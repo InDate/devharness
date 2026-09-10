@@ -4,7 +4,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "devharness@0.9.14"
+        "devharness@0.9.15"
       ]
     }
   }

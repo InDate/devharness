@@ -1,6 +1,6 @@
 {
   "name": "devharness",
-  "version": "0.9.16",
+  "version": "0.9.17",
   "description": "MCP server that connects AI assistants to Chrome DevTools Protocol for runtime debugging - set breakpoints, inspect variables, monitor network traffic, and automate browser interactions",
   "type": "module",
   "main": "build/index.js",

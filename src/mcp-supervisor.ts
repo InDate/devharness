@@ -41,13 +41,43 @@ import { NdjsonReader } from './supervisor/ndjson-reader.js';
 import { recordOwnSupervisor, removeOwnPidFile } from './supervisor/pidfile.js';
 import { ClientWatcher } from './supervisor/client-watcher.js';
 import { readSupervisorSessionConfig, idleCheckIntervalMs } from './supervisor/idle-config.js';
+import { createStderrLog } from './supervisor/stderr-log.js';
 import { runCli, isCliCommand, isVersionFlag, readPackageVersion, CLI_COMMANDS } from './cli/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Set once main() has a shutdown to run. A write that fails on either host
+// pipe means the host's end closed, which is the client being gone.
+let onHostPipeBroken: (() => void) | undefined;
+
+const stderrLog = createStderrLog('[mcp-supervisor]', process.stderr, () => {
+  if (onHostPipeBroken) onHostPipeBroken();
+});
+
+// The host holds the read end of stdout. Its exit closes that end and the next
+// frame write returns EPIPE, which without a listener reaches the
+// uncaughtException handler - the same loop the stderr latch closes. This
+// listener takes it off that path; the latch bounds the writes that follow.
+let hostStdoutBroken = false;
+process.stdout.on('error', () => {
+  if (hostStdoutBroken) return;
+  hostStdoutBroken = true;
+  if (onHostPipeBroken) onHostPipeBroken();
+});
+
+function writeToHostStdout(line: string): void {
+  if (hostStdoutBroken) return;
+  try {
+    process.stdout.write(line.endsWith('\n') ? line : line + '\n');
+  } catch {
+    hostStdoutBroken = true;
+    if (onHostPipeBroken) onHostPipeBroken();
+  }
+}
+
 function logStderr(message: string): void {
-  process.stderr.write(`[mcp-supervisor] ${message}\n`);
+  stderrLog.write(message);
 }
 
 async function main(): Promise<void> {
@@ -142,7 +172,7 @@ async function main(): Promise<void> {
         // call that runs longer than the idle threshold isn't suspended the
         // moment it finally answers.
         lastActivityAt = Date.now();
-        process.stdout.write(line.endsWith('\n') ? line : line + '\n');
+        writeToHostStdout(line);
       },
       killChild: () => childManager.kill(),
       suspendChild: () => childManager.suspend(),
@@ -263,7 +293,34 @@ async function main(): Promise<void> {
   process.stdin.on('end', () => void shutdown('host stdin ended'));
   process.stdin.on('close', () => void shutdown('host stdin closed'));
 
+  // A closed host pipe - stderr or stdout - means the session that launched
+  // this supervisor is gone. Shutdown from here releases the child and its
+  // dev servers and removes the pidfile entry, in place of running on
+  // unattached: 12 such
+  // supervisors were found alive on one machine, the oldest 5 days 16 hours
+  // past its session's exit, each holding a pidfile slot and a child slot.
+  onHostPipeBroken = () => void shutdown('host pipe closed');
+
+  // Repeats of one exception are counted and capped. The stderr latch already
+  // bounds the EPIPE loop this handler used to feed, so a storm reaching this
+  // count originates elsewhere; the exit stops it holding a core either way.
+  // Same shape as the child's handler in index.ts (issue #74).
+  let lastUncaughtMessage = '';
+  let lastUncaughtAt = 0;
+  let repeatCount = 0;
   process.on('uncaughtException', (error) => {
+    const now = Date.now();
+    const message = error?.message ?? String(error);
+    if (message === lastUncaughtMessage && now - lastUncaughtAt < 1000) {
+      if (++repeatCount > 50) {
+        logStderr('Same uncaught exception >50x in <1s, exiting to break the loop');
+        process.exit(1);
+      }
+      return;
+    }
+    lastUncaughtMessage = message;
+    lastUncaughtAt = now;
+    repeatCount = 0;
     logStderr(`Uncaught exception: ${error?.stack || error}`);
   });
   process.on('unhandledRejection', (reason) => {

@@ -26,6 +26,24 @@
  * If the walk finds nothing but plumbing all the way to pid 1, there is no
  * client to watch and reaping is disabled - better to leak than to kill a tree
  * that is still serving someone.
+ *
+ * IDENTIFYING THE CLIENT ACROSS DAYS
+ * A pid alone does not identify a process for the length of a session. The
+ * client exits, the OS recycles its pid onto an unrelated process, and a
+ * liveness check on that number reports alive forever. Twelve supervisors were
+ * found in exactly that state, the oldest 5 days 16 hours past its session,
+ * each consuming CPU linear in its age at about 1.4 ms per 60-second poll -
+ * that poll and nothing else.
+ *
+ * So each poll re-walks the ancestry instead of testing a number. The client's
+ * death reparents everything below it onto init, so the walk hits ppid 1 and
+ * yields null - a reading that holds however the pid is later reused. A walk
+ * that lands on a different pid, or the same pid running a different command,
+ * reads as gone for the same reason.
+ *
+ * `ps` failing is indistinguishable from an exit in a single reading, so the
+ * tree comes down on the third consecutive miss. A transient probe failure
+ * costs two poll intervals; a real exit costs the same delay.
  */
 import { execFileSync } from 'child_process';
 
@@ -37,8 +55,6 @@ export interface ProcessInfo {
 export interface ProcessProbe {
   /** Parent pid + command for a pid, or null if the pid is gone/unreadable. */
   info(pid: number): ProcessInfo | null;
-  /** Whether the pid still exists. */
-  isAlive(pid: number): boolean;
 }
 
 export interface ClientIdentity {
@@ -104,6 +120,23 @@ function isPlumbing(command: string): boolean {
   return false;
 }
 
+/**
+ * Parses one `ps -o ppid=,command=` line: leading spaces, the numeric ppid,
+ * then the command as the rest of the line.
+ *
+ * `ps` prints start times in a locale-shaped form - this machine gives
+ * `Sat  5 Sep 11:04:52 2026`, where another gives `Sat Sep  5 11:04:52 2026` -
+ * so no start-time column is requested. A mis-parsed date would land inside
+ * the command string and defeat the plumbing check that finds the client.
+ */
+const PS_LINE = /^\s*(\d+)\s+(.*)$/;
+
+export function parseProcessLine(line: string): ProcessInfo | null {
+  const match = line.match(PS_LINE);
+  if (!match) return null;
+  return { ppid: Number(match[1]), command: match[2] };
+}
+
 /** Reads process info via `ps`. Unavailable on Windows, which has no `ps`. */
 export const systemProcessProbe: ProcessProbe = {
   info(pid: number): ProcessInfo | null {
@@ -113,23 +146,32 @@ export const systemProcessProbe: ProcessProbe = {
         timeout: 2000,
       }).trim();
       if (!out) return null;
-      const match = out.match(/^\s*(\d+)\s+(.*)$/);
-      if (!match) return null;
-      return { ppid: Number(match[1]), command: match[2] };
+      return parseProcessLine(out);
     } catch {
       return null;
     }
   },
-  isAlive(pid: number): boolean {
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch (err) {
-      // EPERM means it exists but belongs to another user - still alive.
-      return (err as NodeJS.ErrnoException)?.code === 'EPERM';
-    }
-  },
 };
+
+/** Consecutive polls that must miss the client before the tree comes down. */
+export const MISSES_BEFORE_SHUTDOWN = 3;
+
+/**
+ * True while a fresh walk from `startPid` lands on the same client.
+ *
+ * The client's exit reparents the tree onto init, so the walk stops at ppid 1
+ * and returns null however the pid is reused afterwards. A different pid, or
+ * the same pid carrying a different command, is the same reading.
+ */
+export function clientStillPresent(
+  startPid: number,
+  client: ClientIdentity,
+  probe: ProcessProbe
+): boolean {
+  const current = resolveClientIdentity(startPid, probe);
+  if (!current) return false;
+  return current.pid === client.pid && current.command === client.command;
+}
 
 /**
  * Walk up from `startPid`'s parent and return the first ancestor that isn't
@@ -148,7 +190,7 @@ export function resolveClientIdentity(
     if (!isPlumbing(parent.command)) {
       return { pid: current.ppid, command: parent.command };
     }
-    current = { ppid: parent.ppid, command: parent.command };
+    current = parent;
   }
   return null;
 }
@@ -170,6 +212,8 @@ export class ClientWatcher {
   private readonly pollIntervalMs: number;
   private readonly logStderr: (message: string) => void;
   private client: ClientIdentity | null = null;
+  /** Consecutive polls that have not found the client. */
+  private misses = 0;
 
   constructor(private readonly options: ClientWatcherOptions = {}) {
     this.probe = options.probe ?? systemProcessProbe;
@@ -201,7 +245,16 @@ export class ClientWatcher {
     this.logStderr(`Watching client PID ${client.pid} (${client.command.slice(0, 80)})`);
 
     this.timer = setInterval(() => {
-      if (this.probe.isAlive(client.pid)) return;
+      if (clientStillPresent(startPid, client, this.probe)) {
+        this.misses = 0;
+        return;
+      }
+      if (++this.misses < MISSES_BEFORE_SHUTDOWN) {
+        this.logStderr(
+          `Client PID ${client.pid} not found (${this.misses}/${MISSES_BEFORE_SHUTDOWN})`
+        );
+        return;
+      }
       this.stop();
       this.logStderr(`Client PID ${client.pid} is gone; shutting down`);
       onClientGone(client);

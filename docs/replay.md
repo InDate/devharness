@@ -456,11 +456,19 @@ replay({ action: 'run', name: 'magic-link-login', startUrl: 'https://app.example
 ```
 
 - **`baseUrl`** rewrites the origin of *every absolute* `http(s)` URL in the
-  sequence - the stored `startUrl` and any string param in any step (a
-  `navigate goto` url, a `request` url, ...) - keeping path, query and hash.
-  Relative URLs are untouched. The stored sequence is never mutated.
+  sequence - the stored `startUrl`, any string param in any step (a
+  `navigate goto` url, a `request` url, ...), and the launch `url` of any
+  connection the sequence declares - keeping path, query and hash. Relative
+  URLs are untouched. The stored sequence is never mutated.
+- The retarget travels **into nested sequences**: a `conditional`'s `then` and
+  a `forEach`'s `do` load from the recorder in their recorded form, and the
+  run's origin is applied to each as it loads, at every depth. Without that a
+  retargeted run drives two origins at once - the parent on the target
+  deployment, the shared login/setup helper on the recorded one.
+- **`runAll`** takes `baseUrl` too, and applies it to every sequence in the
+  suite, so one call runs a recorded set against any deployment.
 - **`startUrl`** replaces the sequence's start URL wholesale for this run,
-  applied after any rebasing.
+  applied after any rebasing. It is per-sequence, so `runAll` ignores it.
 - Neither is preserved across a mid-run pause and `step`/`finish` resume, which
   re-reads the stored sequence.
 
@@ -554,6 +562,11 @@ instance rather than a new process, so killing by port would take those
 browsers down too. The run says so instead: *"Chrome left running (port 9224
 also serves duo-member-two, killChromeOnFinish)"*. Disconnect or close the other
 connections first if you want the instance gone.
+
+On `runAll` the flag means the **suite's** finish: only the last sequence
+carries it. A teardown between sequences would destroy the state a `_helpers`
+preamble just established, and a suite that stops early (`continueOnFailure:
+false`, a cancel) leaves the browsers up for the failure to be read in.
 
 ### Preview Sequence
 

@@ -238,7 +238,7 @@ const replaySchema = z.object({
   description: z.string().optional(),
   expectedOutcome: z.string().optional(),
   startUrl: z.string().optional().describe('create: sequence start URL. run: replace the stored startUrl for this run only (e.g. a freshly minted link)'),
-  baseUrl: z.string().optional().describe('run: retarget the sequence at another deployment — every absolute URL (startUrl + command params) keeps its path/query but takes this origin. Not preserved across a mid-run pause/step resume'),
+  baseUrl: z.string().optional().describe('run/runAll: retarget at another deployment — every absolute URL (startUrl, command params, a declared connection\u2019s launch url) keeps its path/query but takes this origin, in the sequence itself and in every sequence it reaches through a conditional or forEach. On runAll it applies to every sequence in the suite. Not preserved across a mid-run pause/step resume'),
   indices: z.array(z.number()).optional().describe('Command indices'),
   lines: z.array(z.number()).optional().describe('Log line numbers'),
   sequenceId: z.string().optional(),
@@ -289,7 +289,7 @@ const replaySchema = z.object({
   strict: z.enum(['errors', 'warnings']).optional().describe("run/runAll: fail the run when it PRODUCES console output - 'errors' fails on new console errors, 'warnings' also fails on new warnings. Counted per connection and diffed against the start of the run, so pre-existing noise is not blamed on this sequence. A sequence can be functionally correct and still be logging; strict is how you separate those questions"),
   folder: z.string().optional().describe("runAll: sequences subfolder to run, relative to the sequences dir (e.g. 'spine'). Omit to run every sequence outside folders whose name starts with '_'. The whole tree is always LOADED first so name references (a conditional's then, a forEach's do) resolve wherever the helper lives"),
   continueOnFailure: z.boolean().optional().describe('runAll: keep going after a sequence fails and report every result (default true). false stops at the first failure'),
-  killChromeOnFinish: z.boolean().optional().describe("run: after finishing (skipped on pause/abort), kill the browsers this run owns - its own connection plus any a launchChrome step actually created. A step that reached an already-bound reference only borrowed that browser and it is left running, so an instance you launched yourself survives. Also skipped for any browser whose port another live connection shares (a launchChrome step usually opens a tab in the same instance), and the run reports which connection kept it alive."),
+  killChromeOnFinish: z.boolean().optional().describe("run/runAll: after finishing (skipped on pause/abort), kill the browsers this run owns - its own connection plus any a launchChrome step actually created. A step that reached an already-bound reference only borrowed that browser and it is left running, so an instance you launched yourself survives. Also skipped for any browser whose port another live connection shares (a launchChrome step usually opens a tab in the same instance), and the run reports which connection kept it alive. On runAll only the LAST sequence carries it, so a preamble's browser survives between sequences and a suite that stops early leaves the browsers up."),
 }).strict();
 
 // =============================================================================
@@ -1085,7 +1085,13 @@ async function handleRunAll(
   const keepGoing = args.continueOnFailure !== false;
   const results: Array<{ filename: string; name: string; ok: boolean; detail: string }> = [];
 
-  for (const entry of selected) {
+  for (const [index, entry] of selected.entries()) {
+    // killChromeOnFinish means the SUITE's finish here, not each sequence's: a
+    // teardown between sequences destroys the state a _helpers preamble just
+    // established. Only the last sequence carries it, so a suite that stops
+    // early (continueOnFailure: false, a cancel) leaves the browsers up for
+    // the failure to be read in.
+    const isLast = index === selected.length - 1;
     if (abortSignal?.aborted) {
       results.push({ filename: entry.filename, name: entry.name, ok: false, detail: 'cancelled before it ran' });
       continue;
@@ -1109,11 +1115,11 @@ async function handleRunAll(
           // no-op that a caller then has to notice.
           variables: args.variables ?? {},
           // Per-run args that are actively wrong when fanned across a suite:
-          // killChromeOnFinish would tear down the browser between sequences and
-          // destroy the state a _helpers preamble just established, and
           // startFrom/stepTo/stepCount/startUrl mean something only for one
-          // specific sequence.
-          killChromeOnFinish: undefined,
+          // specific sequence. baseUrl does carry - it retargets every
+          // sequence at the same deployment, which is what a suite run of a
+          // recorded set against another environment needs.
+          killChromeOnFinish: isLast ? args.killChromeOnFinish : undefined,
           startFrom: undefined,
           stepTo: undefined,
           stepCount: undefined,
@@ -1950,7 +1956,10 @@ async function performRun(
     logPrefix: 'run',
     variableStore: {},
     launchedConnections,
-    ...(connectionMap && { connectionMap })
+    ...(connectionMap && { connectionMap }),
+    // Carried on the context so nested sequences inherit the retarget; the
+    // top-level sequence was already rebased in handleRun.
+    ...(args.baseUrl && { rebaseOrigin: args.baseUrl })
   };
 
   // Ensure connection is ready

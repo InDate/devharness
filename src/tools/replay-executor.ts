@@ -68,6 +68,15 @@ export interface ExecutionContext {
    * plus the run's own connection, and nothing else (issue #103).
    */
   launchedConnections?: Set<string>;
+  /**
+   * The origin every absolute URL in this run takes, from `run`/`runAll`'s
+   * `baseUrl`. Inherited by nested sequences (a `conditional`'s `then`, a
+   * `forEach`'s `do`), which load from the recorder in their recorded form:
+   * without it the parent runs against the target deployment and the helper
+   * that logs in or navigates runs against the recorded one, so a retargeted
+   * suite drives two origins at once.
+   */
+  rebaseOrigin?: string;
 }
 
 export interface StepResult {
@@ -623,11 +632,17 @@ export interface ConditionalFlowResult {
  * about, so the common nested call costs no extra tool call.
  */
 async function prepareNestedSequence(
-  sequence: CommandSequence,
+  rawSequence: CommandSequence,
   ctx: ExecutionContext,
   label: string,
   logPrefix: string
 ): Promise<{ filteredSequence: CommandSequence; filteredCommands: RecordedCommand[]; nestedConnection?: string }> {
+  // The parent run's retarget reaches here first: a nested sequence loads from
+  // the recorder in its recorded form, so its absolute URLs still carry the
+  // recorded origin until this runs.
+  const sequence = ctx.rebaseOrigin
+    ? rebaseSequence(rawSequence, { baseUrl: ctx.rebaseOrigin })
+    : rawSequence;
   const liveRefs = sequence.commands.some(cmd => cmd.tool === 'launchChrome')
     ? await probeLiveConnectionReferences(ctx.executeToolCall)
     : null;
@@ -1174,6 +1189,16 @@ export function rebaseSequence(
   return {
     ...sequence,
     startUrl: overrides.startUrl ?? (sequence.startUrl ? rebase(sequence.startUrl) : sequence.startUrl),
+    // A declared connection's `url` is where its browser comes up. Left on the
+    // recorded origin it opens the wrong deployment before step 1, and every
+    // step that assumes the app is already loaded runs against that page.
+    ...(sequence.requiredConnections
+      ? {
+          requiredConnections: sequence.requiredConnections.map(d =>
+            d.url ? { ...d, url: rebase(d.url) } : d
+          ),
+        }
+      : {}),
     commands: sequence.commands.map(cmd => ({
       ...cmd,
       params: walk(cmd.params) as RecordedCommand['params'],

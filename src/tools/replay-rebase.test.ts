@@ -64,3 +64,33 @@ describe('rebaseSequence', () => {
     expect(out.startUrl).toBeUndefined();
   });
 });
+
+describe('rebaseSequence: declared connections', () => {
+  const declared = (): CommandSequence => seq({
+    requiredConnections: [
+      { reference: 'member-one', url: 'http://localhost:5174/join?code=7' },
+      { reference: 'member-two' },
+    ],
+  });
+
+  it("rewrites a declared connection's launch url", () => {
+    const out = rebaseSequence(declared(), { baseUrl: 'https://cue-test.pages.dev' });
+    expect(out.requiredConnections![0].url).toBe('https://cue-test.pages.dev/join?code=7');
+  });
+
+  it('leaves a declaration without a url alone', () => {
+    const out = rebaseSequence(declared(), { baseUrl: 'https://cue-test.pages.dev' });
+    expect(out.requiredConnections![1]).toEqual({ reference: 'member-two' });
+  });
+
+  it('does not mutate the stored declaration', () => {
+    const original = declared();
+    rebaseSequence(original, { baseUrl: 'https://cue-test.pages.dev' });
+    expect(original.requiredConnections![0].url).toBe('http://localhost:5174/join?code=7');
+  });
+
+  it('carries the declarations through when no baseUrl is given', () => {
+    const out = rebaseSequence(declared(), { startUrl: 'http://localhost:5174/other' });
+    expect(out.requiredConnections![0].url).toBe('http://localhost:5174/join?code=7');
+  });
+});

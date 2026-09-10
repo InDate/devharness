@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`runAll` honours `killChromeOnFinish`,** as the suite's finish rather than
+  each sequence's: only the last sequence carries it, so a `_helpers` preamble's
+  browser survives between sequences, and a suite that stops early
+  (`continueOnFailure: false`, a cancel) leaves the browsers up for the failure
+  to be read in. It was cleared outright before, so a suite run left a browser
+  behind with no way to ask for it back.
+
 - **Guard blocks now push, instead of only surfacing on the next tool call.**
   Every new block appends one JSON line to `.devharness/logs/blocks.jsonl`
   (`{ts, guard, tool, detail, resolve}`) covering all five guards: `port`,
@@ -31,6 +38,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   paths into what may be a public repository.
 
 ### Fixed
+
+- **`baseUrl` now reaches nested sequences and declared connections.** A
+  retarget rewrote the sequence handed to the executor and nothing else. A
+  `conditional`'s `then` and a `forEach`'s `do` load from the recorder later,
+  in their recorded form, and a declared connection's launch `url` was copied
+  through untouched - so a retargeted run drove two origins at once: the
+  parent on the target deployment, the shared login/setup helper and the
+  browser's opening page on the recorded one. The origin now travels on the
+  execution context (`rebaseOrigin`) and is applied at every nesting depth,
+  and `rebaseSequence` rewrites `requiredConnections[].url`. `runAll` inherits
+  this, which is where it bites: a suite's shared setup lives in exactly those
+  helper sequences.
 
 - **Tool calls no longer run before state recovery finishes.** The transport
   started serving at `server.connect()`, but managed servers, monitored ports

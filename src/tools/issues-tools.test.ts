@@ -221,3 +221,117 @@ describe('issues resolve - verification outcome comes from _meta', () => {
   });
 
 });
+
+/**
+ * A body used to be reachable only through workOn, which writes in_progress and
+ * opens a browser - so reading what an issue says cost a state change and a
+ * Chrome launch that the read itself does not need.
+ */
+describe('issues list - reading a body', () => {
+  it('returns the named issue in full, changing no state and opening no browser', async () => {
+    const issue = await addIssue({
+      type: 'bug',
+      title: 'ServerFileWatcher can silently miss a change',
+      body: 'fs.watch delivery is not guaranteed.',
+      initialStatus: 'acknowledged',
+    });
+    const { tools, executeToolCall, getPageForConnection } = buildTools();
+
+    const result = await tools.issues.handler({ action: 'list', id: issue.id } as any, undefined);
+
+    expect(result.content[0].text).toContain('fs.watch delivery is not guaranteed.');
+    expect(executeToolCall).not.toHaveBeenCalled();
+    expect(getPageForConnection).not.toHaveBeenCalled();
+
+    const reloaded = await getIssue(issue.id);
+    expect(reloaded!.status).toBe('acknowledged');
+    expect(reloaded!.startedAt).toBeUndefined();
+  });
+
+  it('reaches an issue the default filter drops, so an id needs no includeCompleted', async () => {
+    const issue = await addIssue({
+      type: 'feature',
+      title: 'GitHub issue sync via the gh CLI',
+      body: 'Body of an issue already implemented.',
+      initialStatus: 'implemented',
+    });
+    const { tools } = buildTools();
+
+    const result = await tools.issues.handler({ action: 'list', id: issue.id } as any, undefined);
+
+    expect(result.content[0].text).toContain('Body of an issue already implemented.');
+  });
+
+  it('returns ISSUES_NOT_FOUND for an id no issue carries', async () => {
+    const { tools } = buildTools();
+
+    const result = await tools.issues.handler({ action: 'list', id: 4242 } as any, undefined);
+
+    expect(result.isError).toBe(true);
+    expect((result as any)._errorId).toBe('ISSUES_NOT_FOUND');
+    expect(result.content[0].text).toContain('4242');
+  });
+
+  it('renders the body when a search narrows the listing to one issue', async () => {
+    await addIssue({ type: 'bug', title: 'relocateRoot has no reentrancy guard', body: 'A rebind that throws leaves no rollback.' });
+    await addIssue({ type: 'bug', title: 'Unrelated watcher bug', body: 'Nothing to do with rebinding.' });
+    const { tools } = buildTools();
+
+    const result = await tools.issues.handler({ action: 'list', search: 'reentrancy' } as any, undefined);
+
+    expect(result.content[0].text).toContain('A rebind that throws leaves no rollback.');
+  });
+
+  it('omits bodies above the cap and names the call that reads one', async () => {
+    await addIssue({ type: 'bug', title: 'First routing bug', body: 'BODY MARKER ONE' });
+    await addIssue({ type: 'bug', title: 'Second routing bug', body: 'BODY MARKER TWO' });
+    const { tools } = buildTools();
+
+    const result = await tools.issues.handler({ action: 'list', search: 'routing' } as any, undefined);
+
+    const text = result.content[0].text;
+    expect(text).not.toContain('BODY MARKER ONE');
+    expect(text).not.toContain('BODY MARKER TWO');
+    expect(text).toContain("action: 'list', id:");
+  });
+});
+
+/**
+ * A body is arbitrary Markdown written by users and agents, and it now reaches
+ * the response through a template variable. Variable values enter in one final
+ * replace pass and are never rescanned, so template syntax inside a body is
+ * inert - these pin that, because a rewrite of the substitution loop would
+ * otherwise silently mangle or hide what a body says.
+ */
+describe('issues list - a body is data, not template', () => {
+  it('renders template syntax inside a body verbatim', async () => {
+    const hostile = 'Counts {{count}} and {{^details}}HIDDEN{{/details}} and {{#each x}}L{{/each}} and a bare {{ brace.';
+    const issue = await addIssue({ type: 'bug', title: 'Body carries braces', body: hostile });
+    const { tools } = buildTools();
+
+    const result = await tools.issues.handler({ action: 'list', id: issue.id } as any, undefined);
+
+    expect(result.content[0].text).toContain(hostile);
+  });
+
+  it('omits the read-one pointer when nothing matched', async () => {
+    await addIssue({ type: 'bug', title: 'Present but unmatched', body: 'x' });
+    const { tools } = buildTools();
+
+    const result = await tools.issues.handler({ action: 'list', search: 'nothing-matches-this' } as any, undefined);
+
+    expect(result.content[0].text).not.toContain("action: 'list', id:");
+  });
+
+  it('returns the named issue when the other filters contradict it', async () => {
+    const issue = await addIssue({ type: 'bug', title: 'Contradicted', body: 'BODY OF THE NAMED ISSUE', initialStatus: 'acknowledged' });
+    const { tools } = buildTools();
+
+    const result = await tools.issues.handler(
+      { action: 'list', id: issue.id, type: 'feature', status: 'pending', search: 'no-such-text', labels: ['absent'] } as any,
+      undefined
+    );
+
+    expect(result.content[0].text).toContain('BODY OF THE NAMED ISSUE');
+  });
+});

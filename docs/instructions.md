@@ -218,6 +218,7 @@ runs against (see Quick Start).
 
 **Issues**: `issues` (actions: list, create, workOn, resolve, acknowledge, comment, publish, sync, import, link, pullSequence)
 - `create`/`comment`: track bugs and features as Markdown issues, optionally linked to a replay sequence
+- `list`: `search` matches body and comment text. A listing holding one issue renders it in full, so `issues({ action: 'list', id: N })` returns body, labels, comments and timestamps and leaves the issue's own status and timestamps untouched - reading an issue does not need `workOn`
 - `workOn`: start on an issue, auto-replaying its linked sequence
 - `resolve` is **human-gated**: it opens a browser overlay and only a person clicking Fixed/Not Fixed can close the issue. Don't call it unattended - it will wait ~150s and then fail with `ISSUES_RESOLVE_TIMEOUT`. Record what you found with `comment` and ask the user to run `resolve` themselves
 - `acknowledge`: acknowledge pending bugs to unblock other tools

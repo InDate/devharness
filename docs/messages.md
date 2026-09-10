@@ -2421,9 +2421,10 @@ Use `issues({ action: 'acknowledge' })` to acknowledge.
 **Type:** success
 **Summary:** Issues list
 
-{{issuesList}}
+{{#details}}{{details}}{{/details}}{{^details}}{{issuesList}}{{/details}}
 
-{{count}} issues: {{bugCount}} bugs, {{featureCount}} features{{#pendingCount}}, {{pendingCount}} pending{{/pendingCount}}
+{{count}} issues: {{bugCount}} bugs, {{featureCount}} features{{#pendingCount}}, {{pendingCount}} pending{{/pendingCount}}{{#bodiesOmitted}}
+A listing this wide omits bodies. Narrow the filters, or read one issue in full with `issues({ action: 'list', id: <ID> })`.{{/bodiesOmitted}}
 
 ---
 

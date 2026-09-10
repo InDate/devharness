@@ -53,9 +53,9 @@ function isGithubEnabled(): boolean {
 const issuesSchema = z.object({
   action: z.enum(['list', 'create', 'workOn', 'resolve', 'acknowledge', 'comment',
     'publish', 'sync', 'import', 'link', 'pullSequence'])
-    .describe('Issue action: list (list all issues), create (create new issue), workOn (start working on issue), resolve (opens an interactive browser verification flow and waits for a PERSON to click Fixed/Not Fixed - a human must physically confirm before the issue is marked fixed/implemented, so an agent cannot close an issue this way and should use `comment` to record findings instead), acknowledge (acknowledge pending bugs), comment (append a comment to an issue)'),
+    .describe('Issue action: list (list all issues, or one issue in full by id), create (create new issue), workOn (start working on issue), resolve (opens an interactive browser verification flow and waits for a PERSON to click Fixed/Not Fixed - a human must physically confirm before the issue is marked fixed/implemented, so an agent cannot close an issue this way and should use `comment` to record findings instead), acknowledge (acknowledge pending bugs), comment (append a comment to an issue)'),
   id: z.number().optional()
-    .describe('Issue ID (for workOn, resolve, comment actions)'),
+    .describe('Issue ID (list, workOn, resolve, comment, publish, link, pullSequence). On list it returns that one issue in full and the other filters do not apply.'),
   type: z.enum(['bug', 'feature']).optional()
     .describe('Issue type (required for create, optional filter for list)'),
   status: z.enum(['pending', 'acknowledged', 'in_progress', 'fixed', 'implemented']).optional()
@@ -184,6 +184,9 @@ function getStatusIcon(status: IssueStatus): string {
   }
 }
 
+/** A listing renders bodies when it holds this many issues or fewer; above it, titles only. */
+const DETAIL_RENDER_LIMIT = 1;
+
 function formatIssueDetails(issue: TrackedIssue): string {
   const typeIcon = issue.type === 'bug' ? '🐛' : '✨';
   const statusIcon = getStatusIcon(issue.status);
@@ -251,7 +254,7 @@ export function createIssuesTools(
 ) {
   return {
     issues: createTool(
-      'Track and manage bugs and features as Markdown issues (title, Markdown body, labels, comments). Actions: list (show all issues with optional filters), create (create new issue with title/body/labels, optionally linking a sequence), workOn (start working on issue with auto-replay), resolve (HUMAN-ONLY interactive verification: opens a browser overlay and waits for a person to confirm the fix before marking fixed/implemented - agents are refused immediately, use `comment` instead), acknowledge (acknowledge pending bugs to unblock tools), comment (append a Markdown comment to an issue), publish/sync/import/link/pullSequence (GitHub, via the gh CLI; only publish and sync use the network)',
+      'Track and manage bugs and features as Markdown issues (title, Markdown body, labels, comments). Actions: list (show all issues with optional filters, or one issue in full by id), create (create new issue with title/body/labels, optionally linking a sequence), workOn (start working on issue with auto-replay), resolve (HUMAN-ONLY interactive verification: opens a browser overlay and waits for a person to confirm the fix before marking fixed/implemented - agents are refused immediately, use `comment` instead), acknowledge (acknowledge pending bugs to unblock tools), comment (append a Markdown comment to an issue), publish/sync/import/link/pullSequence (GitHub, via the gh CLI; only publish and sync use the network)',
       issuesSchema,
       async (args, abortSignal) => {
         // Initialize tracker on first use
@@ -259,6 +262,28 @@ export function createIssuesTools(
 
         switch (args.action) {
           case 'list': {
+            // An id names one issue: it returns in full, and the other filters do not apply.
+            if (args.id !== undefined) {
+              const issue = (await getIssues({ includeCompleted: true })).find(i => i.id === args.id);
+              if (!issue) {
+                return createErrorResponse('ISSUES_NOT_FOUND', {
+                  id: args.id,
+                  message: 'No issue carries that ID.',
+                });
+              }
+              return createSuccessResponse('ISSUES_LIST', {
+                count: 1,
+                bugCount: issue.type === 'bug' ? 1 : 0,
+                featureCount: issue.type === 'feature' ? 1 : 0,
+                pendingCount: issue.status === 'pending' ? 1 : 0,
+                issuesList: formatIssuesList([issue]),
+                details: formatIssueDetails(issue),
+                bodiesOmitted: false,
+                search: null,
+                includeCompleted: true,
+              });
+            }
+
             const filter: { type?: IssueType; status?: IssueStatus; includeCompleted?: boolean; labels?: string[] } = {};
             if (args.type) filter.type = args.type;
             if (args.status) filter.status = args.status;
@@ -284,12 +309,16 @@ export function createIssuesTools(
             const featureCount = issues.filter(i => i.type === 'feature').length;
             const pendingCount = issues.filter(i => i.status === 'pending').length;
 
+            const rendersDetails = issues.length > 0 && issues.length <= DETAIL_RENDER_LIMIT;
+
             return createSuccessResponse('ISSUES_LIST', {
               count: issues.length,
               bugCount,
               featureCount,
               pendingCount,
               issuesList: formatIssuesList(issues),
+              details: rendersDetails ? issues.map(formatIssueDetails).join('\n\n---\n\n') : null,
+              bodiesOmitted: !rendersDetails && issues.length > 0,
               search: args.search || null,
               includeCompleted: args.includeCompleted || false,
             });

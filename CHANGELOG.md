@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`envFile` on `run`/`runAll`: a KEY=value file supplying that run's
+  `{{env:NAME}}` tokens.** A relative path resolves against the project
+  directory (the one holding `.devharness`); absolute is used as-is. The
+  file's values win over the server's own environment - the caller named this
+  file for this run, and a stale ambient variable shadowing it would
+  substitute a different credential with nothing in the output to say so - and
+  a name the file omits falls through to `process.env`. `process.env` is never
+  written: two background runs may name different files, and a global write
+  would let one run's credentials resolve inside the other; it follows that
+  changing the file needs no client restart, unlike the environment of a
+  running server, which is fixed when it starts. A missing file, or a line
+  that is neither blank, a `#` comment, nor `NAME=value` with a name matching
+  `[A-Za-z_][A-Za-z0-9_]*`, fails as a parameter error before any step runs
+  rather than halfway through a flow that has already logged in - a skipped
+  line would read as a set variable. No `$VAR` expansion inside values: a
+  password containing `$` is ordinary, and expanding it would type something
+  else.
+
+- **`{{env:NAME}}` interpolation, so a credential need not live in the
+  sequence file.** Any step param may hold it; it resolves from `process.env`
+  when the step runs, alongside the existing `{{var:...}}` and `{{timestamp}}`
+  tokens. The file holds the token, the value lives in the environment, and
+  neither the file nor the tool call carries the secret. An unset or empty
+  variable fails the step and names the variable - resolving to `''` would
+  submit a blank password and surface as a confusing downstream failure
+  instead of the missing configuration that caused it. A token-bearing step no
+  longer holds `run` open for a `variables` answer, since its value arrives at
+  run time by definition; it stays substitutable, and an explicitly supplied
+  value wins over the environment.
+
 - **`runAll` honours `killChromeOnFinish`,** as the suite's finish rather than
   each sequence's: only the last sequence carries it, so a `_helpers` preamble's
   browser survives between sequences, and a suite that stops early
@@ -38,6 +68,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   paths into what may be a public repository.
 
 ### Fixed
+
+- **`variables` stopped at the top-level sequence, and an unmatched key was
+  dropped in silence.** Both failures ran the same way: the step executed on
+  its RECORDED text while the call read as an override, so a recorded
+  credential reached the live app with the run reporting success. A shared
+  login helper reached by a `conditional` is exactly where a supplied password
+  has to land, which made the top-level-only substitution miss the one case
+  that matters. The substitutions now travel on the execution context
+  (`ExecutionContext.variables`) and apply at every nesting depth, and a key
+  naming no typed-text step is rejected before any side effects, with the
+  substitutable keys listed - the rule `connections` already applied to a
+  reference naming no recorded step. `runAll` holds one map for the whole
+  suite, so it validates against the union of the selected sequences and each
+  member substitutes on the keys that name its own steps.
+
+- **The substituted value no longer reaches `debug.log`.** The executor logged
+  `Substituted <key>: "<value>"`; these steps carry passwords and tokens, and
+  the log outlives the run. It logs the key and the value's length now. Debug
+  logging is off by default, so this bit only with `setDebugLogging` on.
+
+- **The `variables` examples used a key that cannot match.** `docs/replay.md`
+  and the skill's `references/sequences.md` both showed
+  `variables: { 'var_2_#email': ... }`, while the executor builds the key with
+  `selector.replace(/[^a-zA-Z0-9]/g, '_')` - `var_2__email`, two underscores.
+  A key matching nothing is dropped in silence and the step runs on its
+  recorded text, so a caller copying the example got no substitution, no
+  error, and the recorded value typed into the live app - a recorded password
+  among them. Both examples corrected, both files now state the transform and
+  point at `get`/the run prompt as the source of the keys, and
+  `replay-typed-text-variables.test.ts` pins the extractor and the executor to
+  the same key so the examples can be copied from a passing test.
 
 - **`baseUrl` now reaches nested sequences and declared connections.** A
   retarget rewrote the sequence handed to the executor and nothing else. A

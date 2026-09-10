@@ -77,6 +77,24 @@ export interface ExecutionContext {
    * suite drives two origins at once.
    */
   rebaseOrigin?: string;
+  /**
+   * Recorded-typed-text substitutions for this run, from `run`/`runAll`'s
+   * `variables`. Inherited by nested sequences (a `conditional`'s `then`, a
+   * `forEach`'s `do`), which load from the recorder in their recorded form:
+   * without it the credential a caller supplied stops at the top-level
+   * sequence and the shared login helper types its RECORDED password into the
+   * live app, with the run reporting success.
+   */
+  variables?: Record<string, string>;
+  /**
+   * Values from the run's `envFile`, checked by {{env:NAME}} before
+   * process.env. Inherited by nested sequences, so a shared login helper
+   * reached by a `conditional` resolves against the same file. The server's
+   * own process.env is never mutated: two background runs may name different
+   * files, and a global write would let one run's credentials resolve inside
+   * the other.
+   */
+  runEnv?: Record<string, string>;
 }
 
 export interface StepResult {
@@ -2184,6 +2202,9 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
   } = options;
 
   const { executeToolCall, commandRecorder, connectionReason, connectionMap, logPrefix = 'executor' } = ctx;
+  // The option wins for a direct caller (teardown, tests); the context is what
+  // carries the run's substitutions into every nesting depth.
+  const activeVariables = variables ?? ctx.variables;
   const commands = sequence.commands;
   const targetEnd = endStep ?? commands.length;
   const results: StepResult[] = [];
@@ -2309,14 +2330,15 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
       // Resolve {{var:name.path}} / {{timestamp}} tokens against the run's
       // variable store. Throws InterpolationError on an unresolvable token -
       // caught by this step's try/catch below, same as any other step failure.
-      params = interpolateParams(params, variableStore, runTimestamp);
+      params = interpolateParams(params, variableStore, runTimestamp, ctx.runEnv);
 
-      // Apply variable substitutions
-      if (variables && cmd.tool === 'input' && params.action === 'type' && params.text) {
+      // Apply variable substitutions. The substituted value is never logged:
+      // these steps carry passwords and tokens, and debug.log outlives the run.
+      if (activeVariables && cmd.tool === 'input' && params.action === 'type' && params.text) {
         const varName = `var_${i}_${params.selector?.replace(/[^a-zA-Z0-9]/g, '_') || 'text'}`;
-        if (variables[varName] !== undefined) {
-          params.text = variables[varName];
-          debugLog(logPrefix, `Substituted ${varName}: "${params.text}"`);
+        if (activeVariables[varName] !== undefined) {
+          params.text = activeVariables[varName];
+          debugLog(logPrefix, `Substituted ${varName} (${String(params.text).length} chars)`);
         }
       }
 

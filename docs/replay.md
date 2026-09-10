@@ -593,6 +593,14 @@ Every recorded `input({ action: 'type' })` step gets an auto-generated key of
 the form `var_<0-based step index>_<selector, non-alphanumerics replaced by _>`
 (or `var_<i>_text` when the step has no selector).
 
+The selector is transformed, not quoted: `#email` becomes `_email`, so step 2
+against `#email` is keyed `var_2__email` - **two** underscores, one from the
+separator and one from the `#`. A key that names no typed-text step is
+rejected before anything runs, with the substitutable keys listed - the same
+rule `connections` applies to a reference naming no recorded step, and for the
+same reason: an ignored key would leave the step on its recorded text while
+the call read as an override.
+
 ```javascript
 // Original recording had: input({ action: 'type', selector: '#email', text: 'original@email.com' })
 replay({
@@ -600,11 +608,83 @@ replay({
   sequenceId: 'seq-login-flow',
   connectionReason: 'test-session',
   variables: {
-    'var_2_#email': 'new@email.com',
-    'var_3_#password': 'newpassword'
+    'var_2__email': 'new@email.com',
+    'var_3__password': 'newpassword'
   }
 })
 ```
+
+`replay({ action: 'get', name: '<sequence>' })` prints the keys as the executor
+builds them, and so does the prompt a `run` returns when typed text is present
+and `variables` is omitted. Read them from there rather than composing them by
+hand.
+
+The substitutions reach **nested sequences** - a `conditional`'s `then` and a
+`forEach`'s `do`, at every depth - so a key naming a step in a shared login
+helper lands there. `runAll` holds one map for the whole suite and validates it
+against the union of the selected sequences: a key matching any member is
+accepted, and each sequence substitutes on the keys that name its own steps.
+
+A supplied value does not remove the recorded literal, which stays in the
+sequence file under `.devharness/sequences/` (gitignored, still plaintext on
+disk). For a credential, use `{{env:NAME}}` instead - see below.
+
+### Keeping a secret out of the sequence file: `{{env:NAME}}`
+
+Any step param may hold `{{env:NAME}}`, resolved from `process.env` when the
+step runs. The file holds the token, the value lives in the environment, and
+neither the file nor the tool call carries the secret.
+
+```javascript
+// In the sequence file:
+{ tool: 'input', params: { action: 'type', selector: '#password', text: '{{env:APP_PASSWORD}}' } }
+
+// The run needs nothing else:
+replay({ action: 'run', name: 'login', connectionReason: 'app' })
+```
+
+- An **unset or empty** variable fails the step, naming the variable. Resolving
+  to `''` would submit a blank password and surface as a confusing downstream
+  failure instead of the missing configuration that caused it.
+- The name must match `[A-Za-z_][A-Za-z0-9_]*`. `{{env:app-password}}` is not a
+  token and passes through as literal text.
+- A token-bearing step does **not** hold the run open for a `variables`
+  answer - its value arrives at run time by definition. It stays substitutable,
+  and an explicitly supplied `variables` value **wins over** the environment,
+  because interpolation runs first and the substitution overwrites it.
+- Environment values are strings, so a whole-string `{{env:PORT}}` yields
+  `"3000"`, not `3000`.
+
+#### Pointing a run at a file: `envFile`
+
+```javascript
+replay({ action: 'run', name: 'login', connectionReason: 'app',
+         envFile: 'sequences.env' })
+```
+
+```bash
+# sequences.env
+APP_PASSWORD=hunter2
+export APP_USER="alice"   # export prefix and surrounding quotes are accepted
+```
+
+- A **relative** path resolves against the project directory (the one holding
+  `.devharness`); an absolute path is used as-is.
+- The file's values **win** over the server's own environment. The caller named
+  this file for this run; a stale ambient variable shadowing it would
+  substitute a different credential with nothing in the output to say so. A
+  name the file omits falls through to `process.env`.
+- `process.env` is **never written**. Two background runs may name different
+  files, and a global write would let one run's credentials resolve inside the
+  other. It follows that changing the file needs no client restart, unlike the
+  environment of a running server, which is fixed when it starts.
+- A **missing file**, or a line that is neither blank, a `#` comment, nor
+  `NAME=value` with a name matching `[A-Za-z_][A-Za-z0-9_]*`, fails as a
+  parameter error before any step runs - not halfway through a flow that has
+  already logged in. A skipped line would read as a set variable.
+- There is **no `$VAR` expansion** inside values. A password containing `$` is
+  ordinary, and expanding it would type something else.
+- `runAll` takes it too, applying the same file to every sequence in the suite.
 
 **If the sequence contains any typed text and you omit `variables` entirely,
 `run` does not execute** - it returns a prompt listing the substitutable keys

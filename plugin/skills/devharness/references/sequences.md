@@ -225,12 +225,42 @@ use `runId` to address a specific background run.
 
 ## Two different "variables" - don't confuse them
 
-**1. `variables` on `run` replaces recorded typed text.** Keyed by the recorded
-input, for replaying a signup with a fresh email:
+**1. `variables` on `run` replaces recorded typed text.** Keyed
+`var_<0-based step index>_<selector, non-alphanumerics replaced by _>`, so a
+step 2 typing into `#email` is `var_2__email` - two underscores, one from the
+separator and one from the `#`. Read the keys off `replay({ action: 'get' })`
+or off the prompt a `run` returns when typed text is present and `variables`
+is omitted; a key that names no typed-text step is rejected before anything
+runs, with the substitutable keys listed. Substitutions reach nested sequences
+(a `conditional`'s `then`, a `forEach`'s `do`) at every depth, so a key naming
+a step in a shared login helper lands there. `runAll` holds one map for the
+whole suite and accepts a key that matches any member. The recorded literal
+stays in the sequence file either way.
+
+**For a credential, use `{{env:NAME}}` in the step instead.** Any step param
+may hold it; it resolves from `process.env` when the step runs, so the file
+holds the token and neither the file nor the tool call carries the secret. An
+unset or empty variable fails the step, naming the variable - an empty value
+would be typed as-is. A token-bearing step does not prompt for `variables`,
+and an explicitly supplied value still wins over the environment.
+
+```
+{ tool: 'input', params: { action: 'type', selector: '#password',
+                           text: '{{env:APP_PASSWORD}}' } }
+```
+
+`envFile` names a KEY=value file for the run - `replay({ action: 'run', name:
+'login', envFile: 'sequences.env' })`. A relative path resolves against the
+project directory (the one holding `.devharness`); its values win over the
+server's own environment, a name it omits falls through to `process.env`, and
+`process.env` is never written, so concurrent runs may name different files and
+changing the file needs no client restart. A missing file or a line that is not
+blank, a `#` comment, or `NAME=value` fails before any step runs. No `$VAR`
+expansion inside values. `runAll` takes it too.
 
 ```
 replay({ action: 'run', sequenceId: 'seq-signup',
-         variables: { 'var_2_#email': 'new@example.com' } })
+         variables: { 'var_2__email': 'new@example.com' } })
 ```
 
 **2. `saveAs` captures a value mid-run for later steps.** Supported on

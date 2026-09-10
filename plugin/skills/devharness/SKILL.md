@@ -153,4 +153,4 @@ Restart kills Chrome instances this session launched (relaunch with `launchChrom
 ## Load on demand
 
 - Full tool/action catalogue: [references/tool-categories.md](references/tool-categories.md)
-- Recording/replaying sequences — `saveAs`, per-step `connectionReason`, conditionals, verifying an issue fix: [references/sequences.md](references/sequences.md)
+- Recording/replaying sequences — `saveAs`, per-step `connectionReason`, conditionals, `variables`, keeping a password out of the sequence file with `{{env:NAME}}`, verifying an issue fix: [references/sequences.md](references/sequences.md)

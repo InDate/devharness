@@ -220,6 +220,10 @@ import {
 } from '../issue-tracker.js';
 
 import { configManager } from '../config.js';
+import { hasTemplateToken } from './interpolation.js';
+import { parseEnvFile } from '../helpers/env-file.js';
+import { getProjectDir } from '../helpers/paths.js';
+import { isAbsolute } from 'path';
 
 // =============================================================================
 // Schema Definition
@@ -238,6 +242,7 @@ const replaySchema = z.object({
   description: z.string().optional(),
   expectedOutcome: z.string().optional(),
   startUrl: z.string().optional().describe('create: sequence start URL. run: replace the stored startUrl for this run only (e.g. a freshly minted link)'),
+  envFile: z.string().optional().describe("run/runAll: a KEY=value file supplying the {{env:NAME}} tokens this run resolves. A relative path resolves against the project directory (the one holding .devharness); absolute is used as-is. Its values WIN over the server's own environment, and the server's environment is never modified - two runs may name different files. A missing file, or a line that is neither blank, a # comment, nor NAME=value, fails before anything runs. Keeps a credential out of the sequence file and out of this call, and changing it needs no client restart"),
   baseUrl: z.string().optional().describe('run/runAll: retarget at another deployment — every absolute URL (startUrl, command params, a declared connection\u2019s launch url) keeps its path/query but takes this origin, in the sequence itself and in every sequence it reaches through a conditional or forEach. On runAll it applies to every sequence in the suite. Not preserved across a mid-run pause/step resume'),
   indices: z.array(z.number()).optional().describe('Command indices'),
   lines: z.array(z.number()).optional().describe('Log line numbers'),
@@ -260,7 +265,7 @@ const replaySchema = z.object({
   requiredSockets: z.array(z.string()).optional().describe("declare: URL substrings of the WebSockets this sequence's assertions ride on, e.g. ['/api/sync/socket']. Match the app's own path, not the origin, so it survives baseUrl. Replaces the whole list; [] clears it"),
   connections: z.record(z.string()).optional().describe("run: rebind a multi-connection sequence's recorded references onto this session - { \"<recorded reference>\": \"<reference here>\" }. Only needed when steps carry their own connectionReason (replay({action:'get', outputFormat:'commands'}) shows which)"),
   record: z.boolean().optional(),
-  variables: z.record(z.string()).optional(),
+  variables: z.record(z.string()).optional().describe("run/runAll: replace the text of recorded input-type steps. Keys are BUILT from the selector - var_<0-based step index>_<selector, non-alphanumerics replaced by _> - so '#password' at step 3 is 'var_3__password', two underscores; read them off `get` or off the prompt a run returns rather than composing them. A key naming no typed-text step is rejected (runAll checks against the whole suite's union). Reaches sequences a conditional or forEach nests into. For a credential prefer {{env:NAME}} in the step itself, which keeps the value out of the sequence file and out of this call; an explicit value here still wins over the environment"),
   stepTimeout: z.number().optional().describe('Per-step ms (default 30000). A step exceeding min(stepTimeout, remaining totalTimeout) fails the run at that step. wait steps are exempt (own timeoutMs) but still capped by totalTimeout'),
   totalTimeout: z.number().optional().describe('Total ms'),
   startFrom: z.number().optional().describe('Start step (1-indexed)'),
@@ -921,6 +926,8 @@ interface PerformRunDeps {
   connectionMap?: Record<string, string>;
   /** Filled in by the executor: references the run's own steps launched. */
   launchedConnections: Set<string>;
+  /** Values read from args.envFile, resolved before process.env by {{env:NAME}}. */
+  runEnv?: Record<string, string>;
 }
 
 /**
@@ -993,6 +1000,105 @@ function collectNestedRebindableReferences(
   }
 
   return { references, complete };
+}
+
+/**
+ * Read the run's `envFile` into the values {{env:NAME}} resolves against.
+ *
+ * Loaded here, before any side effects, so a missing file or a malformed line
+ * fails the run as a parameter error rather than as a step failure halfway
+ * through a flow that has already logged in. The values stay on the run's
+ * context: writing them into process.env would leak one run's credentials into
+ * every concurrent background run, which name their own files.
+ */
+async function loadRunEnv(
+  envFile: string
+): Promise<{ values: Record<string, string> } | { error: string }> {
+  const path = isAbsolute(envFile) ? envFile : join(getProjectDir(), envFile);
+  let text: string;
+  try {
+    text = await fs.readFile(path, 'utf-8');
+  } catch (err: any) {
+    return { error: `Could not read envFile "${envFile}" (resolved to ${path}): ${err?.code === 'ENOENT' ? 'no such file' : err?.message || String(err)}` };
+  }
+
+  const { values, problems } = parseEnvFile(text);
+  if (problems.length > 0) {
+    const shown = problems.slice(0, 3).map(p => `line ${p.line}: ${p.text}`).join('; ');
+    return { error: `envFile "${envFile}" (resolved to ${path}) has ${problems.length} line(s) that are neither blank, a # comment, nor NAME=value with a name matching [A-Za-z_][A-Za-z0-9_]* - ${shown}${problems.length > 3 ? ', ...' : ''}. A skipped line reads as a set variable, so the run stops here.` };
+  }
+
+  return { values };
+}
+
+/**
+ * Every `variables` key a run could substitute on: this sequence's typed-text
+ * steps plus those of every sequence it reaches through a `conditional`'s
+ * `then` or a `forEach`'s `do`.
+ *
+ * Resolution is memory-only and best-effort, the same rule
+ * collectNestedRebindableReferences follows: a helper that lives on disk and
+ * has not been loaded is not loaded here (that would register it as a side
+ * effect of validation), so `complete: false` says "this list may be short"
+ * and the caller must not call a missing key a typo. `runAll` loads the whole
+ * tree before it runs anything, so a suite run always gets a complete list.
+ */
+function collectVariableKeys(
+  commands: RecordedCommand[],
+  recorder: CommandRecorder,
+  depth = 0,
+  seen = new Set<string>()
+): { keys: Set<string>; complete: boolean } {
+  const keys = new Set(Object.keys(extractTextVariables(commands)));
+  // Must track the executor's own cap: with a raised maxConditionalDepth, keys
+  // at runtime-reachable depths would be omitted while `complete` still claimed
+  // the list was exhaustive, and a valid key would be rejected as a typo.
+  if (depth >= configManager.getReplayConfig().maxConditionalDepth) {
+    return { keys, complete: false };
+  }
+
+  let complete = true;
+  for (const cmd of commands) {
+    const named = cmd.tool === 'conditional' ? cmd.params?.then
+      : cmd.tool === 'forEach' ? cmd.params?.do
+      : undefined;
+    if (typeof named !== 'string' || !named || seen.has(named)) continue;
+    seen.add(named);
+
+    const nested = recorder.listSequences().find(sq => sq.name === named);
+    if (!nested) { complete = false; continue; }
+
+    const deeper = collectVariableKeys(nested.commands, recorder, depth + 1, seen);
+    for (const key of deeper.keys) keys.add(key);
+    complete = complete && deeper.complete;
+  }
+
+  return { keys, complete };
+}
+
+/**
+ * Keys the caller supplied that name no typed-text step anywhere the run can
+ * reach. Empty when the key list could not be resolved in full, because a key
+ * valid for an unloaded helper is not a typo.
+ *
+ * A `variables` key is matched exactly and nothing else looks at it, so an
+ * unmatched key used to be dropped in silence: the step ran on its RECORDED
+ * text while the call read as an override. For a recorded credential that
+ * means the old password reaching the live app with the run reporting success.
+ * Same rule the `connections` rebinding already applies to a reference that
+ * names no recorded step.
+ */
+function unmatchedVariableKeys(
+  supplied: Record<string, string>,
+  commands: RecordedCommand[],
+  recorder: CommandRecorder
+): { unmatched: string[]; known: string[] } {
+  const { keys, complete } = collectVariableKeys(commands, recorder);
+  if (!complete) return { unmatched: [], known: [...keys].sort() };
+  return {
+    unmatched: Object.keys(supplied).filter(k => !keys.has(k)),
+    known: [...keys].sort(),
+  };
 }
 
 /**
@@ -1082,6 +1188,34 @@ async function handleRunAll(
     });
   }
 
+  // One `variables` map covers the whole suite, so a key is a typo only when it
+  // matches NO member. Checked once, before anything runs: a supplied key that
+  // lands nowhere is dropped in silence by the executor and every sequence runs
+  // on its recorded text, which for a credential means the recorded one reaching
+  // the live app with the suite reporting green. The whole tree is in memory by
+  // now, so the union is exhaustive.
+  if (args.variables && Object.keys(args.variables).length > 0) {
+    const suiteKeys = new Set<string>();
+    for (const entry of selected) {
+      const seq = recorder.listSequences().find(sq => sq.name === entry.name);
+      if (!seq) continue;
+      for (const key of collectVariableKeys(seq.commands, recorder).keys) suiteKeys.add(key);
+    }
+    const unmatched = Object.keys(args.variables).filter(k => !suiteKeys.has(k));
+    if (unmatched.length > 0) {
+      const known = [...suiteKeys].sort();
+      return createErrorResponse('INVALID_PARAMETER', {
+        parameter: 'variables',
+        value: unmatched.join(', '),
+        message: `${unmatched.length > 1 ? 'Those keys name' : `"${unmatched[0]}" names`} no typed-text step in any sequence this run selects. ` +
+          `The key is BUILT from the selector - var_<0-based step index>_<selector, non-alphanumerics replaced by _> - so "#password" at step 3 is "var_3__password", with two underscores. ` +
+          (known.length
+            ? `Substitutable across this suite: ${known.join(', ')}.`
+            : `No sequence here has typed text to substitute.`),
+      });
+    }
+  }
+
   const keepGoing = args.continueOnFailure !== false;
   const results: Array<{ filename: string; name: string; ok: boolean; detail: string }> = [];
 
@@ -1125,7 +1259,8 @@ async function handleRunAll(
           stepCount: undefined,
           startUrl: undefined,
         },
-        recorder, executeToolCall, getPageForConnection, abortSignal, getConnectionPort
+        recorder, executeToolCall, getPageForConnection, abortSignal, getConnectionPort,
+        { validateVariableKeys: false }
       );
       const text = (res?.content || []).map((c: any) => c?.text || '').join('\n');
       // performRun stamps _meta.replay on every terminal response, so trust that
@@ -1576,7 +1711,13 @@ async function handleRun(
   executeToolCall: ExecuteToolCall,
   getPageForConnection: (connectionReason: string) => Promise<any>,
   abortSignal?: AbortSignal,
-  getConnectionPort?: (connectionReason: string) => Promise<number | null>
+  getConnectionPort?: (connectionReason: string) => Promise<number | null>,
+  /**
+   * `validateVariableKeys: false` for a sequence running as part of a suite:
+   * `runAll` validates the one map it holds against the whole suite's keys and
+   * a per-sequence check would reject a key meant for a different member.
+   */
+  opts?: { validateVariableKeys?: boolean }
 ) {
   // Load sequence
   const loadResult = await loadSequence({ name: args.name, sequenceId: args.sequenceId }, recorder);
@@ -1603,9 +1744,15 @@ async function handleRun(
     connectionReason = deriveConnectionReference(sequence.name);
   }
 
-  // Handle variable extraction and prompting
+  // Handle variable extraction and prompting. A step whose recorded text
+  // carries an interpolation token ({{env:NAME}}, {{var:...}}) is already
+  // parameterised - its value arrives at run time by definition - so it does
+  // not hold the run open for an answer. It stays in the extracted list, so a
+  // caller can still override it and the key validation still accepts it.
   const extractedVariables = extractTextVariables(commands);
-  if (Object.keys(extractedVariables).length > 0 && args.variables === undefined) {
+  const needsAnswer = Object.values(extractedVariables)
+    .some(v => !hasTemplateToken(v.value));
+  if (needsAnswer && args.variables === undefined) {
     const idParam = args.sequenceId || args.name!;
     // Tag it: this response is a PROMPT, not a run. runAll has to be able to
     // tell "asked you a question" from "executed and passed", or a suite goes
@@ -1614,6 +1761,45 @@ async function handleRun(
       content: [{ type: 'text', text: formatVariablePrompt(sequence.name, idParam, extractedVariables, connectionReason) }],
       _meta: { tool: 'replay', action: 'run', timestamp: Date.now(), replay: { success: false, prompted: true } }
     };
+  }
+
+  // The envFile is read before any side effects: a missing file or a malformed
+  // line is a parameter error, not a step failure halfway through a flow that
+  // has already logged in.
+  let runEnv: Record<string, string> | undefined;
+  if (args.envFile) {
+    const loaded = await loadRunEnv(args.envFile);
+    if ('error' in loaded) {
+      return createErrorResponse('INVALID_PARAMETER', {
+        parameter: 'envFile',
+        value: args.envFile,
+        message: loaded.error,
+      });
+    }
+    runEnv = loaded.values;
+  }
+
+  // Same rule for the typed-text substitutions, before any side effects. A key
+  // matching no step is dropped in silence by the executor and the step runs on
+  // its RECORDED text, so a mistyped key reads as an override while the recorded
+  // value - a password among them - reaches the live app.
+  //
+  // Skipped for a suite member: `runAll` hands ONE map to every sequence and
+  // checks it against the union of the whole suite, so a key valid for another
+  // sequence must not fail this one.
+  if (args.variables && opts?.validateVariableKeys !== false) {
+    const { unmatched, known } = unmatchedVariableKeys(args.variables, commands, recorder);
+    if (unmatched.length > 0) {
+      return createErrorResponse('INVALID_PARAMETER', {
+        parameter: 'variables',
+        value: unmatched.join(', '),
+        message: `${unmatched.length > 1 ? 'Those keys name' : `"${unmatched[0]}" names`} no typed-text step in "${sequence.name}" or any sequence it reaches. ` +
+          `The key is BUILT from the selector - var_<0-based step index>_<selector, non-alphanumerics replaced by _> - so "#password" at step 3 is "var_3__password", with two underscores. ` +
+          (known.length
+            ? `Substitutable here: ${known.join(', ')}.`
+            : `This sequence has no typed text to substitute.`),
+      });
+    }
   }
 
   // Validate the connection rebinding before any side effects. A key that names
@@ -1709,6 +1895,7 @@ async function handleRun(
     sequence, analysis, connectionReason, needsConnection,
     launchedConnections: new Set<string>(),
     ...(connectionMap && { connectionMap }),
+    ...(runEnv && { runEnv }),
   };
 
   // wait: true - pre-0.7 blocking behaviour, driven by the MCP request signal.
@@ -1946,7 +2133,7 @@ async function performRun(
 ): Promise<{ response: any; outcome: RunOutcome; results?: any[] }> {
   const { args, recorder, executeToolCall, getPageForConnection, getConnectionPort,
     sequence, analysis, connectionReason, needsConnection, connectionMap,
-    launchedConnections } = deps;
+    launchedConnections, runEnv } = deps;
 
   // Build execution context
   const ctx: ExecutionContext = {
@@ -1959,7 +2146,14 @@ async function performRun(
     ...(connectionMap && { connectionMap }),
     // Carried on the context so nested sequences inherit the retarget; the
     // top-level sequence was already rebased in handleRun.
-    ...(args.baseUrl && { rebaseOrigin: args.baseUrl })
+    ...(args.baseUrl && { rebaseOrigin: args.baseUrl }),
+    // Same reason: a shared login helper reached by a conditional is exactly
+    // where a supplied credential has to land.
+    ...(args.variables && { variables: args.variables }),
+    // Held on the context rather than written into process.env: concurrent
+    // background runs may name different files, and a global write would let
+    // one run's credentials resolve inside the other.
+    ...(runEnv && { runEnv })
   };
 
   // Ensure connection is ready

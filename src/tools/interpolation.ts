@@ -1,7 +1,7 @@
 /**
  * Sequence-step parameter interpolation.
- * Resolves {{var:name.path.to.field}} and {{timestamp}} tokens inside a
- * command's params before the executor runs it.
+ * Resolves {{var:name.path.to.field}}, {{timestamp}} and {{env:NAME}} tokens
+ * inside a command's params before the executor runs it.
  *
  * Whole-string-token rule: if a string param's entire value is exactly one
  * token (e.g. params.right === "{{var:r.body.available}}"), the resolved
@@ -16,10 +16,30 @@
  * {{var:...}} paths are plain dot-separated segments (a.b.c) except where a
  * real key contains a literal dot (e.g. a response field keyed 'exec.t1.s2')
  * - use bracket notation for that segment: a.b['exec.t1.s2'].c
+ *
+ * {{env:NAME}} reads the run's environment at run time - the file named by
+ * `envFile` first, then process.env. It is how a credential is kept
+ * OUT of the sequence file: the file holds the token, the value lives in the
+ * environment, and neither the file nor the tool call carries the secret. An
+ * unset or empty variable fails the step rather than resolving to '' - a blank
+ * password submits the form and surfaces as a confusing downstream failure
+ * instead of the missing configuration that caused it. Environment values are
+ * strings, so a whole-string {{env:PORT}} yields "3000", not 3000.
  */
 
-const TOKEN_RE = /\{\{\s*(var:[^}]+|timestamp(?:[+-]\d+)?)\s*\}\}/g;
-const WHOLE_TOKEN_RE = /^\{\{\s*(var:[^}]+|timestamp(?:[+-]\d+)?)\s*\}\}$/;
+const TOKEN_BODY = String.raw`var:[^}]+|timestamp(?:[+-]\d+)?|env:[A-Za-z_][A-Za-z0-9_]*`;
+const TOKEN_RE = new RegExp(String.raw`\{\{\s*(${TOKEN_BODY})\s*\}\}`, 'g');
+const WHOLE_TOKEN_RE = new RegExp(String.raw`^\{\{\s*(${TOKEN_BODY})\s*\}\}$`);
+
+/**
+ * Whether a string carries any interpolation token. A step already
+ * parameterised this way needs no `variables` prompt: its value is supplied at
+ * run time by definition.
+ */
+export function hasTemplateToken(value: string): boolean {
+  TOKEN_RE.lastIndex = 0;
+  return TOKEN_RE.test(value);
+}
 
 export class InterpolationError extends Error {
   constructor(public token: string, reason: string) {
@@ -55,11 +75,34 @@ function tokenizePath(path: string): string[] {
 /**
  * Resolve a single token (without the {{ }} wrapper) against the variable store.
  */
-function resolveToken(token: string, store: Record<string, any>, runTimestamp: number): unknown {
+function resolveToken(
+  token: string,
+  store: Record<string, any>,
+  runTimestamp: number,
+  runEnv?: Record<string, string>
+): unknown {
   if (token.startsWith('timestamp')) {
     const offsetMatch = token.match(/^timestamp([+-]\d+)?$/);
     const offset = offsetMatch?.[1] ? parseInt(offsetMatch[1], 10) : 0;
     return runTimestamp + offset;
+  }
+
+  if (token.startsWith('env:')) {
+    const name = token.slice('env:'.length);
+    // The named file wins over the ambient environment. The caller named this
+    // file for this run; a stale variable in the server's own environment
+    // shadowing it would substitute a different credential with nothing in the
+    // output to say so.
+    const value = runEnv && name in runEnv ? runEnv[name] : process.env[name];
+    // The reason is the variable NAME and its state, never its value: this
+    // message reaches the run output and the debug log.
+    if (value === undefined) {
+      throw new InterpolationError(token, `${name} is not set${runEnv ? ' in the run\'s envFile or' : ' in'} this process's environment - add it to the envFile, or export it before the run (the sequence file deliberately holds no value for it)`);
+    }
+    if (value === '') {
+      throw new InterpolationError(token, `${name} is set but empty - an empty value would be typed or sent as-is, so the step fails here instead`);
+    }
+    return value;
   }
 
   const path = token.slice('var:'.length);
@@ -104,10 +147,15 @@ function resolveToken(token: string, store: Record<string, any>, runTimestamp: n
  * Whole-string token -> typed value passthrough.
  * Embedded token(s) -> String-coerced substitution.
  */
-function resolveString(value: string, store: Record<string, any>, runTimestamp: number): unknown {
+function resolveString(
+  value: string,
+  store: Record<string, any>,
+  runTimestamp: number,
+  runEnv?: Record<string, string>
+): unknown {
   const wholeMatch = value.match(WHOLE_TOKEN_RE);
   if (wholeMatch) {
-    return resolveToken(wholeMatch[1], store, runTimestamp);
+    return resolveToken(wholeMatch[1], store, runTimestamp, runEnv);
   }
 
   TOKEN_RE.lastIndex = 0;
@@ -117,22 +165,22 @@ function resolveString(value: string, store: Record<string, any>, runTimestamp: 
   TOKEN_RE.lastIndex = 0;
 
   return value.replace(TOKEN_RE, (_match, token) => {
-    const resolved = resolveToken(token, store, runTimestamp);
+    const resolved = resolveToken(token, store, runTimestamp, runEnv);
     return typeof resolved === 'object' ? JSON.stringify(resolved) : String(resolved);
   });
 }
 
-function walk(value: any, store: Record<string, any>, runTimestamp: number): any {
+function walk(value: any, store: Record<string, any>, runTimestamp: number, runEnv?: Record<string, string>): any {
   if (typeof value === 'string') {
-    return resolveString(value, store, runTimestamp);
+    return resolveString(value, store, runTimestamp, runEnv);
   }
   if (Array.isArray(value)) {
-    return value.map(item => walk(item, store, runTimestamp));
+    return value.map(item => walk(item, store, runTimestamp, runEnv));
   }
   if (value !== null && typeof value === 'object') {
     const result: Record<string, any> = {};
     for (const key of Object.keys(value)) {
-      result[key] = walk(value[key], store, runTimestamp);
+      result[key] = walk(value[key], store, runTimestamp, runEnv);
     }
     return result;
   }
@@ -147,7 +195,9 @@ function walk(value: any, store: Record<string, any>, runTimestamp: number): any
 export function interpolateParams(
   params: Record<string, any>,
   store: Record<string, any>,
-  runTimestamp: number
+  runTimestamp: number,
+  /** The run's `envFile` values, checked before process.env by {{env:NAME}}. */
+  runEnv?: Record<string, string>
 ): Record<string, any> {
-  return walk(params, store, runTimestamp) as Record<string, any>;
+  return walk(params, store, runTimestamp, runEnv) as Record<string, any>;
 }

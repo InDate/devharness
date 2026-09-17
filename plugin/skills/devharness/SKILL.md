@@ -66,7 +66,7 @@ Server merges and re-validates. Same token, repeat until it passes. Expires in 5
 
 ## The event stream
 
-Everything devharness pushes at you - a guard block, a message from another session - appends one JSON line to `~/.devharness/events/<sessionId>.jsonl`. One file, one watch, and any kind added later arrives on the same watch.
+Everything devharness pushes at you - a guard block, a message from another session, an annotation someone picked in the browser - appends one JSON line to `~/.devharness/events/<sessionId>.jsonl`. One file, one watch, and any kind added later arrives on the same watch.
 
 Installed as a plugin, a `SessionStart` hook prints that path and the `Monitor` call at the top of every session. Arm it when you see it:
 
@@ -81,7 +81,25 @@ Monitor({
 
 Nothing is lost without it: blocks and messages still surface on your next devharness call. The watch is what makes them arrive while you are doing something else, which for a dev server that died an hour ago is the difference that matters.
 
-Each line carries `kind` and, where there is one, `resolve` - the call that clears it. `kind: "block"` also carries `guard`, one of `port`, `breakpoint`, `pendingStartup`, `bug`, `duplicateSession`; blocks are deduplicated, one line per *new* block rather than one per blocked call. `kind: "message"` carries `from` and the message id.
+Each line carries `kind` and, where there is one, `resolve` - the call that clears it. `kind: "block"` also carries `guard`, one of `port`, `breakpoint`, `pendingStartup`, `bug`, `duplicateSession`; blocks are deduplicated, one line per *new* block rather than one per blocked call. `kind: "message"` carries `from` and the message id; `kind: "annotation"` carries the selector, component and comment for an element someone picked.
+
+## Letting someone point instead of describe
+
+When the person driving the browser would have to write a paragraph to say which element is wrong - or when the problem only exists mid-interaction and is gone before it can be described - stop asking for the description:
+
+```
+annotate({ action: 'start', connectionReason: 'app' })
+```
+
+The app page freezes - `Debugger.pause` for its JS, `Animation.setPlaybackRate(0)` for the compositor - Chrome's own element picker arms, and a control tab opens holding the comment box. Nothing is injected into the app itself: a frozen page cannot accept a keystroke, so the UI lives in a separate tab on a separate origin. They click an element in one tab, type a few words in the other, save.
+
+Each annotation records the selector, the text, the component name and the JSX source location where a dev build exposes one, and lands on the event stream above - so with the watch armed it reaches you mid-task. Keep working while they annotate.
+
+`annotate({ action: 'tick', steps: 1 })` runs the page forward by one callback and freezes again - one callback is one thing the page does, so it is the exact unit and the smallest real move. `tick({ budgetMs: 800 })` is for chasing a known timeout: it runs as many callbacks as it takes to cover that much page time and reports where it landed. Either way this is how they walk into a transient state and hold it still long enough to click; the control tab has buttons for both. `annotate({ action: 'list' })` reads back what they recorded. They finish by closing the control tab, which releases the page and shuts the server down; `stop` does the same from your side.
+
+Two independent toggles, worth explaining once. PICKER decides whether a click points at something or reaches the app. FREEZE decides whether the page runs at all - while it is held its JS is stopped, so driving the app needs both the picker disarmed *and* the page running. Picking works either way, because the picker is Chrome's own rather than the page's. The usual shape is: run it, do the thing that goes wrong, freeze the moment it does, then point.
+
+While the page is held, anything waiting on a timer stops - including a navigation's load timers - so other devharness tools see it as paused at a breakpoint; `annotate({ action: 'unfreeze' })` or `stop` is what clears that, not `execution({ action: 'resume' })`.
 
 ## Talking to another devharness session
 

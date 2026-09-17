@@ -125,7 +125,7 @@ Chrome DevTools Protocol debugging for JavaScript/TypeScript in Chrome, Node.js,
 
 ## The event stream
 
-Everything devharness pushes - a guard block, a message from another session - appends one JSON line to `~/.devharness/events/<sessionId>.jsonl`. One file per session, so one watch covers every kind, including kinds added later.
+Everything devharness pushes - a guard block, a message from another session, an annotation picked in the browser - appends one JSON line to `~/.devharness/events/<sessionId>.jsonl`. One file per session, so one watch covers every kind, including kinds added later.
 
 Installed as a plugin, a `SessionStart` hook (`plugin/hooks/session-start.mjs`) creates that file and prints the `Monitor` call as session context before the first turn. In Claude Code, arm it:
 
@@ -145,6 +145,7 @@ Line kinds:
 ```json
 {"ts":"...","kind":"block","guard":"pendingStartup","tool":"navigate","detail":"died before port detected: \"web\"","resolve":"server({ action: 'acknowledgeStartup', serverId: 'web' })"}
 {"ts":"...","kind":"message","from":"66ba2d65","id":"d94924a8-...","detail":"Message from 66ba2d65: ...","resolve":"message({ action: 'read' })"}
+{"ts":"...","kind":"annotation","annotationId":"...","connection":"app","url":"http://localhost:5173/","tick":300,"comment":"flashes empty here","selector":"#row-3 > span","component":"StatusRow","detail":"StatusRow #row-3 > span - \"flashes empty here\""}
 ```
 
 `guard` is one of `port`, `breakpoint`, `pendingStartup`, `bug`, `duplicateSession`. Blocks are deduplicated: one line per *new* block, not one per blocked call. Any client can tail the file.
@@ -227,6 +228,18 @@ runs against (see Quick Start).
 - `acknowledge`: acknowledge pending bugs to unblock other tools
 - **GitHub** (via the `gh` CLI; only `publish` and `sync` use the network): `publish` shows a draft and posts nothing until `confirm: true`; `sync` reconciles both ways and reports a conflict rather than overwriting when both sides changed; `import` materialises a GitHub-only issue locally; `link` stamps an existing number with no network call; `pullSequence` writes a sequence out of an issue body to disk (one authored by another GitHub account needs a person to read it and pass `confirm: true`)
 - A sequence pulled from an issue is **never run automatically**, and one using `execution`, `saveToDisk`, `server`, `request` or `download` is refused unless you pass `allowPrivilegedSteps: true`. Read it first
+
+**Annotate**: `annotate` (actions: start, stop, tick, list, status)
+
+- For when describing a UI problem costs more than pointing at it. `start` freezes the page, arms Chrome's own element picker and opens a control tab; the person clicks an element in the app tab, types a comment in the control tab, saves. Each annotation records the selector, the text, the component name and the JSX source location where a dev build exposes one - so the report carries what the element *is*, not a description of where it sits
+- Nothing is injected into the page being annotated. The comment box, picker toggle and tick buttons live in the control tab, served from `127.0.0.1` while apps sit on `localhost` - a different site, so Chrome gives it its own renderer process and freezing the app pane cannot take the UI down with it. Chrome's split view has no API (`splitViewId` is read-only), so the tab is opened beside the app for the person to split manually
+- The freeze stops two clocks. `Debugger.pause` holds the page's JS, and with it every timer and `rAF` callback; CSS animations run on the compositor and need `Animation.setPlaybackRate(0)` as well. Both are released on `stop`, and the page goes back to real time
+- `tick({ steps })` runs that many callbacks and freezes again - the exact unit, since one callback is one thing the page does and where its state changes. `tick({ budgetMs })` is the convenience for chasing a known timeout: it runs as many callbacks as it takes to cover that much page time and reports where it landed, which is rarely the number asked for. Either way this is how you walk into a state that only exists mid-interaction (a toast before it auto-dismisses, a spinner between two renders) and hold it there to be clicked. `Emulation.setVirtualTimePolicy` would give exact millisecond steps but is a one-way door - it replaces the page's clock with no way back, so the tab could never be handed over working
+- Each step records the callbacks it ran through - what scheduled them, the function, the source line and the page time they landed at - and the control tab keeps a running log at the bottom. This only exists while stepping: a freely running page is never paused, so there is nothing to observe it with short of tracing
+- While the picker is armed every click is a pick; disarming it hands clicks back to the app. Driving the app also needs the page running - under a freeze its JS is stopped, so a click reaches nothing - so `unfreeze` and `freeze` toggle the hold without leaving annotate mode. Picking works in both states, since the picker is Chrome's rather than the page's
+- Closing the control tab ends the mode: the page is released back to real time, the debugger detaches and the server shuts down. `stop` does the same from the agent side. Annotations are written as they are saved, so neither loses anything
+- Nothing blocks. `start` returns as soon as the control tab is open; annotations land on the session event stream as they are saved, and in `.devharness/annotations/<sessionId>.jsonl`. Keep working while the person annotates
+- While frozen, anything waiting on a timer stops - including a navigation's load timers. `stop` before driving the page with other tools
 
 **Messages**: `message` (actions: sessions, send, read, reply)
 - Text between two devharness sessions on this machine - a session hitting a devharness bug talking to the session working on devharness itself. `sessions` lists reachable mailboxes and this session's own mailbox path

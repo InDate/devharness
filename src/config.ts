@@ -150,6 +150,7 @@ export const TOGGLEABLE_TOOLS = [
   'server',      // Dev server management
   'issues',      // Issue tracking
   'message',     // Text between two devharness sessions on this machine
+  'annotate',    // Freeze the page and collect element-level comments
   'dashboard',   // Web dashboard for monitoring sessions
   // Note: 'config' is NOT toggleable - always enabled
 ] as const;
@@ -170,6 +171,7 @@ export const TOOL_DEPENDENCIES: Record<string, string[]> = {
   network: ['connection'],
   page: ['connection'],
   dom: ['connection'],
+  annotate: ['connection'],
   screenshot: ['connection'],
   input: ['connection'],
   content: ['connection'],

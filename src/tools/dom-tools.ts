@@ -6,7 +6,7 @@ import { z } from 'zod';
 import type { CDPManager } from '../cdp-manager.js';
 import { PuppeteerManager } from '../puppeteer-manager.js';
 import type { ConnectionManager } from '../connection-manager.js';
-import { executeWithPauseDetection, formatActionResult } from '../debugger-aware-wrapper.js';
+import { executeWithPauseDetection, formatActionResult, actionFailureResponse } from '../debugger-aware-wrapper.js';
 import { checkBrowserAutomation } from '../error-helpers.js';
 import { createTool } from '../validation-helpers.js';
 import { createSuccessResponse, createErrorResponse, formatCodeBlock } from '../messages.js';
@@ -109,6 +109,10 @@ export function createDOMTools(
             await cleanupResolvedSelector(page, selector);
 
             // Check if element was not found
+            {
+              const failed = actionFailureResponse(result, 'querySelector', rawSelector);
+              if (failed) return failed;
+            }
             if (!result.result || !result.result.found) {
               return createErrorResponse('ELEMENT_NOT_FOUND', { selector: rawSelector });
             }
@@ -187,6 +191,10 @@ export function createDOMTools(
 
             await cleanupResolvedSelector(page, selector);
 
+            {
+              const failed = actionFailureResponse(result, 'hitTest', rawSelector);
+              if (failed) return failed;
+            }
             const matches: any[] = result.result || [];
             if (matches.length === 0) {
               return createErrorResponse('ELEMENT_NOT_FOUND', { selector: rawSelector });
@@ -273,6 +281,10 @@ export function createDOMTools(
             await cleanupResolvedSelector(page, selector);
 
             // Check if element was not found
+            {
+              const failed = actionFailureResponse(result, 'getProperties', rawSelector);
+              if (failed) return failed;
+            }
             if (!result.result || result.result.error) {
               return createErrorResponse('ELEMENT_NOT_FOUND', { selector: rawSelector });
             }

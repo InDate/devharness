@@ -1,5 +1,5 @@
 /**
- * Test Application for cdp-tools Debugger
+ * Test Application for devharness Debugger
  * This application contains intentional bugs for debugging challenges
  */
 import express from 'express';

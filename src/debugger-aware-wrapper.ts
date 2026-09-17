@@ -5,6 +5,7 @@
 
 import type { CDPManager } from './cdp-manager.js';
 import { isAbortError } from './utils/abort.js';
+import { createErrorResponse } from './messages.js';
 
 export interface ActionResult<T = any> {
   success: boolean;
@@ -62,8 +63,12 @@ export async function executeWithPauseDetection<T = any>(
       // The actual action
       action().then(res => ({ type: 'success' as const, result: res })),
 
-      // Pause detection
-      cdpManager.waitForPause(timeout).then(() => ({ type: 'paused' as const })),
+      // waitForPause rejects on timeout, and a rejection settles the race -
+      // failing an action still in flight. This arm stays pending instead.
+      cdpManager.waitForPause(timeout).then(
+        () => ({ type: 'paused' as const }),
+        () => new Promise<never>(() => {})
+      ),
     ]);
 
     if (result.type === 'paused') {
@@ -114,6 +119,25 @@ export async function executeWithPauseDetection<T = any>(
       } : undefined,
     };
   }
+}
+
+/**
+ * An absent `result` means the page was paused or the action threw - neither
+ * of which is a missing element. Returns undefined when a result came back.
+ */
+export function actionFailureResponse(
+  result: ActionResult,
+  actionName: string,
+  selector: string
+): any | undefined {
+  if (result.result !== undefined) return undefined;
+  const detail = result.error
+    || (result.pausedAtBreakpoint ? `execution is paused at a breakpoint` : 'the action returned nothing');
+  return createErrorResponse('ACTION_FAILED', {
+    action: actionName,
+    selector,
+    error: detail,
+  });
 }
 
 /**

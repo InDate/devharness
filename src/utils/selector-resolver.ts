@@ -40,6 +40,17 @@ export interface SelectorError {
 export function parseExtendedSelector(selector: string): {
   baseSelector: string;
   textMatch: { type: 'has-text' | 'text' | 'text-is'; value: string } | null;
+  /**
+   * The compound the pseudo-class is attached to - what the text is tested
+   * against. `.session-row:has-text("x") .cell` tests `.session-row`.
+   */
+  scopeSelector?: string;
+  /**
+   * What follows that compound, empty when the pseudo-class sits on the last
+   * one. Non-empty means the match descends from the scope, rather than the
+   * text being tested against the descendant - whose own text differs.
+   */
+  descendantSelector?: string;
 } | { error: string } {
   // Check if this looks like an extended selector
   const extendedMatch = selector.match(/:(?:has-text|text|text-is)\(/);
@@ -107,6 +118,8 @@ export function parseExtendedSelector(selector: string): {
   return {
     baseSelector,
     textMatch: { type: matchType, value: textValue },
+    scopeSelector: beforePart.trim() || '*',
+    descendantSelector: afterPart.trim(),
   };
 }
 
@@ -150,65 +163,96 @@ export async function resolveSelector(
     };
   }
 
-  const { baseSelector, textMatch } = parsed;
+  const { baseSelector, textMatch, scopeSelector, descendantSelector } = parsed;
 
   if (!textMatch) {
     // Shouldn't happen since we checked isExtendedSelector, but handle it
     return { selector, matchCount: 1 };
   }
 
-  // Find matching elements and mark the first one with a unique attribute
+  // Find matching elements and mark the first one with a unique attribute.
+  //
+  // The mark has to survive the page re-rendering. A live UI that repaints on a
+  // timer - a dashboard polling for state, a list re-keying - replaces the
+  // matched node and takes the attribute with it, so a caller querying a moment
+  // later finds nothing and reports the element as missing while it is plainly
+  // on screen. The mark re-applies itself on every mutation until it is cleaned
+  // up, which is what makes an extended selector usable on a page that moves.
   const result = await page.evaluate(
-    (base: string, matchType: string, matchText: string) => {
-      const elements = (globalThis as any).document.querySelectorAll(base);
-      const matches: Array<{ text: string; tagName: string }> = [];
-      let firstMatchElement: any = null;
+    (base: string, matchType: string, matchText: string, scope: string, descendant: string) => {
+      const root = (globalThis as any).document;
 
-      elements.forEach((el: any) => {
+      const matchesText = (el: any): boolean => {
         const textContent = el.textContent?.trim() || '';
         const ariaLabel = el.getAttribute('aria-label') || '';
         const title = el.getAttribute('title') || '';
-        // Combine all text sources for matching
         const allText = [textContent, ariaLabel, title].filter(Boolean).join(' ');
-        let isMatch = false;
-
         if (matchType === 'has-text') {
-          isMatch = allText.toLowerCase().includes(matchText.toLowerCase());
-        } else {
-          // 'text' or 'text-is' - exact match (check each source separately)
-          isMatch = textContent === matchText || ariaLabel === matchText || title === matchText;
+          return allText.toLowerCase().includes(matchText.toLowerCase());
         }
+        return textContent === matchText || ariaLabel === matchText || title === matchText;
+      };
 
-        if (isMatch) {
-          if (!firstMatchElement) {
-            firstMatchElement = el;
-          }
-          const displayText = textContent || ariaLabel || title;
-          matches.push({
-            text: displayText.substring(0, 60) + (displayText.length > 60 ? '...' : ''),
-            tagName: el.tagName.toLowerCase(),
-          });
-        }
-      });
+      const collect = () => {
+        const found: any[] = [];
+        root.querySelectorAll(descendant ? scope : base).forEach((el: any) => {
+          if (!matchesText(el)) return;
+          if (!descendant) { found.push(el); return; }
+          el.querySelectorAll(descendant).forEach((inner: any) => found.push(inner));
+        });
+        return found;
+      };
 
-      if (matches.length === 0) {
+      const initial = collect();
+      if (initial.length === 0) {
         return { error: 'no_match' };
       }
 
-      // Mark the first matching element with a unique data attribute
       const uniqueId = `cdp-ext-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-      firstMatchElement!.setAttribute('data-cdp-selector-match', uniqueId);
+      const apply = () => {
+        const current = collect();
+        if (!current.length) return;
+        if (current[0].getAttribute('data-cdp-selector-match') === uniqueId) return;
+        // A re-render can leave the old mark on a detached node; only the live
+        // first match should carry it.
+        root.querySelectorAll(`[data-cdp-selector-match="${uniqueId}"]`)
+          .forEach((el: any) => el.removeAttribute('data-cdp-selector-match'));
+        current[0].setAttribute('data-cdp-selector-match', uniqueId);
+      };
+      apply();
+
+      const w = globalThis as any;
+      w.__cdpSelectorMarks = w.__cdpSelectorMarks || {};
+      const observer = new (globalThis as any).MutationObserver(() => apply());
+      observer.observe(root.documentElement, { childList: true, subtree: true });
+      // A caller that never cleans up must not leave an observer running for
+      // the life of the page.
+      const timer = (globalThis as any).setTimeout(() => {
+        observer.disconnect();
+        delete w.__cdpSelectorMarks[uniqueId];
+      }, 30000);
+      w.__cdpSelectorMarks[uniqueId] = { observer, timer };
+
+      const describe = (el: any) => {
+        const text = (el.textContent?.trim() || el.getAttribute('aria-label') || el.getAttribute('title') || '');
+        return {
+          text: text.substring(0, 60) + (text.length > 60 ? '...' : ''),
+          tagName: el.tagName.toLowerCase(),
+        };
+      };
 
       return {
         uniqueId,
-        matchCount: matches.length,
-        matches: matches.slice(0, 5), // Return first 5 for context
-        tagName: matches[0].tagName,
+        matchCount: initial.length,
+        matches: initial.slice(0, 5).map(describe),
+        tagName: describe(initial[0]).tagName,
       };
     },
     baseSelector,
     textMatch.type,
-    textMatch.value
+    textMatch.value,
+    scopeSelector ?? baseSelector,
+    descendantSelector ?? ''
   );
 
   if ('error' in result && result.error === 'no_match') {
@@ -245,9 +289,16 @@ export async function cleanupResolvedSelector(page: any, selector: string): Prom
   }
 
   await page.evaluate((sel: string) => {
-    const el = (globalThis as any).document.querySelector(sel);
-    if (el) {
-      el.removeAttribute('data-cdp-selector-match');
+    const w = globalThis as any;
+    // Stop the mark re-applying itself before removing it, or the observer puts
+    // it straight back.
+    const uniqueId = sel.match(/\[data-cdp-selector-match="([^"]+)"\]/)?.[1];
+    if (uniqueId && w.__cdpSelectorMarks?.[uniqueId]) {
+      const { observer, timer } = w.__cdpSelectorMarks[uniqueId];
+      observer?.disconnect?.();
+      w.clearTimeout?.(timer);
+      delete w.__cdpSelectorMarks[uniqueId];
     }
+    w.document.querySelectorAll(sel).forEach((el: any) => el.removeAttribute('data-cdp-selector-match'));
   }, selector);
 }

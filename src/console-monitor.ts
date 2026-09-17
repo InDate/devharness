@@ -468,6 +468,21 @@ export class ConsoleMonitor {
     return stats;
   }
 
+  /** Does not move the cursor - call it before getLogStats(). */
+  peekNewestError(): { text: string; where?: string } | undefined {
+    const fresh = this.messages.slice(this.lastSeenCount);
+    for (let i = fresh.length - 1; i >= 0; i--) {
+      const message = fresh[i];
+      if (message.type !== 'error') continue;
+      const file = message.location?.url?.split('/').pop();
+      return {
+        text: (message.text || '').replace(/\s+/g, ' ').trim(),
+        ...(file ? { where: `${file}:${message.location!.lineNumber}` } : {}),
+      };
+    }
+    return undefined;
+  }
+
   /**
    * Peek at log stats without updating the cursor
    */

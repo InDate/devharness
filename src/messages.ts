@@ -17,6 +17,7 @@ interface MessageTemplate {
   code?: string;
   summary?: string;  // Brief action description for status line (e.g., "Breakpoint set")
   content: string;   // Key details and additional info
+  once?: string;     // Orientation: rendered on the first call of a session only
   suggestions?: string[];
   note?: string;
   example?: string;
@@ -67,6 +68,8 @@ class MessageManager {
 
       let inCodeBlock = false;
       let inSuggestions = false;
+      let inOnce = false;
+      let onceLines: string[] = [];
       let codeBlockLines: string[] = [];
 
       for (let i = 1; i < lines.length; i++) {
@@ -140,9 +143,15 @@ class MessageManager {
           continue;
         }
 
+        if (line.startsWith('**Once per session:**')) {
+          inOnce = true;
+          inSuggestions = false;
+          continue;
+        }
+
         // Collect content lines
         if (line.trim() && !line.startsWith('#')) {
-          contentLines.push(line);
+          (inOnce ? onceLines : contentLines).push(line);
         }
       }
 
@@ -152,6 +161,7 @@ class MessageManager {
         code,
         summary,
         content: contentLines.join('\n').trim(),
+        once: onceLines.length > 0 ? onceLines.join('\n').trim() : undefined,
         suggestions: suggestions.length > 0 ? suggestions : undefined,
         note,
         example,
@@ -199,8 +209,19 @@ class MessageManager {
       return `Message not found: ${id}`;
     }
 
-    return this.formatMessage(template.content, variables);
+    const once = this.takeOnce(id, template);
+    const body = this.formatMessage(template.content, variables);
+    return once ? `${body}\n\n${this.formatMessage(once, variables)}` : body;
   }
+
+  /** Returns the once block on the first call for that id, nothing after. */
+  private takeOnce(id: string, template: MessageTemplate): string | undefined {
+    if (!template.once || this.saidOnce.has(id)) return undefined;
+    this.saidOnce.add(id);
+    return template.once;
+  }
+
+  private saidOnce = new Set<string>();
 
   /**
    * Get a complete message template with metadata
@@ -519,6 +540,11 @@ class MessageManager {
     // Add note if present
     if (template.note) {
       markdown += `\n\n**Note:** ${this.formatMessage(template.note, variables)}`;
+    }
+
+    const once = this.takeOnce(id, template);
+    if (once) {
+      markdown += `\n\n${this.formatMessage(once, variables)}`;
     }
 
     // Add example for errors

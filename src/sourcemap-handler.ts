@@ -49,6 +49,52 @@ export class SourceMapHandler {
   }
 
   /**
+   * The original text of a source file, taken from whichever source map carries
+   * it. Maps embed `sourcesContent`, so this answers for a bundled or remote app
+   * where the file is not on disk at all - which is why it lives here rather
+   * than in a caller that could only read the filesystem.
+   */
+  async getOriginalContent(originalSource: string): Promise<string | null> {
+    if (this.clearing) return null;
+
+    const fromConsumer = (consumer: SourceMapConsumer): string | null => {
+      // Same cast the mapping paths use: `sources` is present at runtime but
+      // absent from the union type the library exports.
+      const sources = (consumer as any).sources as string[] | undefined;
+      if (!sources) return null;
+      const match = this.findMatchingSource(sources, originalSource);
+      if (!match) return null;
+      try {
+        return consumer.sourceContentFor(match, true);
+      } catch {
+        return null;
+      }
+    };
+
+    for (const consumer of this.sourceMaps.values()) {
+      const content = fromConsumer(consumer);
+      if (content) return content;
+    }
+
+    // Nothing loaded carries it. A pending map whose script shares the file's
+    // name is where it will be - loading every pending map to find out would
+    // cost more than the answer is worth.
+    const basename = path.basename(this.normalizePath(originalSource));
+    for (const [scriptUrl, sourceMapURL] of [...this.pendingSourceMaps]) {
+      if (!this.normalizePath(scriptUrl).endsWith(basename)) continue;
+      await this.loadSourceMapFromURL(scriptUrl, sourceMapURL);
+      this.pendingSourceMaps.delete(scriptUrl);
+      const consumer = this.sourceMaps.get(scriptUrl);
+      if (consumer) {
+        const content = fromConsumer(consumer);
+        if (content) return content;
+      }
+    }
+
+    return null;
+  }
+
+  /**
    * Load a source map from a file (with size limit)
    */
   async loadSourceMap(generatedFilePath: string): Promise<void> {

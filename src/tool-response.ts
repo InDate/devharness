@@ -10,6 +10,7 @@ import { createErrorResponse } from './messages.js';
 import type { BlockEventInfo } from './block-events.js';
 import type { LaunchObservations } from './chrome-launcher.js';
 import type { SessionMessage } from './session-messages.js';
+import type { Annotation, AnnotateSessionState, TickResult } from './annotate-mode.js';
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -261,8 +262,25 @@ export interface ToolResponseMeta {
   replay?: ReplayRunMeta;
   github?: GithubToolMeta;
   message?: MessageToolMeta;
+  annotate?: AnnotateToolMeta;
   /** launchChrome: the readings taken during a launch that failed. */
   launchObservations?: LaunchObservationsMeta;
+}
+
+/** Structured result of an annotate action. Behaviour reads this, never the
+ *  rendered text. */
+export interface AnnotateToolMeta {
+  action: 'start' | 'stop' | 'tick' | 'freeze' | 'unfreeze' | 'picker' | 'list' | 'status';
+  /** Whether the page is frozen with the picker armed, after this call. */
+  active?: boolean;
+  connection?: string;
+  state?: AnnotateSessionState;
+  /** tick: what the step asked for, and what it actually did. */
+  tick?: TickResult;
+  /** list: the annotations returned, oldest first. */
+  annotations?: Annotation[];
+  /** list: how many exist in total, before any limit. */
+  total?: number;
 }
 
 /** Structured result of a cross-session message action. Behaviour reads this,
@@ -466,6 +484,7 @@ const BREAKPOINT_ALLOWED_TOOLS = new Set([
   'inspect',      // Get call stack, variables, evaluate expression
   'breakpoint',   // Manage breakpoints
   'console',      // View console logs
+  'annotate',     // Owns the pause it would otherwise be blocked by
 ]);
 
 /**
@@ -816,9 +835,17 @@ export interface StatusLineItem {
 /**
  * Build status lines suffix from items
  */
-export function buildStatusSuffix(items: StatusLineItem[]): string {
+export function buildStatusSuffix(items: StatusLineItem[], legend = false): string {
   if (items.length === 0) return '';
 
-  const lines = items.map(item => `**${item.label}:** ${item.value}`);
-  return `\n\n---\n${lines.join('\n')}`;
+  const lines = items.map(item => `${item.label}: ${item.value}`);
+  return `\n\n${lines.join('\n')}${legend ? `\n${STATUS_LEGEND}` : ''}`;
 }
+
+const STATUS_LEGEND = [
+  '(Logs: server output written since the previous tool call, per server - absent when nothing was written.',
+  ' Read it with `server({ action: \'logs\', serverId })`.',
+  ' Console: the page\'s own console over the same window, for the connection this call used, naming the newest error and where it came from.',
+  ' Replay: this call\'s index in the session history - `replay({ action: \'repeat\', indices: [N] })` runs it again,',
+  ' which re-drives setup without retyping it. These lines appear only when something changed, and this note only once.)',
+].join('');

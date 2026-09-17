@@ -1,0 +1,17 @@
+{
+  "name": "devharness-preact-test-app",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Preact dev-build fixture for devharness annotate mode - exercises component and JSX source detection",
+  "scripts": {
+    "dev": "vite --port 3103 --strictPort"
+  },
+  "dependencies": {
+    "preact": "^10.25.4"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.9.3",
+    "vite": "^6.0.7"
+  }
+}

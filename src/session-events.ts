@@ -1,7 +1,8 @@
 /**
  * One event stream per session.
  *
- * Every push event devharness produces - a guard block, an incoming message -
+ * Every push event devharness produces - a guard block, an incoming message,
+ * an annotation picked in the browser -
  * appends one JSON line to `~/.devharness/events/<session>.jsonl`. One file
  * means one watch: a session arms a single Monitor and receives every kind of
  * event, including kinds added later, instead of one watch per feature.
@@ -16,7 +17,7 @@ import { promises as fs } from 'fs';
 import { join } from 'path';
 import { getOutputPath } from './helpers/paths.js';
 
-export type EventKind = 'block' | 'message';
+export type EventKind = 'block' | 'message' | 'annotation' | 'sequence' | 'screenshot';
 
 export interface SessionEvent {
   ts: string;

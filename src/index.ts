@@ -53,6 +53,7 @@ import { createRequestTools } from './tools/request-tools.js';
 import { createAssertTools } from './tools/assert-tools.js';
 import { createWaitTools } from './tools/wait-tools.js';
 import { createModalTools } from './tools/modal-tools.js';
+import { createAnnotateTools } from './tools/annotate-tools.js';
 import { createReplayTools } from './tools/replay-tools.js';
 import { createServerTools } from './tools/server-tools.js';
 import { createConfigTools } from './tools/config-tools.js';
@@ -1504,6 +1505,13 @@ logpointTracker.setLimitExceededCallback((metadata) => {
   });
 });
 
+function truncate(text: string, limit: number): string {
+  return text.length <= limit ? text : `${text.slice(0, limit - 1)}\u2026`;
+}
+
+let pidAnnounced = false;
+let statusLegendShown = false;
+
 /**
  * Execute a tool call - used by replay system
  */
@@ -1550,6 +1558,7 @@ const allTools = {
   ...(configManager.isToolEnabled('input') ? createInputTools(proxyPuppeteerManager, proxyCdpManager, connectionManager, resolveConnectionFromReason) : {}),
   ...(configManager.isToolEnabled('content') ? createContentTools(proxyPuppeteerManager, proxyCdpManager, connectionManager, resolveConnectionFromReason, clickableCache) : {}),
   ...(configManager.isToolEnabled('modal') ? createModalTools(resolveConnectionFromReason) : {}),
+  ...(configManager.isToolEnabled('annotate') ? createAnnotateTools(proxyPuppeteerManager, sourceMapHandler, commandRecorder, executeToolCall, resolveConnectionFromReason) : {}),
   ...(configManager.isToolEnabled('storage') ? createStorageTools(proxyPuppeteerManager, proxyCdpManager, resolveConnectionFromReason) : {}),
   // Download tools
   ...(configManager.isToolEnabled('download') ? createDownloadTools() : {}),
@@ -1785,7 +1794,7 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
           .map(s => `${s.serverId} (${s.newStderr} err/${s.newStdout} out)`);
 
         if (parts.length > 0) {
-          statusItems.push({ label: 'Server Logs', value: parts.join(' | ') });
+          statusItems.push({ label: 'Logs', value: parts.join(' ') });
         }
       }
 
@@ -1794,6 +1803,8 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
       if (connectionReason) {
         const connection = connectionManager.findConnectionByReference(connectionReason);
         if (connection?.consoleMonitor) {
+          // Read before getLogStats, which advances the cursor past it.
+          const newestError = connection.consoleMonitor.peekNewestError();
           const logStats = connection.consoleMonitor.getLogStats();
           if (logStats.newMessages > 0) {
             const details: string[] = [];
@@ -1801,29 +1812,29 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
             if (logStats.newWarnings > 0) details.push(`${logStats.newWarnings} warn`);
             const otherCount = logStats.newMessages - logStats.newErrors - logStats.newWarnings;
             if (otherCount > 0) details.push(`${otherCount} log`);
-            statusItems.push({ label: 'Console', value: details.join('/') });
+            const cause = newestError
+              ? ` - ${truncate(newestError.text, 140)}${newestError.where ? ` (${newestError.where})` : ''}`
+              : '';
+            statusItems.push({ label: 'Console', value: `${details.join('/')}${cause}` });
           }
         }
       }
 
-      // Add replay hint with history index
       if (commandIndex !== null) {
-        statusItems.push({
-          label: 'Repeat',
-          value: `\`replay({ action: 'repeat', indices: [${commandIndex}] })\``
-        });
+        statusItems.push({ label: 'Replay', value: String(commandIndex) });
       }
 
-      // Append all status lines if any
-      const statusSuffix = buildStatusSuffix(statusItems);
+      const statusSuffix = buildStatusSuffix(statusItems, !statusLegendShown);
       if (statusSuffix) {
+        statusLegendShown = true;
         appendToResponse(result, statusSuffix);
       }
 
-      // Always append PID for session file verification
-      // This gets logged by Claude, allowing us to identify our session file
-      // See: src/session-detector.ts for how this is used
-      appendToResponse(result, `\npid:${process.pid}`);
+      // One occurrence in the transcript is what session-detector.ts matches on.
+      if (!pidAnnounced) {
+        pidAnnounced = true;
+        appendToResponse(result, `\npid:${process.pid}`);
+      }
 
       // Report action to dashboard (if enabled)
       const dashboardInst = getDashboardInstance();

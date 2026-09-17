@@ -6,7 +6,7 @@ import { z } from 'zod';
 import type { CDPManager } from '../cdp-manager.js';
 import { PuppeteerManager } from '../puppeteer-manager.js';
 import type { ConnectionManager } from '../connection-manager.js';
-import { executeWithPauseDetection, formatActionResult } from '../debugger-aware-wrapper.js';
+import { executeWithPauseDetection, formatActionResult, actionFailureResponse } from '../debugger-aware-wrapper.js';
 import { checkBrowserAutomation } from '../error-helpers.js';
 import { createTool } from '../validation-helpers.js';
 import { configManager } from '../config.js';
@@ -463,6 +463,8 @@ export function createInputTools(
                   availableStrategies: result.result.blockingModal.dismissStrategies,
                 });
               }
+              const failed = actionFailureResponse(result, 'click', rawSelector);
+              if (failed) return failed;
               return createErrorResponse('ELEMENT_NOT_FOUND', { selector: rawSelector });
             }
 
@@ -702,6 +704,8 @@ export function createInputTools(
                   availableStrategies: result.result.blockingModal.dismissStrategies,
                 });
               }
+              const failed = actionFailureResponse(result, 'type', rawSelector);
+              if (failed) return failed;
               return createErrorResponse('ELEMENT_NOT_FOUND', { selector: rawSelector });
             }
 
@@ -886,6 +890,8 @@ export function createInputTools(
                   availableStrategies: result.result.blockingModal.dismissStrategies,
                 });
               }
+              const failed = actionFailureResponse(result, 'hover', rawSelector);
+              if (failed) return failed;
               return createErrorResponse('ELEMENT_NOT_FOUND', { selector: rawSelector });
             }
 
@@ -970,6 +976,10 @@ export function createInputTools(
             // Clean up temporary selector attribute
             await cleanupResolvedSelector(page, selector);
 
+            {
+              const failed = actionFailureResponse(result, 'focus', rawSelector);
+              if (failed) return failed;
+            }
             if (result.result?.error) {
               return createErrorResponse('ELEMENT_NOT_FOUND', { selector: rawSelector });
             }

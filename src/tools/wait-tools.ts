@@ -60,27 +60,31 @@ export function buildPresencePredicate(selector: string): string | { error: stri
   if ('error' in parsed) {
     return { error: parsed.error };
   }
-  const { baseSelector, textMatch } = parsed;
+  const { baseSelector, textMatch, scopeSelector, descendantSelector } = parsed;
   if (!textMatch) {
     return `!!document.querySelector(${JSON.stringify(baseSelector)})`;
   }
 
   // Matching semantics identical to resolveSelector(): textContent,
   // aria-label and title; case-insensitive partial for has-text, exact for
-  // text/text-is.
+  // text/text-is; and the text tested against the compound it was written on,
+  // descending from there when the selector continues past it.
+  const descendant = descendantSelector ?? '';
   return `(() => {
-    const els = document.querySelectorAll(${JSON.stringify(baseSelector)});
+    const els = document.querySelectorAll(${JSON.stringify(descendant ? (scopeSelector ?? baseSelector) : baseSelector)});
     const matchText = ${JSON.stringify(textMatch.value)};
     const partial = ${JSON.stringify(textMatch.type === 'has-text')};
+    const descendant = ${JSON.stringify(descendant)};
     for (const el of els) {
       const tc = (el.textContent || '').trim();
       const al = el.getAttribute('aria-label') || '';
       const ti = el.getAttribute('title') || '';
-      if (partial) {
-        if ([tc, al, ti].filter(Boolean).join(' ').toLowerCase().includes(matchText.toLowerCase())) return true;
-      } else if (tc === matchText || al === matchText || ti === matchText) {
-        return true;
-      }
+      const hit = partial
+        ? [tc, al, ti].filter(Boolean).join(' ').toLowerCase().includes(matchText.toLowerCase())
+        : (tc === matchText || al === matchText || ti === matchText);
+      if (!hit) continue;
+      if (!descendant) return true;
+      if (el.querySelector(descendant)) return true;
     }
     return false;
   })()`;

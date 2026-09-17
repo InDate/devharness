@@ -15,6 +15,7 @@ import { getOutputPath, registerRootBound } from './helpers/paths.js';
 import { atomicWriteFile } from './atomic-write.js';
 import { getIssueSequencesDir, getIssuesBySequenceFile } from './issue-tracker.js';
 import { captureVariable } from './tools/replay-executor.js';
+import type { Annotation } from './annotation.js';
 import { substituteCapturedValues, type CaptureEntry } from './tools/interpolation-reverse.js';
 
 /** JSON round-trip clone, tolerant of a result that isn't JSON-safe (drops it rather than throwing). */
@@ -31,6 +32,8 @@ export interface RecordedCommand {
   params: Record<string, any>;
   delay?: number;  // ms to wait before executing this command
   comment?: string;  // user comment describing expected behavior
+  /** Notes taken against this step, stored here so they travel with the file. */
+  annotations?: Annotation[];
 }
 
 export interface CommandSequence {

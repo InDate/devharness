@@ -33,6 +33,11 @@ export class NativeRunner implements Runner {
   /** OS-reported start time of `pid`, to detect a recycled pid. */
   private pidStartedAt: string = '';
   private logCursor = { stdout: 0, stderr: 0 };
+  /**
+   * Separate from logCursor so the status line reports the change since the
+   * last tool call, and a later log read still returns everything unread.
+   */
+  private statusCursor = { stdout: 0, stderr: 0 };
   private global: boolean = false;
 
   constructor(id: string) {
@@ -182,6 +187,7 @@ export class NativeRunner implements Runner {
     this.pidStartedAt = readProcessStartTime(pid);
     this.startedAt = new Date();
     this.logCursor = { stdout: 0, stderr: 0 };
+    this.statusCursor = { stdout: 0, stderr: 0 };
 
     await debugLog('NativeRunner', `Started: ${this.id} (PID: ${pid})`);
 
@@ -383,6 +389,7 @@ export class NativeRunner implements Runner {
     await fs.promises.writeFile(stderrPath, '', 'utf-8');
 
     this.logCursor = { stdout: 0, stderr: 0 };
+    this.statusCursor = { stdout: 0, stderr: 0 };
 
     return { logDir, stdoutPath, stderrPath };
   }
@@ -406,10 +413,12 @@ export class NativeRunner implements Runner {
     const stdoutLines = this.countFileLines(this.getStdoutLogPath());
     const stderrLines = this.countFileLines(this.getStderrLogPath());
 
-    return {
-      newStdout: Math.max(0, stdoutLines - this.logCursor.stdout),
-      newStderr: Math.max(0, stderrLines - this.logCursor.stderr),
+    const stats = {
+      newStdout: Math.max(0, stdoutLines - this.statusCursor.stdout),
+      newStderr: Math.max(0, stderrLines - this.statusCursor.stderr),
     };
+    this.statusCursor = { stdout: stdoutLines, stderr: stderrLines };
+    return stats;
   }
 
   /** Getters for state persistence */

@@ -914,6 +914,19 @@ Page reloaded successfully{{#clickableElements}}
 
 ---
 
+## ACTION_FAILED
+
+**Type:** error
+**Code:** ACTION_FAILED
+
+{{action}} on `{{selector}}` did not run: {{error}}
+
+**Suggestions:**
+- The selector matched; the failure is in the action, not in finding the element
+- Check the connection is still alive and the page has not navigated mid-action
+
+---
+
 ## ELEMENT_NOT_FOUND
 
 **Type:** error
@@ -4129,5 +4142,98 @@ Evaluating inside worker target "{{target}}" failed: {{error}}
 {{count}} console message(s) from worker target "{{target}}".
 
 {{messages}}
+
+---
+
+## Annotate Messages
+
+## ANNOTATE_STARTED
+
+**Type:** success
+**Summary:** Annotate mode on for {{connection}}
+
+Control pane: `{{controlUrl}}` - the page runs and the picker is idle.
+
+**Once per session:**
+
+FREEZE in the pane stops the page's JS and its CSS animations, holding a state that only exists mid-interaction; PICKER turns the next click into a pick. They are independent: driving the app needs the picker disarmed *and* the page running, because a held page has its JS stopped and a click reaches nothing. Picking works in either state - the picker is Chrome's, not the page's. While held, other devharness tools report the page as blocked at a breakpoint; `annotate({ action: 'unfreeze' })` or `stop` clears that, not `execution({ action: 'resume' })`, which would leave annotate mode thinking it still holds the page.
+
+Nothing is injected into the page. The pane is served from `127.0.0.1` while apps sit on `localhost` - a different site, so Chrome gives it its own renderer process. Drag it into Chrome's split view to work side by side.
+
+The person picks a step in the pane's sequence card, clicks the element in the app tab, types a comment, saves. The note is stored in that step of the sequence file, so it travels with the sequence rather than living beside it, and hovering the note swaps its text for the selector while outlining the element on the page. Saves, sequence writes and screenshots announce themselves on this session's event stream, `{{eventStreamPath}}` - so with a Monitor armed they arrive mid-task rather than on the next tool call. Keep working while they annotate.
+
+**Suggestions:**
+- To read what they recorded: `annotate({ action: 'list', connectionReason: '{{connection}}' })`
+
+---
+
+## ANNOTATE_TICKED
+
+**Type:** success
+**Summary:** Ran {{steps}} callback(s), {{actualMs}}ms
+
+Asked for {{asked}}; ran {{steps}} callback(s) over {{actualMs}}ms of page time and froze again. Totals since the freeze: {{totalSteps}} callback(s), {{tickMs}}ms.
+
+The callback is the unit - one is one thing the page does, and the only amount a step can deliver exactly. A time target runs as many callbacks as it takes to cover it, so it lands past the number asked for rather than on it.
+
+{{#ranList}}{{ranList}}{{/ranList}}
+
+{{#quiet}}**Nothing was scheduled**, so there was nothing to step to. The page is idle: whatever happens next is waiting on input, the network, or a CSS animation rather than on a timer.{{/quiet}}
+
+---
+
+## ANNOTATE_STOPPED
+
+**Type:** success
+**Summary:** Annotate mode off for {{connection}}
+
+Both clocks resumed and the page is back on real time. {{picks}} element(s) picked, {{annotations}} annotation(s) saved, {{tickMs}}ms of page time stepped through.
+
+---
+
+## ANNOTATE_LIST
+
+**Type:** success
+**Summary:** {{count}} of {{total}} annotation(s)
+
+Stored in the sequences under `{{path}}`:
+
+{{annotationList}}
+
+---
+
+## ANNOTATE_HOLD
+
+**Type:** success
+**Summary:** Page {{held}} for {{connection}}
+
+{{detail}} Picker is {{pickerState}}.
+
+---
+
+## ANNOTATE_PICKER
+
+**Type:** success
+**Summary:** Picker {{pickerState}} for {{connection}}
+
+{{detail}}
+
+---
+
+## ANNOTATE_STATUS
+
+**Type:** success
+**Summary:** Annotate mode {{active}} for {{connection}}
+
+{{detail}}
+
+---
+
+## ANNOTATE_NOT_ACTIVE
+
+**Type:** error
+**Code:** ANNOTATE_NOT_ACTIVE
+
+`{{action}}` needs annotate mode running on "{{connection}}". Start it with `annotate({ action: 'start', connectionReason: '{{connection}}' })`.
 
 ---

@@ -3,6 +3,7 @@
  */
 
 import { z } from 'zod';
+import { announceSequenceSaved } from '../sequence-events.js';
 import { selectSuiteFiles, sequenceFolders } from '../helpers/sequence-tree.js';
 import { promises as fs } from 'fs';
 import { join } from 'path';
@@ -780,6 +781,8 @@ async function handleExport(args: ReplayArgs, recorder: CommandRecorder) {
     }
     return createErrorResponse('EXPORT_FAILED', { message: sequenceResult.error });
   }
+
+  await announceSequenceSaved(sequence, sequenceResult.filepath);
 
   // If only exporting sequence JSON, we're done
   if (format === 'sequence') {

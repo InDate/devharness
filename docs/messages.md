@@ -4156,6 +4156,15 @@ Could not open a tab for this session: {{message}}
 
 ---
 
+## ANNOTATE_STEP_SETTLED
+
+**Type:** success
+**Summary:** Step {{verdict}} for {{connection}}
+
+Recording continues - {{steps}} step(s) so far.
+
+---
+
 ## STATUS_LEGEND
 
 **Type:** info
@@ -4177,6 +4186,30 @@ Ensure this selector is serving its purpose, check with the user if that is uncl
 **Type:** info
 
 The person is pointing at this note now. Look at the element it names and act on what it says.
+
+---
+
+## RECORDING_BRIEF
+
+**Type:** info
+
+The person is recording a sequence. Each action they take arrives here as a step. Judge each one against the page you can inspect, and say when a step will not survive: a selector naming data that changes (an id, a timestamp, a relative date, a count, a tree-drawing character); an action recorded with no selector at all, which replays against a screen position; the same action captured twice; a step that depends on state an earlier step did not establish. Where what they meant is unclear, ask them. Raise it while they are still clicking - the correction is cheap now and expensive after a replay fails.
+
+---
+
+## RECORDING_STEP_HELD
+
+**Type:** info
+
+Recording is held on this step while you read it. The person sees only that validation is running, so a step that reads correctly costs them nothing: approve it with `annotate({ action: 'keepStep' })` and capture continues. Where something is wrong, `annotate({ action: 'flagStep', reason: '...' })` puts your reason and a DROP/KEEP choice in front of them, and `annotate({ action: 'dropStep' })` removes it outright.
+
+---
+
+## RECORDING_REVIEW
+
+**Type:** info
+
+Read the whole sequence against the page and tell the person what will not survive a replay, what it is missing, and whether it does what they meant.
 
 ---
 

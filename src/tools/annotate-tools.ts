@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { promises as fs } from 'fs';
 import { getIssuesBySequenceFile } from '../issue-tracker.js';
 import { autoLaunchChrome } from './replay-executor.js';
+import { stopRecording, cancelRecording, eventsToCommands } from '../interaction-recorder.js';
 import type { PuppeteerManager } from '../puppeteer-manager.js';
 import type { SourceMapHandler } from '../sourcemap-handler.js';
 import type { CommandRecorder } from '../command-recorder.js';
@@ -35,13 +36,16 @@ import {
   pageHeldElsewhere,
   selectSequence,
   gotoSequenceStep,
+  keepRecordedStep,
+  dropRecordedStep,
+  flagRecordedStep,
   type Annotation,
   type SequenceState,
 } from '../annotate-mode.js';
 
 const annotateSchema = z.object({
-  action: z.enum(['start', 'stop', 'tick', 'freeze', 'unfreeze', 'picker', 'list', 'status'])
-    .describe('start (open the control pane with the page running and the picker idle), freeze/unfreeze (hold the page or let it run, without leaving annotate mode - driving the app needs it running), picker (arm or disarm, via armed), tick (run forward by steps or budgetMs), stop (release the page and close), list, status'),
+  action: z.enum(['start', 'stop', 'tick', 'freeze', 'unfreeze', 'picker', 'list', 'status', 'keepStep', 'dropStep', 'flagStep'])
+    .describe('start (open the control pane with the page running and the picker idle), freeze/unfreeze (hold the page or let it run, without leaving annotate mode - driving the app needs it running), picker (arm or disarm, via armed), tick (run forward by steps or budgetMs), stop (release the page and close), keepStep/dropStep (settle the recorded step capture is held on), list, status'),
   connectionReason: z.string()
     .describe('Connection reference (use the reference from launchChrome output)'),
   steps: z.number().int().positive().max(1000).optional()
@@ -56,6 +60,15 @@ const annotateSchema = z.object({
     .describe('start: go here first, then open the pane against it. With no browser on this reference yet, one is launched at this url - so a single call opens the page and the pane'),
   sequence: z.string().optional()
     .describe('start: open the pane with this sequence selected, so the person lands on the run being discussed rather than picking it out of a list'),
+  reason: z.string().optional()
+    .describe('flagStep: one short line naming what is wrong. Not a paragraph - it is the headline the person reads first'),
+  detail: z.string().optional()
+    .describe('flagStep: one more line of context under the headline, where it helps. Omit when the headline says enough'),
+  options: z.array(z.object({
+    selector: z.string().describe('a selector that would work here'),
+    note: z.string().describe('what makes this one hold up, in a few words'),
+  })).optional()
+    .describe('flagStep: selectors the person can lock in with one click, one row each. Offer only ones checked against the page'),
   step: z.number().int().min(0).optional()
     .describe('start: with sequence, run it to this step (0-based) and hold there - the state that step produces is what is on screen when the pane opens'),
 }).strict();
@@ -91,6 +104,14 @@ function formatAnnotations(entries: SequenceAnnotation[]): string {
       return `- [${a.id}] ${sequence} step ${step + 1} (${stepLabel})\n  t+${a.tick}ms  ${where}\n  ${a.target.selector}\n  "${a.comment}"`;
     })
     .join('\n');
+}
+
+/** Returned by record() when the person abandoned it; not a failure. */
+export const CANCELLED = '\u0000cancelled';
+
+/** The page a recording began on, as its opening step. */
+function navigateFirst(url: string) {
+  return { tool: 'navigate', params: { action: 'goto', url }, comment: 'open the page' };
 }
 
 /** Where the sequence files that hold the notes live. */
@@ -555,6 +576,117 @@ function createSequenceDriver(
       return persist(sequence);
     },
 
+    record: async (name: string, connection: string, startUrl: string) => {
+      const result = await executeToolCall('replay', {
+        action: 'recordInteraction',
+        connectionReason: connection,
+        showOverlay: false,
+        closeTabOnDone: false,
+        ...(name ? { name } : {}),
+      }).catch((error: any) => ({ isError: true, error }));
+      if (result?._meta?.replay?.cancelled) return CANCELLED;
+      if (result?.isError) return `recording failed: ${result.error ?? 'unknown'}`;
+      selected = name || null;
+      selectedConnection = connection;
+      reached = 0;
+      ended = null;
+      variableStore = {};
+
+      // Recording leaves the sequence in memory; without this it is gone when
+      // the server restarts, while the pane lists it as though it were saved.
+      const recorded = loadedByName(name);
+      if (recorded) {
+        // The page it began on is the sequence's own first step, so a replay
+        // starts where the recording did rather than wherever a tab happens to be.
+        if (startUrl && recorded.commands?.[0]?.tool !== 'navigate') {
+          recorded.commands = [navigateFirst(startUrl), ...(recorded.commands ?? [])];
+        }
+        const saved = await commandRecorder.saveSequenceToDisk(recorded.id, false, true);
+        if (!saved) return `"${name}" recorded but is no longer loaded`;
+        if (!saved.success) return `"${name}" recorded but not saved: ${saved.error}`;
+        await announceSequenceSaved(recorded, saved.filepath);
+      }
+      return undefined;
+    },
+
+    stopRecording: async (connection: string) => {
+      await stopRecording(connection);
+    },
+
+    cancelRecording: async (connection: string) => {
+      await cancelRecording(connection);
+    },
+
+    recordedSoFar: (eventsJson: string, startUrl: string) => {
+      let events: any[] = [];
+      try { events = JSON.parse(eventsJson); } catch { events = []; }
+      const commands = [
+        ...(startUrl ? [navigateFirst(startUrl)] : []),
+        ...eventsToCommands(events, { simplify: true, includeHovers: false }),
+      ];
+      return commands.map((command, index) => ({
+        index,
+        label: labelFor(command),
+        ...(command.comment ? { comment: command.comment } : {}),
+        done: true,
+        current: false,
+      }));
+    },
+
+    setVariable: async (name: string, value: string) => {
+      const sequence = openSequence();
+      if (!sequence) return 'no sequence is open';
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return `"${name}" is not a usable variable name`;
+      const commands = [...(sequence.commands ?? [])];
+      const step = {
+        tool: 'inspect',
+        params: {
+          action: 'evaluateExpression',
+          expression: JSON.stringify(value),
+          saveAs: name,
+        },
+        comment: `set ${name}`,
+      };
+      const at = commands.findIndex(c => c.params?.saveAs === name && c.tool === 'inspect');
+      if (at >= 0) commands[at] = step;
+      // After a leading navigate, so the value is set against the page it names.
+      else commands.splice(commands[0]?.tool === 'navigate' ? 1 : 0, 0, step);
+      sequence.commands = commands;
+      return persist(sequence);
+    },
+
+    removeVariable: async (name: string) => {
+      const sequence = openSequence();
+      if (!sequence) return 'no sequence is open';
+      const commands = sequence.commands ?? [];
+      const at = commands.findIndex(c => c.params?.saveAs === name && c.tool === 'inspect');
+      if (at < 0) return `"${name}" is not set by this sequence`;
+      sequence.commands = commands.filter((_, i) => i !== at);
+      return persist(sequence);
+    },
+
+    removeStep: async (index: number) => {
+      const sequence = openSequence();
+      if (!sequence) return 'no sequence is open';
+      const commands = sequence.commands ?? [];
+      if (index < 0 || index >= commands.length) return `step ${index + 1} is not in "${sequence.name}"`;
+      sequence.commands = commands.filter((_, i) => i !== index);
+      return persist(sequence);
+    },
+
+    moveStep: async (from: number, to: number) => {
+      const sequence = openSequence();
+      if (!sequence) return 'no sequence is open';
+      const commands = [...(sequence.commands ?? [])];
+      if (from < 0 || from >= commands.length) return `step ${from + 1} is not in "${sequence.name}"`;
+      const target = Math.min(Math.max(to, 0), commands.length - 1);
+      if (target === from) return undefined;
+      const [moved] = commands.splice(from, 1);
+      commands.splice(target, 0, moved);
+      sequence.commands = commands;
+      return persist(sequence);
+    },
+
     attachScreenshot: async (id: string, path: string) => {
       const sequence = openSequence();
       if (!sequence) return 'no sequence is open';
@@ -734,6 +866,20 @@ export function createAnnotateTools(
                 ...(openFailure ? { sequenceFailure: openFailure } : {}),
               }),
             };
+          }
+
+          case 'keepStep':
+          case 'dropStep':
+          case 'flagStep': {
+            const state = action === 'keepStep' ? await keepRecordedStep(connection)
+              : action === 'dropStep' ? await dropRecordedStep(connection)
+              : await flagRecordedStep(connection, args.reason ?? 'this step needs a look', args.options, args.detail);
+            const response = createSuccessResponse('ANNOTATE_STEP_SETTLED', {
+              connection,
+              verdict: action === 'keepStep' ? 'kept' : action === 'dropStep' ? 'dropped' : 'flagged for the person',
+              steps: state?.steps?.length ?? 0,
+            });
+            return { ...response, _meta: buildMeta(action, { connection, sequence: state }) };
           }
 
           case 'tick': {

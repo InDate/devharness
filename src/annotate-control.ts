@@ -36,6 +36,18 @@ export interface ControlHandlers {
   playSequence: () => Promise<void>;
   cancelSequence: () => Promise<void>;
   removeSequence: (name: string) => Promise<void>;
+  dismissFailure: () => Promise<void>;
+  recordSequence: (name: string, withAgent: boolean) => Promise<void>;
+  stopRecordingSequence: () => Promise<void>;
+  cancelRecordingSequence: () => Promise<void>;
+  removeSequenceStep: (index: number) => Promise<void>;
+  moveSequenceStep: (from: number, to: number) => Promise<void>;
+  setSequenceVariable: (name: string, value: string) => Promise<void>;
+  removeSequenceVariable: (name: string) => Promise<void>;
+  keepRecordedStep: () => Promise<void>;
+  flagRecordedStep: (reason: string, options?: Array<{ selector: string; note: string }>, detail?: string) => Promise<void>;
+  chooseStepSelector: (index: number) => Promise<void>;
+  dropRecordedStep: () => Promise<void>;
   noteAtStep: (step: number) => Promise<void>;
   removeAnnotation: (id: string) => Promise<void>;
   notifyAnnotation: (id: string) => Promise<void>;
@@ -134,6 +146,8 @@ export const PAGE = String.raw`<!doctype html>
   .ctl.collapsed button { padding: 5px 8px; }
   .ctl .headstep { display: none; }
   .ctl.collapsed .headstep { display: inline-block; }
+  button.save { background: #188038; border-color: #188038; color: #fff; font-weight: 600; }
+  button.save:hover { background: #146c30; border-color: #146c30; }
   button.danger { color: #d93025; border-color: #d93025; font-size: 10px; letter-spacing: 0.4px; }
   button.danger:hover { background: #d93025; color: #fff; }
   /* The armed state has to read as a different button, or the second click
@@ -166,7 +180,25 @@ export const PAGE = String.raw`<!doctype html>
   .progress { flex: 1; height: 5px; background: var(--panel); border-radius: 3px; overflow: hidden; }
   .progress .bar { height: 100%; width: 0; background: var(--accent); transition: width 160ms ease; }
 
-  .failure { margin-top: 10px; padding: 8px 10px; border-radius: 6px; font-size: 12px;
+  /* A step waiting on a decision, not an error: a left rule rather than a box,
+     the question first, the detail under it, the choices as the loud part. */
+  .held { margin: 6px 0 2px 24px; padding: 2px 0 2px 12px; border-left: 2px solid var(--line);
+          font-size: 12px; color: var(--muted); }
+  .held.flagged { border-left-color: #e8a33d; }
+  .heldhead { font-size: 13px; color: var(--fg); }
+  .held.flagged .heldhead { font-weight: 600; }
+  .helddetail { margin-top: 3px; font-size: 11px; color: var(--muted); }
+  .optrow { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; width: 100%;
+            margin-top: 6px; padding: 8px 10px; text-align: left; border-radius: 6px; }
+  .optrow:hover { border-color: var(--accent); background: var(--panel); }
+  .optsel { font: 11px/1.5 ui-monospace, Menlo, monospace; color: var(--fg); word-break: break-all; }
+  .optnote { font-size: 11px; color: var(--muted); }
+  .heldacts { display: flex; gap: 12px; margin-top: 8px; }
+  button.quiet { border: 0; padding: 0; background: none; color: var(--muted); font-size: 11px;
+                 text-decoration: underline; text-underline-offset: 2px; }
+  button.quiet:hover { color: var(--accent); }
+  button.quiet.drop:hover { color: #d93025; }
+  .failure { display: flex; gap: 8px; align-items: center; margin-top: 10px; padding: 8px 10px; border-radius: 6px; font-size: 12px;
              background: rgba(217,48,37,0.12); color: #d93025; }
   @media (prefers-color-scheme: dark) { .failure { color: #f28b82; } }
 
@@ -221,18 +253,29 @@ export const PAGE = String.raw`<!doctype html>
   .note:hover { outline: 1px solid var(--accent); }
   .steps li { position: relative; }
   /* No transition: it restarts on each rebuild and reads as a pulse. */
-  .steps .addnote { position: absolute; top: 5px; right: 4px; padding: 2px;
-                    border: 0; background: none; line-height: 0; color: var(--muted);
-                    opacity: 0.4; }
-  .steps .addnote:hover { opacity: 1; color: var(--accent); }
+  /* Kept out of the way until the row is hovered: a list of steps reads worse
+     with three controls on every line. */
+  .steptools { display: flex; gap: 2px; align-items: center; margin-left: auto; opacity: 0; }
+  .steps li:hover .steptools, .steptools.armed { opacity: 1; }
+  .steptools button { padding: 1px 5px; font-size: 10px; line-height: 15px; border-color: transparent; }
+  .steptools button:hover { border-color: var(--accent); }
+  .steptools .stepdrop:hover { border-color: #d93025; color: #d93025; }
+  .steps .addnote { padding: 1px 4px; border-color: transparent; line-height: 0; color: var(--muted); }
+  .steps .addnote:hover { border-color: var(--accent); color: var(--accent); }
   /* The armed step stays lit once the pointer leaves the row, or there is
      nothing on screen saying where the next pick will be filed. */
-  .steps .addnote.armed { opacity: 1; color: var(--accent); }
-  .steps .addnote.target { opacity: 0.75; }
+  .steps .addnote.armed { border-color: var(--accent); color: var(--accent); }
+
   .steps .addnote svg { display: block; }
 
   .vars { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
   .vars ol { list-style: none; margin: 8px 0 0; padding: 0; }
+  .varrow { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+  .varrow input { flex: 1; min-width: 80px; padding: 5px 7px; border: 1px solid var(--line);
+                  border-radius: 5px; background: var(--bg); color: var(--fg);
+                  font: 11px ui-monospace, Menlo, monospace; }
+  .varrow .vnameinput { flex: 0 0 120px; }
+  .vlabel { flex: 0 0 96px; font-size: 11px; color: var(--muted); }
   .vars li { display: flex; gap: 10px; align-items: baseline; padding: 4px 0;
              font: 12px ui-monospace, Menlo, monospace; }
   .vars .vname { color: var(--fg); min-width: 84px; }
@@ -241,6 +284,8 @@ export const PAGE = String.raw`<!doctype html>
   .vars .vfields { margin: 2px 0 6px 94px; }
   .vars .vfields div { color: var(--muted); font: 11px ui-monospace, Menlo, monospace; }
   .unit { font: 600 11px -apple-system, sans-serif; letter-spacing: 0.5px; color: var(--muted); width: 52px; }
+  #seqRecName { flex: 1; min-width: 180px; padding: 6px 8px; border: 1px solid var(--line);
+                border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit; font-size: 12px; }
   #seqBase { flex: 1; min-width: 180px; padding: 6px 8px; border: 1px solid var(--line);
              border-radius: 6px; background: var(--bg); color: var(--fg);
              font: 12px ui-monospace, Menlo, monospace; }
@@ -304,18 +349,20 @@ export const PAGE = String.raw`<!doctype html>
 </div>
 
 <div class="card" id="seqCard" hidden>
-  <div class="row" style="margin-top:0">
+  <div class="row" style="margin-top:0" id="seqPickRow">
     <strong class="cardlabel">SEQUENCE</strong>
     <select id="seqPick"><option value="">select a sequence…</option></select>
+    <button id="seqNew" title="record a new sequence from what you click">NEW</button>
     <button id="seqDelete" class="danger" title="erase this sequence from disk">DELETE</button>
   </div>
-  <div class="seqdesc" id="seqDesc"></div>
-  <div class="row">
-    <strong class="unit" style="width:auto">BASE URL</strong>
-    <input id="seqBase" type="text" placeholder="leave empty to use the recorded origins" />
-    <button id="seqBaseSet">SET</button>
+  <div class="row" id="seqNewRow" hidden>
+    <strong class="unit" style="width:auto">RECORD</strong>
+    <input id="seqRecName" type="text" placeholder="name a new sequence, then click through the app" />
+    <button id="seqRecord">START</button>
+    <button id="seqRecordLlm" title="record with the agent watching: it reviews what was captured before it is saved">START (WITH LLM)</button>
+    <button id="seqRecordCancel" class="danger" hidden title="abandon this recording, saving nothing">CANCEL</button>
   </div>
-
+  <div class="seqdesc" id="seqDesc"></div>
   <div class="transport">
     <button id="seqReset" class="tbtn" title="drop the run">⏮<span>reset</span></button>
     <button id="seqPlay" class="tbtn play" title="run to the end">▶<span>play</span></button>
@@ -324,12 +371,28 @@ export const PAGE = String.raw`<!doctype html>
     <span class="tickbar" id="seqPos"></span>
   </div>
 
-  <div class="failure" id="seqFail" hidden></div>
+  <div class="failure" id="seqFail" hidden>
+    <span class="grow" id="seqFailText"></span>
+    <button id="seqFailClose" title="dismiss">✕</button>
+  </div>
   <ol class="steps" id="seqSteps"></ol>
 
-  <div class="vars" id="seqVars" hidden>
-    <div class="row" style="margin-top:0"><strong class="cardlabel">VARIABLES</strong><span class="hint" id="varCount"></span></div>
+  <div class="vars" id="seqVars">
+    <div class="row" style="margin-top:0">
+      <strong class="cardlabel">VARIABLES</strong>
+      <span class="hint grow" id="varCount"></span>
+    </div>
+    <div class="varrow">
+      <span class="vlabel">base url</span>
+      <input id="seqBase" type="text" placeholder="the recorded origins" />
+      <button id="seqBaseSet">SET</button>
+    </div>
     <ol id="varList"></ol>
+    <div class="varrow">
+      <input id="varNewName" type="text" placeholder="name" class="vnameinput" />
+      <input id="varNewValue" type="text" placeholder="value" />
+      <button id="varAdd">ADD</button>
+    </div>
   </div>
 </div>
 
@@ -449,6 +512,55 @@ function render(state) {
 
 let seqNames = '';
 let seqShape = '';
+let recording = false;
+
+function heldPanel(held) {
+  const box = document.createElement('div');
+  const flagged = held.verdict === 'flagged';
+  box.className = 'held' + (flagged ? ' flagged' : '');
+
+  const head = document.createElement('div');
+  head.className = 'heldhead';
+  head.textContent = flagged ? (held.reason || held.label) : 'Checking this step\u2026';
+  box.append(head);
+
+  if (flagged && held.detail) {
+    const detail = document.createElement('div');
+    detail.className = 'helddetail';
+    detail.textContent = held.detail;
+    box.append(detail);
+  }
+
+  for (const [i, option] of (held.options || []).entries()) {
+    const row = document.createElement('button');
+    row.className = 'optrow';
+    const sel = document.createElement('span');
+    sel.className = 'optsel';
+    sel.textContent = option.selector;
+    const note = document.createElement('span');
+    note.className = 'optnote';
+    note.textContent = option.note;
+    row.append(sel, note);
+    row.addEventListener('click', () => post('/sequence/record/choose', { index: i }));
+    box.append(row);
+  }
+
+  if (flagged) {
+    const acts = document.createElement('div');
+    acts.className = 'heldacts';
+    const keep = document.createElement('button');
+    keep.className = 'quiet';
+    keep.textContent = 'keep as recorded';
+    keep.addEventListener('click', () => post('/sequence/record/keep'));
+    const drop = document.createElement('button');
+    drop.className = 'quiet drop';
+    drop.textContent = 'drop step';
+    drop.addEventListener('click', () => post('/sequence/record/drop'));
+    acts.append(keep, drop);
+    box.append(acts);
+  }
+  return box;
+}
 
 function renderSequence(seq, noteStep) {
   $('seqCard').hidden = !seq;
@@ -470,21 +582,35 @@ function renderSequence(seq, noteStep) {
   $('seqPos').textContent = seq.total ? seq.currentStep + ' of ' + seq.total : '';
   $('seqBar').style.width = seq.total ? Math.round((seq.currentStep / seq.total) * 100) + '%' : '0';
   for (const id of ['seqStep', 'seqPlay', 'seqReset']) $(id).disabled = !seq.name || seq.busy;
-  $('seqDelete').disabled = !$('seqPick').value || seq.busy;
+  recording = !!seq.recording;
+  if (recording) $('seqNewRow').hidden = false;
+  // Disabled rather than hidden: this runs on every poll, and a control that
+  // vanishes as the pointer reaches it cannot be used at all.
+  const composing = recording || !$('seqNewRow').hidden;
+  $('seqPick').disabled = composing;
+  $('seqNew').disabled = composing;
+  $('seqDelete').disabled = composing || !$('seqPick').value || seq.busy;
+  $('seqRecord').textContent = recording ? 'SAVE' : 'START';
+  $('seqRecord').classList.toggle('save', recording);
+  $('seqRecName').disabled = recording;
+  $('seqRecord').disabled = seq.busy && !recording;
+  $('seqRecordLlm').hidden = recording;
+  $('seqRecordCancel').hidden = !recording;
   // A sequence that went away under an armed button would delete the next one
   // selected in its place.
   if (deleteArmed && deleteArmed !== $('seqPick').value) disarmDelete();
   $('seqStep').firstChild.textContent = seq.busy ? '⣾' : '⏭';
 
   $('seqFail').hidden = !seq.failure;
-  if (seq.failure) $('seqFail').textContent = seq.failure;
+  if (seq.failure) $('seqFailText').textContent = seq.failure;
 
   const done = seq.total > 0 && seq.currentStep >= seq.total;
 
   // A rebuild replaces the buttons in this list. A click whose press and
   // release straddle one lands on two different elements and never becomes a
   // click, so the list is rebuilt only when its contents change.
-  const shape = JSON.stringify([seq.steps, seq.currentStep, seq.busy, noteStep, seq.noteTarget, seq.issue, done]);
+  const shape = JSON.stringify([seq.name, seq.recording, seq.steps, seq.currentStep, seq.busy,
+                                noteStep, seq.noteTarget, seq.issue, done, seq.pendingStep]);
   const changed = shape !== seqShape;
   seqShape = shape;
 
@@ -512,7 +638,34 @@ function renderSequence(seq, noteStep) {
       + '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
     add.title = 'annotate this step: arms the picker, then click the element';
     add.addEventListener('click', () => post('/sequence/note', { step: step.index }));
-    head.append(mark, what, add);
+    head.append(mark, what);
+
+    // One group: the pen sits with the reorder and remove controls rather than
+    // floating in the corner on its own.
+    const tools = document.createElement('span');
+    tools.className = 'steptools' + (seq.noteStep === step.index ? ' armed' : '');
+    tools.append(add);
+    if (!seq.recording) {
+      const up = document.createElement('button');
+      up.textContent = '\u2191';
+      up.title = 'move this step earlier';
+      up.disabled = step.index === 0 || seq.busy;
+      up.addEventListener('click', () => post('/sequence/step/move', { from: step.index, to: step.index - 1 }));
+      const down = document.createElement('button');
+      down.textContent = '\u2193';
+      down.title = 'move this step later';
+      down.disabled = step.index === (seq.steps || []).length - 1 || seq.busy;
+      down.addEventListener('click', () => post('/sequence/step/move', { from: step.index, to: step.index + 1 }));
+      const kill = document.createElement('button');
+      kill.textContent = '\u2715';
+      kill.className = 'stepdrop';
+      kill.title = 'remove this step from the sequence';
+      kill.disabled = seq.busy;
+      kill.addEventListener('click', () => post('/sequence/step/remove', { index: step.index }));
+      tools.append(up, down, kill);
+    }
+    head.append(tools);
+
     li.append(head);
 
     if (step.comment) {
@@ -532,6 +685,11 @@ function renderSequence(seq, noteStep) {
       cap.className = 'call';
       cap.textContent = '└→ captures ' + step.captures;
       li.append(cap);
+    }
+
+    // The decision belongs to the step it is about, not to the top of the card.
+    if (seq.pendingStep && seq.pendingStep.index === step.index) {
+      li.append(heldPanel(seq.pendingStep));
     }
 
     for (const a of step.annotations || []) {
@@ -621,30 +779,32 @@ function renderSequence(seq, noteStep) {
   }));
 
   const vars = seq.variables || [];
-  $('seqVars').hidden = vars.length === 0;
-  $('varCount').textContent = vars.length ? vars.length + ' carried' : '';
-  $('varList').replaceChildren(...vars.flatMap((variable) => {
+  $('varCount').textContent = vars.length ? vars.length + ' carried' : 'none yet';
+  $('varList').replaceChildren(...vars.map((variable) => {
     const li = document.createElement('li');
+    li.className = 'varrow';
     const name = document.createElement('span');
-    name.className = 'vname';
+    name.className = 'vlabel';
     name.textContent = variable.name;
-    const value = document.createElement('span');
-    value.className = 'vval';
-    value.textContent = variable.value;
+    const value = document.createElement('input');
+    value.type = 'text';
+    value.value = String(variable.value ?? '').replace(/^"|"$/g, '');
+    value.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') post('/sequence/var/set', { name: variable.name, value: value.value });
+    });
+    const set = document.createElement('button');
+    set.textContent = 'SET';
+    set.addEventListener('click', () => post('/sequence/var/set', { name: variable.name, value: value.value }));
+    const kill = document.createElement('button');
+    kill.className = 'stepdrop';
+    kill.textContent = '\u2715';
+    kill.title = 'remove this variable from the sequence';
+    kill.addEventListener('click', () => post('/sequence/var/remove', { name: variable.name }));
     const src = document.createElement('span');
     src.className = 'vsrc';
     src.textContent = variable.source;
-    li.append(name, value, src);
-    if (!variable.fields) return [li];
-
-    const fields = document.createElement('div');
-    fields.className = 'vfields';
-    for (const field of variable.fields) {
-      const row = document.createElement('div');
-      row.textContent = '├ ' + field.key + '  ' + field.value;
-      fields.append(row);
-    }
-    return [li, fields];
+    li.append(name, value, set, kill, src);
+    return li;
   }));
 }
 
@@ -782,6 +942,7 @@ function disarmDelete() {
   clearTimeout(deleteTimer);
   $('seqDelete').classList.remove('armed');
   $('seqDelete').textContent = 'DELETE';
+  $('seqDelete').title = 'erase this sequence from disk';
 }
 
 $('seqPick').addEventListener('change', () => {
@@ -800,10 +961,56 @@ $('seqDelete').addEventListener('click', () => {
   }
   deleteArmed = name;
   $('seqDelete').classList.add('armed');
-  $('seqDelete').textContent = 'DELETE ' + name + '?';
+  $('seqDelete').textContent = 'SURE?';
+  $('seqDelete').title = 'erase "' + name + '" from disk';
   clearTimeout(deleteTimer);
   deleteTimer = setTimeout(disarmDelete, 12000);
 });
+// The recording request stays open until the recording ends, so STOP is a
+// separate call rather than a reply to it.
+function startRecording(withAgent) {
+  if (recording) {
+    post('/sequence/record/stop');
+    $('seqNewRow').hidden = true;
+    $('seqNew').classList.remove('on');
+    $('seqRecName').value = '';
+    return;
+  }
+  const name = $('seqRecName').value.trim();
+  if (!name) { $('seqRecName').focus(); return; }
+  recording = true;
+  seqNames = '';
+  post('/sequence/record', { name, withAgent });
+}
+
+// The record line stays out of the way until a new sequence is wanted.
+$('seqNew').addEventListener('click', () => {
+  const row = $('seqNewRow');
+  row.hidden = !row.hidden;
+  if (!row.hidden) $('seqRecName').focus();
+});
+
+$('seqRecordCancel').addEventListener('click', () => {
+  post('/sequence/record/cancel');
+  $('seqNewRow').hidden = true;
+  $('seqNew').classList.remove('on');
+  $('seqRecName').value = '';
+});
+
+$('seqRecord').addEventListener('click', () => startRecording(false));
+$('seqRecordLlm').addEventListener('click', () => startRecording(true));
+
+$('seqFailClose').addEventListener('click', () => post('/sequence/failure/dismiss'));
+function addVariable() {
+  const name = $('varNewName').value.trim();
+  if (!name) { $('varNewName').focus(); return; }
+  post('/sequence/var/set', { name, value: $('varNewValue').value });
+  $('varNewName').value = '';
+  $('varNewValue').value = '';
+}
+
+$('varAdd').addEventListener('click', addVariable);
+$('varNewValue').addEventListener('keydown', (e) => { if (e.key === 'Enter') addVariable(); });
 $('seqBaseSet').addEventListener('click', () => post('/sequence/baseurl', { baseUrl: $('seqBase').value }));
 $('seqBase').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') post('/sequence/baseurl', { baseUrl: $('seqBase').value });
@@ -927,6 +1134,35 @@ export async function startControlServer(handlers: ControlHandlers): Promise<Con
             case '/sequence/play': await handlers.playSequence(); break;
             case '/sequence/cancel': await handlers.cancelSequence(); break;
             case '/sequence/delete': await handlers.removeSequence(String(body.name ?? '')); break;
+            case '/sequence/failure/dismiss': await handlers.dismissFailure(); break;
+            case '/sequence/record':
+              await handlers.recordSequence(String(body.name ?? ''), !!body.withAgent);
+              break;
+            case '/sequence/record/stop': await handlers.stopRecordingSequence(); break;
+            case '/sequence/record/cancel': await handlers.cancelRecordingSequence(); break;
+            case '/sequence/step/remove':
+              await handlers.removeSequenceStep(Math.max(0, Number(body.index) || 0));
+              break;
+            case '/sequence/var/set':
+              await handlers.setSequenceVariable(String(body.name ?? ''), String(body.value ?? ''));
+              break;
+            case '/sequence/var/remove':
+              await handlers.removeSequenceVariable(String(body.name ?? ''));
+              break;
+            case '/sequence/step/move':
+              await handlers.moveSequenceStep(
+                Math.max(0, Number(body.from) || 0),
+                Math.max(0, Number(body.to) || 0)
+              );
+              break;
+            case '/sequence/record/keep': await handlers.keepRecordedStep(); break;
+            case '/sequence/record/flag':
+              await handlers.flagRecordedStep(String(body.reason ?? ''), body.options, body.detail);
+              break;
+            case '/sequence/record/choose':
+              await handlers.chooseStepSelector(Math.max(0, Number(body.index) || 0));
+              break;
+            case '/sequence/record/drop': await handlers.dropRecordedStep(); break;
             case '/sequence/note': await handlers.noteAtStep(Math.max(0, Number(body.step) || 0)); break;
             case '/annotation/delete': await handlers.removeAnnotation(String(body.id ?? '')); break;
             case '/annotation/notify': await handlers.notifyAnnotation(String(body.id ?? '')); break;

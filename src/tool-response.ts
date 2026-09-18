@@ -270,7 +270,8 @@ export interface ToolResponseMeta {
 /** Structured result of an annotate action. Behaviour reads this, never the
  *  rendered text. */
 export interface AnnotateToolMeta {
-  action: 'start' | 'stop' | 'tick' | 'freeze' | 'unfreeze' | 'picker' | 'list' | 'status';
+  action: 'start' | 'stop' | 'tick' | 'freeze' | 'unfreeze' | 'picker' | 'list' | 'status'
+    | 'keepStep' | 'dropStep' | 'flagStep';
   /** Whether the page is frozen with the picker armed, after this call. */
   active?: boolean;
   connection?: string;
@@ -281,6 +282,8 @@ export interface AnnotateToolMeta {
   annotations?: Annotation[];
   /** list: how many exist in total, before any limit. */
   total?: number;
+  /** The sequence card's state, after a call that changed it. */
+  sequence?: unknown;
 }
 
 /** Structured result of a cross-session message action. Behaviour reads this,

@@ -103,6 +103,7 @@ import type { Page, CDPSession } from 'puppeteer-core';
 import { getOutputPath } from './helpers/paths.js';
 import { appendEvent } from './session-events.js';
 import { getMessage } from './messages.js';
+import { CANCELLED } from './tools/annotate-tools.js';
 import { parseExtendedSelector } from './utils/selector-resolver.js';
 import { debugLog } from './debug-logger.js';
 import { startControlServer, type ControlServer, type ControlState } from './annotate-control.js';
@@ -152,6 +153,33 @@ interface AnnotateSession extends AnnotateSessionState {
   pendingShot?: PendingShot | null;
   /** Captures accepted while a pick is waiting, attached when it is saved. */
   pickShots?: string[];
+  recordingSequence?: boolean;
+  /** Set when the recording in progress reports each action to the agent. */
+  recordingWithAgent?: boolean;
+  /** Steps of the recording already announced, so each is sent once. */
+  announcedSteps?: number;
+  /**
+   * The step capture is held on. 'validating' while the agent reads it, which
+   * needs nothing from the person; 'flagged' once the agent has raised
+   * something, which is when the pane offers a choice.
+   */
+  pendingStep?: {
+    index: number;
+    label: string;
+    verdict: 'validating' | 'flagged';
+    /** One line: what is wrong. */
+    reason?: string;
+    /** A second line of context, where it helps. */
+    detail?: string;
+    /** Selectors that would work here, one row each for the person to pick. */
+    options?: Array<{ selector: string; note: string }>;
+  } | null;
+  /** Raw events captured up to the last kept step, for a drop to rewind to. */
+  keptEvents?: number;
+  /** Set when the page was frozen to hold a step, so only that freeze is undone. */
+  heldForStep?: boolean;
+  /** The page the recording began on, which becomes its first step. */
+  recordingStartUrl?: string;
   stepBreakpointsSet: boolean;
   /** Driving a sequence one step at a time, when one is wired in. */
   sequences?: SequenceDriver;
@@ -276,6 +304,17 @@ export interface SequenceState {
   failure?: string;
   /** Origin every absolute URL in the run is rewritten onto, when set. */
   baseUrl?: string;
+  /** Set while clicks in the page are being recorded into a new sequence. */
+  recording?: boolean;
+  /** The step capture is held on, and whether it needs the person. */
+  pendingStep?: {
+    index: number;
+    label: string;
+    verdict: 'validating' | 'flagged';
+    reason?: string;
+    detail?: string;
+    options?: Array<{ selector: string; note: string }>;
+  };
   /** The tracked issue this sequence reproduces, when one references it. */
   issue?: { id: number; type: string; title: string };
 }
@@ -320,6 +359,33 @@ export interface SequenceDriver {
   detachAnnotation: (id: string) => Promise<string | undefined>;
   /** Add a picture to a note already saved, and write the file back. */
   attachScreenshot: (id: string, path: string) => Promise<string | undefined>;
+  /**
+   * Record clicks in the page into a new sequence, returning when the person
+   * stops. Returns the failure text when nothing was recorded.
+   */
+  record: (name: string, connection: string, startUrl: string) => Promise<string | undefined>;
+  /** Finish a recording in progress, from the pane rather than the page. */
+  stopRecording: (connection: string) => Promise<void>;
+  /** Abandon a recording in progress, saving nothing. */
+  cancelRecording: (connection: string) => Promise<void>;
+  /** Erase one step of the open sequence and write the file back. */
+  removeStep: (index: number) => Promise<string | undefined>;
+  /** Move one step to another position and write the file back. */
+  moveStep: (from: number, to: number) => Promise<string | undefined>;
+  /**
+   * Define a variable the sequence carries, as a step that sets it. A run has
+   * no way to be handed a literal from outside, so the value lives in the
+   * sequence and travels with it.
+   */
+  setVariable: (name: string, value: string) => Promise<string | undefined>;
+  /** Remove the step that defines a variable. */
+  removeVariable: (name: string) => Promise<string | undefined>;
+  /**
+   * The steps a recording has captured, converted from the page's raw events.
+   * The events are read by the caller over CDP: Puppeteer's page.evaluate
+   * blocks on a paused isolate, and the page is held while a step is judged.
+   */
+  recordedSoFar: (eventsJson: string, startUrl: string) => SequenceStepView[];
   /** One note of the open sequence with the step holding it, by id. */
   findAnnotation: (id: string) => { annotation: Annotation; step: number; sequence: string } | undefined;
   /** The tracked issue whose reproduction is the open sequence, when there is one. */
@@ -895,10 +961,29 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
   if (!session?.sequences) return undefined;
 
   const available = await session.sequences.listNames().catch(() => [] as string[]);
+
+  // A recording has no open run to read; its steps come from what has been
+  // clicked so far, so the list fills as the person works.
+  if (session.recordingSequence) {
+    const steps = session.sequences.recordedSoFar(
+      await readCapturedEvents(session),
+      session.recordingStartUrl ?? session.page.url()
+    );
+    await gateNewStep(session, connection, steps);
+    return {
+      available, steps, currentStep: steps.length, total: steps.length,
+      busy: session.sequenceBusy, recording: true, variables: [],
+      ...(session.pendingStep ? { pendingStep: session.pendingStep } : {}),
+      ...(session.sequences.baseUrl() ? { baseUrl: session.sequences.baseUrl() } : {}),
+      ...(session.sequenceFailure ? { failure: session.sequenceFailure } : {}),
+    };
+  }
+
   const active = session.sequences.active();
   if (!active) {
     return {
       available, steps: [], currentStep: 0, total: 0, busy: session.sequenceBusy, variables: [],
+      ...(session.recordingSequence ? { recording: true } : {}),
       ...(session.sequences.baseUrl() ? { baseUrl: session.sequences.baseUrl() } : {}),
       // A failure with nothing selected still belongs on the pane's failure
       // line - a delete that matched no name reports here and nowhere else.
@@ -916,6 +1001,7 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
     currentStep: active.currentStep,
     total: active.total,
     busy: session.sequenceBusy,
+    ...(session.recordingSequence ? { recording: true } : {}),
     variables: active.variables,
     ...(session.sequences.baseUrl() ? { baseUrl: session.sequences.baseUrl() } : {}),
     ...(session.sequenceFailure ? { failure: session.sequenceFailure } : {}),
@@ -1003,6 +1089,14 @@ async function driveSequence(
 export const selectSequence = (connection: string, name: string) =>
   driveSequence(connection, (driver) => driver.start(name, connection));
 
+/** Clear the failure line, which otherwise stands until something else fails. */
+export async function dismissSequenceFailure(connection: string): Promise<SequenceState | undefined> {
+  const session = sessions.get(connection);
+  if (!session) return undefined;
+  session.sequenceFailure = undefined;
+  return getSequenceState(connection);
+}
+
 /** Point the run at another deployment - another port, another host. */
 export async function setSequenceBaseUrl(connection: string, baseUrl: string): Promise<SequenceState | undefined> {
   const session = sessions.get(connection);
@@ -1050,6 +1144,348 @@ export async function playSequence(connection: string): Promise<SequenceState | 
     if (state.currentStep === before) break;
   }
   return state;
+}
+
+/**
+ * Record what is clicked in the page into a new sequence.
+ *
+ * The page runs and the picker is disarmed for the length of the recording: a
+ * held page discards input, and an armed picker turns every click into a pick
+ * instead of an action. Both are restored when it ends.
+ */
+export async function recordSequence(
+  connection: string,
+  name: string,
+  withAgent = false
+): Promise<SequenceState | undefined> {
+  const session = sessions.get(connection);
+  if (!session?.sequences) return undefined;
+  if (session.sequenceBusy) return getSequenceState(connection);
+
+  session.sequenceBusy = true;
+  session.sequenceFailure = undefined;
+  const wasArmed = session.pickerArmed;
+  let cancelled = false;
+  if (withAgent) {
+    await appendEvent(session.session, 'sequence', {
+      connection,
+      sequence: name,
+      recording: 'started',
+      review: getMessage('RECORDING_BRIEF'),
+      detail: `recording "${name}" - the person is clicking through the app now`,
+    });
+  }
+
+  try {
+    if (wasArmed) await setInspectMode(session, false);
+    // Nothing carried over from a previous recording: the page keeps its buffer
+    // across runs, and a stale event would land as this recording's first step.
+    await evaluateInPage(session, 'globalThis.__cdpRecordingEvents = []').catch(() => {});
+    session.recordingStartUrl = session.page.url();
+    session.recordingSequence = true;
+    session.recordingWithAgent = withAgent;
+    session.announcedSteps = 0;
+    session.pendingStep = null;
+    session.keptEvents = 0;
+    const outcome = await withPageReleased(
+      session,
+      () => session.sequences!.record(name, connection, session.recordingStartUrl ?? '')
+    );
+    // Abandoning a recording is a choice, not a failure: reporting it on the
+    // failure line puts a red box in front of someone who did what they meant.
+    cancelled = outcome === CANCELLED;
+    session.sequenceFailure = cancelled ? undefined : outcome;
+  } catch (error) {
+    session.sequenceFailure = String(error);
+  } finally {
+    session.recordingSequence = false;
+    session.recordingWithAgent = false;
+    session.pendingStep = null;
+    if (wasArmed) await setInspectMode(session, true).catch(() => {});
+    session.sequenceBusy = false;
+  }
+
+  if (withAgent) await announceRecording(session, connection, name, cancelled);
+  return getSequenceState(connection);
+}
+
+/**
+ * Hold each new action until it is kept or dropped.
+ *
+ * Capture is paused the moment a step appears, so the next click is not taken
+ * while the last one is still unanswered - a step judged after three more have
+ * landed cannot be removed without taking those with it. One step is in
+ * question at a time, and the page records nothing until it is settled.
+ */
+async function gateNewStep(
+  session: AnnotateSession,
+  connection: string,
+  steps: SequenceStepView[]
+): Promise<void> {
+  if (!session.recordingWithAgent || session.pendingStep) return;
+  const sent = session.announcedSteps ?? 0;
+  if (steps.length <= sent) return;
+
+  const index = steps.length - 1;
+
+  // The opening navigate is this code's own doing, not something the person
+  // did, so holding it asks them to answer for a step they never took.
+  if (index === 0 && steps[index].label.startsWith('navigate.goto')) {
+    session.announcedSteps = 1;
+    session.keptEvents = await capturedEventCount(session);
+    return;
+  }
+
+  session.pendingStep = { index, label: steps[index].label, verdict: 'validating' };
+  await setCapturePaused(session, true);
+  // The page is held as well as the capture: left running, it re-renders while
+  // the step is read, and the element the step names moves underneath it.
+  session.heldForStep = !session.frozen;
+  if (session.heldForStep) await freeze(session);
+
+  await appendEvent(session.session, 'sequence', {
+    connection,
+    recording: 'step',
+    step: index + 1,
+    label: steps[index].label,
+    review: getMessage('RECORDING_STEP_HELD'),
+    detail: `step ${index + 1} held for review: ${steps[index].label}`,
+  });
+}
+
+/**
+ * Evaluate in the page over CDP rather than through Puppeteer.
+ *
+ * page.evaluate never returns while the isolate is paused, and every call
+ * after it queues behind that one - which takes the control pane's own polling
+ * down with it. These run on the annotate client, which answers while held.
+ */
+async function evaluateInPage(session: AnnotateSession, expression: string): Promise<any> {
+  const { result } = await request(session.client, 'Runtime.evaluate', {
+    expression,
+    returnByValue: true,
+  });
+  return result?.value;
+}
+
+/** Stop or resume the page's own capture, which the recorder checks per event. */
+async function setCapturePaused(session: AnnotateSession, paused: boolean): Promise<void> {
+  await evaluateInPage(session, `globalThis.__cdpRecordingPaused = ${paused ? 'true' : 'false'}`)
+    .catch(() => {});
+}
+
+/** The raw events the page has buffered, as JSON. */
+async function readCapturedEvents(session: AnnotateSession): Promise<string> {
+  return (await evaluateInPage(session, 'JSON.stringify(globalThis.__cdpRecordingEvents || [])')
+    .catch(() => '[]')) ?? '[]';
+}
+
+/** How many raw events the page holds, which a drop rewinds to. */
+async function capturedEventCount(session: AnnotateSession): Promise<number> {
+  return (await evaluateInPage(session, '(globalThis.__cdpRecordingEvents || []).length')
+    .catch(() => 0)) ?? 0;
+}
+
+/**
+ * Raise something about the held step, which is what puts the choice in front
+ * of the person. Until this the pane says only that validation is running, so
+ * a step that reads correctly costs them nothing.
+ */
+export async function flagRecordedStep(
+  connection: string,
+  reason: string,
+  options?: Array<{ selector: string; note: string }>,
+  detail?: string
+): Promise<SequenceState | undefined> {
+  const session = sessions.get(connection);
+  if (!session?.pendingStep) return getSequenceState(connection);
+  session.pendingStep = { ...session.pendingStep, verdict: 'flagged', reason, detail, options };
+  return getSequenceState(connection);
+}
+
+/**
+ * Take one of the offered selectors for the held step.
+ *
+ * The step is rebuilt from the page's raw events on every poll, so the choice
+ * is written onto the event that produced it - written onto the step alone, the
+ * next poll would overwrite it.
+ */
+export async function chooseStepSelector(connection: string, index: number): Promise<SequenceState | undefined> {
+  const session = sessions.get(connection);
+  const option = session?.pendingStep?.options?.[index];
+  if (!session || !option) return getSequenceState(connection);
+
+  await evaluateInPage(session, `(() => {
+    const events = globalThis.__cdpRecordingEvents || [];
+    const last = events[events.length - 1];
+    if (last) last.elementInfo = Object.assign({}, last.elementInfo || {}, { selector: ${JSON.stringify(option.selector)} });
+  })()`).catch(() => {});
+
+  return keepRecordedStep(connection, `selector set to ${option.selector}`);
+}
+
+/** Accept the held step and let capture continue. */
+export async function keepRecordedStep(
+  connection: string,
+  settledAs?: string
+): Promise<SequenceState | undefined> {
+  const session = sessions.get(connection);
+  if (!session?.pendingStep) return getSequenceState(connection);
+  const held = session.pendingStep;
+  session.announcedSteps = held.index + 1;
+  session.keptEvents = await capturedEventCount(session);
+  session.pendingStep = null;
+  await releaseForStep(session);
+  await setCapturePaused(session, false);
+  await announceSettled(session, connection, held.index, settledAs ?? `kept as ${held.label}`);
+  return getSequenceState(connection);
+}
+
+/**
+ * Say how a held step was settled.
+ *
+ * The pane settles steps too, and a verdict taken there reaches nobody
+ * otherwise - leaving the agent waiting on a step already resolved, and the
+ * recording moving on without it.
+ */
+async function announceSettled(
+  session: AnnotateSession,
+  connection: string,
+  index: number,
+  outcome: string
+): Promise<void> {
+  if (!session.recordingWithAgent) return;
+  await appendEvent(session.session, 'sequence', {
+    connection,
+    recording: 'settled',
+    step: index + 1,
+    outcome,
+    detail: `step ${index + 1} settled: ${outcome}`,
+  });
+}
+
+/** Let the page run on, where holding it for the step was this code's doing. */
+async function releaseForStep(session: AnnotateSession): Promise<void> {
+  if (!session.heldForStep) return;
+  session.heldForStep = false;
+  await unfreeze(session);
+}
+
+/**
+ * Remove the held step and let capture continue.
+ *
+ * The page's event buffer is rewound to where the last kept step left it, so
+ * the events behind the dropped step go with it rather than reappearing as the
+ * same step on the next poll.
+ */
+export async function dropRecordedStep(connection: string): Promise<SequenceState | undefined> {
+  const session = sessions.get(connection);
+  if (!session?.pendingStep) return getSequenceState(connection);
+  const rewindTo = session.keptEvents ?? 0;
+  await evaluateInPage(session, `(() => {
+    const events = globalThis.__cdpRecordingEvents;
+    if (Array.isArray(events)) events.length = Math.min(${rewindTo}, events.length);
+  })()`).catch(() => {});
+  const dropped = session.pendingStep.index;
+  session.pendingStep = null;
+  await releaseForStep(session);
+  await setCapturePaused(session, false);
+  await announceSettled(session, connection, dropped, 'dropped');
+  return getSequenceState(connection);
+}
+
+/** Put a finished recording on the event stream, for review as a whole. */
+async function announceRecording(
+  session: AnnotateSession,
+  connection: string,
+  name: string,
+  cancelled: boolean
+): Promise<void> {
+  if (cancelled) {
+    await appendEvent(session.session, 'sequence', {
+      connection,
+      sequence: name,
+      recording: 'cancelled',
+      detail: `recording "${name}" cancelled - nothing saved`,
+    });
+    return;
+  }
+
+  const steps = session.sequences?.active()?.steps ?? [];
+  await appendEvent(session.session, 'sequence', {
+    connection,
+    sequence: name,
+    recording: 'finished',
+    steps: steps.map((step, i) => `${i + 1}. ${step.label}`),
+    ...(session.sequenceFailure ? { failure: session.sequenceFailure } : {}),
+    review: getMessage('RECORDING_REVIEW'),
+    detail: `recording "${name}" finished - ${steps.length} step(s)`,
+  });
+}
+
+/** Finish the recording in progress; recordSequence returns once it lands. */
+export async function stopRecordingSequence(connection: string): Promise<void> {
+  const session = sessions.get(connection);
+  if (!session?.sequences) return;
+  await session.sequences.stopRecording(connection).catch(() => {});
+}
+
+/** Abandon the recording in progress, saving nothing. */
+export async function cancelRecordingSequence(connection: string): Promise<void> {
+  const session = sessions.get(connection);
+  if (!session?.sequences) return;
+  // Gating stops before the driver is told: the poll runs every 250ms, and a
+  // recording still marked live re-raises the step that was just abandoned.
+  session.recordingWithAgent = false;
+  session.recordingSequence = false;
+  session.pendingStep = null;
+  await releaseForStep(session);
+  await session.sequences.cancelRecording(connection).catch(() => {});
+}
+
+/**
+ * Erase a step from the open sequence.
+ *
+ * A recording captures what was clicked, which includes what was clicked by
+ * mistake; without this the only way to remove one is to record again.
+ */
+export async function removeSequenceStep(connection: string, index: number): Promise<SequenceState | undefined> {
+  const session = sessions.get(connection);
+  if (!session?.sequences) return undefined;
+  session.sequenceFailure = await session.sequences.removeStep(index).catch(error => String(error));
+  return getSequenceState(connection);
+}
+
+/** Move a step to another position in the open sequence. */
+export async function moveSequenceStep(
+  connection: string,
+  from: number,
+  to: number
+): Promise<SequenceState | undefined> {
+  const session = sessions.get(connection);
+  if (!session?.sequences) return undefined;
+  session.sequenceFailure = await session.sequences.moveStep(from, to).catch(error => String(error));
+  return getSequenceState(connection);
+}
+
+/** Define or update a variable the open sequence carries. */
+export async function setSequenceVariable(
+  connection: string,
+  name: string,
+  value: string
+): Promise<SequenceState | undefined> {
+  const session = sessions.get(connection);
+  if (!session?.sequences) return undefined;
+  session.sequenceFailure = await session.sequences.setVariable(name, value).catch(error => String(error));
+  return getSequenceState(connection);
+}
+
+/** Remove a variable the open sequence defines. */
+export async function removeSequenceVariable(connection: string, name: string): Promise<SequenceState | undefined> {
+  const session = sessions.get(connection);
+  if (!session?.sequences) return undefined;
+  session.sequenceFailure = await session.sequences.removeVariable(name).catch(error => String(error));
+  return getSequenceState(connection);
 }
 
 export async function cancelSequence(connection: string): Promise<SequenceState | undefined> {
@@ -1433,6 +1869,20 @@ export async function startAnnotateMode(params: {
     playSequence: async () => { await playSequence(connection); },
     cancelSequence: async () => { await cancelSequence(connection); },
     removeSequence: async (name: string) => { await removeSequence(connection, name); },
+    dismissFailure: async () => { await dismissSequenceFailure(connection); },
+    keepRecordedStep: async () => { await keepRecordedStep(connection); },
+    chooseStepSelector: async (index: number) => { await chooseStepSelector(connection, index); },
+    flagRecordedStep: async (reason: string, options?: Array<{ selector: string; note: string }>, detail?: string) => {
+      await flagRecordedStep(connection, reason, options, detail);
+    },
+    dropRecordedStep: async () => { await dropRecordedStep(connection); },
+    recordSequence: async (name: string, withAgent: boolean) => { await recordSequence(connection, name, withAgent); },
+    stopRecordingSequence: async () => { await stopRecordingSequence(connection); },
+    cancelRecordingSequence: async () => { await cancelRecordingSequence(connection); },
+    removeSequenceStep: async (index: number) => { await removeSequenceStep(connection, index); },
+    moveSequenceStep: async (from: number, to: number) => { await moveSequenceStep(connection, from, to); },
+    setSequenceVariable: async (name: string, value: string) => { await setSequenceVariable(connection, name, value); },
+    removeSequenceVariable: async (name: string) => { await removeSequenceVariable(connection, name); },
     noteAtStep: async (step: number) => { await noteAtStep(connection, step); },
     removeAnnotation: async (id: string) => { await removeAnnotation(connection, id); },
     notifyAnnotation: async (id: string) => { await notifyAnnotation(connection, id); },

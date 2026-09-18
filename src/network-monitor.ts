@@ -50,7 +50,7 @@ export interface StoredSocketFrame {
   direction: 'sent' | 'received';
   /** 1 text, 2 binary, 8 close, 9 ping, 10 pong. */
   opcode: number;
-  /** Payload length as it arrived, before any truncation. */
+  /** Payload length as it arrived, before any truncation - base64 characters for a binary frame, not bytes. */
   size: number;
   /** Text and binary frames only; control frames carry nothing worth holding. */
   payload?: string;
@@ -97,6 +97,13 @@ export interface StoredWebSocket {
 const MAX_FRAMES_PER_SOCKET = 200;
 /** Characters of a frame payload held. The full length is kept in `size`. */
 const MAX_FRAME_PAYLOAD = 4096;
+/**
+ * Socket records held. Each navigation and each HMR reconnect opens another,
+ * and a record keeps its frames after it closes, so an afternoon's navigations
+ * accumulate without this. Closed records go first, oldest first; an open
+ * socket is evicted only when every record is open.
+ */
+const MAX_SOCKETS = 50;
 
 export class NetworkMonitor {
   private sockets: Map<string, StoredWebSocket> = new Map();
@@ -244,6 +251,7 @@ export class NetworkMonitor {
         id: e.requestId, url: e.url, openedAt: Date.now(), errors: [], target, sessionId,
         frames: [], framesDropped: 0,
       });
+      this.evictSockets();
       this.lastActivityTime = Date.now();
     });
     client.on('Network.webSocketClosed', (e: any) => {
@@ -261,6 +269,10 @@ export class NetworkMonitor {
       // Opcode 8 is the close frame. Sent by the page means it hung up.
       if (e?.response?.opcode === 8) sock.clientClosed = true;
       this.recordFrame(sock, 'sent', e?.response);
+      // A sent frame is the page acting, which is what the inactivity sweep
+      // reads as the browser being in use. A received frame is the server
+      // talking to an idle page, so it must not hold the connection open.
+      this.lastActivityTime = Date.now();
     });
     // Received frames carry what the app is actually driven by. Without them a
     // socket-carried mutation is invisible: the lifecycle says a transport
@@ -269,15 +281,26 @@ export class NetworkMonitor {
       const sock = this.sockets.get(key(e.requestId));
       if (!sock) return;
       this.recordFrame(sock, 'received', e?.response);
-      this.lastActivityTime = Date.now();
     });
+  }
+
+  /** Keep the socket map at MAX_SOCKETS, discarding closed records first. */
+  private evictSockets(): void {
+    if (this.sockets.size <= MAX_SOCKETS) return;
+    const order = [...this.sockets.entries()].sort(([, a], [, b]) => {
+      if (!!a.closedAt !== !!b.closedAt) return a.closedAt ? -1 : 1;
+      return a.openedAt - b.openedAt;
+    });
+    for (const [k] of order.slice(0, this.sockets.size - MAX_SOCKETS)) this.sockets.delete(k);
   }
 
   /**
    * Hold one frame against its socket.
    *
-   * Control frames (close, ping, pong) carry no payload worth holding; their
-   * opcode and timing are what a heartbeat cadence is read from. The buffer
+   * Control frames (close, ping, pong) carry no payload worth holding, so only
+   * their opcode and timing are kept. Chrome answers protocol-level ping and
+   * pong below Blink, so those two rarely reach here at all; an app-level
+   * heartbeat arrives as an ordinary text frame. The buffer
    * drops its oldest entry once it is full, and counts the drop so a reader
    * sees that frames are missing rather than reading a short log as complete.
    */
@@ -290,7 +313,10 @@ export class NetworkMonitor {
     const data = typeof response?.payloadData === 'string' ? response.payloadData : '';
     const frame: StoredSocketFrame = { at: Date.now(), direction, opcode, size: data.length };
     if (opcode === 1 || opcode === 2) {
-      frame.payload = data.slice(0, MAX_FRAME_PAYLOAD);
+      // Rebuilt through JSON rather than sliced: V8 returns a SlicedString that
+      // holds its parent alive, so 200 slices of a 1MB payload retain 200MB
+      // while every stored payload reads as 4096 characters. Measured.
+      frame.payload = JSON.parse(JSON.stringify(data.slice(0, MAX_FRAME_PAYLOAD)));
       if (data.length > MAX_FRAME_PAYLOAD) frame.truncated = true;
     }
     sock.frames.push(frame);
@@ -305,6 +331,9 @@ export class NetworkMonitor {
     return [...this.sockets.values()]
       .map(s => ({
         ...s,
+        // Its own array: the stored one keeps receiving frames and gets spliced
+        // while a response built from this is still being serialised.
+        frames: [...s.frames],
         // Answered now rather than at close time - see closedWithTarget. The
         // page session is never detached while monitoring runs, so a page
         // socket is only ever judged on its own close.

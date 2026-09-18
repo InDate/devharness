@@ -43,6 +43,32 @@ const networkToolSchema = z.object({
 }).strict();
 
 /**
+ * Characters of frame payload carried in _meta across one response.
+ *
+ * The log ships whole payloads, and the socket count is not bounded by the
+ * caller, so without a budget one call over an afternoon's sockets returns
+ * megabytes. Newest frames are kept, since a log is read backwards from
+ * whatever just happened.
+ */
+const FRAME_LOG_CHAR_BUDGET = 262144;
+
+function frameLogBudget() {
+  let left = FRAME_LOG_CHAR_BUDGET;
+  return {
+    take(frames: any[]): any[] {
+      const kept: any[] = [];
+      for (let i = frames.length - 1; i >= 0; i--) {
+        const cost = (frames[i].payload?.length ?? 0) + 64;
+        if (cost > left) break;
+        left -= cost;
+        kept.unshift(frames[i]);
+      }
+      return kept;
+    },
+  };
+}
+
+/**
  * Characters of a payload printed per frame. A push transport carries whole
  * state snapshots, and twenty of those fill a response with one socket's
  * traffic. The full stored payload stays in `_meta.frameLog`.
@@ -102,7 +128,16 @@ export function createNetworkTools(
             const sockets = args.socketUrl
               ? seen.filter((s: any) => s.url.includes(args.socketUrl!))
               : seen;
-            const health = targetNetworkMonitor.getSocketHealth();
+            const budget = frameLogBudget();
+            // Counted over the same set that is listed. Read off the monitor it
+            // would describe every socket seen, so a filter that matched one of
+            // ten reported nine closures the caller had just excluded.
+            const health = {
+              total: sockets.length,
+              open: sockets.filter((s: any) => !s.closedAt).length,
+              closed: sockets.filter((s: any) => s.closedAt).length,
+              errored: sockets.filter((s: any) => s.errors.length > 0).length,
+            };
             const lines = sockets.map((sock: any) => {
               const how = sock.closedWithTarget ? ' with its target'
                 : sock.clientClosed ? ' by the page' : '';
@@ -115,8 +150,11 @@ export function createNetworkTools(
               const head = `${sock.closedAt ? 'CLOSED' : 'OPEN  '} [${sock.target || 'page'}] ${sock.url} (${state})${traffic}${errs}`;
               return args.frames ? [head, ...frameLines(sock)].join('\n') : head;
             });
+            const seenCount = seen.length;
             const text = sockets.length === 0
-              ? 'No WebSockets seen on this connection. Monitoring starts when the connection does, so a socket opened before then is not counted.'
+              ? (args.socketUrl && seenCount > 0
+                ? `No WebSocket here has "${args.socketUrl}" in its URL. ${seenCount} socket(s) were seen on this connection; drop socketUrl to list them.`
+                : 'No WebSockets seen on this connection. Monitoring starts when the connection does, so a socket opened before then is not counted.')
               : `${health.total} WebSocket(s): ${health.open} open, ${health.closed} closed, ${health.errored} with frame errors\n\n${lines.join('\n')}`;
 
             return {
@@ -135,7 +173,7 @@ export function createNetworkTools(
                     sent: s.frames.filter((f: any) => f.direction === 'sent').length,
                     dropped: s.framesDropped,
                   },
-                  ...(args.frames ? { frameLog: s.frames } : {}),
+                  ...(args.frames ? { frameLog: budget.take(s.frames) } : {}),
                 })),
               },
             };

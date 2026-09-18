@@ -15,8 +15,8 @@ import type { ToolResponseMeta, NetworkToolMeta } from '../tool-response.js';
 
 // Consolidated network tool schema
 const networkToolSchema = z.object({
-  action: z.enum(['list', 'get', 'search', 'enable', 'disable', 'setConditions', 'sockets'])
-    .describe('Network action: list (list network requests), get (get specific request details), search (search requests by pattern), enable (enable network monitoring), disable (disable network monitoring), setConditions (set network conditions), sockets (WebSocket lifecycle: what opened, what closed, what errored - puppeteer surfaces no page event for these, so they come from the CDP Network domain)'),
+  action: z.enum(['list', 'get', 'search', 'enable', 'disable', 'setConditions', 'sockets', 'streams'])
+    .describe('Network action: list (list network requests), get (get specific request details), search (search requests by pattern), enable (enable network monitoring), disable (disable network monitoring), setConditions (set network conditions), sockets (WebSocket lifecycle: what opened, what closed, what errored - puppeteer surfaces no page event for these, so they come from the CDP Network domain), streams (EventSource messages: an SSE response body never completes, so the HTTP record holds headers and nothing else)'),
   connectionReason: z.string().optional().describe('Connection reference (use the reference from launchChrome output, e.g., "unnamed-connection-default" or your renamed tab)'),
 
   // list action parameters
@@ -79,6 +79,27 @@ function frameLogBudget() {
  */
 const FRAME_LINE_CHARS = 180;
 
+/** Stream messages inside the window, by the clock they were recorded on. */
+function eventsIn(stream: any, since?: number, until?: number): any[] {
+  if (since === undefined && until === undefined) return stream.events;
+  return stream.events.filter((e: any) =>
+    (since === undefined || e.at >= since) && (until === undefined || e.at < until));
+}
+
+/** One line per stream message, newest last, same shape as the frame log. */
+function streamLines(stream: any, events: any[]): string[] {
+  const shown = events.slice(-FRAME_LINES_PER_SOCKET);
+  const earlier = events.length - shown.length;
+  const head = earlier > 0 ? [`       … ${earlier} earlier event(s) held, not printed`] : [];
+  return head.concat(shown.map((e: any) => {
+    const age = ((e.at - stream.openedAt) / 1000).toFixed(2);
+    const id = e.eventId ? ` #${e.eventId}` : '';
+    const body = e.data.slice(0, FRAME_LINE_CHARS);
+    const more = e.size > body.length ? ` … (${e.size} chars)` : '';
+    return `       <- +${age}s ${e.name}${id} ${body}${more}`;
+  }));
+}
+
 /** Frames that arrived inside the window, by the clock they were recorded on. */
 function framesIn(sock: any, since?: number, until?: number): any[] {
   if (since === undefined && until === undefined) return sock.frames;
@@ -128,6 +149,57 @@ export function createNetworkTools(
         const { action, connectionReason } = args;
 
         switch (action) {
+          case 'streams': {
+            if (!connectionReason) {
+              return createErrorResponse('CONNECTION_NOT_FOUND', {
+                message: 'No Chrome browser available. Use `launchChrome` first to start a browser.'
+              });
+            }
+            const resolved = await resolveConnectionFromReason(connectionReason);
+            if (!resolved) {
+              return createErrorResponse('CONNECTION_NOT_FOUND', {
+                message: 'No Chrome browser available. Use `launchChrome` first to start a browser.'
+              });
+            }
+            const targetPuppeteerManager = resolved.puppeteerManager || puppeteerManager;
+            const targetNetworkMonitor = resolved.networkMonitor || networkMonitor;
+            if (!targetNetworkMonitor.isActive() && targetPuppeteerManager.isConnected()) {
+              targetNetworkMonitor.startMonitoring(targetPuppeteerManager.getPage());
+            }
+
+            const seen = targetNetworkMonitor.getStreams();
+            const streams = args.socketUrl
+              ? seen.filter((s: any) => s.url.includes(args.socketUrl!))
+              : seen;
+            const budget = frameLogBudget();
+
+            const lines = streams.map((stream: any) => {
+              const events = eventsIn(stream, args.since, args.until);
+              const dropped = stream.eventsDropped ? ` +${stream.eventsDropped} dropped` : '';
+              const head = `STREAM [${stream.target || 'page'}] ${stream.url} - ${events.length} event(s)${dropped}`;
+              return args.frames ? [head, ...streamLines(stream, events)].join('\n') : head;
+            });
+
+            const text = streams.length === 0
+              ? (args.socketUrl && seen.length > 0
+                ? `No EventSource stream here has "${args.socketUrl}" in its URL. ${seen.length} stream(s) were seen on this connection.`
+                : 'No EventSource streams seen on this connection. A stream is recorded when its first message arrives, so one that has delivered nothing yet is not listed.')
+              : `${streams.length} stream(s)\n\n${lines.join('\n')}`;
+
+            return {
+              content: [{ type: 'text', text }],
+              _meta: {
+                tool: 'network', action: 'streams', timestamp: Date.now(),
+                streamList: streams.map((s: any) => ({
+                  id: `${s.sessionId}:${s.id}`, url: s.url, target: s.target,
+                  events: eventsIn(s, args.since, args.until).length,
+                  dropped: s.eventsDropped,
+                  ...(args.frames ? { eventLog: budget.take(eventsIn(s, args.since, args.until)) } : {}),
+                })),
+              },
+            };
+          }
+
           case 'sockets': {
             if (!connectionReason) {
               return createErrorResponse('CONNECTION_NOT_FOUND', {

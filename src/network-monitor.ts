@@ -120,8 +120,51 @@ const MAX_FRAME_PAYLOAD = 4096;
  */
 const MAX_SOCKETS = 50;
 
+/** One message delivered on an EventSource stream. */
+export interface StoredStreamEvent {
+  at: number;
+  /** The `event:` field, or 'message' where the stream sent none. */
+  name: string;
+  /** The `id:` field, where the stream sent one. */
+  eventId?: string;
+  /** Payload length as it arrived, before truncation. */
+  size: number;
+  data: string;
+  truncated?: boolean;
+}
+
+/**
+ * One EventSource stream.
+ *
+ * A stream's response body never completes, so the HTTP record for it carries
+ * headers and nothing else - no status, no body, and a duration stamped on a
+ * request still delivering. Its messages arrive on their own CDP event and are
+ * held here.
+ */
+export interface StoredEventStream {
+  id: string;
+  url: string;
+  openedAt: number;
+  events: StoredStreamEvent[];
+  eventsDropped: number;
+  sessionId: string;
+  target: string;
+}
+
+/** Messages held per stream, and URLs remembered while waiting for a first one. */
+const MAX_EVENTS_PER_STREAM = 200;
+const MAX_PENDING_URLS = 200;
+
 export class NetworkMonitor {
   private sockets: Map<string, StoredWebSocket> = new Map();
+  /** EventSource streams, keyed the same way as sockets. */
+  private streams: Map<string, StoredEventStream> = new Map();
+  /**
+   * CDP requestId to URL, so a stream can be named when its first message
+   * arrives. A stream is materialised on that message rather than on the
+   * request, because only then is it known to be one.
+   */
+  private pendingUrls: Map<string, string> = new Map();
   /**
    * Sessions still attached. Whether a socket's target is gone has to be
    * answered when the question is asked, not when the socket closed: the close
@@ -262,6 +305,48 @@ export class NetworkMonitor {
    */
   private bindSocketEvents(client: any, target: string, sessionId: string): void {
     const key = (requestId: string) => `${sessionId}:${requestId}`;
+    client.on('Network.requestWillBeSent', (e: any) => {
+      if (!e?.requestId || !e?.request?.url) return;
+      this.pendingUrls.set(key(e.requestId), e.request.url);
+      if (this.pendingUrls.size > MAX_PENDING_URLS) {
+        const oldest = this.pendingUrls.keys().next().value;
+        if (oldest) this.pendingUrls.delete(oldest);
+      }
+    });
+
+    client.on('Network.eventSourceMessageReceived', (e: any) => {
+      const id = key(e.requestId);
+      let stream = this.streams.get(id);
+      if (!stream) {
+        stream = {
+          id: e.requestId,
+          url: this.pendingUrls.get(id) ?? '(url not seen)',
+          openedAt: Date.now(),
+          events: [],
+          eventsDropped: 0,
+          sessionId,
+          target,
+        };
+        this.streams.set(id, stream);
+      }
+      const data = typeof e.data === 'string' ? e.data : '';
+      const event: StoredStreamEvent = {
+        at: Date.now(),
+        name: e.eventName || 'message',
+        ...(e.eventId ? { eventId: e.eventId } : {}),
+        size: data.length,
+        // Rebuilt through JSON for the same reason frame payloads are: a slice
+        // holds its parent string alive.
+        data: JSON.parse(JSON.stringify(data.slice(0, MAX_FRAME_PAYLOAD))),
+        ...(data.length > MAX_FRAME_PAYLOAD ? { truncated: true } : {}),
+      };
+      stream.events.push(event);
+      if (stream.events.length > MAX_EVENTS_PER_STREAM) {
+        stream.events.splice(0, stream.events.length - MAX_EVENTS_PER_STREAM);
+        stream.eventsDropped += 1;
+      }
+    });
+
     client.on('Network.webSocketCreated', (e: any) => {
       this.sockets.set(key(e.requestId), {
         id: e.requestId, url: e.url, openedAt: Date.now(), errors: [], target, sessionId,
@@ -373,6 +458,13 @@ export class NetworkMonitor {
       sock.frames.splice(0, sock.frames.length - MAX_FRAMES_PER_SOCKET);
       sock.framesDropped += 1;
     }
+  }
+
+  /** Every EventSource stream seen, oldest first, with its own events array. */
+  getStreams(): StoredEventStream[] {
+    return [...this.streams.values()]
+      .map(s => ({ ...s, events: [...s.events] }))
+      .sort((a, b) => a.openedAt - b.openedAt);
   }
 
   /** Every WebSocket seen, oldest first. */

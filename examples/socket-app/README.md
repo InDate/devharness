@@ -32,11 +32,15 @@ from all of them.
 |---|---|
 | `/sse?ms=` | an `EventSource` stream: plain messages, a named `price` event, a payload split across `data:` lines, and `retry:` |
 
-Measured: the request is recorded with its method, headers and
-`resourceType: eventsource`, and nothing else. `Status: N/A`, no response
-headers, no body, and a `timing.duration` of 5ms stamped on a stream that is
-still delivering. Fourteen events reached the page while the record said the
-request had finished. Every event, including the named ones, is absent.
+The HTTP record for a stream holds its method, headers and
+`resourceType: eventsource`, and nothing else - `Status: N/A`, no response
+headers, no body, and a `timing.duration` stamped on a request still
+delivering, because the body never completes.
+
+Its messages come from `network({ action: 'streams' })`, which reads them off
+`Network.eventSourceMessageReceived`. Measured against this endpoint: named
+events keep their name, `id:` is kept, and a payload split across two `data:`
+lines arrives reassembled with the newline the spec puts between them.
 
 ## Egress that never reaches the network
 

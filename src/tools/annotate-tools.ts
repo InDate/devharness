@@ -21,7 +21,7 @@ import { createSuccessResponse, createErrorResponse } from '../messages.js';
 import { checkBrowserAutomation } from '../error-helpers.js';
 import { resolveSessionName } from '../session-identity.js';
 import { getSessionInfo } from './dashboard-tools.js';
-import { getEventStreamPath } from '../session-events.js';
+import { getEventStreamPath, appendEvent } from '../session-events.js';
 import { announceSequenceSaved } from '../sequence-events.js';
 import type { ToolResponseMeta, AnnotateToolMeta } from '../tool-response.js';
 import {
@@ -510,8 +510,19 @@ function createSequenceDriver(
         ended = null;
         variableStore = {};
       }
-      const removed = await commandRecorder.deleteSequenceFromDisk(`${name}.json`);
-      if (!removed) return `no saved sequence named "${name}"`;
+      const onDisk = (await commandRecorder.listSavedSequencesOnDisk().catch(() => [] as any[]))
+        .find((entry: any) => entry.name === name || entry.filename === `${name}.json`);
+      if (!onDisk) return `no saved sequence named "${name}"`;
+      // The exact path, never the name: deleteSequenceFromDisk falls back to
+      // prefix matching, so "asd" would take "asdasd" with it.
+      const removed = await commandRecorder.deleteSequenceFromDisk(onDisk.fullPath);
+      if (!removed) return `could not remove "${name}"`;
+      await appendEvent(resolveSessionName(getSessionInfo()?.shortId), 'sequence', {
+        sequence: name,
+        path: onDisk.fullPath,
+        deleted: true,
+        detail: `sequence "${name}" deleted`,
+      });
       for (const sequence of commandRecorder.listSequences()) {
         if (sequence.name === name) commandRecorder.deleteSequence(sequence.id);
       }

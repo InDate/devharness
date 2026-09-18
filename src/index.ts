@@ -41,6 +41,7 @@ import { createInspectionTools } from './tools/inspection-tools.js';
 import { createSourceTools } from './tools/source-tools.js';
 import { createConsoleTools } from './tools/console-tools.js';
 import { createNetworkTools } from './tools/network-tools.js';
+import { createProxyTools } from './tools/proxy-tools.js';
 import { createPageTools } from './tools/page-tools.js';
 import { createDOMTools } from './tools/dom-tools.js';
 import { createScreenshotTools } from './tools/screenshot-tools.js';
@@ -71,6 +72,7 @@ import { homedir } from 'os';
 import { ServerManager, detectAutoRestartCommand } from './server-manager.js';
 import { configManager } from './config.js';
 import { ToolError } from './tool-error.js';
+import { startProxyFor } from './proxy/registry.js';
 import { checkPortFailures, checkBreakpointPause, checkBugBlocking, checkPendingStartups, checkDuplicateSession, prependToResponse, appendToResponse, buildStatusSuffix, type StatusLineItem } from './tool-response.js';
 import { recordBlockEvent, clearBlockEvents } from './block-events.js';
 import { createStartupGate } from './startup-gate.js';
@@ -475,6 +477,7 @@ const connectionTools = {
       width: z.number().optional().describe('Viewport width in CSS px. Sizes the real OS window, not an emulated viewport, so the page keeps tracking window resizes. Bigger than the display is clamped and reported. Headless emulates instead.'),
       height: z.number().optional().describe('Viewport height in CSS px. Sized like `width`.'),
       profile: z.string().optional().describe('Named persistent Chrome profile, e.g. "device-a". Naming a profile makes it persistent: it maps to a stable user-data-dir under ~/.devharness/profiles (override per project with chrome.persistentProfileRoot) and is never deleted, so cookies, localStorage and IndexedDB - including non-extractable CryptoKeys - survive across runs. Created on first use. Does NOT pin a port; port selection is unchanged. Wipe it with config({action:"resetProfile", profile:"device-a"}). Only one live Chrome may hold a given profile at a time.'),
+      proxy: z.boolean().optional().describe('Launch this browser through an intercepting proxy, so a response or a socket frame can be held and served in its place. Off by default: it makes Chrome show its unsupported-flag banner and forces HTTP/1.1. Only this browser is affected'),
       chromeArgs: z.array(z.string()).optional().describe('Extra Chrome command-line flags to pass through at launch, e.g. ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"]. Merged after the managed defaults. The CDP_TOOLS_EXTRA_CHROME_ARGS env var (space-separated) is also always merged. Only applies when this call actually launches Chrome (ignored when an existing instance on the port is reused).'),
     }).strict(),
     async (args) => {
@@ -667,7 +670,10 @@ const connectionTools = {
           // Don't pass URL to launch if auto-connect is enabled - let Puppeteer handle navigation
           // This prevents race condition where Chrome starts loading before monitors are set up
           const launchUrl = autoConnect ? undefined : url;
-          const result = await chromeLauncher.launch(port, launchUrl, portReserver, args.headless, args.chromeArgs ?? [], profileName);
+          const proxyArgs = args.proxy
+            ? (await startProxyFor(userReference ?? `port-${port}`)).chromeArgs
+            : [];
+          const result = await chromeLauncher.launch(port, launchUrl, portReserver, args.headless, [...proxyArgs, ...(args.chromeArgs ?? [])], profileName);
           await debugLog('index', `Chrome launched successfully: ${JSON.stringify(result)}`);
           isNewBrowser = true;
         }
@@ -1552,6 +1558,7 @@ const allTools = {
   // Browser Automation tools
   ...(configManager.isToolEnabled('console') ? createConsoleTools(proxyPuppeteerManager, proxyConsoleMonitor, resolveConnectionFromReason) : {}),
   ...(configManager.isToolEnabled('network') ? createNetworkTools(proxyPuppeteerManager, proxyNetworkMonitor, resolveConnectionFromReason) : {}),
+  ...createProxyTools(),
   ...(configManager.isToolEnabled('page') ? createPageTools(proxyPuppeteerManager, proxyCdpManager, proxyConsoleMonitor, proxyNetworkMonitor, connectionManager, resolveConnectionFromReason, clickableCache, executeToolCall) : {}),
   ...(configManager.isToolEnabled('dom') ? createDOMTools(proxyPuppeteerManager, proxyCdpManager, connectionManager, resolveConnectionFromReason) : {}),
   ...(configManager.isToolEnabled('screenshot') ? createScreenshotTools(proxyPuppeteerManager, proxyCdpManager, connectionManager, resolveConnectionFromReason) : {}),

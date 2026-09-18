@@ -45,6 +45,36 @@ export interface SocketFrame {
 }
 
 /**
+ * One thing the proxy saw cross the boundary.
+ *
+ * Requests and frames are one kind here rather than two, because what is
+ * wanted between two steps is "what reached the outside world", and that
+ * question does not care which transport carried it.
+ */
+export interface ProxyEvent {
+  id: string;
+  at: number;
+  kind: 'request' | 'frame';
+  /** Leaving the browser, or arriving at it. */
+  direction: 'out' | 'in';
+  url: string;
+  method?: string;
+  status?: number;
+  binary?: boolean;
+  size: number;
+  /** First characters of the payload, for a list. The whole body is kept
+   *  separately and only up to BODY_CAP. */
+  preview?: string;
+  heldAs?: 'replaced' | 'dropped';
+}
+
+/** Events held before the oldest is discarded. */
+const MAX_EVENTS = 2000;
+/** Response body kept per exchange, for turning one into a held value later. */
+const BODY_CAP = 64 * 1024;
+const PREVIEW_CHARS = 200;
+
+/**
  * A frame held in place of what would have crossed.
  *
  * Matched on the payload rather than on position: a socket carries no method,
@@ -72,9 +102,35 @@ export class InterceptProxy {
   private upgrades = new WebSocketServer({ noServer: true });
   private pins = new Map<string, Pin>();
   private framePins = new Map<string, FramePin>();
+  private events: ProxyEvent[] = [];
+  private bodies = new Map<string, string>();
+  private eventSeq = 0;
   private frameHandlers = new Set<(frame: SocketFrame) => void>();
   private pinSeq = 0;
   private port = 0;
+
+  /** What the proxy saw in a window, oldest first. */
+  eventsIn(since?: number, until?: number): ProxyEvent[] {
+    return this.events.filter(e =>
+      (since === undefined || e.at >= since) && (until === undefined || e.at < until));
+  }
+
+  /** The kept body for one event, where there is one. */
+  bodyOf(id: string): string | undefined {
+    return this.bodies.get(id);
+  }
+
+  private record(event: Omit<ProxyEvent, 'id'>, body?: string): ProxyEvent {
+    const stored: ProxyEvent = { id: `ev-${++this.eventSeq}`, ...event };
+    this.events.push(stored);
+    if (body !== undefined) this.bodies.set(stored.id, body);
+    if (this.events.length > MAX_EVENTS) {
+      for (const gone of this.events.splice(0, this.events.length - MAX_EVENTS)) {
+        this.bodies.delete(gone.id);
+      }
+    }
+    return stored;
+  }
 
   /** Every frame that crosses a proxied socket, both directions. */
   onFrame(handler: (frame: SocketFrame) => void): () => void {
@@ -157,6 +213,12 @@ export class InterceptProxy {
       pin.hits += 1;
       res.writeHead(pin.status, { ...pin.headers, 'content-length': Buffer.byteLength(pin.body) });
       res.end(pin.body);
+      this.record({
+        at: Date.now(), kind: 'request', direction: 'out', url,
+        method: req.method ?? 'GET', status: pin.status,
+        size: Buffer.byteLength(pin.body), preview: pin.body.slice(0, PREVIEW_CHARS),
+        heldAs: 'replaced',
+      }, pin.body);
       return;
     }
 
@@ -174,6 +236,20 @@ export class InterceptProxy {
       ...(secure ? { rejectUnauthorized: false } : {}),
     }, (answer) => {
       res.writeHead(answer.statusCode ?? 502, answer.headers);
+      // Tapped rather than buffered: the bytes still pipe through untouched and
+      // a copy is kept up to the cap, so an exchange can become a held value
+      // later without the proxy having to parse anything now.
+      let kept = '';
+      let size = 0;
+      answer.on('data', (chunk: Buffer) => {
+        size += chunk.length;
+        if (kept.length < BODY_CAP) kept += chunk.toString('utf8', 0, BODY_CAP - kept.length);
+      });
+      answer.on('end', () => this.record({
+        at: Date.now(), kind: 'request', direction: 'out', url,
+        method: req.method ?? 'GET', status: answer.statusCode ?? 0,
+        size, preview: kept.slice(0, PREVIEW_CHARS),
+      }, kept));
       answer.pipe(res);
     });
     upstream.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end(); });
@@ -200,11 +276,20 @@ export class InterceptProxy {
           const held = this.matchFramePin(url, direction, text);
           if (held) held.hits += 1;
 
+          const heldAs = held
+            ? (held.replaceWith === undefined ? 'dropped' as const : 'replaced' as const)
+            : undefined;
           this.announce({
             at: Date.now(), url, direction, binary, size: buf.length,
             ...(text !== undefined ? { text } : {}),
-            ...(held ? { heldAs: held.replaceWith === undefined ? 'dropped' : 'replaced' } : {}),
+            ...(heldAs ? { heldAs } : {}),
           });
+          this.record({
+            at: Date.now(), kind: 'frame', direction: direction === 'sent' ? 'out' : 'in',
+            url, binary, size: buf.length,
+            ...(text !== undefined ? { preview: text.slice(0, PREVIEW_CHARS) } : {}),
+            ...(heldAs ? { heldAs } : {}),
+          }, text);
 
           if (held && held.replaceWith === undefined) return;
           const payload = held?.replaceWith !== undefined ? held.replaceWith : data;
@@ -294,6 +379,18 @@ export class InterceptProxy {
         // QUIC does not traverse an HTTP proxy; without this, traffic to a
         // site offering HTTP/3 simply goes around.
         '--disable-quic',
+        // Chrome's own traffic goes through the proxy too, and there is a great
+        // deal of it: variations, update checks, optimization-guide model
+        // downloads, extension fetches. Measured on one launch, 29 of 35
+        // events were Chrome talking to Google and 6 were the app. Left on,
+        // the count between two steps says nothing about the app.
+        '--disable-background-networking',
+        '--disable-component-update',
+        '--disable-domain-reliability',
+        '--disable-client-side-phishing-detection',
+        '--disable-sync',
+        '--metrics-recording-only',
+        '--no-pings',
       ],
     };
   }

@@ -15,7 +15,7 @@ import { getOutputPath, registerRootBound } from './helpers/paths.js';
 import { atomicWriteFile } from './atomic-write.js';
 import { getIssueSequencesDir, getIssuesBySequenceFile } from './issue-tracker.js';
 import { captureVariable } from './tools/replay-executor.js';
-import type { Annotation } from './annotation.js';
+import type { Annotation, StepTraffic } from './annotation.js';
 import { substituteCapturedValues, type CaptureEntry } from './tools/interpolation-reverse.js';
 
 /** JSON round-trip clone, tolerant of a result that isn't JSON-safe (drops it rather than throwing). */
@@ -34,6 +34,8 @@ export interface RecordedCommand {
   comment?: string;  // user comment describing expected behavior
   /** Notes taken against this step, stored here so they travel with the file. */
   annotations?: Annotation[];
+  /** What crossed the boundary while this step ran, when it was recorded. */
+  traffic?: StepTraffic;
 }
 
 export interface CommandSequence {

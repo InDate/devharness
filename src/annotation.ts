@@ -29,3 +29,22 @@ export interface Annotation {
   /** Pictures taken with the note, in the order they were accepted. */
   screenshots?: string[];
 }
+
+/**
+ * What crossed the app's boundary while one step was the action in play.
+ *
+ * Stored on the step, next to the notes it is evidence for: a note saying a
+ * button double-posts is worth nothing without the record of the posts, and
+ * the record is a property of that run, not of the connection.
+ */
+export interface StepTraffic {
+  requests: number;
+  failed: number;
+  frames: number;
+  /** EventSource messages delivered in the step's window. */
+  events: number;
+  /** localStorage and sessionStorage writes, which cross no boundary at all. */
+  writes: number;
+  /** One line each, `POST /draft 200`, capped. */
+  lines: string[];
+}

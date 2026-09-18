@@ -648,6 +648,16 @@ function createSequenceDriver(
       await cancelRecording(connection);
     },
 
+    saveStepTraffic: async (entries: Array<{ index: number; traffic: any }>) => {
+      const sequence = openSequence();
+      if (!sequence) return 'no sequence is open';
+      const commands = sequence.commands ?? [];
+      for (const { index, traffic } of entries) {
+        if (index >= 0 && index < commands.length) commands[index].traffic = traffic;
+      }
+      return persist(sequence);
+    },
+
     trafficIn: async (connection: string, from: number, to: number) => {
       const empty = { requests: 0, failed: 0, frames: 0, events: 0, writes: 0, lines: [] as string[] };
       const http = await executeToolCall('network', {

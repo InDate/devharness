@@ -107,9 +107,9 @@ import { CANCELLED } from './tools/annotate-tools.js';
 import { parseExtendedSelector } from './utils/selector-resolver.js';
 import { debugLog } from './debug-logger.js';
 import { startControlServer, type ControlServer, type ControlState } from './annotate-control.js';
-import type { Annotation, AnnotationTarget } from './annotation.js';
+import type { Annotation, AnnotationTarget, StepTraffic } from './annotation.js';
 
-export type { Annotation, AnnotationTarget } from './annotation.js';
+export type { Annotation, AnnotationTarget, StepTraffic } from './annotation.js';
 
 // =============================================================================
 // Types
@@ -182,6 +182,8 @@ interface AnnotateSession extends AnnotateSessionState {
   recordingStartUrl?: string;
   /** When the recording began, which bounds its first step. */
   recordingStartedAt?: number;
+  /** The newest step's clock, which the recording ending closes the window on. */
+  lastStepAt?: number;
   /** Traffic per step index, computed once the step's window has closed. */
   stepTraffic?: Map<number, StepTraffic>;
   stepBreakpointsSet: boolean;
@@ -281,25 +283,6 @@ export interface SequenceStepView {
   current: boolean;
   /** The step the run stopped on. */
   failed?: boolean;
-}
-
-/**
- * The traffic one step produced.
- *
- * Bounded by when the step before it was observed and when this one was: a
- * request is windowed on when it started, so a click's requests fall inside the
- * window that closes on the step the click produced.
- */
-export interface StepTraffic {
-  requests: number;
-  failed: number;
-  frames: number;
-  /** EventSource messages delivered while this step was the action in play. */
-  events: number;
-  /** localStorage and sessionStorage writes, which cross no boundary at all. */
-  writes: number;
-  /** One line per request, `POST /draft 200`, capped. */
-  lines: string[];
 }
 
 /** A variable the run is carrying, and where it came from. */
@@ -407,6 +390,14 @@ export interface SequenceDriver {
   setVariable: (name: string, value: string) => Promise<string | undefined>;
   /** Remove the step that defines a variable. */
   removeVariable: (name: string) => Promise<string | undefined>;
+  /**
+   * Write each step's traffic onto the sequence on disk.
+   *
+   * A recording's traffic is held per session while it is being taken; without
+   * this it goes when the session does, and a note keeps its own text while
+   * losing the evidence it was written about.
+   */
+  saveStepTraffic: (entries: Array<{ index: number; traffic: StepTraffic }>) => Promise<string | undefined>;
   /**
    * What crossed the boundary between two clocks, for one connection.
    *
@@ -1242,8 +1233,36 @@ export async function recordSequence(
     session.sequenceBusy = false;
   }
 
+  if (!cancelled) await persistStepTraffic(session, connection);
   if (withAgent) await announceRecording(session, connection, name, cancelled);
   return getSequenceState(connection);
+}
+
+/**
+ * Close the last step's window and write every step's traffic to the file.
+ *
+ * The newest step's window stays open while the recording runs, since its
+ * effects are still arriving; the recording ending is what closes it.
+ */
+async function persistStepTraffic(session: AnnotateSession, connection: string): Promise<void> {
+  const held = session.stepTraffic;
+  if (!session.sequences || !held) return;
+
+  const steps = session.sequences.active()?.steps ?? [];
+  const last = steps.length - 1;
+  if (last >= 0 && !held.has(last) && session.lastStepAt !== undefined) {
+    const traffic = await session.sequences.trafficIn(connection, session.lastStepAt, Date.now())
+      .catch(() => undefined);
+    if (traffic) held.set(last, traffic);
+  }
+
+  const entries = [...held.entries()]
+    .filter(([, traffic]) => traffic.requests > 0 || traffic.frames > 0
+      || traffic.events > 0 || traffic.writes > 0)
+    .map(([index, traffic]) => ({ index, traffic }));
+  if (entries.length === 0) return;
+  session.sequenceFailure = await session.sequences.saveStepTraffic(entries)
+    .catch(error => String(error));
 }
 
 /**
@@ -1278,6 +1297,7 @@ async function attachStepTraffic(
     // second later - so it fills in when the next action bounds it.
     const from = steps[index].at;
     const to = steps[index + 1]?.at;
+    if (from !== undefined && to === undefined) session.lastStepAt = from;
     if (from === undefined || to === undefined) continue;
 
     const traffic = await session.sequences.trafficIn(connection, from, to)

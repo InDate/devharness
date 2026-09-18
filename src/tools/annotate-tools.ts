@@ -109,6 +109,30 @@ function formatAnnotations(entries: SequenceAnnotation[]): string {
 /** Returned by record() when the person abandoned it; not a failure. */
 export const CANCELLED = '\u0000cancelled';
 
+/**
+ * Stands in for the control pane's own address inside a recorded sequence.
+ *
+ * The pane is served from an ephemeral port under a per-session token, so a
+ * sequence recorded against it holds an address that resolves once and 404s
+ * every session after. Recording the pane is how the tool gets driven with the
+ * tool, and without this it is a one-shot.
+ */
+const PANE_TOKEN = '{{pane}}';
+
+/** The live pane for this connection, with no trailing slash. */
+function livePaneUrl(connection: string): string | undefined {
+  const url = getAnnotateSession(connection)?.controlUrl;
+  return url ? url.replace(/\/$/, '') : undefined;
+}
+
+/** Swap the live pane's address for the placeholder, or back again. */
+function swapPaneUrl(url: string, connection: string, to: 'token' | 'live'): string {
+  const live = livePaneUrl(connection);
+  if (!live) return url;
+  if (to === 'token') return url.startsWith(live) ? PANE_TOKEN + url.slice(live.length) : url;
+  return url.startsWith(PANE_TOKEN) ? live + url.slice(PANE_TOKEN.length) : url;
+}
+
 /** The page a recording began on, as its opening step. */
 function navigateFirst(url: string) {
   return { tool: 'navigate', params: { action: 'goto', url }, comment: 'open the page' };
@@ -309,6 +333,13 @@ function createSequenceDriver(
   const goToStart = async (name: string, connection: string): Promise<void> => {
     let url = startUrlOf(name);
     if (!url) return;
+    // A sequence recorded against the pane carries the placeholder, which this
+    // session's own pane address fills in.
+    url = swapPaneUrl(url, connection, 'live');
+    if (url.startsWith(PANE_TOKEN)) {
+      debugLog('annotate', `"${name}" starts at the control pane and no pane is open on ${connection}`);
+      return;
+    }
     if (baseUrl) {
       // Same rule replay applies to every absolute URL in the run: keep the
       // path and query, take the new origin.
@@ -599,7 +630,7 @@ function createSequenceDriver(
         // The page it began on is the sequence's own first step, so a replay
         // starts where the recording did rather than wherever a tab happens to be.
         if (startUrl && recorded.commands?.[0]?.tool !== 'navigate') {
-          recorded.commands = [navigateFirst(startUrl), ...(recorded.commands ?? [])];
+          recorded.commands = [navigateFirst(swapPaneUrl(startUrl, connection, 'token')), ...(recorded.commands ?? [])];
         }
         const saved = await commandRecorder.saveSequenceToDisk(recorded.id, false, true);
         if (!saved) return `"${name}" recorded but is no longer loaded`;

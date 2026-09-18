@@ -284,12 +284,21 @@ export class NetworkMonitor {
     });
   }
 
-  /** Keep the socket map at MAX_SOCKETS, discarding closed records first. */
+  /**
+   * Keep the socket map at MAX_SOCKETS.
+   *
+   * A record that carried no frame and no error goes before one that did: the
+   * case this cap exists for is a run of HMR reconnects, and evicting on age
+   * alone discards the app's own transport to make room for the noise that
+   * displaced it. Within a class, closed before open, then oldest first.
+   */
   private evictSockets(): void {
     if (this.sockets.size <= MAX_SOCKETS) return;
+    const rank = (s: StoredWebSocket): [number, number, number] =>
+      [s.frames.length > 0 || s.errors.length > 0 ? 1 : 0, s.closedAt ? 0 : 1, s.openedAt];
     const order = [...this.sockets.entries()].sort(([, a], [, b]) => {
-      if (!!a.closedAt !== !!b.closedAt) return a.closedAt ? -1 : 1;
-      return a.openedAt - b.openedAt;
+      const ra = rank(a), rb = rank(b);
+      return ra[0] - rb[0] || ra[1] - rb[1] || ra[2] - rb[2];
     });
     for (const [k] of order.slice(0, this.sockets.size - MAX_SOCKETS)) this.sockets.delete(k);
   }

@@ -1,0 +1,136 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>socket-app</title>
+<style>
+  body { font: 14px -apple-system, system-ui, sans-serif; margin: 24px; max-width: 900px; }
+  h1 { font-size: 16px; text-transform: uppercase; letter-spacing: .6px; color: #666; }
+  fieldset { border: 1px solid #ddd; border-radius: 8px; margin: 0 0 14px; padding: 12px 14px; }
+  legend { font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: #888; }
+  button { font: inherit; padding: 5px 10px; margin: 0 6px 6px 0; border: 1px solid #ccc;
+           border-radius: 6px; background: #fff; cursor: pointer; }
+  button:hover { border-color: #1a73e8; color: #1a73e8; }
+  #log { font: 12px/1.6 ui-monospace, Menlo, monospace; background: #f6f6f6; border-radius: 6px;
+         padding: 10px; height: 260px; overflow: auto; white-space: pre-wrap; }
+  #count { font-weight: 600; }
+</style>
+
+<h1>socket-app</h1>
+<p>Open sockets, then read them with
+  <code>network({ action: 'sockets', frames: true, socketUrl: '7788' })</code>.</p>
+
+<fieldset>
+  <legend>payload shapes</legend>
+  <button data-testid="open-small" data-path="/small">small text, 2/s</button>
+  <button data-testid="open-big" data-path="/big?chars=200000">200KB text frames</button>
+  <button data-testid="open-binary" data-path="/binary?bytes=3000">binary frames</button>
+  <button data-testid="open-burst" data-path="/burst?n=300">burst of 300</button>
+</fieldset>
+
+<fieldset>
+  <legend>lifecycle</legend>
+  <button data-testid="open-ping" data-path="/ping">server protocol pings</button>
+  <button data-testid="open-heartbeat" data-path="/heartbeat">app heartbeat, 0.5/s</button>
+  <button data-testid="open-quiet" data-path="/quiet">silent socket</button>
+  <button data-testid="open-serverclose" data-path="/serverclose">server closes it</button>
+  <button data-testid="open-badframe" data-path="/badframe">provoke a frame error</button>
+</fieldset>
+
+<fieldset>
+  <legend>from the page</legend>
+  <button data-testid="send-frame">send a text frame</button>
+  <button data-testid="send-binary">send a binary frame</button>
+  <button data-testid="client-close">close from the page</button>
+</fieldset>
+
+<fieldset>
+  <legend>scale and targets</legend>
+  <button data-testid="open-sixty">open 60 sockets</button>
+  <button data-testid="open-worker">open one from a worker</button>
+  <button data-testid="navigate-away">navigate with sockets open</button>
+  <button data-testid="close-all">close all</button>
+</fieldset>
+
+<p>open sockets: <span id="count" data-testid="socket-count">0</span></p>
+<div id="log" data-testid="log"></div>
+
+<script>
+const sockets = [];
+let worker = null;
+const $ = (sel) => document.querySelector(sel);
+const log = (line) => {
+  const el = $('#log');
+  el.textContent += line + '\n';
+  el.scrollTop = el.scrollHeight;
+};
+const refresh = () => {
+  $('#count').textContent = sockets.filter(s => s.readyState === WebSocket.OPEN).length;
+};
+
+function open(path, quiet) {
+  const ws = new WebSocket(`ws://${location.host}${path}`);
+  ws.binaryType = 'arraybuffer';
+  ws.addEventListener('open', () => { if (!quiet) log(`open  ${path}`); refresh(); });
+  ws.addEventListener('close', (e) => { if (!quiet) log(`close ${path} code=${e.code}`); refresh(); });
+  ws.addEventListener('error', () => { if (!quiet) log(`error ${path}`); refresh(); });
+  let seen = 0;
+  ws.addEventListener('message', (e) => {
+    seen++;
+    if (quiet) return;
+    const size = typeof e.data === 'string' ? e.data.length : e.data.byteLength;
+    if (seen <= 3 || seen % 100 === 0) log(`recv  ${path} #${seen} ${size}b`);
+  });
+  sockets.push(ws);
+  return ws;
+}
+
+const live = () => sockets.filter(s => s.readyState === WebSocket.OPEN);
+
+for (const button of document.querySelectorAll('button[data-path]')) {
+  button.addEventListener('click', () => open(button.dataset.path));
+}
+
+$('[data-testid=send-frame]').addEventListener('click', () => {
+  const target = live()[0];
+  if (!target) return log('no open socket to send on');
+  target.send(JSON.stringify({ from: 'page', at: Date.now() }));
+  log('sent  text frame');
+});
+
+$('[data-testid=send-binary]').addEventListener('click', () => {
+  const target = live()[0];
+  if (!target) return log('no open socket to send on');
+  target.send(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]));
+  log('sent  binary frame');
+});
+
+$('[data-testid=client-close]').addEventListener('click', () => {
+  const target = live()[0];
+  if (!target) return log('no open socket to close');
+  target.close(1000, 'page hung up');
+  log('sent  close frame');
+});
+
+$('[data-testid=open-sixty]').addEventListener('click', () => {
+  for (let i = 0; i < 60; i++) open(`/quiet?n=${i}`, true);
+  log('opened 60 quiet sockets');
+});
+
+$('[data-testid=open-worker]').addEventListener('click', () => {
+  worker = new Worker('/socket-worker.js');
+  worker.addEventListener('message', (e) => log(`worker ${e.data}`));
+  worker.postMessage(`ws://${location.host}/small?ms=800`);
+  log('worker started');
+});
+
+$('[data-testid=navigate-away]').addEventListener('click', () => {
+  log('navigating with ' + live().length + ' socket(s) open');
+  location.href = '/second.html';
+});
+
+$('[data-testid=close-all]').addEventListener('click', () => {
+  for (const s of sockets) { try { s.close(); } catch {} }
+  if (worker) { worker.terminate(); worker = null; }
+  log('closed all');
+  refresh();
+});
+</script>

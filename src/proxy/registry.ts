@@ -9,7 +9,7 @@ import { InterceptProxy } from './intercept-proxy.js';
 
 const proxies = new Map<string, InterceptProxy>();
 
-export async function startProxyFor(reference: string): Promise<{
+export async function startProxyFor(reference: string, appUrl?: string): Promise<{
   proxy: InterceptProxy;
   chromeArgs: string[];
 }> {
@@ -18,6 +18,12 @@ export async function startProxyFor(reference: string): Promise<{
 
   const proxy = new InterceptProxy();
   const { chromeArgs } = await proxy.start();
+  // Only the app under test reaches the network. Everything the browser does
+  // on its own account is refused, which is what makes a count of events
+  // between two steps a statement about the app.
+  if (appUrl) {
+    try { proxy.allowOnly([new URL(appUrl).host]); } catch { /* not a URL to scope by */ }
+  }
   proxies.set(reference, proxy);
   return { proxy, chromeArgs };
 }

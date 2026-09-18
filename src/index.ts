@@ -671,7 +671,7 @@ const connectionTools = {
           // This prevents race condition where Chrome starts loading before monitors are set up
           const launchUrl = autoConnect ? undefined : url;
           const proxyArgs = args.proxy
-            ? (await startProxyFor(userReference ?? `port-${port}`)).chromeArgs
+            ? (await startProxyFor(userReference ?? `port-${port}`, url)).chromeArgs
             : [];
           const result = await chromeLauncher.launch(port, launchUrl, portReserver, args.headless, [...proxyArgs, ...(args.chromeArgs ?? [])], profileName);
           await debugLog('index', `Chrome launched successfully: ${JSON.stringify(result)}`);

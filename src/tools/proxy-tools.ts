@@ -47,11 +47,21 @@ export function createProxyTools() {
         switch (args.action) {
           case 'status': {
             const events = proxy.eventsIn();
+            const allowed = proxy.listAllowedHosts();
+            const refusals = proxy.refusals();
+            const lines = [
+              `Proxy running for "${args.connectionReason}". ${events.length} event(s) seen.`,
+              allowed.length
+                ? `Only these reach the network: ${allowed.join(', ')}. Everything else is refused.`
+                : 'The browser\'s own service hosts are refused; everything else reaches the network.',
+              `${proxy.blocked} call(s) refused${refusals.length ? ':' : '.'}`,
+              ...refusals.slice(0, 10).map(r => `  ${r.count.toString().padStart(4)}  ${r.host}`),
+              ...(refusals.length > 10 ? [`  … and ${refusals.length - 10} more host(s)`] : []),
+              `${proxy.listPins().length} response hold(s), ${proxy.listFramePins().length} message hold(s).`,
+            ];
             return {
-              content: [{ type: 'text', text:
-                `Proxy running for "${args.connectionReason}". ${events.length} event(s) seen, `
-                + `${proxy.listPins().length} response hold(s), ${proxy.listFramePins().length} message hold(s).` }],
-              _meta: meta({ proxy: { events: events.length } }),
+              content: [{ type: 'text', text: lines.join('\n') }],
+              _meta: meta({ proxy: { events: events.length, blocked: proxy.blocked, allowed, refusals } }),
             };
           }
 

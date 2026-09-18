@@ -142,14 +142,40 @@ export class InterceptProxy {
   private bodies = new Map<string, string>();
   private eventSeq = 0;
   private blockedHosts = [...BROWSER_SERVICE_HOSTS];
+  private allowedHosts: string[] = [];
   private blockedCount = 0;
+  private refusedHosts = new Map<string, number>();
   private frameHandlers = new Set<(frame: SocketFrame) => void>();
   private pinSeq = 0;
   private port = 0;
 
-  /** How many of the browser's own calls were refused. */
+  /** How many calls were refused, and to where. */
   get blocked(): number {
     return this.blockedCount;
+  }
+
+  /** Refused hosts and their counts, so a black hole is visible, not silent. */
+  refusals(): Array<{ host: string; count: number }> {
+    return [...this.refusedHosts.entries()]
+      .map(([host, count]) => ({ host, count }))
+      .sort((a, b) => b.count - a.count);
+  }
+
+  /**
+   * Let only these through; everything else is refused.
+   *
+   * An entry is a host, matching any port on it and its subdomains, or a
+   * host:port, matching exactly that. Set this and the refused-host list stops
+   * being consulted: an allow list answers the same question with the opposite
+   * default, and consulting both would leave two places to look when something
+   * unexpectedly cannot reach the network.
+   */
+  allowOnly(hosts: string[]): void {
+    this.allowedHosts = [...hosts];
+  }
+
+  listAllowedHosts(): string[] {
+    return [...this.allowedHosts];
   }
 
   /** Replace the refused-host list; [] lets the browser talk freely. */
@@ -170,6 +196,17 @@ export class InterceptProxy {
    */
   private isBrowserService(host: string, path?: string): boolean {
     const name = host.split(':')[0].toLowerCase();
+    const port = host.split(':')[1];
+
+    if (this.allowedHosts.length > 0) {
+      const allowed = this.allowedHosts.some(entry => {
+        const [wantHost, wantPort] = entry.toLowerCase().split(':');
+        const hostMatches = name === wantHost || name.endsWith(`.${wantHost}`);
+        return hostMatches && (wantPort === undefined || wantPort === port);
+      });
+      return !allowed;
+    }
+
     return this.blockedHosts.some(blocked => {
       const cut = blocked.indexOf('/');
       if (cut < 0) return name === blocked || name.endsWith(`.${blocked}`);
@@ -177,6 +214,11 @@ export class InterceptProxy {
       const wantHost = blocked.slice(0, cut);
       return (name === wantHost || name.endsWith(`.${wantHost}`)) && path.startsWith(blocked.slice(cut));
     });
+  }
+
+  private noteRefusal(host: string): void {
+    this.blockedCount += 1;
+    this.refusedHosts.set(host, (this.refusedHosts.get(host) ?? 0) + 1);
   }
 
   /** What the proxy saw in a window, oldest first. */
@@ -281,7 +323,7 @@ export class InterceptProxy {
       // Refused rather than answered: a background service reads a failure as
       // the network being away and backs off, where an empty success can send
       // it round again.
-      this.blockedCount += 1;
+      this.noteRefusal(host);
       res.destroy();
       return;
     }
@@ -416,7 +458,7 @@ export class InterceptProxy {
       // the process and takes every other connection with it.
       socket.on('error', () => socket.destroy());
       if (this.isBrowserService(req.url ?? '')) {
-        this.blockedCount += 1;
+        this.noteRefusal(req.url ?? '(unknown)');
         socket.destroy();
         return;
       }

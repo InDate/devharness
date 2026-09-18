@@ -1242,8 +1242,7 @@ export async function recordSequence(
 
 /** Whether a step produced anything worth showing under it. */
 function hasEvidence(traffic: StepTraffic): boolean {
-  return traffic.requests > 0 || traffic.writes > 0 || (traffic.opened ?? 0) > 0
-    || (traffic.frames ?? 0) > 0 || (traffic.events ?? 0) > 0;
+  return traffic.requests > 0 || traffic.writes > 0 || traffic.opened > 0;
 }
 
 /**

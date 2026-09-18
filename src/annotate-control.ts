@@ -710,8 +710,6 @@ function renderSequence(seq, noteStep) {
       const bits = [];
       if (step.traffic.requests) bits.push(step.traffic.requests + ' request(s)');
       if (step.traffic.opened) bits.push(step.traffic.opened + ' transport(s) opened');
-      if (step.traffic.frames) bits.push(step.traffic.frames + ' frame(s)');
-      if (step.traffic.events) bits.push(step.traffic.events + ' sse event(s)');
       if (step.traffic.writes) bits.push(step.traffic.writes + ' local write(s)');
       if (step.traffic.failed) bits.push(step.traffic.failed + ' failed');
       head.textContent = bits.join(' · ');

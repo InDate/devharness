@@ -43,13 +43,9 @@ export interface StepTraffic {
   /** Transports this action opened. What they later carry is not counted here:
    *  a socket opened by one action can be sent on by another, and what comes
    *  back belongs where it arrived. */
-  opened?: number;
+  opened: number;
   /** localStorage and sessionStorage writes, which cross no boundary at all. */
   writes: number;
   /** One line each, `POST /draft 200`, capped. */
   lines: string[];
-  /** Counted against steps until the window model was found wrong for events a
-   *  step did not cause. Rendered where an older recording carries them. */
-  frames?: number;
-  events?: number;
 }

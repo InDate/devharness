@@ -457,6 +457,7 @@ function createSequenceDriver(
             ...(resolved ? { resolved } : {}),
             ...(typeof command.params?.saveAs === 'string' ? { captures: command.params.saveAs } : {}),
             ...(command.annotations?.length ? { annotations: command.annotations } : {}),
+            ...(command.traffic ? { traffic: command.traffic } : {}),
           };
         }),
         variables: Object.entries(store).map(([name, value]) => {

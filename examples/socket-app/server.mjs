@@ -24,7 +24,45 @@ const files = {
 };
 
 const http = createServer((req, res) => {
-  const path = new URL(req.url, 'http://x').pathname;
+  const url = new URL(req.url, 'http://x');
+  const path = url.pathname;
+
+  // An SSE stream: one long-lived response whose body never completes. A
+  // response-body reader that waits for the end never returns on this.
+  if (path === '/sse') {
+    res.writeHead(200, {
+      'content-type': 'text/event-stream',
+      'cache-control': 'no-cache',
+      connection: 'keep-alive',
+    });
+    const ms = Number(url.searchParams.get('ms') ?? 1000);
+    res.write('retry: 3000\n\n');
+    let n = 0;
+    const timer = setInterval(() => {
+      n++;
+      // Three shapes an app relies on: a plain message, a named event, and a
+      // payload split across data lines.
+      if (n % 3 === 1) res.write(`id: ${n}\ndata: ${JSON.stringify({ tag: 'tick', n })}\n\n`);
+      else if (n % 3 === 2) res.write(`id: ${n}\nevent: price\ndata: ${JSON.stringify({ tag: 'price', n, value: n * 7 })}\n\n`);
+      else res.write(`id: ${n}\ndata: {"tag":"split",\ndata: "n":${n}}\n\n`);
+    }, ms);
+    req.on('close', () => clearInterval(timer));
+    return;
+  }
+
+  // Somewhere for a page-written record to be sent, so "written locally and
+  // never sent" and "written and sent" are distinguishable at the boundary.
+  if (path === '/draft' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      console.log(`POST /draft ${body}`);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ stored: true, bytes: body.length }));
+    });
+    return;
+  }
+
   const entry = files[path];
   if (!entry) {
     res.writeHead(404, { 'content-type': 'text/plain' });
@@ -104,5 +142,6 @@ wss.on('connection', (socket, req) => {
 
 http.listen(PORT, () => {
   console.log(`socket-app on http://localhost:${PORT}`);
-  console.log('endpoints: /small /big /binary /burst /ping /heartbeat /quiet /serverclose /badframe');
+  console.log('sockets: /small /big /binary /burst /ping /heartbeat /quiet /serverclose /badframe');
+  console.log('http:    /sse (text/event-stream), POST /draft');
 });

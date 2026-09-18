@@ -43,6 +43,21 @@
 </fieldset>
 
 <fieldset>
+  <legend>ingress that is not a socket</legend>
+  <button data-testid="open-sse">open an SSE stream</button>
+  <button data-testid="close-sse">close it</button>
+</fieldset>
+
+<fieldset>
+  <legend>egress that never reaches the network</legend>
+  <button data-testid="write-local">write localStorage</button>
+  <button data-testid="write-session">write sessionStorage</button>
+  <button data-testid="write-cookie">write a cookie</button>
+  <button data-testid="write-idb">write IndexedDB</button>
+  <button data-testid="save-draft">write a draft, then POST it</button>
+</fieldset>
+
+<fieldset>
   <legend>scale and targets</legend>
   <button data-testid="open-sixty">open 60 sockets</button>
   <button data-testid="open-worker">open one from a worker</button>
@@ -127,7 +142,66 @@ $('[data-testid=navigate-away]').addEventListener('click', () => {
   location.href = '/second.html';
 });
 
+let sse = null;
+$('[data-testid=open-sse]').addEventListener('click', () => {
+  if (sse) return log('sse already open');
+  sse = new EventSource('/sse?ms=1000');
+  sse.addEventListener('open', () => log('sse   open'));
+  sse.addEventListener('message', (e) => log(`sse   message ${e.data.replace(/\n/g, ' ')}`));
+  sse.addEventListener('price', (e) => log(`sse   price   ${e.data}`));
+  sse.addEventListener('error', () => log('sse   error'));
+});
+
+$('[data-testid=close-sse]').addEventListener('click', () => {
+  if (!sse) return log('no sse stream open');
+  sse.close();
+  sse = null;
+  log('sse   closed by the page');
+});
+
+// Each of these leaves the page and reaches nothing on the network, so the
+// only record of them is whatever the debugger can see the page do.
+$('[data-testid=write-local]').addEventListener('click', () => {
+  localStorage.setItem('socket-app:draft', JSON.stringify({ at: Date.now(), body: 'unsent' }));
+  log('wrote localStorage socket-app:draft');
+});
+
+$('[data-testid=write-session]').addEventListener('click', () => {
+  sessionStorage.setItem('socket-app:step', String(Date.now()));
+  log('wrote sessionStorage socket-app:step');
+});
+
+$('[data-testid=write-cookie]').addEventListener('click', () => {
+  document.cookie = `socket-app-seen=${Date.now()}; path=/; SameSite=Lax`;
+  log('wrote cookie socket-app-seen');
+});
+
+$('[data-testid=write-idb]').addEventListener('click', () => {
+  const open = indexedDB.open('socket-app', 1);
+  open.addEventListener('upgradeneeded', () => open.result.createObjectStore('drafts', { keyPath: 'id' }));
+  open.addEventListener('success', () => {
+    const tx = open.result.transaction('drafts', 'readwrite');
+    tx.objectStore('drafts').put({ id: 'draft-1', body: 'unsent', at: Date.now() });
+    tx.addEventListener('complete', () => log('wrote IndexedDB socket-app/drafts/draft-1'));
+  });
+});
+
+// The pair that separates the two cases: the same record written locally, then
+// sent. One click produces a boundary crossing, the other produces none.
+$('[data-testid=save-draft]').addEventListener('click', async () => {
+  const draft = { id: 'draft-1', body: 'sent', at: Date.now() };
+  localStorage.setItem('socket-app:draft', JSON.stringify(draft));
+  log('wrote localStorage, now posting');
+  const res = await fetch('/draft', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(draft),
+  });
+  log(`POST /draft -> ${res.status}`);
+});
+
 $('[data-testid=close-all]').addEventListener('click', () => {
+  if (sse) { sse.close(); sse = null; }
   for (const s of sockets) { try { s.close(); } catch {} }
   if (worker) { worker.terminate(); worker = null; }
   log('closed all');

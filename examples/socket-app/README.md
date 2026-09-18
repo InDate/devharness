@@ -57,6 +57,11 @@ and the value replaced. IndexedDB emits no write event and stays outside it.
 cases are separable: one click produces a boundary crossing, the other produces
 none while changing what the app holds.
 
+`DRAFT_FAILS=1` makes `POST /draft` answer 500, for checking what a replay does
+with an endpoint that has regressed. Note what happens: the 500 logs a console
+error, so click validation stops the run at that step before any behaviour
+comparison is reached. Boundary drift covers the class that logs nothing.
+
 ## What the page adds
 
 - **open 60 sockets** — past `MAX_SOCKETS`, for the eviction order.

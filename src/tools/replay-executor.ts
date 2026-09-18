@@ -145,6 +145,19 @@ export interface ExecutionResult {
   teardownResults?: StepResult[];
   /** True when teardown ran but at least one of its steps failed. */
   teardownFailed?: boolean;
+  /**
+   * Steps whose boundary behaviour differs from what was recorded.
+   *
+   * Only present where the sequence carries a recorded baseline. A step that
+   * fired one request when recorded and three now is a regression no assertion
+   * on the page can see, because the screen can look identical either way.
+   */
+  behaviourDrift?: Array<{
+    step: number;
+    label: string;
+    recorded: { requests: number; failed: number; events: number; writes: number };
+    observed: { requests: number; failed: number; events: number; writes: number };
+  }>;
 }
 
 export interface ConnectionAnalysis {
@@ -2280,8 +2293,14 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
   };
 
 
+  // When each step began, for windowing the traffic it caused against the
+  // baseline the recording stored on it. Only filled when there is a baseline.
+  const comparesBehaviour = commands.some(c => (c as any).traffic);
+  const stepStartedAt = new Map<number, number>();
+
   for (let i = startStep; i < targetEnd; i++) {
     const cmd = commands[i];
+    if (comparesBehaviour) stepStartedAt.set(i, Date.now());
 
     // Check if aborted
     if (abortSignal?.aborted) {
@@ -2876,12 +2895,84 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
         record,
       });
 
+  const behaviourDrift = comparesBehaviour
+    ? await compareBehaviour(commands, stepStartedAt, ctx)
+    : undefined;
+
   return {
     results,
     totalCommands: commands.length,
     durationMs: Date.now() - startTime,
+    ...(behaviourDrift && behaviourDrift.length > 0 ? { behaviourDrift } : {}),
     ...(teardownOutcome ? { teardownResults: teardownOutcome.results, teardownFailed: teardownOutcome.failed } : {})
   };
+}
+
+/**
+ * Compare each step's boundary traffic against what the recording stored.
+ *
+ * Windowed the way recording windows it: a step owns everything from when it
+ * began until the next one did, and the last step owns everything after it.
+ * Run after the steps rather than between them, so the comparison never delays
+ * a run or changes its timing.
+ *
+ * Frames are counted and not compared. A background stream delivers on its own
+ * schedule, so its count moves with how long a step happened to take and a
+ * difference there says nothing about the step.
+ */
+async function compareBehaviour(
+  commands: RecordedCommand[],
+  stepStartedAt: Map<number, number>,
+  ctx: ExecutionContext
+): Promise<ExecutionResult['behaviourDrift']> {
+  const { executeToolCall, connectionReason } = ctx;
+  const indices = [...stepStartedAt.keys()].sort((a, b) => a - b);
+  const drift: NonNullable<ExecutionResult['behaviourDrift']> = [];
+
+  for (const [position, index] of indices.entries()) {
+    const recorded = (commands[index] as any).traffic;
+    if (!recorded) continue;
+    const from = stepStartedAt.get(index)!;
+    const to = stepStartedAt.get(indices[position + 1]) ?? Date.now();
+
+    const http = await executeToolCall('network', {
+      action: 'list', connectionReason, since: from, until: to, limit: 50,
+    }).catch(() => null);
+    const rows = http?._meta?.network?.requests ?? [];
+    const streams = await executeToolCall('network', {
+      action: 'streams', connectionReason, since: from, until: to,
+    }).catch(() => null);
+    const events = (streams?._meta?.streamList ?? []).reduce(
+      (total: number, s: any) => total + (s.events ?? 0), 0);
+    const stored = await executeToolCall('storage', {
+      action: 'writes', connectionReason, since: from, until: to,
+    }).catch(() => null);
+    const writes = (stored?._meta?.storage?.writes ?? []).length;
+
+    const observed = {
+      requests: rows.length,
+      failed: rows.filter((r: any) => r.failed || (r.status ?? 0) >= 400).length,
+      events,
+      writes,
+    };
+    const before = {
+      requests: recorded.requests ?? 0,
+      failed: recorded.failed ?? 0,
+      events: recorded.events ?? 0,
+      writes: recorded.writes ?? 0,
+    };
+    const differs = (['requests', 'failed', 'events', 'writes'] as const)
+      .some(field => before[field] !== observed[field]);
+    if (differs) {
+      drift.push({
+        step: index + 1,
+        label: `${commands[index].tool}.${commands[index].params?.action ?? ''}`.replace(/\.$/, ''),
+        recorded: before,
+        observed,
+      });
+    }
+  }
+  return drift;
 }
 
 /**

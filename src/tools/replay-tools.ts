@@ -2361,6 +2361,20 @@ async function performRun(
       : undefined
   );
 
+  if (execResult.behaviourDrift?.length) {
+    // Reported, never a verdict: what a step should do at the boundary is the
+    // person's call, and a run that differs is as often a fixed bug as a broken
+    // one.
+    response += `\n\n**Boundary behaviour differs from the recording**`;
+    for (const d of execResult.behaviourDrift) {
+      const moved = (['requests', 'failed', 'events', 'writes'] as const)
+        .filter(f => d.recorded[f] !== d.observed[f])
+        .map(f => `${f} ${d.recorded[f]} → ${d.observed[f]}`)
+        .join(', ');
+      response += `\n- step ${d.step} \`${d.label}\`: ${moved}`;
+    }
+  }
+
   // Add debug state if successful
   const failed = execResult.results.filter(r => !r.success).length;
   if (connectionReason && failed === 0) {

@@ -57,6 +57,13 @@ const http = createServer((req, res) => {
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
       console.log(`POST /draft ${body}`);
+      // DRAFT_FAILS=1 turns this endpoint into a regression, for checking that
+      // a replay reports boundary behaviour differing from its recording.
+      if (process.env.DRAFT_FAILS === '1') {
+        res.writeHead(500, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'draft store unavailable' }));
+        return;
+      }
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ stored: true, bytes: body.length }));
     });

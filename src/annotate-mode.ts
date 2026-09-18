@@ -1976,6 +1976,36 @@ export async function startAnnotateMode(params: {
     cancelSequence: async () => { await cancelSequence(connection); },
     removeSequence: async (name: string) => { await removeSequence(connection, name); },
     dismissFailure: async () => { await dismissSequenceFailure(connection); },
+    proxyBody: async (id: string) => getProxy(connection)?.bodyOf(id) ?? null,
+
+    /**
+     * Answer this from now on with what it answered here.
+     *
+     * A request is held by its own URL, so the next call to it is answered
+     * locally. A frame is held by what it carried, since a socket message has
+     * no other durable handle on it.
+     */
+    proxyHold: async (id: string) => {
+      const live = getProxy(connection);
+      if (!live) return 'no proxy';
+      const event = live.eventsIn().find(e => e.id === id);
+      if (!event) return 'gone';
+      const body = live.bodyOf(id);
+      if (event.kind === 'request') {
+        live.pin({
+          urlIncludes: event.url,
+          ...(event.method ? { method: event.method } : {}),
+          ...(event.status ? { status: event.status } : {}),
+          body: body ?? '',
+        });
+        return 'HELD';
+      }
+      if (body === undefined) return 'BINARY - NOT HELD';
+      live.pinFrame({ urlIncludes: event.url, direction: event.direction === 'out' ? 'sent' : 'received',
+        textIncludes: body, replaceWith: body });
+      return 'HELD';
+    },
+
     proxyEvents: async (sinceId: string | null) => {
       const proxy = getProxy(connection);
       if (!proxy) return { running: false, allowed: [], refused: 0, events: [] };

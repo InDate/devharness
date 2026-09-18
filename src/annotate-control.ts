@@ -44,6 +44,10 @@ export interface ControlHandlers {
     refused: number;
     events: Array<Record<string, unknown>>;
   }>;
+  /** The payload kept for one event, for reading and for holding. */
+  proxyBody: (id: string) => Promise<string | null>;
+  /** Answer this from now on with what it answered here. */
+  proxyHold: (id: string) => Promise<string>;
   recordSequence: (name: string, withAgent: boolean) => Promise<void>;
   stopRecordingSequence: () => Promise<void>;
   cancelRecordingSequence: () => Promise<void>;
@@ -293,13 +297,30 @@ export const PAGE = String.raw`<!doctype html>
   .tabcount { color: var(--muted); font-size: 10px; }
 
   .events { list-style: none; margin: 8px 0 0; padding: 0;
-            font: 11px/1.7 ui-monospace, Menlo, monospace; max-height: 440px; overflow: auto; }
-  .events li { display: flex; gap: 8px; padding: 2px 0; border-bottom: 1px solid var(--panel); }
-  .events .evdir { flex: 0 0 26px; color: var(--muted); }
+            font: 11px/1.6 ui-monospace, Menlo, monospace; max-height: 460px; overflow: auto; }
+  /* A pill per event rather than ruled rows: a separator between every line
+     reads as a table, and this is a stream. */
+  .events li { background: var(--panel); border: 1px solid transparent; border-radius: 7px;
+               padding: 5px 9px; margin-bottom: 3px; }
+  .events li:hover { border-color: var(--line); }
+  .events li.open { border-color: var(--accent); }
+  .evhead { display: flex; gap: 9px; align-items: baseline; cursor: pointer; }
+  .events .evdir { flex: 0 0 30px; color: var(--muted); }
   .events .evurl { flex: 1; word-break: break-all; }
   .events .evmeta { flex: 0 0 auto; color: var(--muted); }
   .events .held { color: #e8a33d; }
   .events .bad { color: #d93025; }
+  /* Symbols while collapsed, words once open: a control you have not used
+     before is a guess until it is named. */
+  .evtools { display: flex; gap: 4px; margin-left: 8px; opacity: 0; }
+  .events li:hover .evtools, .events li.open .evtools { opacity: 1; }
+  .evtools button { padding: 0 5px; font-size: 10px; line-height: 16px; border-color: transparent; }
+  .evtools button:hover { border-color: var(--accent); color: var(--accent); }
+  .evbody { margin-top: 6px; padding: 7px 9px; background: var(--bg); border-radius: 5px;
+            white-space: pre-wrap; word-break: break-all; max-height: 230px; overflow: auto;
+            color: var(--muted); }
+  .evactions { display: flex; gap: 8px; margin-top: 7px; }
+  .evactions button { font-size: 10px; letter-spacing: .4px; padding: 4px 9px; }
 
   .vars { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
   .vars ol { list-style: none; margin: 8px 0 0; padding: 0; }
@@ -1141,20 +1162,83 @@ $('proxyClear').addEventListener('click', () => {
 
 function eventRow(event) {
   const li = document.createElement('li');
+  const head = document.createElement('div');
+  head.className = 'evhead';
+
   const dir = document.createElement('span');
   dir.className = 'evdir';
   dir.textContent = event.kind === 'request'
     ? (event.method || 'GET')
     : (event.direction === 'out' ? '->' : '<-');
+
   const url = document.createElement('span');
   url.className = 'evurl';
   url.textContent = event.kind === 'request' ? event.url : (event.preview || event.url);
+
   const meta = document.createElement('span');
   meta.className = 'evmeta' + (event.heldAs ? ' held' : (event.status >= 400 ? ' bad' : ''));
   meta.textContent = event.heldAs
     ? event.heldAs
     : (event.kind === 'request' ? String(event.status ?? '') : event.size + 'b');
-  li.append(dir, url, meta);
+
+  const tools = document.createElement('span');
+  tools.className = 'evtools';
+  const chevron = document.createElement('button');
+  chevron.textContent = '\u2304';
+  chevron.title = 'open';
+  const holdIcon = document.createElement('button');
+  holdIcon.textContent = '\u25c9';
+  holdIcon.title = 'hold this value';
+  tools.append(chevron, holdIcon);
+
+  head.append(dir, url, meta, tools);
+  li.append(head);
+
+  let body = null;
+  const close = () => {
+    if (body) { body.remove(); body = null; }
+    li.classList.remove('open');
+    chevron.textContent = '\u2304';
+  };
+
+  const open = async () => {
+    if (body) return close();
+    li.classList.add('open');
+    chevron.textContent = '\u2303';
+    body = document.createElement('div');
+    const payload = document.createElement('div');
+    payload.className = 'evbody';
+    payload.textContent = 'reading\u2026';
+    const actions = document.createElement('div');
+    actions.className = 'evactions';
+    const collapse = document.createElement('button');
+    collapse.textContent = 'COLLAPSE';
+    collapse.addEventListener('click', (e) => { e.stopPropagation(); close(); });
+    const hold = document.createElement('button');
+    hold.className = 'save';
+    hold.textContent = 'HOLD THIS VALUE';
+    hold.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const res = await fetch(BASE + '/proxy/hold?id=' + encodeURIComponent(event.id), { method: 'POST' });
+      hold.textContent = (await res.text()) || 'HELD';
+      hold.disabled = true;
+      meta.classList.add('held');
+    });
+    actions.append(collapse, hold);
+    body.append(payload, actions);
+    li.append(body);
+
+    const res = await fetch(BASE + '/proxy/body?id=' + encodeURIComponent(event.id));
+    payload.textContent = (await res.text()) || '(nothing was kept for this one)';
+  };
+
+  head.addEventListener('click', open);
+  chevron.addEventListener('click', (e) => { e.stopPropagation(); open(); });
+  holdIcon.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    await fetch(BASE + '/proxy/hold?id=' + encodeURIComponent(event.id), { method: 'POST' });
+    meta.classList.add('held');
+  });
   return li;
 }
 
@@ -1249,6 +1333,17 @@ export async function startControlServer(handlers: ControlHandlers): Promise<Con
           } catch {
             return send(res, 404, 'No such capture', 'text/plain');
           }
+        }
+
+        if (req.method === 'GET' && route.startsWith('/proxy/body')) {
+          const id = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams.get('id') ?? '';
+          const body = await handlers.proxyBody(id);
+          return send(res, 200, body ?? '', 'text/plain; charset=utf-8');
+        }
+
+        if (req.method === 'POST' && route.startsWith('/proxy/hold')) {
+          const id = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams.get('id') ?? '';
+          return send(res, 200, await handlers.proxyHold(id), 'text/plain; charset=utf-8');
         }
 
         if (req.method === 'GET' && route.startsWith('/proxy/events')) {

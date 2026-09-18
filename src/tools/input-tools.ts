@@ -80,6 +80,50 @@ const inputToolSchema = z.object({
  * Sets __cdpReplayClickInProgress flag before the action and clears it after.
  * This allows CDP-dispatched events to pass through the overlay's event listeners.
  */
+/**
+ * Click a selector without waiting on the document's rendering lifecycle.
+ *
+ * puppeteer's `page.click` begins with `scrollIntoViewIfNeeded`, which asks an
+ * IntersectionObserver whether the element is in view. Observer entries are
+ * delivered from the rendering lifecycle, and a tab that is not the selected
+ * one in its window gets no rendering opportunities - so on a hidden tab that
+ * promise never settles, the CDP call never returns, and the click never
+ * reaches the wire. Measured: with the annotate pane selected, the app tab
+ * reports `document.hidden === true` and a selector click runs past 120s while
+ * a coordinate click at the same point returns at once.
+ *
+ * `scrollIntoView` scrolls over CDP and `clickablePoint` reads getClientRects
+ * synchronously; neither needs a frame to be produced.
+ */
+async function clickSelector(
+  page: any,
+  selector: string,
+  options: { clickCount?: number } = {}
+): Promise<void> {
+  const handle = await page.$(selector);
+  if (!handle) throw new Error(`Element not found: ${selector}`);
+  try {
+    await handle.scrollIntoView();
+    const { x, y } = await handle.clickablePoint();
+    await page.mouse.click(x, y, options);
+  } finally {
+    await handle.dispose().catch(() => {});
+  }
+}
+
+/** Hover without the lifecycle wait - see clickSelector. */
+async function hoverSelector(page: any, selector: string): Promise<void> {
+  const handle = await page.$(selector);
+  if (!handle) throw new Error(`Element not found: ${selector}`);
+  try {
+    await handle.scrollIntoView();
+    const { x, y } = await handle.clickablePoint();
+    await page.mouse.move(x, y);
+  } finally {
+    await handle.dispose().catch(() => {});
+  }
+}
+
 async function withReplayBypass<T>(page: any, action: () => Promise<T>): Promise<T> {
   await page.evaluate(() => { (globalThis as any).__cdpReplayClickInProgress = true; });
   try {
@@ -321,7 +365,7 @@ export function createInputTools(
 
                 // Perform the click - use wrapper to bypass replay blocker overlay
                 await checkAborted(); // last exit before the click goes on the wire
-                await withReplayBypass(page, () => page.click(selector, { clickCount }));
+                await withReplayBypass(page, () => clickSelector(page, selector, { clickCount }));
 
                 // Check if breakpoint was hit during click - if so, skip post-click evaluation
                 // which would hang because page JS is paused
@@ -645,7 +689,7 @@ export function createInputTools(
                 await checkAborted(); // last exit before keystrokes go on the wire
                 if (!append) {
                   await withReplayBypass(page, async () => {
-                    await page.click(selector, { clickCount: 3 });
+                    await clickSelector(page, selector, { clickCount: 3 });
                     await page.keyboard.press('Backspace');
                   });
                   // Abortable between clear and retype: the clear that went
@@ -849,7 +893,7 @@ export function createInputTools(
                 }
 
                 await checkAborted(); // last exit before the hover goes on the wire
-                await withReplayBypass(page, () => page.hover(selector));
+                await withReplayBypass(page, () => hoverSelector(page, selector));
                 return { selector };
               },
               'hoverElement'

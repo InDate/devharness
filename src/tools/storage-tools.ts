@@ -292,9 +292,12 @@ const storageSchema = z.object({
     'getLocalStorage', 'setLocalStorage', 'removeLocalStorage',
     'getSessionStorage', 'setSessionStorage', 'removeSessionStorage',
     'idbListDatabases', 'idbListStores', 'idbGet', 'idbGetAll', 'idbPut', 'idbDelete',
-    'clear',
-  ]).describe('Storage action: getCookies, setCookie, getLocalStorage, setLocalStorage, removeLocalStorage (delete one localStorage key), getSessionStorage, setSessionStorage, removeSessionStorage (delete one sessionStorage key), idbListDatabases, idbListStores, idbGet, idbGetAll, idbPut, idbDelete, clear (clear storage)'),
+    'clear', 'writes',
+  ]).describe('Storage action: getCookies, setCookie, getLocalStorage, setLocalStorage, removeLocalStorage (delete one localStorage key), getSessionStorage, setSessionStorage, removeSessionStorage (delete one sessionStorage key), idbListDatabases, idbListStores, idbGet, idbGetAll, idbPut, idbDelete, clear (clear storage), writes (localStorage and sessionStorage writes as they happened, which no state read can show - these cross no network boundary, so a step that only wrote locally has no other evidence)'),
   connectionReason: z.string().optional().describe('Connection reference (use the reference from launchChrome output, e.g., "unnamed-connection-default" or your renamed tab)'),
+  since: z.number().optional().describe('writes: epoch ms. Only writes at or after this, so a step\'s own writes separate from the rest'),
+  until: z.number().optional().describe('writes: epoch ms. Only writes before this'),
+
   // Parameters for getCookies action
   url: z.string().optional().describe('URL to get cookies for (optional for getCookies action)'),
   // Parameters for setCookie action
@@ -450,6 +453,7 @@ export function createStorageTools(
         // Resolve connection if connectionReason is provided
         let targetPuppeteerManager = puppeteerManager;
         let targetCdpManager = cdpManager;
+        let targetNetworkMonitor: any = null;
         if (connectionReason && resolveConnectionFromReason) {
           const resolved = await resolveConnectionFromReason(connectionReason);
           if (!resolved || !resolved.puppeteerManager) {
@@ -457,6 +461,29 @@ export function createStorageTools(
           }
           targetPuppeteerManager = resolved.puppeteerManager;
           targetCdpManager = resolved.cdpManager;
+          targetNetworkMonitor = resolved.networkMonitor;
+        }
+
+        if (action === 'writes') {
+          if (!targetNetworkMonitor) {
+            return createErrorResponse('PUPPETEER_NOT_CONNECTED');
+          }
+          const writes = targetNetworkMonitor.getStorageWrites(args.since, args.until);
+          const lines = writes.map((w: any) => {
+            const value = w.value === undefined ? '' : ` ${w.value.slice(0, 160)}${w.truncated ? ' …' : ''}`;
+            const key = w.key ? ` ${w.key}` : '';
+            return `${w.area}Storage ${w.operation}${key}${value}`;
+          });
+          const text = writes.length === 0
+            ? 'No localStorage or sessionStorage writes recorded. Capture starts with the connection, so a write made before then is not held. IndexedDB emits no write event and is not covered.'
+            : `${writes.length} write(s)\n\n${lines.join('\n')}`;
+          return {
+            content: [{ type: 'text', text }],
+            _meta: {
+              tool: 'storage', action: 'writes', timestamp: Date.now(),
+              storage: { writes },
+            },
+          };
         }
 
         if (!targetPuppeteerManager.isConnected()) {

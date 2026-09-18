@@ -649,7 +649,7 @@ function createSequenceDriver(
     },
 
     trafficIn: async (connection: string, from: number, to: number) => {
-      const empty = { requests: 0, failed: 0, frames: 0, events: 0, lines: [] as string[] };
+      const empty = { requests: 0, failed: 0, frames: 0, events: 0, writes: 0, lines: [] as string[] };
       const http = await executeToolCall('network', {
         action: 'list', connectionReason: connection, since: from, until: to, limit: 50,
       }).catch(() => null);
@@ -664,16 +664,24 @@ function createSequenceDriver(
       }).catch(() => null);
       const events = (streams?._meta?.streamList ?? []).reduce(
         (total: number, s: any) => total + (s.events ?? 0), 0);
-      if (rows.length === 0 && frames === 0 && events === 0) return empty;
+      const stored = await executeToolCall('storage', {
+        action: 'writes', connectionReason: connection, since: from, until: to,
+      }).catch(() => null);
+      const written = (stored?._meta?.storage?.writes ?? []) as any[];
+      if (rows.length === 0 && frames === 0 && events === 0 && written.length === 0) return empty;
       return {
         requests: rows.length,
         failed: rows.filter((r: any) => r.failed || (r.status ?? 0) >= 400).length,
         frames,
         events,
-        lines: rows.slice(0, 8).map((r: any) => {
-          const path = (() => { try { return new URL(r.url).pathname; } catch { return r.url; } })();
-          return `${r.method} ${path} ${r.failed ? 'failed' : (r.status ?? 'pending')}`;
-        }),
+        writes: written.length,
+        lines: [
+          ...rows.slice(0, 8).map((r: any) => {
+            const path = (() => { try { return new URL(r.url).pathname; } catch { return r.url; } })();
+            return `${r.method} ${path} ${r.failed ? 'failed' : (r.status ?? 'pending')}`;
+          }),
+          ...written.slice(0, 4).map((w: any) => `${w.area}Storage ${w.operation} ${w.key ?? ''}`.trim()),
+        ],
       };
     },
 

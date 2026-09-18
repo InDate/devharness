@@ -46,9 +46,12 @@ lines arrives reassembled with the newline the spec puts between them.
 
 `write localStorage`, `write sessionStorage`, `write a cookie`,
 `write IndexedDB` each leave a record in the page and cross no boundary.
-Measured: after a localStorage write and an IndexedDB write, the network record
-held the document and a favicon 404. The `storage` tool reads state when asked;
-no tool reports that a write happened.
+A network record of these holds nothing - measured: after a localStorage write
+and an IndexedDB write, it held the document and a favicon 404.
+
+`storage({ action: 'writes' })` reports the localStorage and sessionStorage
+ones as they happen, read off the CDP DOMStorage domain, with the value written
+and the value replaced. IndexedDB emits no write event and stays outside it.
 
 `write a draft, then POST it` writes the same record and sends it, so the two
 cases are separable: one click produces a boundary crossing, the other produces

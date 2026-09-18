@@ -151,12 +151,36 @@ export interface StoredEventStream {
   target: string;
 }
 
+/**
+ * One write to localStorage or sessionStorage.
+ *
+ * These cross no boundary, so a network record of a step that made one holds
+ * nothing. The `storage` tool reads state when asked; without this, "this
+ * button saved a draft and never sent it" has no evidence anywhere.
+ */
+export interface StoredStorageWrite {
+  at: number;
+  area: 'local' | 'session';
+  origin: string;
+  operation: 'added' | 'updated' | 'removed' | 'cleared';
+  key?: string;
+  /** Truncated the same way a frame payload is. */
+  value?: string;
+  previous?: string;
+  truncated?: boolean;
+}
+
+/** Writes held before the oldest is discarded. */
+const MAX_STORAGE_WRITES = 300;
+
 /** Messages held per stream, and URLs remembered while waiting for a first one. */
 const MAX_EVENTS_PER_STREAM = 200;
 const MAX_PENDING_URLS = 200;
 
 export class NetworkMonitor {
   private sockets: Map<string, StoredWebSocket> = new Map();
+  /** localStorage and sessionStorage writes, oldest first. */
+  private storageWrites: StoredStorageWrite[] = [];
   /** EventSource streams, keyed the same way as sockets. */
   private streams: Map<string, StoredEventStream> = new Map();
   /**
@@ -305,6 +329,51 @@ export class NetworkMonitor {
    */
   private bindSocketEvents(client: any, target: string, sessionId: string): void {
     const key = (requestId: string) => `${sessionId}:${requestId}`;
+    // DOMStorage is a separate domain and silent until enabled.
+    void client.send('DOMStorage.enable').catch(() => {});
+    const areaOf = (id: any): 'local' | 'session' => id?.isLocalStorage ? 'local' : 'session';
+    const originOf = (id: any): string => id?.securityOrigin ?? id?.storageKey ?? '(origin not given)';
+    const held = (value: unknown): { value?: string; truncated?: boolean } => {
+      if (typeof value !== 'string') return {};
+      const kept = JSON.parse(JSON.stringify(value.slice(0, MAX_FRAME_PAYLOAD)));
+      return value.length > MAX_FRAME_PAYLOAD ? { value: kept, truncated: true } : { value: kept };
+    };
+    const write = (entry: StoredStorageWrite) => {
+      this.storageWrites.push(entry);
+      if (this.storageWrites.length > MAX_STORAGE_WRITES) {
+        this.storageWrites.splice(0, this.storageWrites.length - MAX_STORAGE_WRITES);
+      }
+    };
+
+    client.on('DOMStorage.domStorageItemAdded', (e: any) => {
+      const kept = held(e.newValue);
+      write({
+        at: Date.now(), area: areaOf(e.storageId), origin: originOf(e.storageId),
+        operation: 'added', key: e.key, ...kept,
+      });
+    });
+    client.on('DOMStorage.domStorageItemUpdated', (e: any) => {
+      const kept = held(e.newValue);
+      const before = held(e.oldValue);
+      write({
+        at: Date.now(), area: areaOf(e.storageId), origin: originOf(e.storageId),
+        operation: 'updated', key: e.key, ...kept,
+        ...(before.value !== undefined ? { previous: before.value } : {}),
+      });
+    });
+    client.on('DOMStorage.domStorageItemRemoved', (e: any) => {
+      write({
+        at: Date.now(), area: areaOf(e.storageId), origin: originOf(e.storageId),
+        operation: 'removed', key: e.key,
+      });
+    });
+    client.on('DOMStorage.domStorageItemsCleared', (e: any) => {
+      write({
+        at: Date.now(), area: areaOf(e.storageId), origin: originOf(e.storageId),
+        operation: 'cleared',
+      });
+    });
+
     client.on('Network.requestWillBeSent', (e: any) => {
       if (!e?.requestId || !e?.request?.url) return;
       this.pendingUrls.set(key(e.requestId), e.request.url);
@@ -458,6 +527,12 @@ export class NetworkMonitor {
       sock.frames.splice(0, sock.frames.length - MAX_FRAMES_PER_SOCKET);
       sock.framesDropped += 1;
     }
+  }
+
+  /** Storage writes in a window, oldest first. */
+  getStorageWrites(since?: number, until?: number): StoredStorageWrite[] {
+    return this.storageWrites.filter(w =>
+      (since === undefined || w.at >= since) && (until === undefined || w.at < until));
   }
 
   /** Every EventSource stream seen, oldest first, with its own events array. */

@@ -296,6 +296,8 @@ export interface StepTraffic {
   frames: number;
   /** EventSource messages delivered while this step was the action in play. */
   events: number;
+  /** localStorage and sessionStorage writes, which cross no boundary at all. */
+  writes: number;
   /** One line per request, `POST /draft 200`, capped. */
   lines: string[];
 }
@@ -1268,7 +1270,7 @@ async function attachStepTraffic(
   for (let index = 0; index < steps.length; index++) {
     const cached = held.get(index);
     if (cached) {
-      if (cached.requests > 0 || cached.frames > 0 || cached.events > 0) steps[index].traffic = cached;
+      if (cached.requests > 0 || cached.frames > 0 || cached.events > 0 || cached.writes > 0) steps[index].traffic = cached;
       continue;
     }
     // Only a window that has closed is computed. The newest step's effects are
@@ -1279,9 +1281,9 @@ async function attachStepTraffic(
     if (from === undefined || to === undefined) continue;
 
     const traffic = await session.sequences.trafficIn(connection, from, to)
-      .catch(() => ({ requests: 0, failed: 0, frames: 0, events: 0, lines: [] as string[] }));
+      .catch(() => ({ requests: 0, failed: 0, frames: 0, events: 0, writes: 0, lines: [] as string[] }));
     held.set(index, traffic);
-    if (traffic.requests > 0 || traffic.frames > 0 || traffic.events > 0) steps[index].traffic = traffic;
+    if (traffic.requests > 0 || traffic.frames > 0 || traffic.events > 0 || traffic.writes > 0) steps[index].traffic = traffic;
     return;
   }
 }

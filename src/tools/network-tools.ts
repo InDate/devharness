@@ -34,6 +34,10 @@ const networkToolSchema = z.object({
   statusCode: z.string().optional().describe('Filter by status code (for search action)'),
   flags: z.string().optional().describe('Regex flags (for search action, default: "")'),
 
+  // windowing, for attributing traffic to the action that caused it
+  since: z.number().optional().describe('list/sockets: epoch ms. Only traffic that started at or after this. Read `at` off a previous response, act, then pass it back to get exactly what that action caused'),
+  until: z.number().optional().describe('list/sockets: epoch ms. Only traffic that started before this. With `since`, brackets one action'),
+
   // sockets action parameters
   frames: z.boolean().optional().describe('sockets: include the frame log per socket - what crossed it, oldest first, with text and binary payloads truncated. Off by default: a sync transport carries thousands of frames and the lifecycle alone answers whether it stayed up'),
   socketUrl: z.string().optional().describe('sockets: with frames, only sockets whose URL contains this substring. Match the app\'s own path to leave dev-server transports out'),
@@ -75,6 +79,13 @@ function frameLogBudget() {
  */
 const FRAME_LINE_CHARS = 180;
 
+/** Frames that arrived inside the window, by the clock they were recorded on. */
+function framesIn(sock: any, since?: number, until?: number): any[] {
+  if (since === undefined && until === undefined) return sock.frames;
+  return sock.frames.filter((f: any) =>
+    (since === undefined || f.at >= since) && (until === undefined || f.at < until));
+}
+
 /**
  * Frame lines printed per socket, newest last.
  *
@@ -85,10 +96,10 @@ const FRAME_LINE_CHARS = 180;
 const FRAME_LINES_PER_SOCKET = 30;
 
 /** Frame ages in seconds, so a heartbeat cadence reads off the log directly. */
-function frameLines(sock: any): string[] {
+function frameLines(sock: any, frames: any[]): string[] {
   const opcodes: Record<number, string> = { 1: 'text', 2: 'binary', 8: 'close', 9: 'ping', 10: 'pong' };
-  const shownFrames = sock.frames.slice(-FRAME_LINES_PER_SOCKET);
-  const earlier = sock.frames.length - shownFrames.length;
+  const shownFrames = frames.slice(-FRAME_LINES_PER_SOCKET);
+  const earlier = frames.length - shownFrames.length;
   const head = earlier > 0
     ? [`       … ${earlier} earlier frame(s) held, not printed`]
     : [];
@@ -158,12 +169,13 @@ export function createNetworkTools(
                 : sock.clientClosed ? ' by the page' : '';
               const state = sock.closedAt ? `closed${how} after ${sock.closedAt - sock.openedAt}ms` : 'open';
               const errs = sock.errors.length ? ` - ${sock.errors.length} frame error(s): ${sock.errors.slice(0, 2).join('; ')}` : '';
-              const sent = sock.frames.filter((f: any) => f.direction === 'sent').length;
-              const got = sock.frames.filter((f: any) => f.direction === 'received').length;
+              const windowed = framesIn(sock, args.since, args.until);
+              const sent = windowed.filter((f: any) => f.direction === 'sent').length;
+              const got = windowed.filter((f: any) => f.direction === 'received').length;
               const dropped = sock.framesDropped ? ` +${sock.framesDropped} dropped` : '';
-              const traffic = sock.frames.length ? ` - ${got} in / ${sent} out${dropped}` : '';
+              const traffic = windowed.length ? ` - ${got} in / ${sent} out${dropped}` : '';
               const head = `${sock.closedAt ? 'CLOSED' : 'OPEN  '} [${sock.target || 'page'}] ${sock.url} (${state})${traffic}${errs}`;
-              return args.frames ? [head, ...frameLines(sock)].join('\n') : head;
+              return args.frames ? [head, ...frameLines(sock, windowed)].join('\n') : head;
             });
             const seenCount = seen.length;
             const text = sockets.length === 0
@@ -185,18 +197,18 @@ export function createNetworkTools(
                   clientClosed: !!s.clientClosed,
                   closedWithDocument: !!s.closedWithDocument,
                   frames: {
-                    received: s.frames.filter((f: any) => f.direction === 'received').length,
-                    sent: s.frames.filter((f: any) => f.direction === 'sent').length,
+                    received: framesIn(s, args.since, args.until).filter((f: any) => f.direction === 'received').length,
+                    sent: framesIn(s, args.since, args.until).filter((f: any) => f.direction === 'sent').length,
                     dropped: s.framesDropped,
                   },
-                  ...(args.frames ? { frameLog: budget.take(s.frames) } : {}),
+                  ...(args.frames ? { frameLog: budget.take(framesIn(s, args.since, args.until)) } : {}),
                 })),
               },
             };
           }
 
           case 'list': {
-            const { resourceType, limit = 100, offset = 0 } = args;
+            const { resourceType, limit = 100, offset = 0, since, until } = args;
 
             if (!connectionReason) {
               return createErrorResponse('CONNECTION_NOT_FOUND', {
@@ -225,6 +237,8 @@ export function createNetworkTools(
               resourceType,
               limit,
               offset,
+              since,
+              until,
             });
 
             const requestList = requests.map((req: StoredNetworkRequest) => ({
@@ -240,11 +254,20 @@ export function createNetworkTools(
             }));
 
             const totalCount = targetNetworkMonitor.getCount(resourceType);
+            // The read clock, returned so a caller can bracket the next action
+            // without keeping one of its own.
+            const at = Date.now();
+            const inWindow = since !== undefined || until !== undefined
+              ? targetNetworkMonitor.countRequestsIn(since, until)
+              : totalCount;
 
             const response = createSuccessResponse('NETWORK_REQUESTS_LIST', {
               count: requests.length,
               totalCount,
-              resourceType
+              resourceType,
+              at,
+              window: since !== undefined || until !== undefined,
+              inWindow,
             }, requestList);
 
             // Add structured metadata for programmatic use
@@ -255,6 +278,10 @@ export function createNetworkTools(
               network: {
                 totalCount,
                 matchCount: requests.length,
+                inWindow,
+                at,
+                ...(since !== undefined ? { since } : {}),
+                ...(until !== undefined ? { until } : {}),
               },
             };
 

@@ -1163,7 +1163,9 @@ Network conditions set to **{{preset}}**
 **Type:** success
 **Summary:** Network requests retrieved
 
-Count: {{count}} of {{totalCount}} total{{#resourceType}} (filtered by type: {{resourceType}}){{/resourceType}}
+Count: {{count}} of {{totalCount}} total{{#resourceType}} (filtered by type: {{resourceType}}){{/resourceType}}{{#window}}, {{inWindow}} started in the window{{/window}}
+
+Clock: {{at}} - pass this as `since` on the next call to get exactly what the next action causes.
 
 ---
 

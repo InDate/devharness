@@ -391,6 +391,11 @@ export class NetworkMonitor {
       .sort((a, b) => a.openedAt - b.openedAt);
   }
 
+  /** Requests started in a window, counted before any limit is applied. */
+  countRequestsIn(since?: number, until?: number): number {
+    return this.getRequests({ since, until }).length;
+  }
+
   /** Open / closed / errored counts, for a health check. */
   getSocketHealth(): { total: number; open: number; closed: number; errored: number } {
     const all = this.getSockets();
@@ -551,12 +556,30 @@ export class NetworkMonitor {
   /**
    * Get all requests
    */
-  getRequests(filter?: { resourceType?: string; limit?: number; offset?: number }): StoredNetworkRequest[] {
+  getRequests(filter?: {
+    resourceType?: string;
+    limit?: number;
+    offset?: number;
+    /** Epoch ms. Requests that STARTED at or after this. */
+    since?: number;
+    /** Epoch ms. Requests that started before this. */
+    until?: number;
+  }): StoredNetworkRequest[] {
     let filtered = Array.from(this.requests.values());
 
     // Filter by resource type
     if (filter?.resourceType) {
       filtered = filtered.filter(req => req.resourceType === filter.resourceType);
+    }
+
+    // Windowed on start, not on completion: a request belongs to the action
+    // that issued it, and a slow one finishing after the next action still
+    // belongs to the one that made it.
+    if (filter?.since !== undefined) {
+      filtered = filtered.filter(req => (req.timing?.startTime ?? 0) >= filter.since!);
+    }
+    if (filter?.until !== undefined) {
+      filtered = filtered.filter(req => (req.timing?.startTime ?? 0) < filter.until!);
     }
 
     // Apply offset and limit

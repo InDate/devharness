@@ -106,6 +106,12 @@ export interface ConsoleToolMeta {
 export interface NetworkToolMeta {
   totalCount: number;
   matchCount?: number;
+  /** Requests started inside the requested window, before any limit. */
+  inWindow?: number;
+  /** The read clock, for bracketing the next action against this one. */
+  at?: number;
+  since?: number;
+  until?: number;
 }
 
 /**

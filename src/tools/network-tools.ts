@@ -75,10 +75,24 @@ function frameLogBudget() {
  */
 const FRAME_LINE_CHARS = 180;
 
+/**
+ * Frame lines printed per socket, newest last.
+ *
+ * A full buffer is 200 frames, and one burst socket fills a response with them
+ * on its own. A log is read backwards from what just happened, so the newest
+ * are the ones kept and the count of the rest is stated.
+ */
+const FRAME_LINES_PER_SOCKET = 30;
+
 /** Frame ages in seconds, so a heartbeat cadence reads off the log directly. */
 function frameLines(sock: any): string[] {
   const opcodes: Record<number, string> = { 1: 'text', 2: 'binary', 8: 'close', 9: 'ping', 10: 'pong' };
-  return sock.frames.map((frame: any) => {
+  const shownFrames = sock.frames.slice(-FRAME_LINES_PER_SOCKET);
+  const earlier = sock.frames.length - shownFrames.length;
+  const head = earlier > 0
+    ? [`       … ${earlier} earlier frame(s) held, not printed`]
+    : [];
+  return head.concat(shownFrames.map((frame: any) => {
     const arrow = frame.direction === 'received' ? '<-' : '->';
     const kind = opcodes[frame.opcode] ?? `opcode ${frame.opcode}`;
     const age = ((frame.at - sock.openedAt) / 1000).toFixed(2);
@@ -87,7 +101,7 @@ function frameLines(sock: any): string[] {
       ? ''
       : ` ${shown}${frame.size > shown.length ? ` … (${frame.size} chars)` : ''}`;
     return `       ${arrow} +${age}s ${kind}${body}`;
-  });
+  }));
 }
 
 export function createNetworkTools(

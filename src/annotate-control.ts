@@ -305,9 +305,14 @@ export const PAGE = String.raw`<!doctype html>
   .events li:hover { border-color: var(--line); }
   .events li.open { border-color: var(--accent); }
   .evhead { display: flex; gap: 9px; align-items: baseline; cursor: pointer; }
-  .events .evdir { flex: 0 0 30px; color: var(--muted); }
-  .events .evurl { flex: 1; word-break: break-all; }
-  .events .evmeta { flex: 0 0 auto; color: var(--muted); }
+  .events .evdir { flex: 0 0 34px; color: var(--muted); }
+  .events .evway { flex: 0 0 12px; color: var(--muted); }
+  /* One line, cut to whatever width the window is. min-width:0 is what lets a
+     flex child shrink below its content and be ellipsised at all. */
+  .events .evurl { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden;
+                   text-overflow: ellipsis; }
+  .events li.open .evurl { white-space: normal; overflow: visible; word-break: break-all; }
+  .events .evmeta { flex: 0 0 auto; color: var(--muted); white-space: nowrap; }
   .events .held { color: #e8a33d; }
   .events .bad { color: #d93025; }
   /* Symbols while collapsed, words once open: a control you have not used
@@ -1207,11 +1212,18 @@ function eventRow(event) {
   dir.className = 'evdir';
   dir.textContent = event.kind === 'request'
     ? (event.method || 'GET')
-    : (event.direction === 'out' ? '->' : '<-');
+    : (event.url.startsWith('wss://') ? 'WSS' : 'WS');
+
+  // Which way a message went, in the column a request has nothing to say in.
+  const way = document.createElement('span');
+  way.className = 'evway';
+  way.textContent = event.kind === 'request' ? '' : (event.direction === 'out' ? '\u2192' : '\u2190');
 
   const url = document.createElement('span');
   url.className = 'evurl';
   url.textContent = event.kind === 'request' ? event.url : (event.preview || event.url);
+  // The whole line is here for a pointer, since the row shows what fits.
+  url.title = url.textContent;
 
   const meta = document.createElement('span');
   meta.className = 'evmeta' + (event.heldAs ? ' held' : (event.status >= 400 ? ' bad' : ''));
@@ -1227,7 +1239,7 @@ function eventRow(event) {
   holdIcon.title = 'hold this value';
   tools.append(chevron, holdIcon);
 
-  head.append(dir, url, meta, tools);
+  head.append(dir, way, url, meta, tools);
   li.append(head);
 
   let body = null;

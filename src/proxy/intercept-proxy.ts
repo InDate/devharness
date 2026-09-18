@@ -68,6 +68,42 @@ export interface ProxyEvent {
   heldAs?: 'replaced' | 'dropped';
 }
 
+/**
+ * Hosts the browser talks to on its own account, refused outright.
+ *
+ * Chrome's own traffic goes through this proxy too, and there is far more of
+ * it than the app's: measured on one launch, 29 events of 35 were Chrome
+ * talking to Google. Flags cut it and none of them reach zero - the New Tab
+ * page, GCM check-in and update pings survive every switch there is.
+ *
+ * Matched on the host's suffix. Deliberately narrow: these are browser
+ * services an application does not call. Ambiguous hosts an app might really
+ * use - accounts.google.com for sign-in, fonts and gstatic for assets - are
+ * left alone, because blocking one silently breaks the thing under test.
+ */
+const BROWSER_SERVICE_HOSTS = [
+  // Host and path, for services living on a host an application may also use.
+  // The New Tab page, the omnibox and the browser's sign-in state all call
+  // google.com, and an application does not call these paths.
+  'www.google.com/async/',
+  'www.google.com/complete/search',
+  'accounts.google.com/ListAccounts',
+  'clients1.google.com',
+  'clients2.google.com',
+  'clients3.google.com',
+  'clients4.google.com',
+  'clients5.google.com',
+  'clients6.google.com',
+  'update.googleapis.com',
+  'clientservices.googleapis.com',
+  'optimizationguide-pa.googleapis.com',
+  'safebrowsing.googleapis.com',
+  'content-autofill.googleapis.com',
+  'android.clients.google.com',
+  'gvt1.com',
+  'gvt2.com',
+];
+
 /** Events held before the oldest is discarded. */
 const MAX_EVENTS = 2000;
 /** Response body kept per exchange, for turning one into a held value later. */
@@ -105,9 +141,43 @@ export class InterceptProxy {
   private events: ProxyEvent[] = [];
   private bodies = new Map<string, string>();
   private eventSeq = 0;
+  private blockedHosts = [...BROWSER_SERVICE_HOSTS];
+  private blockedCount = 0;
   private frameHandlers = new Set<(frame: SocketFrame) => void>();
   private pinSeq = 0;
   private port = 0;
+
+  /** How many of the browser's own calls were refused. */
+  get blocked(): number {
+    return this.blockedCount;
+  }
+
+  /** Replace the refused-host list; [] lets the browser talk freely. */
+  setBlockedHosts(hosts: string[]): void {
+    this.blockedHosts = [...hosts];
+  }
+
+  listBlockedHosts(): string[] {
+    return [...this.blockedHosts];
+  }
+
+  /**
+   * Whether this is the browser talking on its own account.
+   *
+   * An entry with no slash matches the host and its subdomains. An entry with
+   * one matches a host and a path prefix, which is how a browser service on a
+   * host an application also uses is refused without refusing the application.
+   */
+  private isBrowserService(host: string, path?: string): boolean {
+    const name = host.split(':')[0].toLowerCase();
+    return this.blockedHosts.some(blocked => {
+      const cut = blocked.indexOf('/');
+      if (cut < 0) return name === blocked || name.endsWith(`.${blocked}`);
+      if (path === undefined) return false;
+      const wantHost = blocked.slice(0, cut);
+      return (name === wantHost || name.endsWith(`.${wantHost}`)) && path.startsWith(blocked.slice(cut));
+    });
+  }
 
   /** What the proxy saw in a window, oldest first. */
   eventsIn(since?: number, until?: number): ProxyEvent[] {
@@ -207,6 +277,15 @@ export class InterceptProxy {
     const host = req.headers.host ?? '';
     const path = req.url ?? '/';
     const url = /^https?:\/\//i.test(path) ? path : `${secure ? 'https' : 'http'}://${host}${path}`;
+    if (this.isBrowserService(host, path)) {
+      // Refused rather than answered: a background service reads a failure as
+      // the network being away and backs off, where an empty success can send
+      // it round again.
+      this.blockedCount += 1;
+      res.destroy();
+      return;
+    }
+
     const pin = this.matchPin(url, req.method ?? 'GET');
 
     if (pin) {
@@ -332,10 +411,15 @@ export class InterceptProxy {
     // it is: a TLS record starts 0x16, an HTTP request line starts with a
     // letter. Routing every tunnel to the TLS server fails the handshake on a
     // plaintext one and the page sees its socket close before any reply.
-    this.front.on('connect', (_req, socket: Socket, head: Buffer) => {
+    this.front.on('connect', (req, socket: Socket, head: Buffer) => {
       // A peer resetting a tunnel is ordinary. Unhandled, its error event ends
       // the process and takes every other connection with it.
       socket.on('error', () => socket.destroy());
+      if (this.isBrowserService(req.url ?? '')) {
+        this.blockedCount += 1;
+        socket.destroy();
+        return;
+      }
       socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
       const route = (first: Buffer) => {
         socket.unshift(first);

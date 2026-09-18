@@ -40,6 +40,26 @@ export interface SocketFrame {
   size: number;
   /** Text frames only, truncated by the caller's own rule. */
   text?: string;
+  /** What the proxy did with it. Absent means it went through unchanged. */
+  heldAs?: 'replaced' | 'dropped';
+}
+
+/**
+ * A frame held in place of what would have crossed.
+ *
+ * Matched on the payload rather than on position: a socket carries no method,
+ * URL or status, so the only durable handle on one message is what is in it.
+ */
+export interface FramePin {
+  id: string;
+  /** Substring of the connection's URL, when the hold is for one socket. */
+  urlIncludes?: string;
+  direction?: 'sent' | 'received';
+  /** Substring of the text payload. Binary frames are never matched. */
+  textIncludes: string;
+  /** Sent in its place. Absent drops the frame, and nothing arrives at all. */
+  replaceWith?: string;
+  hits: number;
 }
 
 export class InterceptProxy {
@@ -51,6 +71,7 @@ export class InterceptProxy {
   private innerPlain = createHttpServer();
   private upgrades = new WebSocketServer({ noServer: true });
   private pins = new Map<string, Pin>();
+  private framePins = new Map<string, FramePin>();
   private frameHandlers = new Set<(frame: SocketFrame) => void>();
   private pinSeq = 0;
   private port = 0;
@@ -85,7 +106,30 @@ export class InterceptProxy {
   }
 
   unpin(id: string): boolean {
-    return this.pins.delete(id);
+    return this.pins.delete(id) || this.framePins.delete(id);
+  }
+
+  /** Hold a frame: replace what it carries, or drop it so nothing arrives. */
+  pinFrame(spec: Omit<FramePin, 'id' | 'hits'>): FramePin {
+    const pin: FramePin = { id: `frame-${++this.pinSeq}`, hits: 0, ...spec };
+    this.framePins.set(pin.id, pin);
+    return pin;
+  }
+
+  listFramePins(): FramePin[] {
+    return [...this.framePins.values()];
+  }
+
+  private matchFramePin(
+    url: string, direction: SocketFrame['direction'], text: string | undefined,
+  ): FramePin | undefined {
+    if (text === undefined) return undefined;
+    for (const pin of this.framePins.values()) {
+      if (pin.urlIncludes && !url.includes(pin.urlIncludes)) continue;
+      if (pin.direction && pin.direction !== direction) continue;
+      if (text.includes(pin.textIncludes)) return pin;
+    }
+    return undefined;
   }
 
   listPins(): Pin[] {
@@ -152,12 +196,21 @@ export class InterceptProxy {
       const forward = (from: WebSocket, to: WebSocket, direction: SocketFrame['direction']) => {
         from.on('message', (data: any, binary: boolean) => {
           const buf = Buffer.isBuffer(data) ? data : Buffer.from(String(data));
+          const text = binary ? undefined : buf.toString('utf8');
+          const held = this.matchFramePin(url, direction, text);
+          if (held) held.hits += 1;
+
           this.announce({
             at: Date.now(), url, direction, binary, size: buf.length,
-            ...(binary ? {} : { text: buf.toString('utf8') }),
+            ...(text !== undefined ? { text } : {}),
+            ...(held ? { heldAs: held.replaceWith === undefined ? 'dropped' : 'replaced' } : {}),
           });
-          if (to.readyState === WebSocket.OPEN) to.send(data, { binary });
-          else if (to === upstream) pending.push([data, binary]);
+
+          if (held && held.replaceWith === undefined) return;
+          const payload = held?.replaceWith !== undefined ? held.replaceWith : data;
+          const asBinary = held?.replaceWith !== undefined ? false : binary;
+          if (to.readyState === WebSocket.OPEN) to.send(payload, { binary: asBinary });
+          else if (to === upstream) pending.push([payload, asBinary]);
         });
       };
 

@@ -191,7 +191,7 @@ export function createNetworkTools(
               _meta: {
                 tool: 'network', action: 'streams', timestamp: Date.now(),
                 streamList: streams.map((s: any) => ({
-                  id: `${s.sessionId}:${s.id}`, url: s.url, target: s.target,
+                  id: `${s.sessionId}:${s.id}`, url: s.url, target: s.target, openedAt: s.openedAt,
                   events: eventsIn(s, args.since, args.until).length,
                   dropped: s.eventsDropped,
                   ...(args.frames ? { eventLog: budget.take(eventsIn(s, args.since, args.until)) } : {}),
@@ -263,7 +263,7 @@ export function createNetworkTools(
                 // Per-socket, so a run's health diff can name the socket that
                 // died and tell a declared transport from dev-server noise.
                 socketList: sockets.map((s: any) => ({
-                  id: `${s.sessionId}:${s.id}`, url: s.url, target: s.target,
+                  id: `${s.sessionId}:${s.id}`, url: s.url, target: s.target, openedAt: s.openedAt,
                   closed: !!s.closedAt, errors: s.errors.length,
                   closedWithTarget: !!s.closedWithTarget,
                   clientClosed: !!s.clientClosed,

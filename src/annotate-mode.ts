@@ -1240,6 +1240,12 @@ export async function recordSequence(
   return getSequenceState(connection);
 }
 
+/** Whether a step produced anything worth showing under it. */
+function hasEvidence(traffic: StepTraffic): boolean {
+  return traffic.requests > 0 || traffic.writes > 0 || (traffic.opened ?? 0) > 0
+    || (traffic.frames ?? 0) > 0 || (traffic.events ?? 0) > 0;
+}
+
 /**
  * Close the last step's window and write every step's traffic to the file.
  *
@@ -1259,8 +1265,7 @@ async function persistStepTraffic(session: AnnotateSession, connection: string):
   }
 
   const entries = [...held.entries()]
-    .filter(([, traffic]) => traffic.requests > 0 || traffic.frames > 0
-      || traffic.events > 0 || traffic.writes > 0)
+    .filter(([, traffic]) => hasEvidence(traffic))
     .map(([index, traffic]) => ({ index, traffic }));
   if (entries.length === 0) return;
   session.sequenceFailure = await session.sequences.saveStepTraffic(entries)
@@ -1291,7 +1296,7 @@ async function attachStepTraffic(
   for (let index = 0; index < steps.length; index++) {
     const cached = held.get(index);
     if (cached) {
-      if (cached.requests > 0 || cached.frames > 0 || cached.events > 0 || cached.writes > 0) steps[index].traffic = cached;
+      if (hasEvidence(cached)) steps[index].traffic = cached;
       continue;
     }
     // Only a window that has closed is computed. The newest step's effects are
@@ -1303,9 +1308,9 @@ async function attachStepTraffic(
     if (from === undefined || to === undefined) continue;
 
     const traffic = await session.sequences.trafficIn(connection, from, to)
-      .catch(() => ({ requests: 0, failed: 0, frames: 0, events: 0, writes: 0, lines: [] as string[] }));
+      .catch(() => ({ requests: 0, failed: 0, opened: 0, writes: 0, lines: [] as string[] }));
     held.set(index, traffic);
-    if (traffic.requests > 0 || traffic.frames > 0 || traffic.events > 0 || traffic.writes > 0) steps[index].traffic = traffic;
+    if (hasEvidence(traffic)) steps[index].traffic = traffic;
     return;
   }
 }

@@ -338,7 +338,7 @@ export interface SequenceDriver {
     description?: string;
     currentStep: number;
     total: number;
-    steps: Array<{ label: string; comment?: string; resolved?: string; captures?: string; annotations?: Annotation[] }>;
+    steps: Array<{ label: string; comment?: string; resolved?: string; captures?: string; annotations?: Annotation[]; traffic?: StepTraffic }>;
     variables: SequenceVariable[];
     /** 0-based index of the step that failed, when one did. */
     failedStep?: number;
@@ -1039,8 +1039,10 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
       ...(step.captures ? { captures: step.captures } : {}),
       // Dropping these here is invisible at the write - the note reaches the
       // file and the event stream all the same - and leaves the pane showing
-      // nothing under the step it was just filed against.
+      // nothing under the step it was just filed against. The same held for
+      // traffic: written to the file, whitelisted out on the way back.
       ...(step.annotations?.length ? { annotations: step.annotations } : {}),
+      ...(step.traffic ? { traffic: step.traffic } : {}),
       done: index < active.currentStep,
       current: index === active.currentStep,
       ...(active.failedStep === index ? { failed: true } : {}),

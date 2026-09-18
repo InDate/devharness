@@ -116,6 +116,9 @@ export const PAGE = String.raw`<!doctype html>
   }
   h1 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); margin: 0 0 4px; }
   .sub { color: var(--muted); font-size: 12px; margin-bottom: 16px; word-break: break-all; }
+  #inertTag { margin-left: 8px; padding: 2px 6px; border: 1px solid var(--line); border-radius: 4px;
+              font: 10px -apple-system, sans-serif; letter-spacing: 0.5px; color: var(--muted);
+              vertical-align: middle; }
   .card { border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin-bottom: 14px; }
   .idle { color: var(--muted); }
   .target { font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--panel);
@@ -294,7 +297,7 @@ export const PAGE = String.raw`<!doctype html>
 </style>
 </head>
 <body>
-<h1>devharness annotate</h1>
+<h1>devharness annotate<span id="inertTag" hidden>inert</span></h1>
 <div class="sub" id="sub">connecting…</div>
 
 <div id="shotModal" hidden>
@@ -440,7 +443,12 @@ const $ = (id) => document.getElementById(id);
 let pendingKey = null;
 let stopped = false;
 
+// A copy opened with ?inert=1 draws and polls but commands nothing, so it can
+// be the subject of a recording: every click is captured and none of it acts.
+const INERT = new URLSearchParams(location.search).get('inert') === '1';
+
 async function post(path, body) {
+  if (INERT) return;
   await fetch(BASE + path, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -1033,6 +1041,8 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !$('picked').hidden) post('/save', { comment: $('comment').value });
   if (e.key === 'Escape' && !$('picked').hidden) post('/discard');
 });
+
+if (INERT) $('inertTag').hidden = false;
 
 refresh();
 setInterval(refresh, 250);

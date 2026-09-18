@@ -38,6 +38,26 @@ export interface StoredNetworkRequest {
  * run is the interesting case: an app whose reads come over a socket can keep
  * rendering the last synced snapshot afterwards and pass every assertion.
  */
+/**
+ * One frame that crossed a WebSocket.
+ *
+ * Payloads are held truncated and the buffer is capped per socket: a sync
+ * transport can carry thousands of frames a minute, and holding them whole
+ * grows without bound for the length of a session.
+ */
+export interface StoredSocketFrame {
+  at: number;
+  direction: 'sent' | 'received';
+  /** 1 text, 2 binary, 8 close, 9 ping, 10 pong. */
+  opcode: number;
+  /** Payload length as it arrived, before any truncation. */
+  size: number;
+  /** Text and binary frames only; control frames carry nothing worth holding. */
+  payload?: string;
+  /** Set when `payload` holds the first MAX_FRAME_PAYLOAD characters only. */
+  truncated?: boolean;
+}
+
 export interface StoredWebSocket {
   id: string;
   url: string;
@@ -60,6 +80,10 @@ export interface StoredWebSocket {
    * first made healthy navigations and identity changes look like drops.
    */
   closedWithTarget?: boolean;
+  /** Frames that crossed it, oldest first, capped at MAX_FRAMES_PER_SOCKET. */
+  frames: StoredSocketFrame[];
+  /** Frames discarded to keep the buffer at its cap, so a reader sees the gap. */
+  framesDropped: number;
   /**
    * The page sent a close frame - it hung up on purpose (an app dropping a
    * socket on sign-out or an identity change), rather than losing the
@@ -68,6 +92,11 @@ export interface StoredWebSocket {
    */
   clientClosed?: boolean;
 }
+
+/** Frames held per socket. Older ones are discarded as newer arrive. */
+const MAX_FRAMES_PER_SOCKET = 200;
+/** Characters of a frame payload held. The full length is kept in `size`. */
+const MAX_FRAME_PAYLOAD = 4096;
 
 export class NetworkMonitor {
   private sockets: Map<string, StoredWebSocket> = new Map();
@@ -213,6 +242,7 @@ export class NetworkMonitor {
     client.on('Network.webSocketCreated', (e: any) => {
       this.sockets.set(key(e.requestId), {
         id: e.requestId, url: e.url, openedAt: Date.now(), errors: [], target, sessionId,
+        frames: [], framesDropped: 0,
       });
       this.lastActivityTime = Date.now();
     });
@@ -225,12 +255,49 @@ export class NetworkMonitor {
       const sock = this.sockets.get(key(e.requestId));
       if (sock) sock.errors.push(String(e.errorMessage || 'frame error'));
     });
-    // Opcode 8 is the close frame. Sent by the page means it chose to hang up.
     client.on('Network.webSocketFrameSent', (e: any) => {
-      if (e?.response?.opcode !== 8) return;
       const sock = this.sockets.get(key(e.requestId));
-      if (sock) sock.clientClosed = true;
+      if (!sock) return;
+      // Opcode 8 is the close frame. Sent by the page means it hung up.
+      if (e?.response?.opcode === 8) sock.clientClosed = true;
+      this.recordFrame(sock, 'sent', e?.response);
     });
+    // Received frames carry what the app is actually driven by. Without them a
+    // socket-carried mutation is invisible: the lifecycle says a transport
+    // stayed up and nothing says what crossed it.
+    client.on('Network.webSocketFrameReceived', (e: any) => {
+      const sock = this.sockets.get(key(e.requestId));
+      if (!sock) return;
+      this.recordFrame(sock, 'received', e?.response);
+      this.lastActivityTime = Date.now();
+    });
+  }
+
+  /**
+   * Hold one frame against its socket.
+   *
+   * Control frames (close, ping, pong) carry no payload worth holding; their
+   * opcode and timing are what a heartbeat cadence is read from. The buffer
+   * drops its oldest entry once it is full, and counts the drop so a reader
+   * sees that frames are missing rather than reading a short log as complete.
+   */
+  private recordFrame(
+    sock: StoredWebSocket,
+    direction: 'sent' | 'received',
+    response: { opcode?: number; payloadData?: string } | undefined
+  ): void {
+    const opcode = response?.opcode ?? 1;
+    const data = typeof response?.payloadData === 'string' ? response.payloadData : '';
+    const frame: StoredSocketFrame = { at: Date.now(), direction, opcode, size: data.length };
+    if (opcode === 1 || opcode === 2) {
+      frame.payload = data.slice(0, MAX_FRAME_PAYLOAD);
+      if (data.length > MAX_FRAME_PAYLOAD) frame.truncated = true;
+    }
+    sock.frames.push(frame);
+    if (sock.frames.length > MAX_FRAMES_PER_SOCKET) {
+      sock.frames.splice(0, sock.frames.length - MAX_FRAMES_PER_SOCKET);
+      sock.framesDropped += 1;
+    }
   }
 
   /** Every WebSocket seen, oldest first. */

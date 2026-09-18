@@ -34,9 +34,35 @@ const networkToolSchema = z.object({
   statusCode: z.string().optional().describe('Filter by status code (for search action)'),
   flags: z.string().optional().describe('Regex flags (for search action, default: "")'),
 
+  // sockets action parameters
+  frames: z.boolean().optional().describe('sockets: include the frame log per socket - what crossed it, oldest first, with text and binary payloads truncated. Off by default: a sync transport carries thousands of frames and the lifecycle alone answers whether it stayed up'),
+  socketUrl: z.string().optional().describe('sockets: with frames, only sockets whose URL contains this substring. Match the app\'s own path to leave dev-server transports out'),
+
   // setConditions action parameters
   preset: z.enum(['offline', 'slow-3g', 'fast-3g', 'fast-4g', 'online']).optional().describe('Network condition preset (required for setConditions action)'),
 }).strict();
+
+/**
+ * Characters of a payload printed per frame. A push transport carries whole
+ * state snapshots, and twenty of those fill a response with one socket's
+ * traffic. The full stored payload stays in `_meta.frameLog`.
+ */
+const FRAME_LINE_CHARS = 180;
+
+/** Frame ages in seconds, so a heartbeat cadence reads off the log directly. */
+function frameLines(sock: any): string[] {
+  const opcodes: Record<number, string> = { 1: 'text', 2: 'binary', 8: 'close', 9: 'ping', 10: 'pong' };
+  return sock.frames.map((frame: any) => {
+    const arrow = frame.direction === 'received' ? '<-' : '->';
+    const kind = opcodes[frame.opcode] ?? `opcode ${frame.opcode}`;
+    const age = ((frame.at - sock.openedAt) / 1000).toFixed(2);
+    const shown = frame.payload === undefined ? '' : frame.payload.slice(0, FRAME_LINE_CHARS);
+    const body = frame.payload === undefined
+      ? ''
+      : ` ${shown}${frame.size > shown.length ? ` … (${frame.size} chars)` : ''}`;
+    return `       ${arrow} +${age}s ${kind}${body}`;
+  });
+}
 
 export function createNetworkTools(
   puppeteerManager: PuppeteerManager,
@@ -69,14 +95,25 @@ export function createNetworkTools(
               targetNetworkMonitor.startMonitoring(targetPuppeteerManager.getPage());
             }
 
-            const sockets = targetNetworkMonitor.getSockets();
+            const seen = targetNetworkMonitor.getSockets();
+            // Matched on a substring of the URL, the way requiredSockets is, so
+            // an app's own path selects its transport and leaves dev-server
+            // sockets (Vite HMR and friends) out of the log.
+            const sockets = args.socketUrl
+              ? seen.filter((s: any) => s.url.includes(args.socketUrl!))
+              : seen;
             const health = targetNetworkMonitor.getSocketHealth();
             const lines = sockets.map((sock: any) => {
               const how = sock.closedWithTarget ? ' with its target'
                 : sock.clientClosed ? ' by the page' : '';
               const state = sock.closedAt ? `closed${how} after ${sock.closedAt - sock.openedAt}ms` : 'open';
               const errs = sock.errors.length ? ` - ${sock.errors.length} frame error(s): ${sock.errors.slice(0, 2).join('; ')}` : '';
-              return `${sock.closedAt ? 'CLOSED' : 'OPEN  '} [${sock.target || 'page'}] ${sock.url} (${state})${errs}`;
+              const sent = sock.frames.filter((f: any) => f.direction === 'sent').length;
+              const got = sock.frames.filter((f: any) => f.direction === 'received').length;
+              const dropped = sock.framesDropped ? ` +${sock.framesDropped} dropped` : '';
+              const traffic = sock.frames.length ? ` - ${got} in / ${sent} out${dropped}` : '';
+              const head = `${sock.closedAt ? 'CLOSED' : 'OPEN  '} [${sock.target || 'page'}] ${sock.url} (${state})${traffic}${errs}`;
+              return args.frames ? [head, ...frameLines(sock)].join('\n') : head;
             });
             const text = sockets.length === 0
               ? 'No WebSockets seen on this connection. Monitoring starts when the connection does, so a socket opened before then is not counted.'
@@ -93,6 +130,12 @@ export function createNetworkTools(
                   closed: !!s.closedAt, errors: s.errors.length,
                   closedWithTarget: !!s.closedWithTarget,
                   clientClosed: !!s.clientClosed,
+                  frames: {
+                    received: s.frames.filter((f: any) => f.direction === 'received').length,
+                    sent: s.frames.filter((f: any) => f.direction === 'sent').length,
+                    dropped: s.framesDropped,
+                  },
+                  ...(args.frames ? { frameLog: s.frames } : {}),
                 })),
               },
             };

@@ -319,6 +319,11 @@ export const PAGE = String.raw`<!doctype html>
   .evbody { margin-top: 6px; padding: 7px 9px; background: var(--bg); border-radius: 5px;
             white-space: pre-wrap; word-break: break-all; max-height: 230px; overflow: auto;
             color: var(--muted); }
+  /* Only while the list is scrolled away from the top: at the top the newest
+     row is already on screen and a button would announce what is visible. */
+  .newabove { width: 100%; margin-top: 8px; padding: 5px; border-radius: 6px;
+              border-color: var(--accent); color: var(--accent);
+              font-size: 10px; letter-spacing: .5px; }
   .evactions { display: flex; gap: 8px; margin-top: 7px; }
   .evactions button { font-size: 10px; letter-spacing: .4px; padding: 4px 9px; }
 
@@ -499,6 +504,7 @@ export const PAGE = String.raw`<!doctype html>
     <span class="hint grow" id="proxyScope"></span>
     <button id="proxyClear">CLEAR</button>
   </div>
+  <button id="proxyNew" class="newabove" hidden></button>
   <ol class="events" id="proxyEvents"></ol>
 </div>
 
@@ -1154,10 +1160,27 @@ for (const button of document.querySelectorAll('.tab')) {
   button.addEventListener('click', () => showTab(button.dataset.tab));
 }
 
+let unseenAbove = 0;
+
+function clearUnseen() {
+  unseenAbove = 0;
+  $('proxyNew').hidden = true;
+}
+
+$('proxyNew').addEventListener('click', () => {
+  $('proxyEvents').scrollTop = 0;
+  clearUnseen();
+});
+
+$('proxyEvents').addEventListener('scroll', () => {
+  if ($('proxyEvents').scrollTop <= 4) clearUnseen();
+});
+
 $('proxyClear').addEventListener('click', () => {
   $('proxyEvents').replaceChildren();
   eventCount = 0;
   $('proxyCount').textContent = '';
+  clearUnseen();
 });
 
 const bytes = (n) => n < 1024 ? n + ' B'
@@ -1261,14 +1284,24 @@ async function pollProxy() {
       ? state.allowed.join(', ') + (state.refused ? ' \u00b7 ' + state.refused + ' refused' : '')
       : 'this browser was not launched through a proxy';
     const list = $('proxyEvents');
+    // Newest first, and the scroll position is left alone. Appending and
+    // scrolling to the end drags the reader off whatever they were looking at
+    // every time the app makes a request.
+    const atTop = list.scrollTop <= 4;
     for (const event of state.events) {
-      list.append(eventRow(event));
+      list.prepend(eventRow(event));
       lastEventId = event.id;
       eventCount += 1;
     }
     if (state.events.length) {
       $('proxyCount').textContent = eventCount;
-      list.scrollTop = list.scrollHeight;
+      if (atTop) list.scrollTop = 0;
+      else {
+        unseenAbove += state.events.length;
+        const button = $('proxyNew');
+        button.textContent = unseenAbove + ' NEW ABOVE';
+        button.hidden = false;
+      }
     }
   } catch { /* the pane outlives a restart; the next poll picks it up */ }
 }

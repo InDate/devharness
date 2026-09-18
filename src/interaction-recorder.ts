@@ -100,6 +100,11 @@ export type InputEvent = MouseEvent | KeyboardEvent | PasteEvent | NavigationEve
 
 export interface RecordingOptions {
   showOverlay?: boolean;
+  /**
+   * Whether finishing closes the tab. True suits a tab opened for the
+   * recording; false leaves a tab the person was already working in.
+   */
+  closeTabOnDone?: boolean;
   abortSignal?: AbortSignal;
   issueId?: number;  // If provided, looks up issue and shows fullscreen overlay
 }
@@ -163,6 +168,7 @@ const cleanupHandles = new Map<string, () => Promise<void>>();
 
 // Cancel callbacks for active recordings
 const cancelCallbacks = new Map<string, () => Promise<void>>();
+const stopCallbacks = new Map<string, () => Promise<void>>();
 
 /**
  * Cancel an active recording without saving
@@ -174,6 +180,20 @@ export async function cancelRecording(connectionReference: string): Promise<bool
     return true;
   }
   return false;
+}
+
+/**
+ * Finish an active recording from outside the page.
+ *
+ * Takes the same path the overlay's done button takes, so the events, the
+ * pause adjustment and the summary are built once. Drives a recording started
+ * with no overlay, where the page carries no control to press.
+ */
+export async function stopRecording(connectionReference: string): Promise<boolean> {
+  const stop = stopCallbacks.get(connectionReference);
+  if (!stop) return false;
+  await stop();
+  return true;
 }
 
 /**
@@ -269,6 +289,19 @@ export async function startRecording(
   };
   cancelCallbacks.set(connectionReference, cancelFn);
 
+  const stopFn = async () => {
+    stopCallbacks.delete(connectionReference);
+    await page.evaluate(() => {
+      const w = globalThis as any;
+      w.__cdpRecordingState = 'completed';
+      w.__cdpRecordingComplete(JSON.stringify({
+        events: w.__cdpRecordingEvents || [],
+        pausePeriods: w.__cdpPausePeriods || [],
+      }));
+    }).catch(() => {});
+  };
+  stopCallbacks.set(connectionReference, stopFn);
+
   // Listen for abort signal from MCP (tool cancellation)
   if (options.abortSignal) {
     options.abortSignal.addEventListener('abort', () => {
@@ -356,10 +389,14 @@ export async function startRecording(
           // Cleanup
           cleanupHandles.delete(connectionReference);
           activeSessions.delete(connectionReference);
+          cancelCallbacks.delete(connectionReference);
+          stopCallbacks.delete(connectionReference);
 
-          // Resolve the blocking promise - caller should close the tab
           debugLog('recording', `Recording complete with ${allEvents.length} events`);
-          resolveRecording({ success: true, id: session.id, recording: stored, closeTab: true });
+          resolveRecording({
+            success: true, id: session.id, recording: stored,
+            closeTab: options.closeTabOnDone !== false,
+          });
         } catch (e) {
           debugLog('recording', `Error processing UI stop: ${e}`);
           resolveRecording({ success: false, error: String(e) });
@@ -371,8 +408,11 @@ export async function startRecording(
         cleanupHandles.delete(connectionReference);
         activeSessions.delete(connectionReference);
         cancelCallbacks.delete(connectionReference);
-        // Resolve with closeTab flag - caller should close the tab
-        resolveRecording({ success: false, cancelled: true, closeTab: true });
+        stopCallbacks.delete(connectionReference);
+        resolveRecording({
+          success: false, cancelled: true,
+          closeTab: options.closeTabOnDone !== false,
+        });
       }
 
       if (event.name === '__cdpRecordingSaveEvents') {

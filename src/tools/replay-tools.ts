@@ -280,6 +280,8 @@ const replaySchema = z.object({
   overwrite: z.boolean().optional(),
   newName: z.string().optional(),
   showOverlay: z.boolean().optional(),
+  closeTabOnDone: z.boolean().optional()
+    .describe('recordInteraction: whether finishing closes the tab (default:true). False leaves a tab the person was already working in'),
   simplifyEvents: z.boolean().optional().describe('recordInteraction: collapse noisy raw events (default:true)'),
   includeHovers: z.boolean().optional().describe('recordInteraction: keep mousemove steps (default:false)'),
   outputFormat: z.enum(['events', 'commands', 'review', 'puppeteer', 'playwright']).optional()
@@ -3132,6 +3134,7 @@ async function handleRecordInteraction(
   // If issueId is provided, startRecording will show a fullscreen overlay with issue details
   const result = await startRecording(page, args.connectionReason, {
     showOverlay,
+    closeTabOnDone: args.closeTabOnDone,
     abortSignal,
     issueId
   });

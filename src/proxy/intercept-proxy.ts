@@ -203,8 +203,17 @@ export class InterceptProxy {
         socket.unshift(first);
         (first[0] === 0x16 ? this.inner : this.innerPlain).emit('connection', socket);
       };
-      if (head?.length) route(head);
-      else socket.once('data', route);
+      if (head?.length) { route(head); return; }
+      // Read one byte in paused mode and put it back. A 'data' listener would
+      // switch the socket to flowing and the handshake would stream past
+      // before the TLS server had attached, which reads as a hang rather than
+      // an error.
+      const peek = () => {
+        const first = socket.read(1) as Buffer | null;
+        if (first === null) { socket.once('readable', peek); return; }
+        route(first);
+      };
+      peek();
     });
 
     // Every stream here belongs to a peer that may vanish: a reset, a half-open

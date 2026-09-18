@@ -1479,6 +1479,12 @@ export interface CommandConversionOptions {
   preferSelectors?: boolean;
   includeDelays?: boolean;
   startTime?: number;
+  /**
+   * Filled with the source event's timestamp for each command emitted, same
+   * order. An out-parameter rather than a field on the command, because these
+   * commands are what gets written to the sequence file.
+   */
+  timestampsOut?: number[];
   /** Maximum delay in ms (0 = no limit). Delays exceeding this are capped. */
   maxDelayMs?: number;
 }
@@ -1487,7 +1493,7 @@ export function eventsToCommands(
   events: InputEvent[],
   options: CommandConversionOptions = {}
 ): Array<{ tool: string; params: Record<string, any>; delay?: number; comment?: string }> {
-  const { simplify = true, includeHovers = false, preferCoordinates = false, preferSelectors = false, includeDelays = false, startTime, maxDelayMs = 0 } = options;
+  const { simplify = true, includeHovers = false, preferCoordinates = false, preferSelectors = false, includeDelays = false, startTime, maxDelayMs = 0, timestampsOut } = options;
   const processedEvents = simplify ? simplifyEvents(events) : events;
   const commands: Array<{ tool: string; params: Record<string, any>; delay?: number; comment?: string }> = [];
 
@@ -1497,6 +1503,7 @@ export function eventsToCommands(
   let lastTypedSelector: string | null = null;
 
   const addCommand = (cmd: { tool: string; params: Record<string, any> }, eventTimestamp: number) => {
+    timestampsOut?.push(eventTimestamp);
     if (includeDelays) {
       let delay = eventTimestamp - lastTimestamp;
       // Cap delay at maxDelayMs if configured (0 = no limit)

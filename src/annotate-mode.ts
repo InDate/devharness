@@ -180,6 +180,10 @@ interface AnnotateSession extends AnnotateSessionState {
   heldForStep?: boolean;
   /** The page the recording began on, which becomes its first step. */
   recordingStartUrl?: string;
+  /** When the recording began, which bounds its first step. */
+  recordingStartedAt?: number;
+  /** Traffic per step index, computed once the step's window has closed. */
+  stepTraffic?: Map<number, StepTraffic>;
   stepBreakpointsSet: boolean;
   /** Driving a sequence one step at a time, when one is wired in. */
   sequences?: SequenceDriver;
@@ -267,12 +271,31 @@ export interface SequenceStepView {
   resolved?: string;
   /** Variable this step captures, when it captures one. */
   captures?: string;
+  /** When the action that produced this step happened, by the page's clock. */
+  at?: number;
+  /** What crossed the boundary while this step was being taken. */
+  traffic?: StepTraffic;
   /** Notes taken against this step, in the order they were made. */
   annotations?: Annotation[];
   done: boolean;
   current: boolean;
   /** The step the run stopped on. */
   failed?: boolean;
+}
+
+/**
+ * The traffic one step produced.
+ *
+ * Bounded by when the step before it was observed and when this one was: a
+ * request is windowed on when it started, so a click's requests fall inside the
+ * window that closes on the step the click produced.
+ */
+export interface StepTraffic {
+  requests: number;
+  failed: number;
+  frames: number;
+  /** One line per request, `POST /draft 200`, capped. */
+  lines: string[];
 }
 
 /** A variable the run is carrying, and where it came from. */
@@ -380,6 +403,13 @@ export interface SequenceDriver {
   setVariable: (name: string, value: string) => Promise<string | undefined>;
   /** Remove the step that defines a variable. */
   removeVariable: (name: string) => Promise<string | undefined>;
+  /**
+   * What crossed the boundary between two clocks, for one connection.
+   *
+   * Read off the network tool rather than the monitor directly, so the same
+   * windowing rule applies here as to anyone asking by hand.
+   */
+  trafficIn: (connection: string, from: number, to: number) => Promise<StepTraffic>;
   /**
    * The steps a recording has captured, converted from the page's raw events.
    * The events are read by the caller over CDP: Puppeteer's page.evaluate
@@ -969,6 +999,7 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
       await readCapturedEvents(session),
       session.recordingStartUrl ?? session.page.url()
     );
+    await attachStepTraffic(session, connection, steps);
     await gateNewStep(session, connection, steps);
     return {
       available, steps, currentStep: steps.length, total: steps.length,
@@ -1182,6 +1213,8 @@ export async function recordSequence(
     // across runs, and a stale event would land as this recording's first step.
     await evaluateInPage(session, 'globalThis.__cdpRecordingEvents = []').catch(() => {});
     session.recordingStartUrl = session.page.url();
+    session.recordingStartedAt = Date.now();
+    session.stepTraffic = new Map();
     session.recordingSequence = true;
     session.recordingWithAgent = withAgent;
     session.announcedSteps = 0;
@@ -1207,6 +1240,48 @@ export async function recordSequence(
 
   if (withAgent) await announceRecording(session, connection, name, cancelled);
   return getSequenceState(connection);
+}
+
+/**
+ * Give each step what crossed the boundary while it was being taken.
+ *
+ * A step's window opens when the step before it was observed and closes when it
+ * was, and a request is windowed on when it started, so the requests a click
+ * issues fall inside the window that closes on the step that click produced.
+ * The poll is 250ms, which is coarser than the gap between a click and its
+ * first request and finer than the gap between two clicks.
+ *
+ * One step is computed per poll and the result is held: recomputing every step
+ * four times a second would put the whole recording's traffic through the
+ * network tool continuously.
+ */
+async function attachStepTraffic(
+  session: AnnotateSession,
+  connection: string,
+  steps: SequenceStepView[]
+): Promise<void> {
+  if (!session.sequences) return;
+  const held = session.stepTraffic ??= new Map();
+
+  for (let index = 0; index < steps.length; index++) {
+    const cached = held.get(index);
+    if (cached) {
+      if (cached.requests > 0 || cached.frames > 0) steps[index].traffic = cached;
+      continue;
+    }
+    // Only a window that has closed is computed. The newest step's effects are
+    // still arriving - a socket it opened delivers its first frame half a
+    // second later - so it fills in when the next action bounds it.
+    const from = steps[index].at;
+    const to = steps[index + 1]?.at;
+    if (from === undefined || to === undefined) continue;
+
+    const traffic = await session.sequences.trafficIn(connection, from, to)
+      .catch(() => ({ requests: 0, failed: 0, frames: 0, lines: [] as string[] }));
+    held.set(index, traffic);
+    if (traffic.requests > 0 || traffic.frames > 0) steps[index].traffic = traffic;
+    return;
+  }
 }
 
 /**

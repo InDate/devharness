@@ -112,6 +112,14 @@ export interface NetworkToolMeta {
   at?: number;
   since?: number;
   until?: number;
+  /** The rows themselves, so behaviour reads them here rather than the body. */
+  requests?: Array<{
+    id: string;
+    url: string;
+    method: string;
+    status?: number;
+    failed: boolean;
+  }>;
 }
 
 /**

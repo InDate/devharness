@@ -617,17 +617,46 @@ function createSequenceDriver(
       await cancelRecording(connection);
     },
 
+    trafficIn: async (connection: string, from: number, to: number) => {
+      const empty = { requests: 0, failed: 0, frames: 0, lines: [] as string[] };
+      const http = await executeToolCall('network', {
+        action: 'list', connectionReason: connection, since: from, until: to, limit: 50,
+      }).catch(() => null);
+      const rows = http?._meta?.network?.requests ?? [];
+      const sockets = await executeToolCall('network', {
+        action: 'sockets', connectionReason: connection, since: from, until: to,
+      }).catch(() => null);
+      const frames = (sockets?._meta?.socketList ?? []).reduce(
+        (total: number, s: any) => total + (s.frames?.received ?? 0) + (s.frames?.sent ?? 0), 0);
+      if (rows.length === 0 && frames === 0) return empty;
+      return {
+        requests: rows.length,
+        failed: rows.filter((r: any) => r.failed || (r.status ?? 0) >= 400).length,
+        frames,
+        lines: rows.slice(0, 8).map((r: any) => {
+          const path = (() => { try { return new URL(r.url).pathname; } catch { return r.url; } })();
+          return `${r.method} ${path} ${r.failed ? 'failed' : (r.status ?? 'pending')}`;
+        }),
+      };
+    },
+
     recordedSoFar: (eventsJson: string, startUrl: string) => {
       let events: any[] = [];
       try { events = JSON.parse(eventsJson); } catch { events = []; }
-      const commands = [
-        ...(startUrl ? [navigateFirst(startUrl)] : []),
-        ...eventsToCommands(events, { simplify: true, includeHovers: false }),
-      ];
+      const times: number[] = [];
+      const converted = eventsToCommands(events, {
+        simplify: true, includeHovers: false, timestampsOut: times,
+      });
+      const lead = startUrl ? [navigateFirst(startUrl)] : [];
+      const commands = [...lead, ...converted];
+      // The synthesised opening navigate has no source event, so it takes the
+      // clock of whatever followed it.
+      const at = [...lead.map(() => times[0]), ...times];
       return commands.map((command, index) => ({
         index,
         label: labelFor(command),
         ...(command.comment ? { comment: command.comment } : {}),
+        ...(at[index] !== undefined ? { at: at[index] } : {}),
         done: true,
         current: false,
       }));

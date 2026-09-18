@@ -271,6 +271,13 @@ export const PAGE = String.raw`<!doctype html>
 
   .steps .addnote svg { display: block; }
 
+  /* Sits under the step it belongs to, quieter than the step itself: it is
+     evidence for the step, not another step. */
+  .traffic { margin: 4px 0 2px 24px; padding: 3px 0 3px 10px; border-left: 2px solid var(--line);
+             font: 11px/1.6 ui-monospace, Menlo, monospace; color: var(--muted); }
+  .traffic .thead { color: var(--fg); font: 11px -apple-system, sans-serif; letter-spacing: .3px; }
+  .traffic .tfail { color: #d93025; }
+
   .vars { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
   .vars ol { list-style: none; margin: 8px 0 0; padding: 0; }
   .varrow { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
@@ -693,6 +700,25 @@ function renderSequence(seq, noteStep) {
       cap.className = 'call';
       cap.textContent = '└→ captures ' + step.captures;
       li.append(cap);
+    }
+
+    if (step.traffic) {
+      const box = document.createElement('div');
+      box.className = 'traffic';
+      const head = document.createElement('div');
+      head.className = 'thead' + (step.traffic.failed ? ' tfail' : '');
+      const bits = [];
+      if (step.traffic.requests) bits.push(step.traffic.requests + ' request(s)');
+      if (step.traffic.frames) bits.push(step.traffic.frames + ' frame(s)');
+      if (step.traffic.failed) bits.push(step.traffic.failed + ' failed');
+      head.textContent = bits.join(' · ');
+      box.append(head);
+      for (const line of step.traffic.lines || []) {
+        const row = document.createElement('div');
+        row.textContent = line;
+        box.append(row);
+      }
+      li.append(box);
     }
 
     // The decision belongs to the step it is about, not to the top of the card.

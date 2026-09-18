@@ -280,6 +280,11 @@ export function createNetworkTools(
                 matchCount: requests.length,
                 inWindow,
                 at,
+                requests: requestList.map((r: any) => ({
+                  id: r.id, url: r.url, method: r.method,
+                  ...(r.status !== undefined ? { status: r.status } : {}),
+                  failed: r.failed,
+                })),
                 ...(since !== undefined ? { since } : {}),
                 ...(until !== undefined ? { until } : {}),
               },

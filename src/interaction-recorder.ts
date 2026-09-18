@@ -171,6 +171,24 @@ const cancelCallbacks = new Map<string, () => Promise<void>>();
 const stopCallbacks = new Map<string, () => Promise<void>>();
 
 /**
+ * Run a recording's cleanup and forget it.
+ *
+ * The cleanup handle detaches the CDP client, removes the page's listeners and
+ * clears its globals. Deleting the handle without calling it leaves every
+ * listener attached to the live document, so the next recording on that page
+ * adds a second set over the first and captures every click twice - and leaves
+ * the previous client attached.
+ */
+async function finishRecording(connectionReference: string): Promise<void> {
+  const cleanup = cleanupHandles.get(connectionReference);
+  cleanupHandles.delete(connectionReference);
+  activeSessions.delete(connectionReference);
+  cancelCallbacks.delete(connectionReference);
+  stopCallbacks.delete(connectionReference);
+  if (cleanup) await cleanup().catch(() => {});
+}
+
+/**
  * Cancel an active recording without saving
  */
 export async function cancelRecording(connectionReference: string): Promise<boolean> {
@@ -278,13 +296,7 @@ export async function startRecording(
   // Store cancel callback for external cancellation
   const cancelFn = async () => {
     // Clean up without creating a recording
-    const cleanup = cleanupHandles.get(connectionReference);
-    if (cleanup) {
-      await cleanup().catch(() => {});
-      cleanupHandles.delete(connectionReference);
-    }
-    activeSessions.delete(connectionReference);
-    cancelCallbacks.delete(connectionReference);
+    await finishRecording(connectionReference);
     resolveRecording({ success: false, cancelled: true });
   };
   cancelCallbacks.set(connectionReference, cancelFn);
@@ -386,11 +398,7 @@ export async function startRecording(
             summary,
           };
 
-          // Cleanup
-          cleanupHandles.delete(connectionReference);
-          activeSessions.delete(connectionReference);
-          cancelCallbacks.delete(connectionReference);
-          stopCallbacks.delete(connectionReference);
+          await finishRecording(connectionReference);
 
           debugLog('recording', `Recording complete with ${allEvents.length} events`);
           resolveRecording({
@@ -405,10 +413,7 @@ export async function startRecording(
 
       if (event.name === '__cdpRecordingCancel') {
         // Cancel button was clicked - clean up without saving
-        cleanupHandles.delete(connectionReference);
-        activeSessions.delete(connectionReference);
-        cancelCallbacks.delete(connectionReference);
-        stopCallbacks.delete(connectionReference);
+        await finishRecording(connectionReference);
         resolveRecording({
           success: false, cancelled: true,
           closeTab: options.closeTabOnDone !== false,
@@ -1292,6 +1297,11 @@ export async function startRecording(
           }
           const overlay = doc.getElementById('__cdp-recording-overlay');
           if (overlay) overlay.remove();
+          // The re-injection guard goes with the listeners it guards: left set
+          // with them removed, the next recording injects nothing and captures
+          // nothing.
+          delete (globalThis as any).__cdpRecordingInjected;
+          delete (globalThis as any).__cdpPausePeriods;
           delete (globalThis as any).__cdpRecordingEvents;
           delete (globalThis as any).__cdpRecordingListeners;
           delete (globalThis as any).__cdpRecordingStart;

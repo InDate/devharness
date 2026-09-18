@@ -85,12 +85,27 @@ export interface StoredWebSocket {
   /** Frames discarded to keep the buffer at its cap, so a reader sees the gap. */
   framesDropped: number;
   /**
-   * The page sent a close frame - it hung up on purpose (an app dropping a
-   * socket on sign-out or an identity change), rather than losing the
-   * transport. `Network.webSocketClosed` carries no close code, so the sent
-   * opcode-8 frame is the only CDP-visible signal of intent.
+   * The page sent a close frame.
+   *
+   * Chrome reports data frames to the inspector and handles close frames below
+   * that, so `Network.webSocketFrameSent` does not carry opcode 8 and this is
+   * never set by a page calling close() on a live document. Driven against
+   * examples/socket-app: a page close produced webSocketClosed and no sent
+   * frame. A close that comes with the document going away is caught by
+   * `closedWithDocument`; an explicit close() on a live document has no
+   * CDP-visible signal of intent at all.
    */
   clientClosed?: boolean;
+  /**
+   * Its document was replaced by a main-frame navigation, which takes every
+   * socket the page held with it.
+   *
+   * Chrome delivers no `Network.webSocketClosed` for these: the CDP session
+   * survives the navigation by design, and nothing else reports the teardown,
+   * so without this they read open forever and a "is the transport up?" check
+   * passes over a socket whose document is gone.
+   */
+  closedWithDocument?: boolean;
 }
 
 /** Frames held per socket. Older ones are discarded as newer arrive. */
@@ -191,6 +206,7 @@ export class NetworkMonitor {
       // judged on their own close events, never as target teardown.
       this.liveSessions.add('page');
       this.bindSocketEvents(client, 'page', 'page');
+      await this.watchNavigation(client);
 
       // A socket opened inside a Web Worker belongs to that worker's target and
       // emits nothing on the page session, so each worker needs its own session
@@ -281,6 +297,30 @@ export class NetworkMonitor {
       const sock = this.sockets.get(key(e.requestId));
       if (!sock) return;
       this.recordFrame(sock, 'received', e?.response);
+    });
+  }
+
+  /**
+   * Close the page's sockets when its document is replaced.
+   *
+   * Read off the CDP event rather than Puppeteer's `framenavigated`, which also
+   * fires for a same-document navigation - measured: a hash change closed a
+   * live socket. CDP reports those on `Page.navigatedWithinDocument` and keeps
+   * `Page.frameNavigated` for a document that was actually replaced.
+   *
+   * Main frame only, and only sockets on the page session: a worker's socket
+   * lives in its own target, and its teardown arrives as a target detach.
+   */
+  private async watchNavigation(client: any): Promise<void> {
+    await client.send('Page.enable').catch(() => {});
+    client.on('Page.frameNavigated', (e: any) => {
+      if (e?.frame?.parentId) return;
+      const at = Date.now();
+      for (const sock of this.sockets.values()) {
+        if (sock.sessionId !== 'page' || sock.closedAt) continue;
+        sock.closedAt = at;
+        sock.closedWithDocument = true;
+      }
     });
   }
 

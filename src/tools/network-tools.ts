@@ -154,6 +154,7 @@ export function createNetworkTools(
             };
             const lines = sockets.map((sock: any) => {
               const how = sock.closedWithTarget ? ' with its target'
+                : sock.closedWithDocument ? ' with its document'
                 : sock.clientClosed ? ' by the page' : '';
               const state = sock.closedAt ? `closed${how} after ${sock.closedAt - sock.openedAt}ms` : 'open';
               const errs = sock.errors.length ? ` - ${sock.errors.length} frame error(s): ${sock.errors.slice(0, 2).join('; ')}` : '';
@@ -182,6 +183,7 @@ export function createNetworkTools(
                   closed: !!s.closedAt, errors: s.errors.length,
                   closedWithTarget: !!s.closedWithTarget,
                   clientClosed: !!s.clientClosed,
+                  closedWithDocument: !!s.closedWithDocument,
                   frames: {
                     received: s.frames.filter((f: any) => f.direction === 'received').length,
                     sent: s.frames.filter((f: any) => f.direction === 'sent').length,

@@ -1587,6 +1587,7 @@ interface SocketSnapshot {
   closedWithTarget?: boolean;
   /** The page hung up on purpose, rather than losing the transport. */
   clientClosed?: boolean;
+  closedWithDocument?: boolean;
 }
 
 /**
@@ -1684,11 +1685,13 @@ function socketFailures(
       //  - already closed before the run started;
       //  - torn down with its target, since a `navigate` replaces the page's
       //    workers and takes their sockets with it;
-      //  - hung up by the page itself, which an app does on sign-out or an
-      //    identity change.
+      //  - taken with its document by a main-frame navigation the run drove;
+      //  - hung up by the page itself. Chrome delivers no signal for a close()
+      //    on a live document, so that one is caught only where the document
+      //    went with it, and a sign-out mid-run still reports here.
       // Whether a socket came back afterwards is the end-state check's
       // question, not this one's.
-      const deliberate = sock.closedWithTarget || sock.clientClosed;
+      const deliberate = sock.closedWithTarget || sock.closedWithDocument || sock.clientClosed;
       if (sock.closed && !deliberate && !prev?.closed) {
         out.push(`${ref}: ${socketLabel(sock.url)} [${sock.target}] closed during the run`);
       }

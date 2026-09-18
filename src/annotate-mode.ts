@@ -624,6 +624,10 @@ async function pageTime(client: CDPSession): Promise<number> {
 async function freeze(session: AnnotateSession): Promise<void> {
   if (session.frozen) return;
   const { client } = session;
+  // Debugger.pause does nothing against a disabled agent or one set to skip
+  // every pause, and a release leaves it in both of those states.
+  await send(client, 'Debugger.enable');
+  await send(client, 'Debugger.setSkipAllPauses', { skip: false });
   await send(client, 'Animation.setPlaybackRate', { playbackRate: 0 });
   const paused = nextPause(client, 1000);
   session.pauseRequested = true;

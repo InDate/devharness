@@ -717,7 +717,7 @@ describe('an idle page, where the pause is armed rather than taken', () => {
     // and leave the armed pause to stop the page later, with no owner.
     expect(client.calls('Debugger.resume')).toHaveLength(0);
     expect(client.calls('Debugger.disable').length).toBeGreaterThan(0);
-    expect(client.calls('Debugger.enable').length).toBe(2);
+    expect(client.calls('Debugger.enable').length).toBeGreaterThan(1);
     expect(getAnnotateSession(CONNECTION)).toMatchObject({ frozen: false });
   });
 

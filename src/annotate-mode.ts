@@ -107,6 +107,7 @@ import { CANCELLED } from './tools/annotate-tools.js';
 import { parseExtendedSelector } from './utils/selector-resolver.js';
 import { debugLog } from './debug-logger.js';
 import { startControlServer, type ControlServer, type ControlState } from './annotate-control.js';
+import { getProxy } from './proxy/registry.js';
 import type { Annotation, AnnotationTarget, StepTraffic } from './annotation.js';
 
 export type { Annotation, AnnotationTarget, StepTraffic } from './annotation.js';
@@ -1975,6 +1976,20 @@ export async function startAnnotateMode(params: {
     cancelSequence: async () => { await cancelSequence(connection); },
     removeSequence: async (name: string) => { await removeSequence(connection, name); },
     dismissFailure: async () => { await dismissSequenceFailure(connection); },
+    proxyEvents: async (sinceId: string | null) => {
+      const proxy = getProxy(connection);
+      if (!proxy) return { running: false, allowed: [], refused: 0, events: [] };
+      const all = proxy.eventsIn();
+      // Asked for by id rather than by clock: the list only grows, and an id
+      // cannot land twice the way a millisecond can.
+      const at = sinceId ? all.findIndex(e => e.id === sinceId) : -1;
+      return {
+        running: true,
+        allowed: proxy.listAllowedHosts(),
+        refused: proxy.blocked,
+        events: all.slice(at + 1) as unknown as Array<Record<string, unknown>>,
+      };
+    },
     keepRecordedStep: async () => { await keepRecordedStep(connection); },
     chooseStepSelector: async (index: number) => { await chooseStepSelector(connection, index); },
     flagRecordedStep: async (reason: string, options?: Array<{ selector: string; note: string }>, detail?: string) => {
@@ -2012,6 +2027,14 @@ export async function startAnnotateMode(params: {
   });
   session.control = control;
   session.controlUrl = control.url;
+  // The pane travels the same proxy as the app, so an allow list scoped to the
+  // app refuses it and the pane never loads. Registered once its port is known,
+  // and left out of the record: at four polls a second it would bury the app's
+  // own traffic in its own.
+  const liveProxy = getProxy(connection);
+  if (liveProxy) {
+    try { liveProxy.allowQuietly([new URL(control.url).host]); } catch { /* no host to add */ }
+  }
 
 
   if (openControlTab) {

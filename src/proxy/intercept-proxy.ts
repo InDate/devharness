@@ -143,6 +143,8 @@ export class InterceptProxy {
   private eventSeq = 0;
   private blockedHosts = [...BROWSER_SERVICE_HOSTS];
   private allowedHosts: string[] = [];
+  /** Allowed through and left out of the record: devharness's own servers. */
+  private quietHosts: string[] = [];
   private blockedCount = 0;
   private refusedHosts = new Map<string, number>();
   private frameHandlers = new Set<(frame: SocketFrame) => void>();
@@ -176,6 +178,30 @@ export class InterceptProxy {
 
   listAllowedHosts(): string[] {
     return [...this.allowedHosts];
+  }
+
+  /**
+   * Reach the network, and stay out of the record.
+   *
+   * devharness's own servers travel the same proxy as the app: the control
+   * pane is on loopback like everything else. Refusing them breaks the pane,
+   * and recording them buries the app's traffic under the pane's own polling.
+   */
+  allowQuietly(hosts: string[]): void {
+    for (const host of hosts) {
+      if (!this.quietHosts.includes(host)) this.quietHosts.push(host);
+      if (!this.allowedHosts.includes(host)) this.allowedHosts.push(host);
+    }
+  }
+
+  private isQuiet(host: string): boolean {
+    const name = host.split(':')[0].toLowerCase();
+    const port = host.split(':')[1];
+    return this.quietHosts.some(entry => {
+      const [wantHost, wantPort] = entry.toLowerCase().split(':');
+      return (name === wantHost || name.endsWith(`.${wantHost}`))
+        && (wantPort === undefined || wantPort === port);
+    });
   }
 
   /** Replace the refused-host list; [] lets the browser talk freely. */
@@ -232,7 +258,10 @@ export class InterceptProxy {
     return this.bodies.get(id);
   }
 
-  private record(event: Omit<ProxyEvent, 'id'>, body?: string): ProxyEvent {
+  private record(event: Omit<ProxyEvent, 'id'>, body?: string): ProxyEvent | undefined {
+    try {
+      if (this.isQuiet(new URL(event.url).host)) return undefined;
+    } catch { /* not a URL to judge by; record it */ }
     const stored: ProxyEvent = { id: `ev-${++this.eventSeq}`, ...event };
     this.events.push(stored);
     if (body !== undefined) this.bodies.set(stored.id, body);

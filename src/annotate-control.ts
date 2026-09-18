@@ -37,6 +37,13 @@ export interface ControlHandlers {
   cancelSequence: () => Promise<void>;
   removeSequence: (name: string) => Promise<void>;
   dismissFailure: () => Promise<void>;
+  /** What the proxy has seen, when this browser was launched through one. */
+  proxyEvents: (sinceId: string | null) => Promise<{
+    running: boolean;
+    allowed: string[];
+    refused: number;
+    events: Array<Record<string, unknown>>;
+  }>;
   recordSequence: (name: string, withAgent: boolean) => Promise<void>;
   stopRecordingSequence: () => Promise<void>;
   cancelRecordingSequence: () => Promise<void>;
@@ -278,6 +285,22 @@ export const PAGE = String.raw`<!doctype html>
   .traffic .thead { color: var(--fg); font: 11px -apple-system, sans-serif; letter-spacing: .3px; }
   .traffic .tfail { color: #d93025; }
 
+  .tabs { display: flex; gap: 4px; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
+  .tab { border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 6px 12px;
+         background: none; color: var(--muted); font-size: 11px; letter-spacing: .5px; }
+  .tab:hover { color: var(--fg); }
+  .tab.on { color: var(--fg); border-bottom-color: var(--accent); }
+  .tabcount { color: var(--muted); font-size: 10px; }
+
+  .events { list-style: none; margin: 8px 0 0; padding: 0;
+            font: 11px/1.7 ui-monospace, Menlo, monospace; max-height: 440px; overflow: auto; }
+  .events li { display: flex; gap: 8px; padding: 2px 0; border-bottom: 1px solid var(--panel); }
+  .events .evdir { flex: 0 0 26px; color: var(--muted); }
+  .events .evurl { flex: 1; word-break: break-all; }
+  .events .evmeta { flex: 0 0 auto; color: var(--muted); }
+  .events .held { color: #e8a33d; }
+  .events .bad { color: #d93025; }
+
   .vars { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
   .vars ol { list-style: none; margin: 8px 0 0; padding: 0; }
   .varrow { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
@@ -306,6 +329,11 @@ export const PAGE = String.raw`<!doctype html>
 <body>
 <h1>devharness annotate<span id="inertTag" hidden>inert</span></h1>
 <div class="sub" id="sub">connecting…</div>
+
+<div class="tabs">
+  <button class="tab on" data-tab="annotate">ANNOTATE</button>
+  <button class="tab" data-tab="proxy">PROXY <span class="tabcount" id="proxyCount"></span></button>
+</div>
 
 <div id="shotModal" hidden>
   <div id="shotModalBox">
@@ -442,6 +470,15 @@ export const PAGE = String.raw`<!doctype html>
 <div class="card">
   <div class="row" style="margin-top:0"><strong class="grow" id="logCount">Callbacks</strong><button id="clearLog">CLEAR</button></div>
   <div class="log" id="log"><div class="hint">Nothing stepped yet. Each callback the page runs appears here as a step passes through it - only while stepping, since a freely running page is never paused to be observed.</div></div>
+</div>
+
+<div class="card" id="proxyCard" hidden>
+  <div class="row" style="margin-top:0">
+    <strong class="cardlabel">WHAT CROSSED THE BOUNDARY</strong>
+    <span class="hint grow" id="proxyScope"></span>
+    <button id="proxyClear">CLEAR</button>
+  </div>
+  <ol class="events" id="proxyEvents"></ol>
 </div>
 
 <script>
@@ -1071,6 +1108,79 @@ document.addEventListener('keydown', (e) => {
 
 if (INERT) $('inertTag').hidden = false;
 
+// The proxy tab polls on its own clock. Its list only grows, so each poll asks
+// for what arrived after the last id rather than for the whole list again.
+let activeTab = 'annotate';
+let lastEventId = null;
+let eventCount = 0;
+
+function showTab(name) {
+  activeTab = name;
+  for (const button of document.querySelectorAll('.tab')) {
+    button.classList.toggle('on', button.dataset.tab === name);
+  }
+  // display rather than the hidden attribute: the annotate cards manage that
+  // themselves for their own reasons, and a tab must not take it over.
+  for (const card of document.querySelectorAll('.card')) {
+    const isProxy = card.id === 'proxyCard';
+    card.style.display = (isProxy === (name === 'proxy')) ? '' : 'none';
+  }
+  $('proxyCard').hidden = false;
+  if (name === 'proxy') pollProxy();
+}
+
+for (const button of document.querySelectorAll('.tab')) {
+  button.addEventListener('click', () => showTab(button.dataset.tab));
+}
+
+$('proxyClear').addEventListener('click', () => {
+  $('proxyEvents').replaceChildren();
+  eventCount = 0;
+  $('proxyCount').textContent = '';
+});
+
+function eventRow(event) {
+  const li = document.createElement('li');
+  const dir = document.createElement('span');
+  dir.className = 'evdir';
+  dir.textContent = event.kind === 'request'
+    ? (event.method || 'GET')
+    : (event.direction === 'out' ? '->' : '<-');
+  const url = document.createElement('span');
+  url.className = 'evurl';
+  url.textContent = event.kind === 'request' ? event.url : (event.preview || event.url);
+  const meta = document.createElement('span');
+  meta.className = 'evmeta' + (event.heldAs ? ' held' : (event.status >= 400 ? ' bad' : ''));
+  meta.textContent = event.heldAs
+    ? event.heldAs
+    : (event.kind === 'request' ? String(event.status ?? '') : event.size + 'b');
+  li.append(dir, url, meta);
+  return li;
+}
+
+async function pollProxy() {
+  if (stopped) return;
+  try {
+    const res = await fetch(BASE + '/proxy/events?since=' + encodeURIComponent(lastEventId ?? ''));
+    const state = await res.json();
+    $('proxyScope').textContent = state.running
+      ? state.allowed.join(', ') + (state.refused ? ' \u00b7 ' + state.refused + ' refused' : '')
+      : 'this browser was not launched through a proxy';
+    const list = $('proxyEvents');
+    for (const event of state.events) {
+      list.append(eventRow(event));
+      lastEventId = event.id;
+      eventCount += 1;
+    }
+    if (state.events.length) {
+      $('proxyCount').textContent = eventCount;
+      list.scrollTop = list.scrollHeight;
+    }
+  } catch { /* the pane outlives a restart; the next poll picks it up */ }
+}
+
+setInterval(() => { if (activeTab === 'proxy') pollProxy(); }, 500);
+
 refresh();
 setInterval(refresh, 250);
 </script>
@@ -1139,6 +1249,11 @@ export async function startControlServer(handlers: ControlHandlers): Promise<Con
           } catch {
             return send(res, 404, 'No such capture', 'text/plain');
           }
+        }
+
+        if (req.method === 'GET' && route.startsWith('/proxy/events')) {
+          const since = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams.get('since') || null;
+          return send(res, 200, JSON.stringify(await handlers.proxyEvents(since)), 'application/json');
         }
 
         if (req.method === 'GET' && route === '/state') {

@@ -4147,6 +4147,15 @@ Evaluating inside worker target "{{target}}" failed: {{error}}
 
 ## Annotate Messages
 
+## ANNOTATE_TAB_FAILED
+
+**Type:** error
+**Code:** ANNOTATE_TAB_FAILED
+
+Could not open a tab for this session: {{message}}
+
+---
+
 ## STATUS_LEGEND
 
 **Type:** info

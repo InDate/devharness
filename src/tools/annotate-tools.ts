@@ -32,6 +32,7 @@ import {
   setPicker,
   type SequenceDriver,
   getAnnotateSession,
+  pageHeldElsewhere,
   selectSequence,
   gotoSequenceStep,
   type Annotation,
@@ -667,7 +668,18 @@ export function createAnnotateTools(
 
         switch (action) {
           case 'start': {
-            const page = targetPuppeteerManager.getPage();
+            let page = targetPuppeteerManager.getPage();
+
+            // A second session on the same tab would drive the first one's
+            // page: its navigate moves the other off what it was watching.
+            if (pageHeldElsewhere(page, connection)) {
+              try {
+                page = await page.browser().newPage();
+                await page.bringToFront();
+              } catch (error) {
+                return createErrorResponse('ANNOTATE_TAB_FAILED', { message: String(error) });
+              }
+            }
 
             if (args.url) {
               try {

@@ -705,6 +705,20 @@ async function ensureStepBreakpoints(session: AnnotateSession): Promise<void> {
   session.stepBreakpointsSet = true;
 }
 
+/**
+ * Whether another annotate session already holds this page.
+ *
+ * Two sessions on one tab drive the same page from two panes: a navigate for
+ * one takes the other off the page it was watching, and a freeze by one blocks
+ * the other's own reads.
+ */
+export function pageHeldElsewhere(page: Page, exceptConnection: string): boolean {
+  for (const [reference, session] of sessions) {
+    if (reference !== exceptConnection && session.page === page) return true;
+  }
+  return false;
+}
+
 export function getAnnotateSession(connection: string): AnnotateSessionState | undefined {
   const session = sessions.get(connection);
   if (!session) return undefined;

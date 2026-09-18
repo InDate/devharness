@@ -102,6 +102,7 @@ import { join } from 'path';
 import type { Page, CDPSession } from 'puppeteer-core';
 import { getOutputPath } from './helpers/paths.js';
 import { appendEvent } from './session-events.js';
+import { getMessage } from './messages.js';
 import { parseExtendedSelector } from './utils/selector-resolver.js';
 import { debugLog } from './debug-logger.js';
 import { startControlServer, type ControlServer, type ControlState } from './annotate-control.js';
@@ -862,7 +863,7 @@ export async function saveAnnotation(connection: string, comment: string): Promi
     selector: target.selector,
     // Once per session: on every note it buries the notes.
     ...(firstOfSession
-      ? { review: 'Ensure this selector is serving its purpose, check with the user if that is unclear and modify the selector as needed.' }
+      ? { review: getMessage('ANNOTATE_SELECTOR_REVIEW') }
       : {}),
     component: target.component,
     source: target.source?.fileName,
@@ -1241,7 +1242,7 @@ export async function notifyAnnotation(connection: string, id: string): Promise<
     component: annotation.target.component,
     source: annotation.target.source?.fileName,
     sequence: `${sequence} step ${step + 1}`,
-    review: 'The person is pointing at this note now. Look at the element it names and act on what it says.',
+    review: getMessage('ANNOTATE_NOTIFY_REVIEW'),
     detail: `look at this: ${annotation.comment || '(no comment)'} - ${annotation.target.selector}`,
   });
 }

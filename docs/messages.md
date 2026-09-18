@@ -4147,6 +4147,30 @@ Evaluating inside worker target "{{target}}" failed: {{error}}
 
 ## Annotate Messages
 
+## STATUS_LEGEND
+
+**Type:** info
+
+(Logs: server output written since the previous tool call, per server - absent when nothing was written. Read it with `server({ action: 'logs', serverId })`. Console: the page's own console over the same window, for the connection this call used, naming the newest error and where it came from. Replay: this call's index in the session history - `replay({ action: 'repeat', indices: [N] })` runs it again, which re-drives setup without retyping it. These lines appear only when something changed, and this note only once.)
+
+---
+
+## ANNOTATE_SELECTOR_REVIEW
+
+**Type:** info
+
+Ensure this selector is serving its purpose, check with the user if that is unclear and modify the selector as needed.
+
+---
+
+## ANNOTATE_NOTIFY_REVIEW
+
+**Type:** info
+
+The person is pointing at this note now. Look at the element it names and act on what it says.
+
+---
+
 ## ANNOTATE_STARTED
 
 **Type:** success

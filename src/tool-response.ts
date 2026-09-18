@@ -6,7 +6,7 @@
 import type { PortFailureInfo, PendingStartupFailureInfo, PendingRestartInfo } from './server-manager.js';
 import type { Connection } from './connection-manager.js';
 import { hasPendingBugs, getPendingBugs } from './issue-tracker.js';
-import { createErrorResponse } from './messages.js';
+import { createErrorResponse, getMessage } from './messages.js';
 import type { BlockEventInfo } from './block-events.js';
 import type { LaunchObservations } from './chrome-launcher.js';
 import type { SessionMessage } from './session-messages.js';
@@ -839,13 +839,7 @@ export function buildStatusSuffix(items: StatusLineItem[], legend = false): stri
   if (items.length === 0) return '';
 
   const lines = items.map(item => `${item.label}: ${item.value}`);
-  return `\n\n${lines.join('\n')}${legend ? `\n${STATUS_LEGEND}` : ''}`;
+  return `\n\n${lines.join('\n')}${legend ? `\n${getMessage('STATUS_LEGEND')}` : ''}`;
 }
 
-const STATUS_LEGEND = [
-  '(Logs: server output written since the previous tool call, per server - absent when nothing was written.',
-  ' Read it with `server({ action: \'logs\', serverId })`.',
-  ' Console: the page\'s own console over the same window, for the connection this call used, naming the newest error and where it came from.',
-  ' Replay: this call\'s index in the session history - `replay({ action: \'repeat\', indices: [N] })` runs it again,',
-  ' which re-drives setup without retyping it. These lines appear only when something changed, and this note only once.)',
-].join('');
+

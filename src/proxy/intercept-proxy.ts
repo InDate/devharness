@@ -61,7 +61,11 @@ export interface ProxyEvent {
   method?: string;
   status?: number;
   binary?: boolean;
+  /** Response body bytes for a request, payload bytes for a frame. */
   size: number;
+  contentType?: string;
+  /** Request issued to response complete. Absent for a frame, which is a point. */
+  durationMs?: number;
   /** First characters of the payload, for a list. The whole body is kept
    *  separately and only up to BODY_CAP. */
   preview?: string;
@@ -367,6 +371,8 @@ export class InterceptProxy {
         at: Date.now(), kind: 'request', direction: 'out', url,
         method: req.method ?? 'GET', status: pin.status,
         size: Buffer.byteLength(pin.body), preview: pin.body.slice(0, PREVIEW_CHARS),
+        durationMs: 0,
+        ...(pin.headers['content-type'] ? { contentType: pin.headers['content-type'].split(';')[0] } : {}),
         heldAs: 'replaced',
       }, pin.body);
       return;
@@ -386,6 +392,7 @@ export class InterceptProxy {
       ...(secure ? { rejectUnauthorized: false } : {}),
     }, (answer) => {
       res.writeHead(answer.statusCode ?? 502, answer.headers);
+      const startedAt = Date.now();
       // Tapped rather than buffered: the bytes still pipe through untouched and
       // a copy is kept up to the cap, so an exchange can become a held value
       // later without the proxy having to parse anything now.
@@ -399,6 +406,10 @@ export class InterceptProxy {
         at: Date.now(), kind: 'request', direction: 'out', url,
         method: req.method ?? 'GET', status: answer.statusCode ?? 0,
         size, preview: kept.slice(0, PREVIEW_CHARS),
+        durationMs: Date.now() - startedAt,
+        ...(typeof answer.headers['content-type'] === 'string'
+          ? { contentType: (answer.headers['content-type'] as string).split(';')[0] }
+          : {}),
       }, kept));
       answer.pipe(res);
     });

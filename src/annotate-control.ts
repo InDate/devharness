@@ -1160,6 +1160,21 @@ $('proxyClear').addEventListener('click', () => {
   $('proxyCount').textContent = '';
 });
 
+const bytes = (n) => n < 1024 ? n + ' B'
+  : n < 1024 * 1024 ? (n / 1024).toFixed(n < 10240 ? 1 : 0) + ' kB'
+  : (n / 1048576).toFixed(1) + ' MB';
+
+/** Status, size, how long it took, what it was - in that order of interest. */
+function describe(event) {
+  const parts = [];
+  if (event.heldAs) parts.push(event.heldAs);
+  else if (event.kind === 'request') parts.push(String(event.status ?? ''));
+  parts.push(bytes(event.size));
+  if (event.durationMs !== undefined && event.durationMs > 0) parts.push(event.durationMs + ' ms');
+  if (event.contentType) parts.push(event.contentType);
+  return parts.filter(Boolean).join(' \u00b7 ');
+}
+
 function eventRow(event) {
   const li = document.createElement('li');
   const head = document.createElement('div');
@@ -1177,9 +1192,7 @@ function eventRow(event) {
 
   const meta = document.createElement('span');
   meta.className = 'evmeta' + (event.heldAs ? ' held' : (event.status >= 400 ? ' bad' : ''));
-  meta.textContent = event.heldAs
-    ? event.heldAs
-    : (event.kind === 'request' ? String(event.status ?? '') : event.size + 'b');
+  meta.textContent = describe(event);
 
   const tools = document.createElement('span');
   tools.className = 'evtools';
@@ -1211,9 +1224,6 @@ function eventRow(event) {
     payload.textContent = 'reading\u2026';
     const actions = document.createElement('div');
     actions.className = 'evactions';
-    const collapse = document.createElement('button');
-    collapse.textContent = 'COLLAPSE';
-    collapse.addEventListener('click', (e) => { e.stopPropagation(); close(); });
     const hold = document.createElement('button');
     hold.className = 'save';
     hold.textContent = 'HOLD THIS VALUE';
@@ -1224,7 +1234,7 @@ function eventRow(event) {
       hold.disabled = true;
       meta.classList.add('held');
     });
-    actions.append(collapse, hold);
+    actions.append(hold);
     body.append(payload, actions);
     li.append(body);
 

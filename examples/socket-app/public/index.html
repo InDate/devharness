@@ -9,6 +9,10 @@
   button { font: inherit; padding: 5px 10px; margin: 0 6px 6px 0; border: 1px solid #ccc;
            border-radius: 6px; background: #fff; cursor: pointer; }
   button:hover { border-color: #1a73e8; color: #1a73e8; }
+  .state { font: 12px ui-monospace, Menlo, monospace; color: #666; margin-bottom: 8px; }
+  .state strong { color: #111; }
+  button:disabled { opacity: .35; cursor: not-allowed; border-color: #eee; }
+  button:disabled:hover { border-color: #eee; color: inherit; }
   #log { font: 12px/1.6 ui-monospace, Menlo, monospace; background: #f6f6f6; border-radius: 6px;
          padding: 10px; height: 260px; overflow: auto; white-space: pre-wrap; }
   #count { font-weight: 600; }
@@ -17,6 +21,26 @@
 <h1>socket-app</h1>
 <p>Open sockets, then read them with
   <code>network({ action: 'sockets', frames: true, socketUrl: '7788' })</code>.</p>
+
+<fieldset id="lifecycle">
+  <legend>connection lifecycle — controls unlock as state allows</legend>
+  <div class="state">state: <strong id="connState" data-testid="conn-state">disconnected</strong></div>
+  <button data-testid="conn-connect">CONNECT</button>
+  <button data-testid="conn-send">send 1</button>
+  <button data-testid="conn-send5">send 5</button>
+  <button data-testid="conn-pull3">ask for 3</button>
+  <button data-testid="conn-pull5">ask for 5</button>
+  <button data-testid="conn-drop">drop the connection</button>
+  <button data-testid="conn-retry">retry</button>
+  <button data-testid="conn-bye">disconnect</button>
+</fieldset>
+
+<fieldset>
+  <legend>a request that depends on another</legend>
+  <div class="state">session: <strong id="sessState" data-testid="session-state">none</strong></div>
+  <button data-testid="get-session">POST /session</button>
+  <button data-testid="post-draft" disabled>POST /draft</button>
+</fieldset>
 
 <fieldset>
   <legend>payload shapes</legend>
@@ -141,6 +165,84 @@ $('[data-testid=navigate-away]').addEventListener('click', () => {
   log('navigating with ' + live().length + ' socket(s) open');
   location.href = '/second.html';
 });
+
+// One connection the page drives, with every control gated on its state. A
+// button that cannot do anything yet is disabled rather than absent, so the
+// order a sequence has to follow is readable from the page itself.
+let liveSocket = null;
+let liveState = 'disconnected';
+let sessionToken = null;
+
+const LIVE_ALLOWS = {
+  disconnected: ['conn-connect'],
+  connecting: [],
+  open: ['conn-send', 'conn-send5', 'conn-pull3', 'conn-pull5', 'conn-drop', 'conn-bye'],
+  failed: ['conn-retry'],
+};
+
+function setLiveState(next) {
+  liveState = next;
+  $('#connState').textContent = next;
+  const allowed = LIVE_ALLOWS[next] ?? [];
+  for (const id of ['conn-connect', 'conn-send', 'conn-send5', 'conn-pull3', 'conn-pull5',
+                    'conn-drop', 'conn-retry', 'conn-bye']) {
+    $('[data-testid=' + id + ']').disabled = !allowed.includes(id);
+  }
+}
+
+function connectLive() {
+  setLiveState('connecting');
+  liveSocket = new WebSocket(`ws://${location.host}/live`);
+  liveSocket.addEventListener('open', () => { log('live   open'); setLiveState('open'); });
+  liveSocket.addEventListener('message', (e) => log(`live   <- ${e.data}`));
+  liveSocket.addEventListener('close', (e) => {
+    // 1000 is the page asking; anything else is the transport going away, and
+    // only the second offers a retry.
+    log(`live   closed code=${e.code}`);
+    setLiveState(e.code === 1000 ? 'disconnected' : 'failed');
+    liveSocket = null;
+  });
+  liveSocket.addEventListener('error', () => log('live   error'));
+}
+
+function liveSend(payload, note) {
+  if (!liveSocket || liveSocket.readyState !== WebSocket.OPEN) return log('live   not open');
+  liveSocket.send(JSON.stringify(payload));
+  log(`live   -> ${note}`);
+}
+
+$('[data-testid=conn-connect]').addEventListener('click', connectLive);
+$('[data-testid=conn-retry]').addEventListener('click', connectLive);
+$('[data-testid=conn-send]').addEventListener('click', () => liveSend({ cmd: 'echo' }, 'one frame'));
+$('[data-testid=conn-send5]').addEventListener('click', () => {
+  for (let i = 1; i <= 5; i++) liveSend({ cmd: 'echo', i }, `frame ${i} of 5`);
+});
+$('[data-testid=conn-pull3]').addEventListener('click', () => liveSend({ cmd: 'push', n: 3 }, 'ask for 3'));
+$('[data-testid=conn-pull5]').addEventListener('click', () => liveSend({ cmd: 'push', n: 5 }, 'ask for 5'));
+$('[data-testid=conn-drop]').addEventListener('click', () => liveSend({ cmd: 'die', refuse: 1 }, 'drop it'));
+$('[data-testid=conn-bye]').addEventListener('click', () => liveSend({ cmd: 'bye' }, 'disconnect'));
+
+// The draft endpoint refuses without a session, so replaying these out of order
+// produces a 401 at the boundary rather than passing quietly.
+$('[data-testid=get-session]').addEventListener('click', async () => {
+  const res = await fetch('/session', { method: 'POST' });
+  const body = await res.json();
+  sessionToken = body.token;
+  $('#sessState').textContent = sessionToken;
+  $('[data-testid=post-draft]').disabled = false;
+  log(`POST /session -> ${res.status} ${sessionToken}`);
+});
+
+$('[data-testid=post-draft]').addEventListener('click', async () => {
+  const res = await fetch('/draft', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...(sessionToken ? { 'x-session': sessionToken } : {}) },
+    body: JSON.stringify({ id: 'draft-1', body: 'sent', at: Date.now() }),
+  });
+  log(`POST /draft -> ${res.status}`);
+});
+
+setLiveState('disconnected');
 
 let sse = null;
 $('[data-testid=open-sse]').addEventListener('click', () => {

@@ -16,6 +16,16 @@ import { WebSocketServer } from 'ws';
 const here = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 7788);
 
+/** Tokens handed out by POST /session, which POST /draft requires. */
+const sessions = new Set();
+
+/**
+ * Connect attempts refused before one succeeds, so a failure is followed by a
+ * retry that also fails and then one that works - the shape a real reconnect
+ * has, and the shape a recorded sequence has to read as a story.
+ */
+let refusalsLeft = 0;
+
 const files = {
   '/': ['index.html', 'text/html'],
   '/index.html': ['index.html', 'text/html'],
@@ -50,9 +60,25 @@ const http = createServer((req, res) => {
     return;
   }
 
+  // A session token the draft endpoint requires, so one request depends on
+  // another having happened first. A sequence replayed out of order gets a 401
+  // rather than silently passing.
+  if (path === '/session' && req.method === 'POST') {
+    const token = `s-${Math.random().toString(36).slice(2, 10)}`;
+    sessions.add(token);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ token }));
+    return;
+  }
+
   // Somewhere for a page-written record to be sent, so "written locally and
   // never sent" and "written and sent" are distinguishable at the boundary.
   if (path === '/draft' && req.method === 'POST') {
+    if (!sessions.has(req.headers['x-session'])) {
+      res.writeHead(401, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'no session - POST /session first' }));
+      return;
+    }
     let body = '';
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
@@ -98,11 +124,42 @@ wss.on('connection', (socket, req) => {
   const once = (ms, fn) => timers.push(setTimeout(fn, ms));
   socket.on('close', () => timers.forEach(t => { clearInterval(t); clearTimeout(t); }));
 
-  socket.on('message', (data, isBinary) => {
-    // Echoed on every endpoint: a sent frame is what the inactivity sweep
-    // reads as the page being in use, so every mode can exercise that path.
-    socket.send(isBinary ? data : `echo:${data}`, { binary: isBinary });
-  });
+  if (mode !== '/live') {
+    socket.on('message', (data, isBinary) => {
+      // Echoed on every other endpoint: a sent frame is what the inactivity
+      // sweep reads as the page being in use.
+      socket.send(isBinary ? data : `echo:${data}`, { binary: isBinary });
+    });
+  }
+
+  if (mode === '/live') {
+    // One connection the page drives by command, so traffic happens because an
+    // action asked for it rather than on a timer. Everything here is a reply to
+    // something the page sent.
+    if (refusalsLeft > 0) {
+      refusalsLeft -= 1;
+      socket.close(1013, 'try again later');
+      return;
+    }
+    socket.send(JSON.stringify({ tag: 'ready', at: Date.now() }));
+    socket.on('message', (data) => {
+      let cmd = {};
+      try { cmd = JSON.parse(String(data)); } catch { return; }
+      if (cmd.cmd === 'push') {
+        for (let i = 1; i <= (cmd.n ?? 1); i++) {
+          once(i * 60, () => socket.send(JSON.stringify({ tag: 'push', i, of: cmd.n })));
+        }
+      } else if (cmd.cmd === 'die') {
+        // Destroyed rather than closed: no close frame, which is what a dropped
+        // transport looks like and is not what a clean hang-up looks like.
+        refusalsLeft = cmd.refuse ?? 1;
+        socket._socket.destroy();
+      } else if (cmd.cmd === 'bye') {
+        socket.close(1000, 'page asked');
+      }
+    });
+    return;
+  }
 
   if (mode === '/small') {
     every(q('ms', 500), () => socket.send(JSON.stringify({ tag: 'small', at: Date.now() })));
@@ -149,6 +206,7 @@ wss.on('connection', (socket, req) => {
 
 http.listen(PORT, () => {
   console.log(`socket-app on http://localhost:${PORT}`);
-  console.log('sockets: /small /big /binary /burst /ping /heartbeat /quiet /serverclose /badframe');
+  console.log('lifecycle: /live (connect, push, die, bye), POST /session then POST /draft');
+  console.log('capture:   /small /big /binary /burst /ping /heartbeat /quiet /serverclose /badframe');
   console.log('http:    /sse (text/event-stream), POST /draft');
 });

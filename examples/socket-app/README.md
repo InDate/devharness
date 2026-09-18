@@ -9,10 +9,38 @@ PORT=7900 node examples/socket-app/server.mjs
 
 It depends on `ws`, which the repo root already has; there is nothing to install.
 
+## The lifecycle, which is the point
+
+`/live` is one connection the page drives by command. Nothing on it happens on
+a timer - every message is a reply to something an action asked for, so a
+recording of it reads as a story rather than as noise arriving underneath one.
+
+Controls are gated on the connection's state and disabled rather than hidden,
+so the order a sequence has to follow is readable from the page:
+
+| state | what is available |
+|---|---|
+| disconnected | CONNECT |
+| open | send 1, send 5, ask for 3, ask for 5, drop, disconnect |
+| failed | retry |
+
+`drop the connection` destroys the socket server-side without a close frame, so
+the page sees `1006` rather than a clean hang-up, and arms the server to refuse
+the next attempt. The path that produces is: drop, retry refused with `1013`,
+retry accepted. A reconnect with a failure in the middle of it.
+
+`POST /session` then `POST /draft` is the same idea over HTTP: the draft
+endpoint answers 401 without a session token, so a sequence replayed out of
+order fails at the boundary instead of passing quietly.
+
 ## What each endpoint is for
+
+These are single-purpose and fire on their own schedule. They exist to exercise
+capture, not to tell a story - use `/live` for that.
 
 | Path | Exercises |
 |---|---|
+| `/live` | a connection driven by command: connect, send, ask for N, drop, retry, disconnect |
 | `/small?ms=` | ordinary text frames, both directions |
 | `/big?chars=` | payloads past `MAX_FRAME_PAYLOAD`, and what truncation retains |
 | `/binary?bytes=` | opcode 2, where the stored payload is base64 |

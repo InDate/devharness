@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.10.0] - 2026-09-24
 
 ### Added
 
@@ -68,6 +68,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A delay cut short names the step it interrupted** rather than the one
   after it, and an abort landing on the last step in range still produces a
   marker instead of none.
+
+## Unattributed - shipped across 0.3.0 to 0.9.17
+
+The entries below were written before this file carried a section per release.
+Each shipped in some version between 0.3.0 and 0.9.17; which one is not
+recorded here.
+
+### Fixed
 
 - **`envFile` on `run`/`runAll`: a KEY=value file supplying that run's
   `{{env:NAME}}` tokens.** A relative path resolves against the project

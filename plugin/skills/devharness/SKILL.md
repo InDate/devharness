@@ -85,21 +85,31 @@ Each line carries `kind` and, where there is one, `resolve` - the call that clea
 
 ## Letting someone point instead of describe
 
-When the person driving the browser would have to write a paragraph to say which element is wrong - or when the problem only exists mid-interaction and is gone before it can be described - stop asking for the description:
+When describing which element is wrong would cost a paragraph - or the problem
+only exists mid-interaction and is gone before it can be described - open the
+bench instead of asking:
 
 ```
-annotate({ action: 'start', connectionReason: 'app' })
+bench({ action: 'start', connectionReason: 'app' })
 ```
 
-The app page freezes - `Debugger.pause` for its JS, `Animation.setPlaybackRate(0)` for the compositor - Chrome's own element picker arms, and a control tab opens holding the comment box. Nothing is injected into the app itself: a frozen page cannot accept a keystroke, so the UI lives in a separate tab on a separate origin. They click an element in one tab, type a few words in the other, save.
+It opens a pane in its own tab with the page still running. PICKER arms
+Chrome's element picker; FREEZE holds the page. They click an element in the
+app tab, type in the pane, save - and the note lands in the step of the
+sequence it belongs to, and on the event stream, so with a watch armed it
+reaches you mid-task. Keep working while they write.
 
-Each annotation records the selector, the text, the component name and the JSX source location where a dev build exposes one, and lands on the event stream above - so with the watch armed it reaches you mid-task. Keep working while they annotate.
+The bench also drives a sequence step by step, reads what crossed the boundary
+under each step, and carries the proxy's own controls. Launch the browser with
+`proxy: true` or it records nothing.
 
-`annotate({ action: 'tick', steps: 1 })` runs the page forward by one callback and freezes again - one callback is one thing the page does, so it is the exact unit and the smallest real move. `tick({ budgetMs: 800 })` is for chasing a known timeout: it runs as many callbacks as it takes to cover that much page time and reports where it landed. Either way this is how they walk into a transient state and hold it still long enough to click; the control tab has buttons for both. `annotate({ action: 'list' })` reads back what they recorded. They finish by closing the control tab, which releases the page and shuts the server down; `stop` does the same from your side.
+While the page is held, other devharness tools report it as paused at a
+breakpoint; `bench({ action: 'unfreeze' })` or `stop` clears that, **not**
+`execution({ action: 'resume' })`.
 
-Two independent toggles, worth explaining once. PICKER decides whether a click points at something or reaches the app. FREEZE decides whether the page runs at all - while it is held its JS is stopped, so driving the app needs both the picker disarmed *and* the page running. Picking works either way, because the picker is Chrome's own rather than the page's. The usual shape is: run it, do the thing that goes wrong, freeze the moment it does, then point.
-
-While the page is held, anything waiting on a timer stops - including a navigation's load timers - so other devharness tools see it as paused at a breakpoint; `annotate({ action: 'unfreeze' })` or `stop` is what clears that, not `execution({ action: 'resume' })`.
+Ticking into a transient state, pause-and-resume, notes and captures, cropping,
+the boundary panel, `sweep`, the CLI command:
+[references/bench.md](references/bench.md)
 
 ## Talking to another devharness session
 
@@ -171,4 +181,7 @@ Restart kills Chrome instances this session launched (relaunch with `launchChrom
 ## Load on demand
 
 - Full tool/action catalogue: [references/tool-categories.md](references/tool-categories.md)
+- The bench - ticking into a transient state, driving a sequence, pausing and resuming,
+  notes and captures, the boundary panel, `sweep`: [references/bench.md](references/bench.md)
+- What crossed the app's boundary and what caused it - the intercepting proxy, attribution roots and levels, socket shapes, ruling a payload shape, what reaches a recording: [references/boundary.md](references/boundary.md)
 - Recording/replaying sequences — `saveAs`, per-step `connectionReason`, conditionals, `variables`, keeping a password out of the sequence file with `{{env:NAME}}`, verifying an issue fix: [references/sequences.md](references/sequences.md)

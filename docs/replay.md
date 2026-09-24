@@ -288,7 +288,8 @@ Notes:
 ## Managing Sequences
 
 ```javascript
-// List all in-memory sequences
+// List every sequence: the ones in memory, then the ones on disk
+// (a sequences dir holds a suite while a fresh session's memory holds nothing)
 replay({ action: 'list' })
 
 // View sequence details (by sequenceId or name)
@@ -310,7 +311,7 @@ replay({ action: 'export', sequenceId: 'seq-1234567890', format: 'sequence' })
 replay({ action: 'export', sequenceId: 'seq-1234567890', format: 'sequence', global: true })
 // Saves to: ~/.devharness/sequences/<name>.json
 
-// List saved sequences on disk (add showAll: true to include completed issues)
+// List the sequences on disk alone (add showAll: true to include completed issues)
 replay({ action: 'listSaved' })
 
 // Load sequence from disk
@@ -858,6 +859,18 @@ session before it runs, whether or not the sequence spans several connections,
 so a missing browser fails as *"step 3 needs connection duo-member-two, which
 does not exist in this session"* instead of a generic "not connected to browser"
 from inside the tool.
+
+A run-level `connectionReason` does not reach a step that names its own
+connection; that step resolves through `connections` alone. Where every
+connection-taking step names one reference and the run passes a different
+`connectionReason` with no mapping for it, no step would run on the passed
+connection: the steps drive the recorded reference, and a stale window under
+that name in the same session produces "element not found" at every step. The
+run is refused before step 1, naming the steps and the mapping that retargets
+them, `connections: { "<recorded>": "<connectionReason>" }`. A sequence where
+some steps name no connection, or whose reference is a `{{...}}` template, is
+not refused: the run-level connection reaches the bare steps, and a template
+resolves only at run time.
 
 Mapping also renames the `reference` on `launchChrome` / `connectDebugger`
 steps; otherwise a mapped sequence would launch the recorded name and then drive

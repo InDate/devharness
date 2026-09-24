@@ -34,6 +34,12 @@ runs against (see the skill's Quick Start).
 
 **Network**: `network` (actions: list, get, search, enable, disable, setConditions)
 
+**Proxy**: `proxy` (actions: status, events, sockets, body, hold, holdFrame, release, holds)
+- Needs `launchChrome({ proxy: true })`. Holds what reached the outside world, where `network` reads what CDP saw
+- Each event carries the step that owns it, a level read from stored evidence, and what the page says started it. A timer-rooted request or send owns nothing, so an app's own polling stays out of every step
+- `hold` answers a URL with a value; `holdFrame` replaces or drops one socket message
+- Full model - roots, levels, socket shapes, ruling a payload shape, what reaches a recording: [boundary.md](boundary.md)
+
 **Page**: `navigate` (actions: goto, reload, back, forward, info)
 
 **DOM**: `dom` (actions: querySelector, getProperties, snapshot)
@@ -78,16 +84,19 @@ runs against (see the skill's Quick Start).
 - `pullSequence` writes a sequence out of an issue to disk. Nothing is written until you ask, and nothing is ever run automatically: sequence steps are `{tool, params}` for **any** tool, so a sequence in a public issue is a script, not a macro. One authored by a GitHub account other than the one `gh` is logged in as is refused until a **person** has read it and re-run with `confirm: true` - an agent must not confirm on its own. One using `execution`, `saveToDisk`, `server`, `request` or `download` is refused unless you pass `allowPrivilegedSteps: true`. Read the step list in the response before you do
 - All of these are blocked while any bug is `pending` - `acknowledge` first
 
-**Annotate**: `annotate` (actions: start, stop, tick, list, status)
+**Bench**: `bench` (actions: start, stop, freeze, unfreeze, picker, tick, keepStep, dropStep, flagStep, sweep, list, status)
+- The panel beside a driven app: it holds the page still, shows what crossed the boundary and what caused each thing, records and steps sequences, and collects element-level comments
 
-- For when describing a UI problem costs more than pointing at it. `start` freezes the page, arms Chrome's own element picker and opens a control tab; the person clicks an element in the app tab, types a comment in the control tab, saves. Each annotation records the selector, the text, the component name and the JSX source location where a dev build exposes one - so the report carries what the element *is*, not a description of where it sits
-- Nothing is injected into the page being annotated. The comment box, picker toggle and tick buttons live in the control tab, served from `127.0.0.1` while apps sit on `localhost` - a different site, so Chrome gives it its own renderer process and freezing the app pane cannot take the UI down with it. Chrome's split view has no API (`splitViewId` is read-only), so the tab is opened beside the app for the person to split manually
+- For when describing a UI problem costs more than pointing at it. `start` opens the bench in its own tab with the page still running and Chrome's element picker idle; the person arms the picker, clicks an element in the app tab, types a comment in the bench, saves. Each annotation records the selector, the text, the component name and the JSX source location where a dev build exposes one - so the report carries what the element *is*, not a description of where it sits
+- Nothing is injected into the page being driven. The comment box, picker toggle, tick buttons and boundary stream live in the bench tab, served from `127.0.0.1` while apps sit on `localhost` - a different site, so Chrome gives it its own renderer process and freezing the app pane cannot take the UI down with it. Chrome's split view has no API (`splitViewId` is read-only), so the tab is opened beside the app for the person to split manually
 - The freeze stops two clocks. `Debugger.pause` holds the page's JS, and with it every timer and `rAF` callback; CSS animations run on the compositor and need `Animation.setPlaybackRate(0)` as well. Both are released on `stop`, and the page goes back to real time
 - `tick({ steps })` runs that many callbacks and freezes again - the exact unit, since one callback is one thing the page does and where its state changes. `tick({ budgetMs })` is the convenience for chasing a known timeout: it runs as many callbacks as it takes to cover that much page time and reports where it landed, which is rarely the number asked for. Either way this is how you walk into a state that only exists mid-interaction (a toast before it auto-dismisses, a spinner between two renders) and hold it there to be clicked. `Emulation.setVirtualTimePolicy` would give exact millisecond steps but is a one-way door - it replaces the page's clock with no way back, so the tab could never be handed over working
-- Each step records the callbacks it ran through - what scheduled them, the function, the source line and the page time they landed at - and the control tab keeps a running log at the bottom. This only exists while stepping: a freely running page is never paused, so there is nothing to observe it with short of tracing
-- While the picker is armed every click is a pick; disarming it hands clicks back to the app. Driving the app also needs the page running - under a freeze its JS is stopped, so a click reaches nothing - so `unfreeze` and `freeze` toggle the hold without leaving annotate mode. Picking works in both states, since the picker is Chrome's rather than the page's
-- Closing the control tab ends the mode: the page is released back to real time, the debugger detaches and the server shuts down. `stop` does the same from the agent side. Annotations are written as they are saved, so neither loses anything
-- Nothing blocks. `start` returns as soon as the control tab is open; annotations land on the session event stream as they are saved, and in `.devharness/annotations/<sessionId>.jsonl`. Keep working while the person annotates
+- Each step records the callbacks it ran through - what scheduled them, the function, the source line and the page time they landed at - and the bench keeps a running log beside the hold controls. This only exists while stepping: a freely running page is never paused, so there is nothing to observe it with short of tracing
+- While the picker is armed every click is a pick; disarming it hands clicks back to the app. Driving the app also needs the page running - under a freeze its JS is stopped, so a click reaches nothing - so `unfreeze` and `freeze` toggle the hold without leaving the bench. Picking works in both states, since the picker is Chrome's rather than the page's
+- Closing the bench tab ends it: the page is released back to real time, the debugger detaches and the server shuts down. `stop` does the same from the agent side. Annotations are written as they are saved, so neither loses anything
+- `sweep` reports the note captures no sequence refers to any more, and with `remove: true` deletes them. It reads every sequence store, so a capture another sequence cites is never taken, and needs no browser
+- Full reference, including pausing a run and the boundary panel: [bench.md](bench.md)
+- Nothing blocks. `start` returns as soon as the bench is open; notes land on the session event stream as they are saved, and in the step of the sequence file they were written against. Keep working while the person writes
 - While frozen, anything waiting on a timer stops - including a navigation's load timers. `stop` before driving the page with other tools
 
 **Messages**: `message` (actions: sessions, send, read, reply)

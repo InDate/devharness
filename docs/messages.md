@@ -2110,9 +2110,9 @@ Breakpoint hit at {{location}}
 ## REPLAY_SEQUENCE_LIST_EMPTY
 
 **Type:** info
-**Summary:** No sequences saved
+**Summary:** No sequences in memory
 
-No sequences saved yet in memory.
+No sequences in memory.
 
 ---
 
@@ -2256,7 +2256,7 @@ No commands were recorded in this session.
 **Type:** error
 **Code:** SEQUENCE_NOT_FOUND
 
-{{#message}}{{message}}{{/message}}{{^message}}Sequence `{{sequenceId}}` not found. Use `replay({ action: 'list' })` to see available sequences or `replay({ action: 'listSaved' })` to see saved files.{{/message}}
+{{#message}}{{message}}{{/message}}{{^message}}Sequence `{{sequenceId}}` not found. Use `replay({ action: 'list' })` to see the sequences in memory and on disk.{{/message}}
 
 ---
 
@@ -4147,18 +4147,18 @@ Evaluating inside worker target "{{target}}" failed: {{error}}
 
 ---
 
-## Annotate Messages
+## Bench Messages
 
-## ANNOTATE_TAB_FAILED
+## BENCH_TAB_FAILED
 
 **Type:** error
-**Code:** ANNOTATE_TAB_FAILED
+**Code:** BENCH_TAB_FAILED
 
 Could not open a tab for this session: {{message}}
 
 ---
 
-## ANNOTATE_STEP_SETTLED
+## BENCH_STEP_SETTLED
 
 **Type:** success
 **Summary:** Step {{verdict}} for {{connection}}
@@ -4175,7 +4175,7 @@ Recording continues - {{steps}} step(s) so far.
 
 ---
 
-## ANNOTATE_SELECTOR_REVIEW
+## BENCH_SELECTOR_REVIEW
 
 **Type:** info
 
@@ -4183,7 +4183,17 @@ Ensure this selector is serving its purpose, check with the user if that is uncl
 
 ---
 
-## ANNOTATE_NOTIFY_REVIEW
+## BENCH_PROXY_WANTED
+
+**Type:** info
+
+A browser is launched through a proxy or it is not; a running one cannot gain one. Relaunch it with `launchChrome({ reference: '{{connection}}', proxy: true })`, then `bench({ action: 'start', connectionReason: '{{connection}}', sequence: '{{sequence}}' })` so the bench comes back where they left it.
+
+Until then the ASSOCIATE view has nothing to read: without a proxy nothing records what crossed the boundary.
+
+---
+
+## BENCH_NOTIFY_REVIEW
 
 **Type:** info
 
@@ -4203,7 +4213,7 @@ The person is recording a sequence. Each action they take arrives here as a step
 
 **Type:** info
 
-Recording is held on this step while you read it. The person sees only that validation is running, so a step that reads correctly costs them nothing: approve it with `annotate({ action: 'keepStep' })` and capture continues. Where something is wrong, `annotate({ action: 'flagStep', reason: '...' })` puts your reason and a DROP/KEEP choice in front of them, and `annotate({ action: 'dropStep' })` removes it outright.
+Recording is held on this step while you read it. The person sees only that validation is running, so a step that reads correctly costs them nothing: approve it with `bench({ action: 'keepStep' })` and capture continues. Where something is wrong, `bench({ action: 'flagStep', reason: '...' })` puts your reason and a DROP/KEEP choice in front of them, and `bench({ action: 'dropStep' })` removes it outright.
 
 ---
 
@@ -4215,27 +4225,27 @@ Read the whole sequence against the page and tell the person what will not survi
 
 ---
 
-## ANNOTATE_STARTED
+## BENCH_STARTED
 
 **Type:** success
-**Summary:** Annotate mode on for {{connection}}
+**Summary:** Bench open on {{connection}}
 
-Control pane: `{{controlUrl}}` - the page runs and the picker is idle.
+Bench: `{{benchUrl}}` - the page runs and the picker is idle.
 
 **Once per session:**
 
-FREEZE in the pane stops the page's JS and its CSS animations, holding a state that only exists mid-interaction; PICKER turns the next click into a pick. They are independent: driving the app needs the picker disarmed *and* the page running, because a held page has its JS stopped and a click reaches nothing. Picking works in either state - the picker is Chrome's, not the page's. While held, other devharness tools report the page as blocked at a breakpoint; `annotate({ action: 'unfreeze' })` or `stop` clears that, not `execution({ action: 'resume' })`, which would leave annotate mode thinking it still holds the page.
+FREEZE in the bench stops the page's JS and its CSS animations, holding a state that only exists mid-interaction; PICKER turns the next click into a pick. They are independent: driving the app needs the picker disarmed *and* the page running, because a held page has its JS stopped and a click reaches nothing. Picking works in either state - the picker is Chrome's, not the page's. While held, other devharness tools report the page as blocked at a breakpoint; `bench({ action: 'unfreeze' })` or `stop` clears that, not `execution({ action: 'resume' })`, which leaves the bench holding a page it no longer has.
 
-Nothing is injected into the page. The pane is served from `127.0.0.1` while apps sit on `localhost` - a different site, so Chrome gives it its own renderer process. Drag it into Chrome's split view to work side by side.
+Nothing is injected into the page. The bench is served from `127.0.0.1` while apps sit on `localhost` - a different site, so Chrome gives it its own renderer process. Drag it into Chrome's split view to work side by side.
 
-The person picks a step in the pane's sequence card, clicks the element in the app tab, types a comment, saves. The note is stored in that step of the sequence file, so it travels with the sequence rather than living beside it, and hovering the note swaps its text for the selector while outlining the element on the page. Saves, sequence writes and screenshots announce themselves on this session's event stream, `{{eventStreamPath}}` - so with a Monitor armed they arrive mid-task rather than on the next tool call. Keep working while they annotate.
+The person picks a step in the bench's step list, clicks the element in the app tab, types a comment, saves. The note is stored in that step of the sequence file, so it travels with the sequence rather than living beside it, and hovering the note swaps its text for the selector while outlining the element on the page. Saves, sequence writes and screenshots announce themselves on this session's event stream, `{{eventStreamPath}}` - so with a Monitor armed they arrive mid-task rather than on the next tool call. Keep working while they write.
 
 **Suggestions:**
-- To read what they recorded: `annotate({ action: 'list', connectionReason: '{{connection}}' })`
+- To read what they recorded: `bench({ action: 'list', connectionReason: '{{connection}}' })`
 
 ---
 
-## ANNOTATE_TICKED
+## BENCH_TICKED
 
 **Type:** success
 **Summary:** Ran {{steps}} callback(s), {{actualMs}}ms
@@ -4250,16 +4260,16 @@ The callback is the unit - one is one thing the page does, and the only amount a
 
 ---
 
-## ANNOTATE_STOPPED
+## BENCH_STOPPED
 
 **Type:** success
-**Summary:** Annotate mode off for {{connection}}
+**Summary:** Bench closed on {{connection}}
 
 Both clocks resumed and the page is back on real time. {{picks}} element(s) picked, {{annotations}} annotation(s) saved, {{tickMs}}ms of page time stepped through.
 
 ---
 
-## ANNOTATE_LIST
+## BENCH_LIST
 
 **Type:** success
 **Summary:** {{count}} of {{total}} annotation(s)
@@ -4270,7 +4280,18 @@ Stored in the sequences under `{{path}}`:
 
 ---
 
-## ANNOTATE_HOLD
+## BENCH_SWEPT
+
+**Type:** success
+**Summary:** {{orphans}} capture(s) no note refers to, {{kB}} kB — {{removed}} deleted
+
+Read {{sequencesRead}} sequence file(s); {{stillCited}} capture(s) are still cited, {{heldByOpenDrafts}} held by a draft not yet saved.
+
+{{list}}
+
+---
+
+## BENCH_HOLD
 
 **Type:** success
 **Summary:** Page {{held}} for {{connection}}
@@ -4279,7 +4300,7 @@ Stored in the sequences under `{{path}}`:
 
 ---
 
-## ANNOTATE_PICKER
+## BENCH_PICKER
 
 **Type:** success
 **Summary:** Picker {{pickerState}} for {{connection}}
@@ -4288,20 +4309,20 @@ Stored in the sequences under `{{path}}`:
 
 ---
 
-## ANNOTATE_STATUS
+## BENCH_STATUS
 
 **Type:** success
-**Summary:** Annotate mode {{active}} for {{connection}}
+**Summary:** Bench {{active}} on {{connection}}
 
 {{detail}}
 
 ---
 
-## ANNOTATE_NOT_ACTIVE
+## BENCH_NOT_ACTIVE
 
 **Type:** error
-**Code:** ANNOTATE_NOT_ACTIVE
+**Code:** BENCH_NOT_ACTIVE
 
-`{{action}}` needs annotate mode running on "{{connection}}". Start it with `annotate({ action: 'start', connectionReason: '{{connection}}' })`.
+`{{action}}` needs the bench open on "{{connection}}". Open it with `bench({ action: 'start', connectionReason: '{{connection}}' })`.
 
 ---

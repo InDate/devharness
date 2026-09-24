@@ -69,7 +69,7 @@ slash command. They are here, once, rather than restated by each of those.
   records nothing about which browser it ran in, so on replay it lands wherever
   the run-level connection points - silently, and the run still passes. This is
   the most common way to produce a sequence that tests nothing.
-- **Check `listSaved` first.** Auth and setup flows often already exist; a
+- **Check `list` first.** Auth and setup flows often already exist; a
   `conditional` step can reuse one instead of re-recording it.
 - **Keep the path minimal.** Skip exploratory calls (source searches, unrelated
   navigation); include only what is needed to reproduce.
@@ -132,12 +132,14 @@ indices to `create`.
 
 ## Managing them
 
-- `list` / `get` / `delete` - sequences in memory. `get` takes
+- `list` - every sequence: the ones in memory, then the ones on disk. A fresh
+  session holds none in memory, so this is what shows an existing suite.
+- `get` / `delete` - sequences in memory. `get` takes
   `outputFormat: 'commands' | 'playwright' | 'puppeteer'` to return the raw
   command JSON or generated test code instead of the detail view (`'events'`
   and `'review'` are recordInteraction-only - a stored sequence has no raw
   events, and `get` says so rather than ignoring them)
-- `load` / `listSaved` / `deleteSaved` - sequences on disk
+- `load` / `listSaved` / `deleteSaved` - sequences on disk alone
 - `export` - write to a file as `sequence`, `playwright`, or `puppeteer`
 - `global: true` on `export` saves to `~/.cdp-tools/sequences/` instead of the
   working directory
@@ -442,6 +444,14 @@ Any step naming a connection other than the run's is checked against the live
 session first, so a missing browser fails as *"step 3 needs connection
 duo-member-two, which does not exist in this session"* rather than as a generic
 "not connected to browser" from somewhere inside the tool.
+
+**A run-level `connectionReason` does not reach a step that names its own
+connection.** Such a step resolves through `connections` alone. A sequence
+whose steps all name one reference (a hand-built one, or one never hoisted by
+`create`) run with a different `connectionReason` would drive the recorded
+reference, and a stale window under that name in this session turns every step
+into "element not found". The run is refused before step 1 with the mapping
+that retargets it: `connections: { "<recorded>": "<connectionReason>" }`.
 
 **repeat / runFromLog.** Each command replays against the connection it was
 recorded with. An explicit `connectionReason` retargets a single-connection

@@ -12,3 +12,6 @@ dev-notes/*
 
 # Coverage reports (vitest --coverage)
 coverage/
+
+# Working notes on the shape of a problem, kept beside the code but not shipped.
+docs/landscapes/

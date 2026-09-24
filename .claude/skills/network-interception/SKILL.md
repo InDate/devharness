@@ -1,98 +1,107 @@
 ---
 name: network-interception
-description: What building request interception and test doubles into devharness requires - which CDP seam reaches which traffic, what prior art (MSW, Polly.JS) already settled, and the measured limits that bound the design. Use when adding or designing anything that pauses, stubs, records or replays network traffic, when deciding between a CDP Fetch seam and a proxy, or when a sequence needs to drive part of a system without making real changes.
+description: What devharness holds for intercepting traffic - the proxy a browser is launched through, the pins that answer a request or a socket frame, the rules a sequence carries, the step binding, the field predicate and the refuse mode - where each lives, what bounds it, and what prior art (MSW, Polly.JS) settled. Use when changing anything that pauses, stubs, records or replays network traffic, when a sequence has to drive part of a system without writing to it, or before proposing a seam that already exists.
 ---
 
 # Network interception in devharness
 
-The goal a request for this keeps arriving as: drive part of an app without
-the writes reaching the real system, and have the decision survive into a
-replayable sequence.
+The request this keeps arriving as: drive part of an app without the writes
+reaching the real system, with the decision on a replayable sequence.
 
-Nothing here is built. `network` observes: `list`, `get`, `search`, `sockets`.
-`grep -rn "Fetch\.\|setRequestInterception" src/` returns nothing.
+The seam is an intercepting proxy between the browser and the server
+(`src/proxy/intercept-proxy.ts`), started per browser by
+`launchChrome({ proxy: true })` and scoped to the app's host at launch
+(`src/proxy/registry.ts:28`). It carries HTTP and socket frames through one
+place. CDP `Fetch` is not used anywhere in `src/` (`grep -rn 'Fetch\.' src`
+returns nothing), and the observing tools (`network`) stay on CDP, which sees
+cache hits and service-worker replies the proxy never does. The design
+record for the identity function is `docs/landscapes/match-identity.md`.
 
-## Seams, and what each one reaches
+## What exists, and where
 
-| Seam | Reaches | Costs |
+| Thing | Where | What it computes |
 |---|---|---|
-| CDP `Fetch` domain | HTTP, both stages, any origin, no page change | never WebSocket frames; per target |
-| Breakpoints (`src/tools/breakpoint-tools.ts`) | anything in JS, including socket handlers | bound to source positions; breaks on redeploy |
-| `baseUrl` (`rebaseSequence`, `src/tools/replay-executor.ts:1191`) | whole run onto another origin | rewrites `^https?://` only, so `ws://` keeps its recorded origin |
-| `storage` tool | client state that never crosses the wire | no effect on outbound calls |
-| Proxy between browser and server | HTTP **and** frames, one place, survives redeploy | TLS handling, real infrastructure |
+| Request pin | `Pin`, `intercept-proxy.ts:22` | `urlIncludes` substring, optional `method` and `step`; answers with status, headers, body; counts `hits` (`:42`) |
+| Frame pin | `FramePin`, `:750` | `textIncludes` read as one `"key":value` field or as characters (`fieldOf`, `:249`); optional socket url, direction, `step`; `replaceWith` or drop |
+| Request match | `matchPin`, `:1417` | narrowest accepted pin: constraints (method, step) first, then substring length |
+| Frame match | `matchFramePin`, `:1362` | narrowest accepted pin: constraints (url, direction, step, field-on-a-parsed-frame) first, then text length; parses the frame once (`objectOf`, `:266`; `carries`, `:278`) |
+| Step binding | `underStep`, `:1403` | a pin with `step` answers only while that replay step is the cursor (`src/tools/replay-executor.ts:2359`) |
+| Refuse mode | `refuseUnmatchedWrites`, `:880`; branch at `:1474` | an unmatched request outside `GET`/`HEAD`/`OPTIONS` (`SAFE_METHODS`, `:46`) is answered 403, recorded `heldAs: 'refused'`, counted |
+| Host scope | `allowOnly`, `:858`; `BROWSER_SERVICE_HOSTS`, `:532` | hosts outside the list are destroyed and counted; the app's host is on the list by construction (`src/tools/bench-tools.ts:423`) |
+| Tool surface | `src/tools/proxy-tools.ts:41` | `hold`, `holdFrame` (with `step`, `:50`), `release`, `holds`, `refuse` (`unmatchedWrites`, `:51`), `status`, `events`, `sockets`, `body` |
+| Bench rules | `setBoundaryRule`, `src/bench-mode.ts:1079` | a row's `answer` / `block` / `hide` becomes a pin; `block` is a 204 pin or a dropped frame; `hide` arms nothing |
+| Rules on the file | `boundaryRules`, `src/command-recorder.ts:73`; `boundaryRefuse`, `:96` | key, verb, method, step, url, direction, body, status; the refuse setting |
+| Arming from the file | `armSavedRules`, `src/bench-mode.ts:1322` | opening a sequence in the bench arms its rules and its refuse setting; closing clears them |
+| Key derivation | `keyOf`, `src/bench/frontend/crossing.tsx:57`; `frameMatch`, `:93` | pathname for a request; for a frame, a naming key (`:72`) holding a value that does not move (`:79`), then the first such value, then the first non-digit string, then the first key |
 
-`teardown` (`src/command-recorder.ts:46-57`), persistent profiles and nested
-setup sequences are already built and solve neighbouring problems: permit the
-write and reverse it, bound it by identity, or reach a state without driving to
-it. Check whether one of those already covers the case before building a seam.
+## Identity, and its bounds
 
-## Two stages, and only one of them guarantees anything
+A rule finds a later crossing by the predicate its pin computes. What the
+predicate reads and what it leaves out is the whole of what a rule can and
+cannot do.
 
-`Fetch.enable` takes `patterns` with `requestStage`. Both stages can be armed
-for one URL.
+- A request is matched on a URL substring and, from the bench, its method.
+  Query and origin are outside the key (`keyOf` takes the pathname, `:60`),
+  so a key rebases for free under `baseUrl` and a path carrying an id
+  (`/draft/42`) keys the rule to one run.
+- A frame is matched on one top-level JSON field by value where the frame
+  parses, and on characters where it does not. The field is chosen once, at
+  staging, by `frameMatch`; the pin has no part in choosing it. A rule keyed
+  on a moving value reads `never fired` on the row (`crossing.tsx`, the
+  `hits` span), which is the reading that exposes the choice.
+- A step-bound pin answers only under a replay cursor. During a live drive
+  the cursor is a command index, so the pin answers nothing; a request that
+  starts after its step released carries the next step or none.
+- The bench holds one rule per key (`boundaryRules` is a `Map` keyed by
+  `key`), so two bodies at two positions of one path is expressible from the
+  `proxy` tool (two holds with two steps) and not from the bench.
+- The refuse mode bounds the browser's HTTP. A `request` step with
+  `destination: "node"` runs `fetch` from the server process
+  (`src/tools/request-tools.ts:79`, `:114`) and passes through no proxy; a
+  sent socket frame carries no method and is outside the mode.
+- A tool-side `replay run` arms nothing from the file: rules and the refuse
+  setting reach the proxy through the bench opening the sequence, or through
+  the `proxy` tool directly.
 
-- **Request stage** — nothing has left. `continueRequest`, `fulfillRequest`,
-  `failRequest`. This is the only stage where "no real change" holds.
-- **Response stage** — the call went, the server acted. `Fetch.getResponseBody`
-  reads what arrived, `continueResponse` passes it on. Use it to drive the UI
-  through answers a server will not produce on demand. It cannot undo a write.
+## Prior art, and what devharness does differently
 
-`Fetch.authRequired` / `continueWithAuth` is a third pause. Arming `Fetch`
-against a site with basic auth and ignoring it hangs every challenged request.
+Read off MSW and Polly.JS; the per-row comparison is in
+`references/capabilities.md`.
 
-Requests are concurrent; a gate holding one at a time stalls the rest. Steps
-are serial (`gateNewStep`, `src/annotate-mode.ts:1220`) and that gate's shape
-does not carry over unchanged.
-
-## Capability checklist
-
-Read off MSW and Polly.JS, which already settled this. Detail and the
-devharness gap per row: `references/capabilities.md`.
-
-- **Matching** — method and URL predicate with params and wildcards; regex; a
-  predicate function; independent match on method, headers, body and **order**;
-  URL split per component; a normaliser function per component.
-- **Responding** — return or throw a response; any status and header; body in
-  several types; request, params and cookies available; replay timing.
-- **Lifecycle** — record / replay / passthrough; record-if-missing; expiry with
-  warn / error / re-record; prune unused; diff-stable ordering on disk.
-
-Three things to carry from it:
-
-- **The identity function is the problem.** Polly's `matchRequestsBy` is
-  configurable per URL component *and* accepts a normaliser, because real
-  traffic carries tokens, emails and timestamps that differ every run.
-  `{{env:NAME}}` and `baseUrl` are point fixes for two of those components.
-- **`order` matters and is on by default.** GET, POST, GET of one URL returns
-  different bodies; ordinal matching is how that replays.
-- **Nobody has "refuse".** Polly's third mode is passthrough, MSW's is
-  do-nothing. Neither runs against a system it cannot afford to write to, so
-  default-deny on unmatched non-idempotent methods has no prior art to copy and
-  is the thing that makes the guarantee real rather than intended.
+- **Polly's `matchRequestsBy`** is `Boolean | Function` per component -
+  method, headers, body, and each of protocol, username, password,
+  hostname, port, pathname, query, hash - with `order` a boolean, default
+  `true`. devharness has method, a path substring and a step in place of
+  the ordinal, and a fixed normaliser (`frameMatch`) in place of a function.
+  A function form is unavailable: the sequence file is JSON and carries no
+  code.
+- **MSW's `onUnhandledRequest`** accepts `"bypass"`, `"warn"` (default) and
+  `"error"`, and `"error"` throws and aborts the request. **Polly's**
+  `recordIfMissing: false` errors on an unrecorded request. Both refuse
+  every unmatched request or none. devharness's `refuseUnmatchedWrites`
+  refuses by method and forwards reads, so a run reaches a real read-only
+  surface while every write is answered or refused; that mode has no prior
+  art, the all-or-nothing one does. An earlier version of this skill stated
+  that neither library refuses; that was wrong.
+- **Neither has a frame pin.** A frame carries no method, URL or status; the
+  field predicate over the payload is the handle devharness gives it.
 
 ## Storage
 
-A sequence variable is already a step: `setVariable`
-(`src/tools/annotate-tools.ts:636`) writes an `inspect.evaluateExpression` with
-`saveAs`, and a whole-string `{{var:name}}` keeps the resolved value's real type
-(`src/tools/interpolation.ts:6-10`). `CommandSequence` has `teardown` and no
-setup counterpart, so anything that is not an action gets encoded as one. Two
-consequences already visible:
-
-- `setVariable` splices after the leading navigate, so nothing it defines is in
-  force for the page load — and a rule must be armed before the first request.
-- The run-level `variables` parameter is keyed by typed-text step
-  (`src/tools/replay-tools.ts:269`) and reaches no capture, so a stub payload
-  cannot be retargeted per run.
-
-A declarative block on `CommandSequence` is underneath interception, storage
-seeding and payload stubs alike.
+A sequence variable is a step: `setVariable` (`src/tools/bench-tools.ts:868`)
+writes an `inspect.evaluateExpression` with `saveAs`, and a whole-string
+`{{var:name}}` keeps the resolved value's real type
+(`src/tools/interpolation.ts:30`, `:195`). Tokens are resolved over step
+params only; a rule's key or body is armed as the raw string
+(`armSavedRules` passes `raw.body` straight through), so a token in a rule
+is served literally. `teardown` (`src/command-recorder.ts:67`) and
+persistent profiles cover the neighbouring cases: permit a write and reverse
+it, or reach a state without driving to it.
 
 ## WebSockets
 
-Frames are captured (`recordFrame`, `src/network-monitor.ts`). Intervening on
-them is a different question, and these are measured against
+Frames are captured (`recordFrame`, `src/network-monitor.ts:594`, `:606`)
+and intervened on at the proxy's frame hook. These are measured against
 `examples/socket-app`, not inferred:
 
 | Finding | How |
@@ -101,29 +110,29 @@ them is a different question, and these are measured against
 | Close frames never arrive as sent frames | a page `close()` left `1 out`, the binary frame sent before it |
 | A replaced document delivers no close event | fixed by `Page.frameNavigated`; Puppeteer's `framenavigated` also fires same-document and closed a live socket |
 | `framesDropped` counts frames | 300 sent, 200 held, 100 reported |
+| A sent frame can be replaced | a `"cmd":"push"` pin replacing `n:5` with `n:12` produced twelve pushes from `/live` |
+| A field pin and a text pin split a stream | over those twelve, `"i":1` as a field took one hit and `i":1` as text took the three it also matches (`10`, `11`, `12`) |
 
-CDP has no pause-and-modify for a frame. The two routes are a shim over the
-page's `WebSocket` constructor, which contradicts annotate mode's no-injection
-principle (`src/annotate-mode.ts:93-98`), or a proxy. A frame carries no method,
-URL or status, so a rule for one is a content predicate over app-specific
-payloads with per-run correlation ids — there is no generic mechanism to offer.
+Freeze does not compose with a socket. A held HTTP request leaves the far
+side idle; a held socket is live, app-level heartbeats stop with the page's
+JS, and the server hangs up. Read the app's real heartbeat interval before
+designing any pause around a socket. The bench's no-injection principle
+(`src/bench-mode.ts:93`) rules out a shim over the page's `WebSocket`
+constructor, which is why the frame hook lives in the proxy.
 
-Freeze does not compose with a socket. A held HTTP request leaves the far side
-idle; a held socket is live, app-level heartbeats stop with the page's JS, and
-the server hangs up. Read the app's real heartbeat interval before designing any
-pause around a socket.
+## Before changing this
 
-## Before building
+The cheapest thing that changes a plan, in order:
 
-The cheapest thing that changes the plan, in order:
-
-1. List the flows that cannot be driven today, and for each, whether a real
-   response exists to replay. Where one does, record-and-serve covers it and no
-   gate is needed.
-2. Spike `Fetch.requestPaused` with `freeze` (`src/annotate-mode.ts:691`, the two clocks at `:81-83`):
-   pause, freeze, wait past the caller's own timeout, fulfil, unfreeze, confirm
-   the page consumes it. Whether those compose is unverified and load-bearing.
-3. Read one target app's traffic. Sockets carrying the writes makes `Fetch` a
-   local maximum and the proxy the seam.
+1. Read `docs/landscapes/match-identity.md`. The designs not taken are
+   surveyed there with what holds each up; a proposal that matches one of
+   them starts from its bounds.
+2. Drive `examples/socket-app` through a proxied browser. `POST /session`
+   then `POST /draft` is the ordinal case (`/draft` answers 401 without a
+   session); `/live` is the frame case. Build first, drive second: a rebuild
+   discards the proxy registry and every event in it (`CLAUDE.md`).
+3. Read one target app's traffic before adding a matcher. Whether its
+   payloads name themselves by a field `frameMatch` reads, and whether its
+   writes go over HTTP or a socket, settles which bound above is met first.
 
 Scope: sites the user owns or is authorised to test.

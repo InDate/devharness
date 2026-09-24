@@ -9,6 +9,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The bench: a pane beside the app being driven.** It serves a page per
+  session carrying the steps of a sequence, what crossed the boundary under
+  each, the rules that answer a later run, and the notes and captures taken
+  against a step. One floating bar holds everything acting on the session
+  rather than on a tab - the sequence open, the run's position and controls,
+  the picker, the capture, the proxy and the freeze - so no screen carries a
+  second copy of a control and no two copies can disagree. The `bench` tool
+  opens and drives it; `bench({ action: 'sweep' })` reports the captures no
+  sequence refers to any more, and `sweep` with `remove: true` deletes them,
+  reading every sequence store so a capture another sequence cites is never
+  taken.
+
+- **Pausing a run stops it on the step it reached and holds the page there.**
+  The step in flight is cut short by its own abort signal rather than left to
+  run out its settle against a page about to be frozen, so the state on screen
+  is the one at the moment of the press. Carrying on resumes from that step:
+  the step-through session stays open at the last step that completed, and the
+  steps before it are not taken again. Only that one step repeats, because an
+  input whose settle was cut may or may not have reached the page and
+  re-running it is the only certain answer.
+
+- **`devharness bench [sequence] [url]`**, opening the pane against the
+  session the shell belongs to and launching a browser when none is bound. A
+  bare word is read as a sequence name and an `http(s)` word as the page to
+  start on, in either order.
+
+- **The proxy records which side caused each crossing** - the step that drove
+  it, the initiator behind it, the socket it rode - so a reading of the
+  boundary separates what the app did on its own from what a step made it do.
+  The allow list bounds which hosts the browser may reach, and a sequence
+  carries what its boundary decided, so a later run is scoped and answered as
+  the first one was.
+
+### Changed
+
+- **Annotate mode is now the bench** (`annotate-mode`, `annotate-control` and
+  `annotate-tools` become `bench-mode`, `bench-control` and `bench-tools`, and
+  the `annotate` tool becomes `bench`). The feature is the pane, not the act
+  of annotating. No released version carried the annotate tool, so nothing
+  published breaks; a configuration still naming `annotate` under `enabled` or
+  `disabled` is ignored rather than failing, and the `bench` tool is
+  discovered regardless.
+
+### Fixed
+
+- **Refusing unmatched writes no longer locks the bench out of its own
+  controls.** The pane is served through the same proxy the app runs through,
+  so turning the setting on refused the request that would turn it off, and
+  the only way back was a call made from outside the browser. The bench's own
+  origin is now exempt.
+
+- **A step stopped part-way no longer runs the sequence's declared teardown.**
+  An aborted step is recorded as a failure, and the run treated that as the
+  end, tearing down in the middle of a session somebody had stopped to look
+  at. It now counts as a pause.
+
+- **A delay cut short names the step it interrupted** rather than the one
+  after it, and an abort landing on the last step in range still produces a
+  marker instead of none.
+
 - **`envFile` on `run`/`runAll`: a KEY=value file supplying that run's
   `{{env:NAME}}` tokens.** A relative path resolves against the project
   directory (the one holding `.devharness`); absolute is used as-is. The

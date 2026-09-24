@@ -36,6 +36,14 @@ export interface RecordedCommand {
   annotations?: Annotation[];
   /** What crossed the boundary while this step ran, when it was recorded. */
   traffic?: StepTraffic;
+  /**
+   * The history index this step was built from.
+   *
+   * Proxy events are stamped with the command in flight, so this is what joins
+   * a recorded step to what crossed under it. Absent on a sequence built any
+   * other way than from history.
+   */
+  recordedAt?: number;
 }
 
 export interface CommandSequence {
@@ -57,6 +65,35 @@ export interface CommandSequence {
    * outcome never changes the run's verdict.
    */
   teardown?: RecordedCommand[];
+  /**
+   * What this sequence does to the traffic it meets, arrived at by running it
+   * and deciding row by row. Only the decisions are stored: the events they
+   * were made against belong to the pass that carried them.
+   */
+  boundaryRules?: Array<{
+    key: string;
+    verb: 'answer' | 'block' | 'hide';
+    frame?: boolean;
+    method?: string;
+    step?: number;
+    url?: string;
+    direction?: 'out' | 'in';
+    body?: string;
+    status?: string;
+    recorded?: string;
+    label?: string;
+  }>;
+  /** Steps that hold open until a number of things have crossed under them. */
+  boundaryWaits?: Array<{ step: number; count: number }>;
+  /**
+   * What an unmatched write meets on this sequence's proxy.
+   *
+   * `writes` answers every POST, PUT, PATCH or DELETE no rule covers with 403,
+   * so the run reaches the server with reads and with the rules' answers and
+   * nothing else. Absent forwards them, as a sequence recorded before this
+   * field did.
+   */
+  boundaryRefuse?: 'writes';
   createdAt: number;
   /**
    * The connection every step was recorded against, when `create` hoisted a
@@ -68,6 +105,30 @@ export interface CommandSequence {
    * ones that never shared a single connection.
    */
   recordedConnection?: string;
+  /**
+   * The recording ran through an intercepting proxy.
+   *
+   * A replay that auto-launches its own browser launches it without one, so
+   * nothing it drives reaches the proxy and none of its traffic is captured -
+   * leaving no boundary evidence to set beside the recording's.
+   */
+  recordedThroughProxy?: boolean;
+  /**
+   * What a person ruled about each payload shape while recording.
+   *
+   * A verdict outranks any reading of the wire, and it is stored with the
+   * sequence so a replay weighs the same shapes the same way the recording
+   * did. `unknown` is kept rather than dropped: a shape nobody could place is
+   * evidence about the app.
+   */
+  shapeRules?: Record<string, 'step' | 'send' | 'background' | 'unknown'>;
+  /**
+   * Steps whose boundary evidence was already gone when this was created.
+   *
+   * Recorded so a comparison leaves them out rather than reading an absent
+   * set as "nothing crossed", which would report drift on every replay.
+   */
+  shapesUnmeasured?: number[];
   /**
    * Browsers this sequence needs before it can run, beyond the run's own
    * connection. A multi-browser sequence names its connections on the steps,
@@ -151,6 +212,14 @@ interface HistoryCommand extends RecordedCommand {
    * matching literal can be rewritten to `{{var:...}}` instead of copied.
    */
   result?: any;
+  /**
+   * When this command's boundary was released, for a command that marked one.
+   *
+   * `timestamp` to here is the span the command owns at the boundary. Without
+   * it the span runs to the next command's timestamp, which on the last
+   * recorded command is the whole of the pause before `create` reads it.
+   */
+  releasedAt?: number;
 }
 
 // Active sequence state for step-through debugging
@@ -493,6 +562,16 @@ export class CommandRecorder {
   }
 
   /**
+   * Record when this command's boundary was released. Runs after the release
+   * resolves, which is after the handler returned, so a command that is still
+   * settling carries none until it finishes.
+   */
+  attachRelease(index: number, at: number): void {
+    const cmd = this.history.find(c => c.index === index);
+    if (cmd) cmd.releasedAt = at;
+  }
+
+  /**
    * Build RecordedCommand[] from history indices, in order, substituting any
    * step's literal value that matches an EARLIER included step's `saveAs`
    * capture with a `{{var:name.path}}` reference - the templatization a
@@ -515,6 +594,7 @@ export class CommandRecorder {
         params: substituteCapturedValues(paramsClone, captures),
         ...(cmd.delay !== undefined && { delay: cmd.delay }),
         ...(cmd.comment && { comment: cmd.comment }),
+        recordedAt: idx,
       });
 
       if (cmd.params.saveAs && cmd.result !== undefined) {
@@ -914,8 +994,8 @@ export class CommandRecorder {
   /**
    * List saved sequences on disk from a specific directory
    */
-  private async listSequencesFromDir(dir: string, location: 'working-dir' | 'global' | 'issues'): Promise<Array<{ filename: string; name: string; id: string; commandCount: number; description?: string; expectedOutcome?: string; startUrl?: string; location: string; fullPath: string }>> {
-    const sequences: Array<{ filename: string; name: string; id: string; commandCount: number; description?: string; expectedOutcome?: string; startUrl?: string; location: string; fullPath: string }> = [];
+  private async listSequencesFromDir(dir: string, location: 'working-dir' | 'global' | 'issues'): Promise<Array<{ filename: string; name: string; id: string; commandCount: number; noteCount: number; description?: string; expectedOutcome?: string; startUrl?: string; location: string; fullPath: string }>> {
+    const sequences: Array<{ filename: string; name: string; id: string; commandCount: number; noteCount: number; description?: string; expectedOutcome?: string; startUrl?: string; location: string; fullPath: string }> = [];
 
     try {
       // Read directory - if it doesn't exist, return empty list (no side effects)
@@ -940,6 +1020,11 @@ export class CommandRecorder {
             name: sequence.name,
             id: sequence.id,
             commandCount: sequence.commands?.length || 0,
+            // Counted here because the file is already parsed: a listing that
+            // says how much has been written against a sequence is what makes
+            // one worth opening.
+            noteCount: (sequence.commands ?? []).reduce(
+              (total, command) => total + ((command as any).annotations?.length ?? 0), 0),
             location,
             fullPath: filepath,
             ...(sequence.description && { description: sequence.description }),
@@ -960,7 +1045,7 @@ export class CommandRecorder {
   /**
    * List saved sequences on disk (checks both working directory and global)
    */
-  async listSavedSequencesOnDisk(): Promise<Array<{ filename: string; name: string; id: string; commandCount: number; description?: string; expectedOutcome?: string; startUrl?: string; location: string; fullPath: string }>> {
+  async listSavedSequencesOnDisk(): Promise<Array<{ filename: string; name: string; id: string; commandCount: number; noteCount: number; description?: string; expectedOutcome?: string; startUrl?: string; location: string; fullPath: string }>> {
     const workingDir = this.getSequencesDir(false);
     const globalDir = this.getSequencesDir(true);
 

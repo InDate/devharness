@@ -1,5 +1,5 @@
 /**
- * Tests for annotate mode.
+ * Tests for the bench.
  *
  * The properties worth pinning: both clocks stop (a freeze that leaves CSS
  * animations running does not hold the state someone is trying to click), the
@@ -17,22 +17,22 @@ import { initializePaths, setWorkingDirOverride } from './helpers/paths.js';
 import { getEventStreamPath } from './session-events.js';
 import {
   setFrozen,
-  startAnnotateMode,
-  stopAnnotateMode,
-  tickAnnotateMode,
+  startBench,
+  stopBench,
+  tickBench,
   saveAnnotation,
   discardPick,
   setPicker,
   getPendingPick,
-  getAnnotateSession,
-  isAnnotating,
+  getBenchSession,
+  isBenchOpen,
   noteAtStep,
   removeAnnotation,
   notifyAnnotation,
-  captureAnnotateScreenshot,
-  saveAnnotateScreenshot,
+  captureBenchScreenshot,
+  saveBenchScreenshot,
   highlightAnnotation,
-  forgetAnnotateSession,
+  forgetBenchSession,
   verifySourceLine,
   getSequenceState,
   selectSequence,
@@ -42,8 +42,10 @@ import {
   setSequenceBaseUrl,
   playSequence,
   cancelSequence,
+  recordSequence,
+  commentSequenceStep,
   type SequenceDriver,
-} from './annotate-mode.js';
+} from './bench-mode.js';
 
 const SESSION = 'aaaaaaaa';
 const CONNECTION = 'app';
@@ -204,14 +206,24 @@ function noteSequences() {
     { label: 'input.click #save' },
   ];
   let open = true;
-  return {
+  const api: any = {
     steps,
+    /** Where the run has reached. `steps.length` is a run that has finished. */
+    at: 1,
+    hosts: () => [],
+    saveBoundaryRules: async () => undefined,
+    openBoundaryRules: () => ({ rules: [], waits: [], refuseWrites: false }),
+    listCatalogue: async () => [],
+    describe: async () => undefined,
+    commentStep: async () => undefined,
+    addConditional: async () => undefined,
     listNames: async () => ['orders'],
-    active: () => (open ? { name: 'orders', currentStep: 1, total: steps.length, steps, variables: [] } : null),
+    active: () => (open ? { name: 'orders', currentStep: api.at, total: steps.length, steps, variables: [] } : null),
     start: async () => { open = true; return undefined; },
     step: async () => undefined,
     goto: async () => undefined,
     finish: async () => undefined,
+    halt: async () => {},
     cancel: async () => { open = false; },
     remove: async () => undefined,
     attachAnnotation: async (step: number, annotation: any) => {
@@ -229,6 +241,7 @@ function noteSequences() {
       }
       return 'that note is not in the open sequence';
     },
+    moveAnnotation: async () => undefined,
     detachAnnotation: async (id: string) => {
       let found = false;
       for (const command of steps) {
@@ -248,6 +261,7 @@ function noteSequences() {
     setBaseUrl: () => {},
     baseUrl: () => undefined,
   };
+  return api;
 }
 
 /** Every note the fake sequence is holding, step order then save order. */
@@ -257,10 +271,10 @@ function notesIn(sequences: ReturnType<typeof noteSequences>) {
 
 let noteDriver: ReturnType<typeof noteSequences>;
 
-/** The session exactly as startAnnotateMode leaves it. */
+/** The session exactly as startBench leaves it. */
 async function startBare(client: any) {
   noteDriver = noteSequences();
-  return startAnnotateMode({
+  return startBench({
     page: createFakePage(client), connection: CONNECTION, sessionName: SESSION, sequences: noteDriver as any,
   });
 }
@@ -283,7 +297,7 @@ let previousDir: string | undefined;
 
 beforeEach(() => {
   previousDir = process.env.DEVHARNESS_DIR;
-  dir = mkdtempSync(join(tmpdir(), 'devharness-annotate-'));
+  dir = mkdtempSync(join(tmpdir(), 'devharness-bench-'));
   process.env.DEVHARNESS_DIR = dir;
   initializePaths();
   // Annotations are project-scoped; the env var only moves the global dir.
@@ -291,14 +305,14 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  forgetAnnotateSession(CONNECTION);
+  forgetBenchSession(CONNECTION);
   if (previousDir === undefined) delete process.env.DEVHARNESS_DIR;
   else process.env.DEVHARNESS_DIR = previousDir;
   initializePaths();
   rmSync(dir, { recursive: true, force: true });
 });
 
-describe('startAnnotateMode', () => {
+describe('startBench', () => {
   it('stops both clocks - the page\'s JS and the compositor - when held', async () => {
     const client = createFakeClient();
     await start(client);
@@ -318,7 +332,7 @@ describe('startAnnotateMode', () => {
   it('never turns on virtual time, which cannot be turned off again', async () => {
     const client = createFakeClient();
     await start(client);
-    await tickAnnotateMode(CONNECTION, { budgetMs: 100 });
+    await tickBench(CONNECTION, { budgetMs: 100 });
 
     expect(client.calls('Emulation.setVirtualTimePolicy')).toHaveLength(0);
   });
@@ -345,22 +359,22 @@ describe('startAnnotateMode', () => {
     expect(client.calls('Runtime.addBinding')).toHaveLength(0);
   });
 
-  it('serves a control pane and reports where it is', async () => {
+  it('serves the bench and reports where it is', async () => {
     const client = createFakeClient();
     const state = await start(client);
 
-    expect(state.controlUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/[a-f0-9]{32}\/$/);
+    expect(state.benchUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/[a-f0-9]{32}\/$/);
   });
 
-  it('opens the control tab when one can be opened', async () => {
+  it('opens the bench tab when one can be opened', async () => {
     const client = createFakeClient();
     const opened: string[] = [];
 
-    await startAnnotateMode({
+    await startBench({
       page: createFakePage(client),
       connection: CONNECTION,
       sessionName: SESSION,
-      openControlTab: async (url: string) => { opened.push(url); return undefined; },
+      openBench: async (url: string) => { opened.push(url); return undefined; },
     });
 
     expect(opened).toHaveLength(1);
@@ -379,7 +393,7 @@ describe('startAnnotateMode', () => {
 });
 
 describe('picking an element', () => {
-  it('holds the pick for the control pane rather than blocking on it', async () => {
+  it('holds the pick for the bench rather than blocking on it', async () => {
     const client = createFakeClient();
     await start(client);
 
@@ -397,7 +411,7 @@ describe('picking an element', () => {
 
     await pick(client);
 
-    expect(getAnnotateSession(CONNECTION)).toMatchObject({ picks: 1, pickerArmed: false });
+    expect(getBenchSession(CONNECTION)).toMatchObject({ picks: 1, pickerArmed: false });
   });
 
   it('saves what the element is, not a description of it', async () => {
@@ -444,7 +458,7 @@ describe('picking an element', () => {
     const client = createFakeClient();
     client.stepMs = 100;
     await start(client);
-    await tickAnnotateMode(CONNECTION, { budgetMs: 300 });
+    await tickBench(CONNECTION, { budgetMs: 300 });
     await pick(client);
 
     await saveAnnotation(CONNECTION, 'gone by now');
@@ -459,7 +473,7 @@ describe('picking an element', () => {
 
     await saveAnnotation(CONNECTION, 'one');
 
-    expect(getAnnotateSession(CONNECTION)).toMatchObject({ picks: 1, annotations: 1, pickerArmed: true });
+    expect(getBenchSession(CONNECTION)).toMatchObject({ picks: 1, annotations: 1, pickerArmed: true });
     expect(getPendingPick(CONNECTION)).toBeNull();
   });
 
@@ -473,7 +487,7 @@ describe('picking an element', () => {
     expect(notesIn(noteDriver)).toHaveLength(0);
     expect(readEvents()).toHaveLength(0);
     expect(getPendingPick(CONNECTION)).toBeNull();
-    expect(getAnnotateSession(CONNECTION)).toMatchObject({ pickerArmed: true });
+    expect(getBenchSession(CONNECTION)).toMatchObject({ pickerArmed: true });
   });
 
   it('files the note against the step the + named, not the one the run is on', async () => {
@@ -507,7 +521,7 @@ describe('picking an element', () => {
 
   it('holds the pick when no sequence is open, so selecting one saves it', async () => {
     const client = createFakeClient();
-    await startAnnotateMode({ page: createFakePage(client), connection: CONNECTION, sessionName: SESSION });
+    await startBench({ page: createFakePage(client), connection: CONNECTION, sessionName: SESSION });
     await pick(client);
 
     expect(await saveAnnotation(CONNECTION, 'nowhere to go')).toBeUndefined();
@@ -582,10 +596,10 @@ describe('picking an element', () => {
     const client = createFakeClient();
     await start(client);
     await pick(client);
-    await captureAnnotateScreenshot(CONNECTION, '#row-3 > span');
-    await saveAnnotateScreenshot(CONNECTION);
-    await captureAnnotateScreenshot(CONNECTION);
-    await saveAnnotateScreenshot(CONNECTION);
+    await captureBenchScreenshot(CONNECTION, '#row-3 > span');
+    await saveBenchScreenshot(CONNECTION);
+    await captureBenchScreenshot(CONNECTION);
+    await saveBenchScreenshot(CONNECTION);
 
     await saveAnnotation(CONNECTION, 'the pill is wrong');
 
@@ -603,8 +617,8 @@ describe('picking an element', () => {
     await saveAnnotation(CONNECTION, 'the pill is wrong');
     const [note] = notesIn(noteDriver);
 
-    await captureAnnotateScreenshot(CONNECTION, '#row-3 > span', 0, note.id);
-    await saveAnnotateScreenshot(CONNECTION);
+    await captureBenchScreenshot(CONNECTION, '#row-3 > span', 0, note.id);
+    await saveBenchScreenshot(CONNECTION);
 
     expect(notesIn(noteDriver)[0].screenshots).toHaveLength(1);
   });
@@ -616,9 +630,9 @@ describe('picking an element', () => {
     await saveAnnotation(CONNECTION, 'the pill is wrong');
     const [note] = notesIn(noteDriver);
 
-    await captureAnnotateScreenshot(CONNECTION, '#row-3 > span', 0, note.id);
-    await captureAnnotateScreenshot(CONNECTION, '#row-3 > span', 2, note.id);
-    await saveAnnotateScreenshot(CONNECTION);
+    await captureBenchScreenshot(CONNECTION, '#row-3 > span', 0, note.id);
+    await captureBenchScreenshot(CONNECTION, '#row-3 > span', 2, note.id);
+    await saveBenchScreenshot(CONNECTION);
 
     expect(notesIn(noteDriver)[0].screenshots).toHaveLength(1);
   });
@@ -637,8 +651,8 @@ describe('picking an element', () => {
     const client = createFakeClient();
     await start(client);
     await pick(client);
-    await captureAnnotateScreenshot(CONNECTION, '#row-3 > span');
-    await saveAnnotateScreenshot(CONNECTION);
+    await captureBenchScreenshot(CONNECTION, '#row-3 > span');
+    await saveBenchScreenshot(CONNECTION);
 
     await discardPick(CONNECTION);
     await pick(client);
@@ -659,25 +673,38 @@ describe('picking an element', () => {
     expect(notesIn(noteDriver)).toHaveLength(0);
   });
 
-  it('saves nothing when no pick is waiting', async () => {
+  it('saves a note about the step when nothing was picked', async () => {
+    // A note needs an element only when it is about one. "This step is flaky"
+    // points at nothing on the page, and refusing it lost the note silently.
     const client = createFakeClient();
     await start(client);
 
-    expect(await saveAnnotation(CONNECTION, 'stray')).toBeUndefined();
+    const note = await saveAnnotation(CONNECTION, 'this step is flaky');
+
+    expect(note?.comment).toBe('this step is flaky');
+    expect(note?.target).toBeUndefined();
+    expect(notesIn(noteDriver)).toHaveLength(1);
+  });
+
+  it('saves nothing when there is neither a pick nor a word', async () => {
+    const client = createFakeClient();
+    await start(client);
+
+    expect(await saveAnnotation(CONNECTION, '   ')).toBeUndefined();
     expect(notesIn(noteDriver)).toHaveLength(0);
   });
 });
 
-describe('a pause that is not annotate\'s', () => {
+describe('a pause that is not the bench\'s', () => {
   it('is left stopped rather than resumed', async () => {
     const client = createFakeClient();
     await start(client);
 
-    // Someone else's breakpoint lands - annotate never asked for it.
+    // Someone else's breakpoint lands - the bench never asked for it.
     await client.emit('Debugger.paused', { reason: 'other', callFrames: [] });
     const resumesBefore = client.calls('Debugger.resume').length;
 
-    await stopAnnotateMode(CONNECTION);
+    await stopBench(CONNECTION);
 
     // Releasing our own hold may resume once; nothing re-attaches to clear
     // theirs, because that would discard what they stopped to look at.
@@ -690,7 +717,7 @@ describe('a pause that is not annotate\'s', () => {
     await start(client);
     client.heldAfterRelease = true;   // the page stays stopped
 
-    await stopAnnotateMode(CONNECTION);
+    await stopBench(CONNECTION);
 
     expect(client.repair).toBeUndefined();
   });
@@ -703,7 +730,7 @@ describe('an idle page, where the pause is armed rather than taken', () => {
     await start(client);
 
     // Nothing is running to stop, but nothing can run either.
-    expect(getAnnotateSession(CONNECTION)).toMatchObject({ frozen: true });
+    expect(getBenchSession(CONNECTION)).toMatchObject({ frozen: true });
   });
 
   it('discards the armed pause instead of resuming something that is not paused', async () => {
@@ -718,7 +745,7 @@ describe('an idle page, where the pause is armed rather than taken', () => {
     expect(client.calls('Debugger.resume')).toHaveLength(0);
     expect(client.calls('Debugger.disable').length).toBeGreaterThan(0);
     expect(client.calls('Debugger.enable').length).toBeGreaterThan(1);
-    expect(getAnnotateSession(CONNECTION)).toMatchObject({ frozen: false });
+    expect(getBenchSession(CONNECTION)).toMatchObject({ frozen: false });
   });
 
   it('releases cleanly on stop, leaving no armed pause behind', async () => {
@@ -726,7 +753,7 @@ describe('an idle page, where the pause is armed rather than taken', () => {
     client.idle = true;
     await start(client);
 
-    await stopAnnotateMode(CONNECTION);
+    await stopBench(CONNECTION);
 
     expect(client.calls('Debugger.resume')).toHaveLength(0);
     expect(client.calls('Debugger.disable').length).toBeGreaterThan(0);
@@ -740,7 +767,7 @@ describe('an idle page, where the pause is armed rather than taken', () => {
     await start(client);
 
     // The page reaches a callback on its own and stops on the armed pause.
-    const stepping = tickAnnotateMode(CONNECTION, { steps: 1 });
+    const stepping = tickBench(CONNECTION, { steps: 1 });
     await new Promise(r => setTimeout(r, 5));
     client.clock += 30;
     await client.emit('Debugger.paused', { reason: 'EventListener', callFrames: [] });
@@ -752,13 +779,13 @@ describe('an idle page, where the pause is armed rather than taken', () => {
     // That pause is a real one, so the next step does resume - and the fake
     // answers a resume with the next pause, as Chrome would.
     client.idle = false;
-    await tickAnnotateMode(CONNECTION, { steps: 1 });
+    await tickBench(CONNECTION, { steps: 1 });
     expect(client.calls('Debugger.resume')).toHaveLength(1);
   });
 });
 
-describe('closing the control tab', () => {
-  /** A stand-in for the puppeteer Page of the control tab. */
+describe('closing the bench tab', () => {
+  /** A stand-in for the puppeteer Page of the bench tab. */
   function fakeControlTab() {
     const handlers: Array<() => void> = [];
     return {
@@ -771,43 +798,43 @@ describe('closing the control tab', () => {
   it('releases the page and ends the mode', async () => {
     const client = createFakeClient();
     const tab = fakeControlTab();
-    await startAnnotateMode({
+    await startBench({
       page: createFakePage(client), connection: CONNECTION, sessionName: SESSION,
-      openControlTab: async () => tab,
+      openBench: async () => tab,
     });
     await setFrozen(CONNECTION, true);
 
     await tab.closedByUser();
     await new Promise(r => setTimeout(r, 10));
 
-    expect(isAnnotating(CONNECTION)).toBe(false);
+    expect(isBenchOpen(CONNECTION)).toBe(false);
     expect(client.calls('Debugger.resume').length).toBeGreaterThan(0);
     expect(client.lastCall('Animation.setPlaybackRate').params).toEqual({ playbackRate: 1 });
     expect(client.calls('Debugger.disable')).toHaveLength(1);
     expect(client.detached()).toBe(true);
   });
 
-  it('stops serving the control pane', async () => {
+  it('stops serving the bench', async () => {
     const client = createFakeClient();
     const tab = fakeControlTab();
-    const { controlUrl } = await startAnnotateMode({
+    const { benchUrl } = await startBench({
       page: createFakePage(client), connection: CONNECTION, sessionName: SESSION,
-      openControlTab: async () => tab,
+      openBench: async () => tab,
     });
 
     await tab.closedByUser();
     await new Promise(r => setTimeout(r, 10));
 
-    await expect(http(controlUrl + 'state')).rejects.toThrow();
+    await expect(http(benchUrl + 'state')).rejects.toThrow();
   });
 
   it('keeps annotations already saved', async () => {
     const client = createFakeClient();
     const tab = fakeControlTab();
     const sequences = noteSequences();
-    await startAnnotateMode({
+    await startBench({
       page: createFakePage(client), connection: CONNECTION, sessionName: SESSION,
-      openControlTab: async () => tab,
+      openBench: async () => tab,
       sequences: sequences as any,
     });
     await pick(client);
@@ -824,18 +851,18 @@ describe('closing the control tab', () => {
   it('does not recurse when stop closes the tab itself', async () => {
     const client = createFakeClient();
     const tab = fakeControlTab();
-    await startAnnotateMode({
+    await startBench({
       page: createFakePage(client), connection: CONNECTION, sessionName: SESSION,
-      openControlTab: async () => tab,
+      openBench: async () => tab,
     });
 
-    await stopAnnotateMode(CONNECTION);
+    await stopBench(CONNECTION);
     await new Promise(r => setTimeout(r, 10));
 
     // The close handler fires during stop; the session is already gone by then,
     // so the page is released exactly once.
     expect(client.calls('Debugger.disable')).toHaveLength(1);
-    expect(isAnnotating(CONNECTION)).toBe(false);
+    expect(isBenchOpen(CONNECTION)).toBe(false);
   });
 });
 
@@ -849,7 +876,14 @@ describe('a step and the rest of devharness', () => {
       const steps = [{ label: 'input.click #save' }];
       let open: { name: string; currentStep: number } | null = null;
       return {
-        listNames: async () => ['one-step'],
+        hosts: () => [],
+    saveBoundaryRules: async () => undefined,
+    openBoundaryRules: () => ({ rules: [], waits: [], refuseWrites: false }),
+    listCatalogue: async () => [],
+    describe: async () => undefined,
+    commentStep: async () => undefined,
+    addConditional: async () => undefined,
+    listNames: async () => ['one-step'],
         active: () => (open ? { name: 'one-step', currentStep: open.currentStep, total: 1, steps, variables: [] } : null),
         start: async () => { open = { name: 'one-step', currentStep: 0 }; return undefined; },
         step: async () => {
@@ -860,9 +894,11 @@ describe('a step and the rest of devharness', () => {
         },
         goto: async () => undefined,
         finish: async () => undefined,
+        halt: async () => {},
         cancel: async () => { open = null; },
         remove: async () => undefined,
         attachAnnotation: async () => undefined,
+        moveAnnotation: async () => undefined,
         detachAnnotation: async () => undefined,
         attachScreenshot: async () => undefined,
         record: async () => undefined,
@@ -883,7 +919,7 @@ describe('a step and the rest of devharness', () => {
     })();
     const order: string[] = [];
 
-    await startAnnotateMode({ page: createFakePage(client), connection: CONNECTION, sessionName: SESSION, sequences });
+    await startBench({ page: createFakePage(client), connection: CONNECTION, sessionName: SESSION, sequences });
     await selectSequence(CONNECTION, 'one-step');
     await stepSequence(CONNECTION);
 
@@ -910,7 +946,14 @@ describe('stepping a sequence', () => {
     const driver: SequenceDriver & { calls: string[]; open: () => any; nextFailure?: string } = {
       calls,
       open: () => open,
-      listNames: async () => [...saved],
+      hosts: () => [],
+    saveBoundaryRules: async () => undefined,
+    openBoundaryRules: () => ({ rules: [], waits: [], refuseWrites: false }),
+    listCatalogue: async () => [],
+    describe: async () => undefined,
+    commentStep: async () => undefined,
+    addConditional: async () => undefined,
+    listNames: async () => [...saved],
       active: () => (open
         ? { name: open.name, description: 'checkout end to end', currentStep: open.currentStep, total: steps.length, steps, variables }
         : null),
@@ -933,6 +976,7 @@ describe('stepping a sequence', () => {
       issue: async () => undefined,
       setBaseUrl: (value: string) => { calls.push(`baseUrl:${value}`); base = value; },
       baseUrl: () => base || undefined,
+      halt: async () => { calls.push('halt'); },
       cancel: async () => { calls.push('cancel'); open = null; },
       attachAnnotation: async (step: number, annotation: any) => {
         calls.push(`attach:${step}`);
@@ -941,6 +985,7 @@ describe('stepping a sequence', () => {
         command.annotations = [...(command.annotations ?? []), annotation];
         return undefined;
       },
+      moveAnnotation: async () => undefined,
       detachAnnotation: async (id: string) => {
         calls.push(`detach:${id}`);
         let found = false;
@@ -962,7 +1007,7 @@ describe('stepping a sequence', () => {
   }
 
   async function startWithSequences(client: any, sequences: SequenceDriver) {
-    const state = await startAnnotateMode({
+    const state = await startBench({
       page: createFakePage(client), connection: CONNECTION, sessionName: SESSION, sequences,
     });
     await setPicker(CONNECTION, true);
@@ -1041,7 +1086,7 @@ describe('stepping a sequence', () => {
 
     // Input is discarded while V8 is stopped, so the step cannot land frozen.
     expect(client.calls('Debugger.resume').length).toBeGreaterThan(0);
-    expect(getAnnotateSession(CONNECTION)).toMatchObject({ frozen: true });
+    expect(getBenchSession(CONNECTION)).toMatchObject({ frozen: true });
     expect(sequences.calls).toContain('step');
   });
 
@@ -1065,7 +1110,7 @@ describe('stepping a sequence', () => {
 
     await stepSequence(CONNECTION);
 
-    expect(getAnnotateSession(CONNECTION)).toMatchObject({ frozen: false });
+    expect(getBenchSession(CONNECTION)).toMatchObject({ frozen: false });
   });
 
   it('advances the marked step', async () => {
@@ -1155,7 +1200,7 @@ describe('stepping a sequence', () => {
 
     expect(sequences.calls).toContain('goto:0');
     expect(state!.currentStep).toBe(1);
-    expect(getAnnotateSession(CONNECTION)).toMatchObject({ frozen: true });
+    expect(getBenchSession(CONNECTION)).toMatchObject({ frozen: true });
   });
 
   it('records which step an annotation was taken at', async () => {
@@ -1205,7 +1250,7 @@ describe('stepping a sequence', () => {
 
   it('reports no sequence state when no driver is wired in', async () => {
     const client = createFakeClient();
-    await startAnnotateMode({ page: createFakePage(client), connection: CONNECTION, sessionName: SESSION });
+    await startBench({ page: createFakePage(client), connection: CONNECTION, sessionName: SESSION });
 
     expect(await getSequenceState(CONNECTION)).toBeUndefined();
   });
@@ -1218,7 +1263,7 @@ describe('capturing the page', () => {
     const client = createFakeClient();
     await start(client);
 
-    const taken = await captureAnnotateScreenshot(CONNECTION);
+    const taken = await captureBenchScreenshot(CONNECTION);
 
     expect('shot' in taken).toBe(true);
     expect(readEvents().filter(e => e.kind === 'screenshot')).toHaveLength(0);
@@ -1227,9 +1272,9 @@ describe('capturing the page', () => {
   it('writes the accepted capture and announces where it landed', async () => {
     const client = createFakeClient();
     await start(client);
-    await captureAnnotateScreenshot(CONNECTION);
+    await captureBenchScreenshot(CONNECTION);
 
-    const saved = await saveAnnotateScreenshot(CONNECTION);
+    const saved = await saveBenchScreenshot(CONNECTION);
 
     expect('path' in saved).toBe(true);
     if (!('path' in saved)) return;
@@ -1240,9 +1285,9 @@ describe('capturing the page', () => {
   it('names the file after the element it is a picture of', async () => {
     const client = createFakeClient();
     await start(client);
-    await captureAnnotateScreenshot(CONNECTION, '.session-row:has-text("8d76da6e") .entry-count');
+    await captureBenchScreenshot(CONNECTION, '.session-row:has-text("8d76da6e") .entry-count');
 
-    const saved = await saveAnnotateScreenshot(CONNECTION);
+    const saved = await saveBenchScreenshot(CONNECTION);
 
     if (!('path' in saved)) throw new Error('expected a path');
     expect(saved.path).toContain('session-row');
@@ -1257,7 +1302,7 @@ describe('capturing the page', () => {
     const client = createFakeClient();
     await start(client);
 
-    await captureAnnotateScreenshot(CONNECTION, '#row-3 > span', 2);
+    await captureBenchScreenshot(CONNECTION, '#row-3 > span', 2);
 
     const box = client.calls('Runtime.evaluate')
       .filter((c: any) => String(c.params?.expression ?? '').includes('getBoundingClientRect')).at(-1);
@@ -1269,7 +1314,7 @@ describe('capturing the page', () => {
     const client = createFakeClient();
     await start(client);
 
-    expect(await saveAnnotateScreenshot(CONNECTION)).toMatchObject({
+    expect(await saveBenchScreenshot(CONNECTION)).toMatchObject({
       failure: 'nothing is waiting to be saved',
     });
   });
@@ -1278,9 +1323,9 @@ describe('capturing the page', () => {
     const client = createFakeClient();
     await start(client);
 
-    await captureAnnotateScreenshot(CONNECTION);
+    await captureBenchScreenshot(CONNECTION);
     const whole = client.lastCall('Page.captureScreenshot');
-    await captureAnnotateScreenshot(CONNECTION, '#row-3 > span');
+    await captureBenchScreenshot(CONNECTION, '#row-3 > span');
     const clipped = client.lastCall('Page.captureScreenshot');
 
     expect(whole.params.captureBeyondViewport).toBe(true);
@@ -1292,9 +1337,9 @@ describe('capturing the page', () => {
   it('records the selector on the event, so the picture says what it is of', async () => {
     const client = createFakeClient();
     await start(client);
-    await captureAnnotateScreenshot(CONNECTION, '#row-3 > span');
+    await captureBenchScreenshot(CONNECTION, '#row-3 > span');
 
-    await saveAnnotateScreenshot(CONNECTION);
+    await saveBenchScreenshot(CONNECTION);
 
     expect(readEvents().find(e => e.kind === 'screenshot')).toMatchObject({ selector: '#row-3 > span' });
   });
@@ -1304,7 +1349,7 @@ describe('capturing the page', () => {
     client.missingNode = true;
     await start(client);
 
-    const shot = await captureAnnotateScreenshot(CONNECTION, '.gone');
+    const shot = await captureBenchScreenshot(CONNECTION, '.gone');
 
     expect(shot).toMatchObject({ failure: expect.stringContaining('.gone') });
     expect(client.calls('Page.captureScreenshot')).toHaveLength(0);
@@ -1378,7 +1423,7 @@ describe('the callback log', () => {
     client.stepMs = 25;
     await startWithScript(client);
 
-    const tick = await tickAnnotateMode(CONNECTION, { steps: 3 });
+    const tick = await tickBench(CONNECTION, { steps: 3 });
 
     expect(tick!.ran).toHaveLength(3);
     expect(tick!.ran[0]).toMatchObject({
@@ -1395,11 +1440,11 @@ describe('the callback log', () => {
     client.stepMs = 20;
     await startWithScript(client);
 
-    await tickAnnotateMode(CONNECTION, { steps: 2 });
-    const tick = await tickAnnotateMode(CONNECTION, { steps: 2 });
+    await tickBench(CONNECTION, { steps: 2 });
+    const tick = await tickBench(CONNECTION, { steps: 2 });
 
     expect(tick!.ran.map(e => e.index)).toEqual([3, 4]);
-    expect(getAnnotateSession(CONNECTION)!.callbacks.map(e => e.at)).toEqual([20, 40, 60, 80]);
+    expect(getBenchSession(CONNECTION)!.callbacks.map(e => e.at)).toEqual([20, 40, 60, 80]);
   });
 
   it('keeps the log bounded so a long session cannot grow without limit', async () => {
@@ -1407,9 +1452,9 @@ describe('the callback log', () => {
     client.stepMs = 1;
     await startWithScript(client);
 
-    await tickAnnotateMode(CONNECTION, { steps: 250 });
+    await tickBench(CONNECTION, { steps: 250 });
 
-    const log = getAnnotateSession(CONNECTION)!.callbacks;
+    const log = getBenchSession(CONNECTION)!.callbacks;
     expect(log).toHaveLength(200);
     // The tail is kept: the oldest 50 are the ones dropped.
     expect(log[log.length - 1].index).toBe(250);
@@ -1421,10 +1466,10 @@ describe('the callback log', () => {
     await startWithScript(client);
     client.quiet = true;
 
-    const tick = await tickAnnotateMode(CONNECTION, { budgetMs: 100 }, 10);
+    const tick = await tickBench(CONNECTION, { budgetMs: 100 }, 10);
 
     expect(tick!.ran).toEqual([]);
-    expect(getAnnotateSession(CONNECTION)!.callbacks).toEqual([]);
+    expect(getBenchSession(CONNECTION)!.callbacks).toEqual([]);
   });
 
   it('falls back to a bare entry when the frame names nothing', async () => {
@@ -1443,7 +1488,7 @@ describe('the callback log', () => {
     });
     await start(client);
 
-    const tick = await tickAnnotateMode(CONNECTION, { steps: 1 });
+    const tick = await tickBench(CONNECTION, { steps: 1 });
 
     expect(tick!.ran[0]).toMatchObject({ index: 1 });
     expect(tick!.ran[0].kind).toBeUndefined();
@@ -1456,7 +1501,7 @@ describe('freeze and picker as independent toggles', () => {
     const client = createFakeClient();
     await startBare(client);
 
-    expect(getAnnotateSession(CONNECTION)).toMatchObject({ frozen: false, pickerArmed: false });
+    expect(getBenchSession(CONNECTION)).toMatchObject({ frozen: false, pickerArmed: false });
   });
 
   it('holds and arms on demand, both from the pane', async () => {
@@ -1466,7 +1511,7 @@ describe('freeze and picker as independent toggles', () => {
     await setFrozen(CONNECTION, true);
     await setPicker(CONNECTION, true);
 
-    expect(getAnnotateSession(CONNECTION)).toMatchObject({ frozen: true, pickerArmed: true });
+    expect(getBenchSession(CONNECTION)).toMatchObject({ frozen: true, pickerArmed: true });
   });
 
   it('held + picker idle: the page stays held, so clicks reach nothing', async () => {
@@ -1475,7 +1520,7 @@ describe('freeze and picker as independent toggles', () => {
 
     await setPicker(CONNECTION, false);
 
-    expect(getAnnotateSession(CONNECTION)).toMatchObject({ frozen: true, pickerArmed: false });
+    expect(getBenchSession(CONNECTION)).toMatchObject({ frozen: true, pickerArmed: false });
     expect(client.lastCall('Overlay.setInspectMode').params.mode).toBe('none');
     expect(client.calls('Debugger.resume')).toHaveLength(0);
   });
@@ -1490,7 +1535,7 @@ describe('freeze and picker as independent toggles', () => {
     expect(state).toMatchObject({ frozen: false, pickerArmed: false });
     expect(client.calls('Debugger.resume').length).toBeGreaterThan(0);
     expect(client.calls('EventBreakpoints.disable').length).toBeGreaterThan(0);
-    expect(isAnnotating(CONNECTION)).toBe(true);
+    expect(isBenchOpen(CONNECTION)).toBe(true);
   });
 
   it('running + picker armed: picking works without holding the page', async () => {
@@ -1498,7 +1543,7 @@ describe('freeze and picker as independent toggles', () => {
     await start(client);
     await setFrozen(CONNECTION, false);
 
-    expect(getAnnotateSession(CONNECTION)).toMatchObject({ frozen: false, pickerArmed: true });
+    expect(getBenchSession(CONNECTION)).toMatchObject({ frozen: false, pickerArmed: true });
     expect(client.lastCall('Overlay.setInspectMode').params.mode).toBe('searchForNode');
 
     await pick(client);
@@ -1522,10 +1567,10 @@ describe('freeze and picker as independent toggles', () => {
     await start(client);
     await setFrozen(CONNECTION, false);
 
-    const tick = await tickAnnotateMode(CONNECTION, { steps: 2 });
+    const tick = await tickBench(CONNECTION, { steps: 2 });
 
     expect(tick).toMatchObject({ steps: 2 });
-    expect(getAnnotateSession(CONNECTION)).toMatchObject({ frozen: true });
+    expect(getBenchSession(CONNECTION)).toMatchObject({ frozen: true });
   });
 
   it('toggling is idempotent - freezing twice does not double-pause', async () => {
@@ -1542,11 +1587,11 @@ describe('freeze and picker as independent toggles', () => {
     await start(client);
     await setFrozen(CONNECTION, false);
 
-    const state = await stopAnnotateMode(CONNECTION);
+    const state = await stopBench(CONNECTION);
 
     expect(state).toMatchObject({ frozen: false });
     expect(client.calls('Debugger.disable')).toHaveLength(1);
-    expect(isAnnotating(CONNECTION)).toBe(false);
+    expect(isBenchOpen(CONNECTION)).toBe(false);
   });
 });
 
@@ -1558,8 +1603,8 @@ describe('setPicker', () => {
     await setPicker(CONNECTION, false);
 
     expect(client.lastCall('Overlay.setInspectMode').params.mode).toBe('none');
-    expect(getAnnotateSession(CONNECTION)).toMatchObject({ pickerArmed: false });
-    expect(isAnnotating(CONNECTION)).toBe(true);
+    expect(getBenchSession(CONNECTION)).toMatchObject({ pickerArmed: false });
+    expect(isBenchOpen(CONNECTION)).toBe(true);
   });
 
   it('leaves the picker disarmed across a tick', async () => {
@@ -1567,19 +1612,19 @@ describe('setPicker', () => {
     await start(client);
     await setPicker(CONNECTION, false);
 
-    await tickAnnotateMode(CONNECTION, { budgetMs: 50 });
+    await tickBench(CONNECTION, { budgetMs: 50 });
 
     expect(client.lastCall('Overlay.setInspectMode').params.mode).toBe('none');
   });
 });
 
-describe('tickAnnotateMode', () => {
+describe('tickBench', () => {
   it('steps one callback when nothing is asked for - the smallest real move', async () => {
     const client = createFakeClient();
     client.stepMs = 40;
     await start(client);
 
-    const tick = await tickAnnotateMode(CONNECTION);
+    const tick = await tickBench(CONNECTION);
 
     expect(tick).toMatchObject({ requestedSteps: 1, steps: 1, actualMs: 40 });
   });
@@ -1589,7 +1634,7 @@ describe('tickAnnotateMode', () => {
     client.stepMs = 40;
     await start(client);
 
-    const tick = await tickAnnotateMode(CONNECTION, { steps: 5 });
+    const tick = await tickBench(CONNECTION, { steps: 5 });
 
     expect(tick).toMatchObject({ requestedSteps: 5, steps: 5, actualMs: 200 });
   });
@@ -1599,7 +1644,7 @@ describe('tickAnnotateMode', () => {
     client.stepMs = 40;
     await start(client);
 
-    const tick = await tickAnnotateMode(CONNECTION, { budgetMs: 100 });
+    const tick = await tickBench(CONNECTION, { budgetMs: 100 });
 
     // 40ms per callback, so three of them clear a 100ms request.
     expect(tick).toMatchObject({ requestedMs: 100, actualMs: 120, steps: 3 });
@@ -1611,7 +1656,7 @@ describe('tickAnnotateMode', () => {
     client.stepMs = 75;
     await start(client);
 
-    const tick = await tickAnnotateMode(CONNECTION, { budgetMs: 100 });
+    const tick = await tickBench(CONNECTION, { budgetMs: 100 });
 
     expect(tick!.actualMs).toBe(150);
     expect(tick!.requestedMs).toBe(100);
@@ -1621,8 +1666,8 @@ describe('tickAnnotateMode', () => {
     const client = createFakeClient();
     await start(client);
 
-    await tickAnnotateMode(CONNECTION, { budgetMs: 50 });
-    await tickAnnotateMode(CONNECTION, { budgetMs: 50 });
+    await tickBench(CONNECTION, { budgetMs: 50 });
+    await tickBench(CONNECTION, { budgetMs: 50 });
 
     const events = client.calls('EventBreakpoints.setInstrumentationBreakpoint')
       .map((c: SentCall) => c.params.eventName);
@@ -1634,8 +1679,8 @@ describe('tickAnnotateMode', () => {
     client.stepMs = 50;
     await start(client);
 
-    await tickAnnotateMode(CONNECTION, { budgetMs: 50 });
-    const tick = await tickAnnotateMode(CONNECTION, { budgetMs: 50 });
+    await tickBench(CONNECTION, { budgetMs: 50 });
+    const tick = await tickBench(CONNECTION, { budgetMs: 50 });
 
     expect(tick!.tickMs).toBe(100);
   });
@@ -1645,7 +1690,7 @@ describe('tickAnnotateMode', () => {
     await start(client);
     client.quiet = true;
 
-    const tick = await tickAnnotateMode(CONNECTION, { budgetMs: 100 }, 10);
+    const tick = await tickBench(CONNECTION, { budgetMs: 100 }, 10);
 
     expect(tick).toMatchObject({ steps: 0, actualMs: 0, quiet: true });
   });
@@ -1655,26 +1700,26 @@ describe('tickAnnotateMode', () => {
     client.stepMs = 20;
     await start(client);
 
-    await tickAnnotateMode(CONNECTION, { steps: 2 });
-    const tick = await tickAnnotateMode(CONNECTION, { steps: 3 });
+    await tickBench(CONNECTION, { steps: 2 });
+    const tick = await tickBench(CONNECTION, { steps: 3 });
 
     expect(tick).toMatchObject({ totalSteps: 5, tickMs: 100 });
   });
 
   it('returns undefined when the mode is not running', async () => {
-    expect(await tickAnnotateMode('nothing-here', { budgetMs: 100 })).toBeUndefined();
+    expect(await tickBench('nothing-here', { budgetMs: 100 })).toBeUndefined();
   });
 });
 
-describe('stopAnnotateMode', () => {
-  it('restores both clocks, closes the control pane and detaches', async () => {
+describe('stopBench', () => {
+  it('restores both clocks, closes the bench and detaches', async () => {
     const client = createFakeClient();
     const closed: string[] = [];
-    const state0 = await startAnnotateMode({
+    const state0 = await startBench({
       page: createFakePage(client),
       connection: CONNECTION,
       sessionName: SESSION,
-      openControlTab: async () => ({ close: async () => { closed.push('tab'); } }) as any,
+      openBench: async () => ({ close: async () => { closed.push('tab'); } }) as any,
       sequences: noteSequences() as any,
     });
     await setPicker(CONNECTION, true);
@@ -1682,7 +1727,7 @@ describe('stopAnnotateMode', () => {
     await pick(client);
     await saveAnnotation(CONNECTION, 'one');
 
-    const state = await stopAnnotateMode(CONNECTION);
+    const state = await stopBench(CONNECTION);
 
     expect(client.calls('Debugger.resume').length).toBeGreaterThan(0);
     expect(client.calls('EventBreakpoints.disable')).toHaveLength(1);
@@ -1691,31 +1736,31 @@ describe('stopAnnotateMode', () => {
     expect(client.lastCall('Overlay.setInspectMode').params.mode).toBe('none');
     expect(client.detached()).toBe(true);
     expect(closed).toEqual(['tab']);
-    expect(state).toMatchObject({ picks: 1, annotations: 1, controlUrl: state0.controlUrl });
-    expect(isAnnotating(CONNECTION)).toBe(false);
+    expect(state).toMatchObject({ picks: 1, annotations: 1, benchUrl: state0.benchUrl });
+    expect(isBenchOpen(CONNECTION)).toBe(false);
   });
 
-  it('stops serving the control pane', async () => {
+  it('stops serving the bench', async () => {
     const client = createFakeClient();
-    const { controlUrl } = await start(client);
+    const { benchUrl } = await start(client);
 
-    await stopAnnotateMode(CONNECTION);
+    await stopBench(CONNECTION);
 
-    await expect(http(controlUrl)).rejects.toThrow();
+    await expect(http(benchUrl)).rejects.toThrow();
   });
 
   it('returns undefined when nothing is running', async () => {
-    expect(await stopAnnotateMode('nothing-here')).toBeUndefined();
+    expect(await stopBench('nothing-here')).toBeUndefined();
   });
 });
 
-describe('the control pane', () => {
+describe('the bench', () => {
   it('serves its own state, and refuses a request without the token', async () => {
     const client = createFakeClient();
-    const { controlUrl } = await start(client);
+    const { benchUrl } = await start(client);
     await pick(client);
 
-    const state = JSON.parse((await http(`${controlUrl}state`)).body);
+    const state = JSON.parse((await http(`${benchUrl}state`)).body);
     expect(state).toMatchObject({
       connection: CONNECTION,
       frozen: true,
@@ -1724,16 +1769,16 @@ describe('the control pane', () => {
       pending: { selector: '#row-3 > span' },
     });
 
-    const base = controlUrl.replace(/\/[a-f0-9]{32}\/$/, '');
+    const base = benchUrl.replace(/\/[a-f0-9]{32}\/$/, '');
     expect((await http(`${base}/state`)).status).toBe(404);
   });
 
   it('saves the comment typed into it', async () => {
     const client = createFakeClient();
-    const { controlUrl } = await start(client);
+    const { benchUrl } = await start(client);
     await pick(client);
 
-    await http(`${controlUrl}save`, { method: 'POST', body: { comment: 'wrong colour' } });
+    await http(`${benchUrl}save`, { method: 'POST', body: { comment: 'wrong colour' } });
 
     const annotations = notesIn(noteDriver);
     expect(annotations).toHaveLength(1);
@@ -1745,11 +1790,11 @@ describe('the control pane', () => {
     // this state, and without a claim both focus their own comment box when a
     // pick lands - pulling the caret out of the one being typed into.
     const client = createFakeClient();
-    const { controlUrl } = await start(client);
+    const { benchUrl } = await start(client);
 
-    const first = JSON.parse((await http(`${controlUrl}state?client=aaa`)).body);
-    const second = JSON.parse((await http(`${controlUrl}state?client=bbb`)).body);
-    const firstAgain = JSON.parse((await http(`${controlUrl}state?client=aaa`)).body);
+    const first = JSON.parse((await http(`${benchUrl}state?client=aaa`)).body);
+    const second = JSON.parse((await http(`${benchUrl}state?client=bbb`)).body);
+    const firstAgain = JSON.parse((await http(`${benchUrl}state?client=aaa`)).body);
 
     expect(first.primary).toBe(true);
     expect(second.primary).toBe(false);
@@ -1761,11 +1806,11 @@ describe('the control pane', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       const client = createFakeClient();
-      const { controlUrl } = await start(client);
-      await http(`${controlUrl}state?client=aaa`);
+      const { benchUrl } = await start(client);
+      await http(`${benchUrl}state?client=aaa`);
 
       vi.advanceTimersByTime(4000);
-      const next = JSON.parse((await http(`${controlUrl}state?client=bbb`)).body);
+      const next = JSON.parse((await http(`${benchUrl}state?client=bbb`)).body);
 
       expect(next.primary).toBe(true);
     } finally {
@@ -1775,16 +1820,16 @@ describe('the control pane', () => {
 
   it('toggles the picker from the pane', async () => {
     const client = createFakeClient();
-    const { controlUrl } = await start(client);
+    const { benchUrl } = await start(client);
 
-    await http(`${controlUrl}picker`, { method: 'POST', body: { armed: false } });
+    await http(`${benchUrl}picker`, { method: 'POST', body: { armed: false } });
 
     expect(client.lastCall('Overlay.setInspectMode').params.mode).toBe('none');
   });
 });
 
 describe('the breakpoint guard', () => {
-  it('lets annotate run while the page is paused - it owns that pause', async () => {
+  it('lets the bench run while the page is paused - it owns that pause', async () => {
     const { checkBreakpointPause } = await import('./tool-response.js');
     const paused = [{
       reference: CONNECTION,
@@ -1792,7 +1837,7 @@ describe('the breakpoint guard', () => {
       cdpManager: { isPaused: () => true, getPausedInfo: () => ({ location: 'app.js:1', callStack: [] }) },
     }] as any;
 
-    expect(checkBreakpointPause(paused, 'annotate', undefined, 'tick').blocked).toBe(false);
+    expect(checkBreakpointPause(paused, 'bench', undefined, 'tick').blocked).toBe(false);
     // Still blocking for a tool that would drive a page it does not control.
     expect(checkBreakpointPause(paused, 'input', undefined, 'click').blocked).toBe(true);
   });
@@ -1885,3 +1930,104 @@ describe('verifySourceLine', () => {
   });
 });
 
+
+/**
+ * The four behaviours a mutation pass found nothing standing behind: each of
+ * these fails if the mechanism under it is removed, which is the only thing
+ * that makes a test worth its run time.
+ */
+describe('what a mutation pass found unguarded', () => {
+  it('files a note on the last step when the run has already finished', async () => {
+    // A finished run sits one past its last command. Unclamped, the note is
+    // filed against a step that does not exist and the save is refused.
+    const client = createFakeClient();
+    await start(client);
+    noteDriver.at = noteDriver.steps.length;
+    await pick(client);
+
+    const saved = await saveAnnotation(CONNECTION, 'the total is wrong');
+
+    expect(saved).toBeDefined();
+    expect(noteDriver.steps[noteDriver.steps.length - 1].annotations).toHaveLength(1);
+  });
+
+  it('reports the page being driven, which is not where the bench is served', async () => {
+    const client = createFakeClient();
+    const state = await start(client);
+
+    const view = JSON.parse((await http(`${state.benchUrl}state?client=a`)).body);
+
+    expect(view.pageUrl).toBe('http://localhost:5173/orders');
+    expect(view.pageUrl).not.toBe(state.benchUrl);
+  });
+
+  /**
+   * A recording's steps are a projection of the page's captured events, rebuilt
+   * on every poll. Anything written onto one is discarded at the next tick
+   * unless it is held against its position, and the file it belongs to does not
+   * exist until the recording stops.
+   */
+  function recordingDriver() {
+    const commented: Array<{ index: number; words: string }> = [];
+    const saved: Array<{ index: number; traffic: any }> = [];
+    let release: () => void = () => {};
+    const driver: any = {
+      ...noteSequences(),
+      recordedSoFar: () => ([
+        { index: 0, label: 'navigate.goto /orders', at: 1000, done: true, current: false },
+        { index: 1, label: 'input.click #save', at: 2000, done: true, current: false },
+      ]),
+      record: () => new Promise<string | undefined>((resolve) => { release = () => resolve(undefined); }),
+      stopRecording: async () => {},
+      cancelRecording: async () => {},
+      commentStep: async (index: number, words: string) => { commented.push({ index, words }); return undefined; },
+      trafficIn: async () => ({ requests: 2, failed: 1, opened: 0, writes: 0, lines: ['POST /save 500'] }),
+      saveStepTraffic: async (entries: Array<{ index: number; traffic: any }>) => {
+        saved.push(...entries); return undefined;
+      },
+    };
+    return { driver, commented, saved, stop: () => release() };
+  }
+
+  it('holds a note written mid-recording through the poll, and writes it on stop', async () => {
+    const client = createFakeClient();
+    const { driver, commented, stop } = recordingDriver();
+    await startBench({
+      page: createFakePage(client), connection: CONNECTION, sessionName: SESSION, sequences: driver,
+    });
+
+    const recording = recordSequence(CONNECTION, 'saving hangs');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await commentSequenceStep(CONNECTION, 1, 'this is the click that hangs');
+
+    const midway = await getSequenceState(CONNECTION);
+    expect(midway?.steps[1].comment).toBe('this is the click that hangs');
+
+    stop();
+    await recording;
+
+    expect(commented).toEqual([{ index: 1, words: 'this is the click that hangs' }]);
+  });
+
+  it('gives a step the traffic it caused, and writes it to the file on stop', async () => {
+    const client = createFakeClient();
+    const { driver, saved, stop } = recordingDriver();
+    await startBench({
+      page: createFakePage(client), connection: CONNECTION, sessionName: SESSION, sequences: driver,
+    });
+
+    const recording = recordSequence(CONNECTION, 'saving hangs');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    // A step's window closes when the next one is observed, so the first step
+    // is the one with a window to measure while a second stands after it.
+    const midway = await getSequenceState(CONNECTION);
+    expect(midway?.steps[0].traffic).toMatchObject({ requests: 2, failed: 1 });
+
+    stop();
+    await recording;
+
+    expect(saved.map(entry => entry.index)).toContain(0);
+    expect(saved.find(entry => entry.index === 0)?.traffic.lines).toEqual(['POST /save 500']);
+  });
+});

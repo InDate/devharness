@@ -3,7 +3,7 @@
  *
  * A tool called repeatedly returns its template each time. Orientation is true
  * every time and new only the first, so repeating it spends context on text
- * already read - twenty starts of annotate mode cost ten thousand tokens of
+ * already read - twenty starts of the bench cost ten thousand tokens of
  * the same three paragraphs.
  */
 
@@ -14,21 +14,21 @@ const textOf = (response: any): string => response.content[0].text;
 
 describe('a template with a once-per-session part', () => {
   it('carries the orientation the first time and drops it after', () => {
-    const first = textOf(createSuccessResponse('ANNOTATE_STARTED', {
-      connection: 'app', controlUrl: 'http://127.0.0.1:1/t/', eventStreamPath: '/tmp/e.jsonl',
+    const first = textOf(createSuccessResponse('BENCH_STARTED', {
+      connection: 'app', benchUrl: 'http://127.0.0.1:1/t/', eventStreamPath: '/tmp/e.jsonl',
     }));
-    const second = textOf(createSuccessResponse('ANNOTATE_STARTED', {
-      connection: 'app', controlUrl: 'http://127.0.0.1:1/t/', eventStreamPath: '/tmp/e.jsonl',
+    const second = textOf(createSuccessResponse('BENCH_STARTED', {
+      connection: 'app', benchUrl: 'http://127.0.0.1:1/t/', eventStreamPath: '/tmp/e.jsonl',
     }));
 
-    expect(first).toContain('FREEZE in the pane');
-    expect(second).not.toContain('FREEZE in the pane');
+    expect(first).toContain('FREEZE in the bench');
+    expect(second).not.toContain('FREEZE in the bench');
     expect(second.length).toBeLessThan(first.length / 2);
   });
 
   it('still says what changed on every call', () => {
-    const later = textOf(createSuccessResponse('ANNOTATE_STARTED', {
-      connection: 'second-app', controlUrl: 'http://127.0.0.1:2/u/', eventStreamPath: '/tmp/e.jsonl',
+    const later = textOf(createSuccessResponse('BENCH_STARTED', {
+      connection: 'second-app', benchUrl: 'http://127.0.0.1:2/u/', eventStreamPath: '/tmp/e.jsonl',
     }));
 
     expect(later).toContain('second-app');

@@ -33,7 +33,7 @@ function render(rows: string[]): void {
 }
 
 beforeEach(() => {
-  render(['389d0e79 annotate active']);
+  render(['389d0e79 bench active']);
 });
 
 afterEach(() => {
@@ -108,7 +108,7 @@ describe('resolveSelector', () => {
     if ('error' in resolved) throw new Error(resolved.error);
 
     // What a dashboard does once a second: same content, new nodes.
-    render(['389d0e79 annotate active']);
+    render(['389d0e79 bench active']);
     await settle();
 
     const found = document.querySelector(resolved.selector);
@@ -120,7 +120,7 @@ describe('resolveSelector', () => {
     const resolved = await resolveSelector(page, '.session-row:has-text("389d0e79")');
     if ('error' in resolved) throw new Error(resolved.error);
 
-    render(['45027e10 other session', '389d0e79 annotate active']);
+    render(['45027e10 other session', '389d0e79 bench active']);
     await settle();
 
     expect(document.querySelector(resolved.selector)?.textContent).toContain('389d0e79');
@@ -130,9 +130,9 @@ describe('resolveSelector', () => {
     const resolved = await resolveSelector(page, '.session-row:has-text("389d0e79")');
     if ('error' in resolved) throw new Error(resolved.error);
 
-    render(['389d0e79 annotate active']);
+    render(['389d0e79 bench active']);
     await settle();
-    render(['389d0e79 annotate paused']);
+    render(['389d0e79 bench paused']);
     await settle();
 
     expect(document.querySelectorAll('[data-cdp-selector-match]')).toHaveLength(1);
@@ -171,7 +171,7 @@ describe('cleanupResolvedSelector', () => {
     if ('error' in resolved) throw new Error(resolved.error);
 
     await cleanupResolvedSelector(page, resolved.selector);
-    render(['389d0e79 annotate active']);
+    render(['389d0e79 bench active']);
     await settle();
 
     expect(document.querySelectorAll('[data-cdp-selector-match]')).toHaveLength(0);

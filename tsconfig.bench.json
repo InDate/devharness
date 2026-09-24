@@ -1,0 +1,15 @@
+{
+  "//": "The bench's page. Typechecked but never emitted - esbuild bundles it, and without this pass the page's copy of a wire shape can disagree with the server's and nothing says so.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "jsxImportSource": "preact"
+  },
+  "include": ["src/bench/**/*"],
+  "exclude": ["node_modules", "build"]
+}

@@ -16,5 +16,5 @@
     "sourceMap": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "build", "src/dashboard/frontend"]
+  "exclude": ["node_modules", "build", "src/dashboard/frontend", "src/bench/frontend"]
 }

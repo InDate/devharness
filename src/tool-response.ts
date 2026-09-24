@@ -10,7 +10,7 @@ import { createErrorResponse, getMessage } from './messages.js';
 import type { BlockEventInfo } from './block-events.js';
 import type { LaunchObservations } from './chrome-launcher.js';
 import type { SessionMessage } from './session-messages.js';
-import type { Annotation, AnnotateSessionState, TickResult } from './annotate-mode.js';
+import type { Annotation, BenchReport, TickResult } from './bench-mode.js';
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -276,26 +276,36 @@ export interface ToolResponseMeta {
   replay?: ReplayRunMeta;
   github?: GithubToolMeta;
   message?: MessageToolMeta;
-  annotate?: AnnotateToolMeta;
+  bench?: BenchToolMeta;
   /** launchChrome: the readings taken during a launch that failed. */
   launchObservations?: LaunchObservationsMeta;
 }
 
-/** Structured result of an annotate action. Behaviour reads this, never the
+/** Structured result of a bench action. Behaviour reads this, never the
  *  rendered text. */
-export interface AnnotateToolMeta {
+export interface BenchToolMeta {
   action: 'start' | 'stop' | 'tick' | 'freeze' | 'unfreeze' | 'picker' | 'list' | 'status'
-    | 'keepStep' | 'dropStep' | 'flagStep';
+    | 'keepStep' | 'dropStep' | 'flagStep' | 'sweep';
   /** Whether the page is frozen with the picker armed, after this call. */
   active?: boolean;
   connection?: string;
-  state?: AnnotateSessionState;
+  state?: BenchReport;
   /** tick: what the step asked for, and what it actually did. */
   tick?: TickResult;
   /** list: the annotations returned, oldest first. */
   annotations?: Annotation[];
   /** list: how many exist in total, before any limit. */
   total?: number;
+  /** sweep: the captures no sequence refers to, and what became of them. */
+  swept?: {
+    root: string;
+    orphans: Array<{ path: string; bytes: number }>;
+    bytes: number;
+    removed: number;
+    sequencesRead: number;
+    referenced: number;
+    inFlight: number;
+  };
   /** The sequence card's state, after a call that changed it. */
   sequence?: unknown;
 }
@@ -501,7 +511,7 @@ const BREAKPOINT_ALLOWED_TOOLS = new Set([
   'inspect',      // Get call stack, variables, evaluate expression
   'breakpoint',   // Manage breakpoints
   'console',      // View console logs
-  'annotate',     // Owns the pause it would otherwise be blocked by
+  'bench',        // Owns the pause it would otherwise be blocked by
 ]);
 
 /**

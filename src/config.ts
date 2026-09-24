@@ -50,6 +50,44 @@ export interface ReplayConfig {
   puppeteerExportPath: string;
   /** Maximum delay between commands in ms when recording (default: 1000, 0 = no limit) */
   maxDelayMs: number;
+  /**
+   * Quiet the boundary holds for after a command returns, in ms (default: 0,
+   * off).
+   *
+   * A command's consequences arrive after it returns. Three mechanisms account
+   * for them, and this is the last of the three rather than the first.
+   *
+   * 1. The cursor clears when the command returns (`releaseCommand`), so a
+   *    bucket covers its own command and nothing later. This runs always and
+   *    is what makes the rest legible.
+   * 2. What the page reports accounts for traffic that starts after the
+   *    return: a parser-rooted subresource takes the stamp of the document it
+   *    was named by, and a timer-rooted request or send owns nothing. Both are
+   *    measurements, and neither needs a wait.
+   * 3. This wait, which holds the returning command's cursor in place until
+   *    the boundary goes quiet, so traffic starting inside the window is
+   *    attributed to it by position.
+   *
+   * Raise this only where the page cannot report. The wrapper reaches pages
+   * and worker targets alike, so what is left is narrow: a worker that opens a
+   * socket and schedules on its first line, which runs before the wrapper can
+   * be installed into it (holding the resume until it is would stall a service
+   * worker's registration, which `network-monitor.test.ts` pins against); a
+   * page attached to after its load, whose load requests were already sent;
+   * and a page that has frozen `WebSocket.prototype` or `fetch`, where the
+   * wrapper gives way rather than throwing. Attribution by position is what is
+   * left in those cases.
+   *
+   * It costs up to `stepSettleCapMs` before the next driving command can mark.
+   * The wait is paid out of the gap after a command rather than out of its own
+   * response, so a session that does anything between driving commands pays
+   * nothing; two driving commands back to back pay the remainder. An app whose
+   * chatter carries no rule and no timer root never goes quiet, so the cap
+   * rather than the quiet ends every wait there.
+   */
+  stepSettleMs: number;
+  /** Longest a step boundary waits for quiet before giving up (default: 2000) */
+  stepSettleCapMs: number;
 }
 
 /**
@@ -150,7 +188,7 @@ export const TOGGLEABLE_TOOLS = [
   'server',      // Dev server management
   'issues',      // Issue tracking
   'message',     // Text between two devharness sessions on this machine
-  'annotate',    // Freeze the page and collect element-level comments
+  'bench',       // Hold the page, read the boundary, record sequences, collect comments
   'dashboard',   // Web dashboard for monitoring sessions
   // Note: 'config' is NOT toggleable - always enabled
 ] as const;
@@ -171,7 +209,7 @@ export const TOOL_DEPENDENCIES: Record<string, string[]> = {
   network: ['connection'],
   page: ['connection'],
   dom: ['connection'],
-  annotate: ['connection'],
+  bench: ['connection'],
   screenshot: ['connection'],
   input: ['connection'],
   content: ['connection'],
@@ -296,6 +334,8 @@ const DEFAULT_CONFIG: CdpToolsConfig = {
     playwrightExportPath: './tests/e2e',      // Export path for Playwright tests
     puppeteerExportPath: './tests/puppeteer', // Export path for Puppeteer tests
     maxDelayMs: 1000,         // Cap recorded delays at 1 second (0 = no limit)
+    stepSettleMs: 0,          // Step boundary settle: off (see ReplayConfig)
+    stepSettleCapMs: 2000,
   },
   changeDetection: {
     enabled: true,            // Detect DOM changes by default
@@ -706,6 +746,8 @@ export class ConfigManager {
         playwrightExportPath: loaded.replay?.playwrightExportPath ?? defaults.replay.playwrightExportPath,
         puppeteerExportPath: loaded.replay?.puppeteerExportPath ?? defaults.replay.puppeteerExportPath,
         maxDelayMs: loaded.replay?.maxDelayMs ?? defaults.replay.maxDelayMs,
+        stepSettleMs: loaded.replay?.stepSettleMs ?? defaults.replay.stepSettleMs,
+        stepSettleCapMs: loaded.replay?.stepSettleCapMs ?? defaults.replay.stepSettleCapMs,
       },
       changeDetection: {
         enabled: loaded.changeDetection?.enabled ?? defaults.changeDetection.enabled,

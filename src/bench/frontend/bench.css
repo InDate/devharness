@@ -1,0 +1,1241 @@
+/*
+ * The bench's own look.
+ *
+ * Two hues carry the only question this panel asks - did a step cause this, or
+ * did the app do it on its own - and nothing else is coloured. A row stays
+ * quiet unless it failed, is held, or belongs to no step.
+ */
+:root {
+  --bg: #ffffff;
+  --fg: #16191d;
+  --muted: #5d656e;
+  --line: #e2e5e9;
+  --panel: #f5f6f8;
+  --accent: #1a73e8;
+  --caused: #2f6f5e;
+  --own: #a8632c;
+  --alert: #b8443a;
+  --frost: #2f7fb8;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14171a;
+    --fg: #e7eaee;
+    --muted: #949ca6;
+    --line: #2b3138;
+    --panel: #1b1f24;
+    --accent: #8ab4f8;
+    --caused: #63c2a4;
+    --own: #d99a58;
+    --alert: #e8776c;
+    --frost: #7fc7ef;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  /* The foot clears the fixed footing bar, which would otherwise cover the
+     last row of whatever the tab is listing. */
+  padding: 18px 20px 112px;
+  background: var(--bg);
+  color: var(--fg);
+  font: 13px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+header { display: flex; align-items: baseline; gap: 18px; margin-bottom: 14px; }
+h1 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: 0.08em; color: var(--muted); }
+nav { display: flex; gap: 2px; }
+nav button {
+  padding: 4px 10px; border: 0; border-radius: 6px; background: none; cursor: pointer;
+  color: var(--muted); font: 600 11px/1.4 inherit; letter-spacing: 0.06em;
+}
+nav button:hover { color: var(--fg); }
+nav button.on { background: var(--panel); color: var(--fg); }
+
+.hint { color: var(--muted); font-size: 12px; }
+.quiet { color: var(--muted); }
+.grow { flex: 1; }
+.free { color: var(--own); }
+.bad { color: var(--alert); }
+
+/* One reading, and it is the only thing on the page with weight. */
+.totals { margin-bottom: 14px; }
+.headline { display: flex; align-items: baseline; gap: 10px; }
+.headline .count {
+  font: 600 30px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums; letter-spacing: -0.02em;
+}
+.headline .of { color: var(--muted); font-size: 12px; }
+.headline .bad { margin-left: auto; font-size: 12px; }
+
+.bar { display: flex; height: 8px; margin: 9px 0 7px; border-radius: 4px; overflow: hidden; background: var(--panel); }
+.bar span { display: block; }
+.bar .owned { background: var(--caused); }
+.bar .unowned { background: var(--own); }
+
+.under { display: flex; gap: 12px; align-items: baseline; font-size: 12px; }
+
+.filters { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px;
+  border: 1px solid var(--line); border-radius: 999px;
+  font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted);
+}
+.chip.out { border-color: var(--own); color: var(--own); }
+.chip.on { border-color: var(--caused); color: var(--caused); }
+.chip button { padding: 0 1px; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+
+/* Repeats sit above the stream and hold their place, so a heartbeat ticking
+   every two seconds stops shoving the traffic a step caused down the page. */
+.repeating { margin-bottom: 14px; }
+.sectionhead {
+  display: flex; gap: 10px; align-items: baseline; padding: 0 0 4px 2px;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted);
+}
+.sectionhead .quiet { font-size: 10px; }
+
+/* The stream. Ruled lines rather than pills: a row is one line of a record,
+   and a box around each turns fifteen of them into fifteen objects. */
+.stream { list-style: none; margin: 0; padding: 0; max-height: 62vh; overflow: auto; }
+.row { border-top: 1px solid var(--line); }
+.row:last-child { border-bottom: 1px solid var(--line); }
+.row .head {
+  display: flex; gap: 10px; align-items: baseline; padding: 6px 8px 6px 10px; cursor: pointer;
+  font: 11px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.row:hover .head { background: var(--panel); }
+/* The mark's side says who caused it, inside the row so a scroll cannot clip
+   it: a step on the left, the app's own schedule on the right. */
+.row.owned .head { box-shadow: inset 2px 0 0 var(--caused); }
+.row.unowned .head { box-shadow: inset -2px 0 0 var(--own); }
+.row.ruled .head { box-shadow: none; opacity: 0.5; }
+
+.row .where { flex: 0 1 auto; min-width: 34px; max-width: 26%; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .way { flex: 0 0 10px; color: var(--muted); }
+.row .what { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row.open .what { white-space: normal; overflow: visible; word-break: break-all; }
+.row .repeat { flex: 0 0 auto; color: var(--own); }
+.row .meta { flex: 0 1 auto; min-width: 0; max-width: 34%; text-align: right; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.row .meta.held { color: var(--own); }
+.row .reading { flex: 0 1 auto; min-width: 0; max-width: 24%; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Beside the app the bench is a narrow column, and there the payload is what a
+   row is found by. The reading gives way first - the mark still carries the
+   attribution, and the headline carries the counts. */
+@media (max-width: 599px) {
+  .row .reading { display: none; }
+  .headline .count { font-size: 24px; }
+}
+
+.body { padding: 2px 10px 10px 12px; }
+.payload {
+  max-height: 220px; overflow: auto; padding: 8px 10px; border-radius: 6px;
+  background: var(--panel); white-space: pre-wrap; word-break: break-all;
+  font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.bodyrow { display: flex; gap: 10px; align-items: center; margin-top: 8px; }
+
+button.save {
+  padding: 6px 12px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg); color: var(--fg); cursor: pointer;
+  font: 600 11px/1.4 -apple-system, sans-serif; letter-spacing: 0.04em;
+}
+button.save:hover { border-color: var(--accent); }
+button.save.chosen { background: var(--own); border-color: var(--own); color: #fff; }
+
+.menu {
+  position: fixed; z-index: 40; min-width: 216px; padding: 4px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .28);
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.menulabel { padding: 5px 8px 3px; color: var(--muted); }
+.menurule { height: 1px; margin: 4px 6px; background: var(--line); }
+.menu > button {
+  display: flex; gap: 8px; width: 100%; padding: 5px 8px; text-align: left;
+  border: 0; border-radius: 5px; background: none; color: var(--fg); cursor: pointer; font: inherit;
+}
+.menu > button:hover { background: var(--panel); }
+.menu .op { color: var(--muted); }
+.menu .val { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Reporting a reading takes the screen: the note is about the conclusion above
+   it, and a box tucked into a menu leaves no room to say what was seen. */
+.scrim {
+  position: fixed; inset: 0; z-index: 60; display: grid; place-items: center;
+  padding: 24px; background: rgba(8, 10, 12, .62); backdrop-filter: blur(2px);
+}
+.report {
+  width: min(680px, 100%); max-height: 86vh; overflow: auto; padding: 18px 20px 16px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .45);
+}
+.reporthead {
+  display: flex; gap: 10px; align-items: baseline; padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+  font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.reporthead .where { flex: 0 0 auto; color: var(--muted); }
+.reporthead .way { flex: 0 0 10px; color: var(--muted); }
+.reporthead .what { flex: 1; min-width: 0; word-break: break-all; }
+.reporthead .close {
+  flex: 0 0 auto; padding: 0 4px; border: 0; background: none; cursor: pointer;
+  color: var(--muted); font: 16px/1 inherit;
+}
+.reporthead .close:hover { color: var(--fg); }
+
+/* What the rule read, laid out as pairs so the disagreement has something to
+   point at. */
+.facts { display: flex; flex-wrap: wrap; gap: 6px 22px; margin: 12px 0 16px; }
+.facts div { display: flex; gap: 8px; align-items: baseline; }
+.facts dt { margin: 0; color: var(--muted); font-size: 11px; }
+.facts dd {
+  margin: 0; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.asklabel { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
+.report textarea.why {
+  width: 100%; padding: 10px 12px; resize: vertical;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--fg);
+  font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.reportfoot { display: flex; gap: 12px; align-items: center; margin-top: 12px; }
+
+.menu textarea.why {
+  width: calc(100% - 12px); margin: 0 6px; padding: 6px 8px; resize: vertical;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg);
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.menu textarea.why:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* The notes tab.
+ *
+ * The step list is the page: it is what was driven, in order, and a note
+ * belongs on a step. Everything else - which sequence, where the run is, the
+ * page's own hold - is one line of chrome above it.
+ */
+.runbar {
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  padding-bottom: 10px; margin-bottom: 12px; border-bottom: 1px solid var(--line);
+}
+.runbar .rule { width: 1px; height: 18px; background: var(--line); margin: 0 2px; }
+.runbar .at { color: var(--muted); font-size: 12px; }
+.runbar .at b { color: var(--fg); font-variant-numeric: tabular-nums; }
+.seqpick {
+  padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg); color: var(--fg); font: 12px/1.4 inherit; max-width: 280px;
+}
+.chip-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg); color: var(--muted); cursor: pointer;
+  font: 600 11px/1.4 -apple-system, sans-serif; letter-spacing: 0.04em;
+}
+.chip-toggle:hover:not(:disabled) { border-color: var(--accent); color: var(--fg); }
+.chip-toggle.on { border-color: var(--accent); color: var(--accent); }
+/* Dimmed, and the cursor that stands for an explanation rather than a
+   refusal: the tooltip naming what to clear first is the whole reason to
+   reach one of these, and a crossed circle warns the pointer off it. */
+.chip-toggle:disabled,
+.chip-toggle[aria-disabled='true'] { opacity: 0.35; }
+.chip-toggle[aria-disabled='true'] { cursor: help; }
+.chip-toggle[aria-disabled='true']:hover { border-color: var(--line); color: var(--muted); }
+
+.failure {
+  display: flex; gap: 10px; align-items: center; padding: 8px 10px; margin-bottom: 12px;
+  border: 1px solid var(--alert); border-radius: 8px;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.steps { list-style: none; margin: 0; padding: 0; }
+.step { padding: 2px 0; border-top: 1px solid var(--line); }
+.step:last-child { border-bottom: 1px solid var(--line); }
+.stephead {
+  display: flex; gap: 10px; align-items: baseline; padding: 7px 8px 7px 0;
+  font: 11px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+/* Where the run stands, marked on the step rather than stated above the list. */
+.step.now { box-shadow: inset 2px 0 0 var(--accent); }
+.step.writing { background: var(--panel); }
+.step.done .label { color: var(--muted); }
+.step.failed .label { color: var(--alert); }
+.step .num {
+  flex: 0 0 26px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.step .label { flex: 1; min-width: 0; word-break: break-all; }
+.step .captures { flex: 0 0 auto; color: var(--caused); }
+.step .tally {
+  flex: 0 0 auto; min-width: 18px; padding: 0 5px; border-radius: 9px;
+  background: var(--panel); color: var(--muted); text-align: center; font-size: 10px;
+}
+/* Quiet until the row is under the pointer: the list is for reading first. */
+.step .write {
+  flex: 0 0 auto; padding: 2px 8px; border: 1px solid transparent; border-radius: 5px;
+  background: none; color: var(--muted); cursor: pointer; font: 10px/1.6 inherit;
+  opacity: 0;
+}
+.step:hover .write, .step.writing .write { opacity: 1; }
+.step .write:hover { border-color: var(--accent); color: var(--accent); }
+
+.stepwhat { margin: 0 8px 6px 36px; color: var(--muted); font-size: 11px; }
+
+.note {
+  display: flex; gap: 8px; align-items: baseline; padding: 4px 8px 6px 36px;
+  font: 12px/1.5 -apple-system, sans-serif;
+}
+.note .notewords { flex: 1; min-width: 0; }
+.note .notewhere {
+  flex: 0 1 auto; min-width: 0; max-width: 40%; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: 10px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.note .drop {
+  flex: 0 0 auto; padding: 0 3px; border: 0; background: none; cursor: pointer;
+  color: var(--muted); font: 13px/1 inherit;
+}
+.note .drop:hover { color: var(--alert); }
+
+.composer { padding: 2px 8px 10px 36px; }
+.picked {
+  display: flex; gap: 8px; align-items: baseline; padding: 6px 8px; margin-bottom: 7px;
+  border-radius: 6px; background: var(--bg); border: 1px solid var(--line);
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.picked .tag { color: var(--accent); font-weight: 600; }
+.picked .selector { flex: 1; min-width: 0; word-break: break-all; }
+.composer .hint { margin: 0 0 7px; }
+.composer textarea.why {
+  width: 100%; padding: 9px 11px; resize: vertical;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg);
+  font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.composerfoot { display: flex; gap: 10px; align-items: center; margin-top: 8px; }
+
+/* Walking a held page forward. Appears with the hold, because ticking a
+   running page means nothing, and goes when the hold is released. */
+.held {
+  padding: 10px 12px; margin-bottom: 12px;
+  border: 1px solid var(--accent); border-radius: 8px; background: var(--panel);
+}
+.tickbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.tickbar b { font: 600 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+             font-variant-numeric: tabular-nums; }
+.tickbar .quiet { font-size: 11px; }
+.tickbar .rule { width: 1px; height: 16px; background: var(--line); }
+.msin {
+  width: 74px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg); color: var(--fg);
+  font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.ticksaid { margin: 8px 0 0; }
+
+/* What each step actually ran, newest first: a transient state is told from a
+   timer that fired beside it by what is in this list. */
+.callbacks { list-style: none; margin: 8px 0 0; padding: 0; max-height: 132px; overflow: auto; }
+.callbacks li {
+  display: flex; gap: 10px; align-items: baseline; padding: 2px 0;
+  font: 10px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted);
+}
+.callbacks .num { flex: 0 0 22px; text-align: right; font-variant-numeric: tabular-nums; }
+.callbacks .when { flex: 0 0 56px; font-variant-numeric: tabular-nums; }
+.callbacks .kind { flex: 0 0 auto; color: var(--caused); }
+.callbacks .fn { flex: 1; min-width: 0; color: var(--fg); overflow: hidden;
+                 text-overflow: ellipsis; white-space: nowrap; }
+.callbacks .where { flex: 0 1 auto; min-width: 0; overflow: hidden;
+                    text-overflow: ellipsis; white-space: nowrap; }
+
+/* What the run is carrying, above the steps that read it. One wrapping line,
+   because a value is usually short and the steps are what the page is for. */
+.vars {
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  padding-bottom: 10px; margin-bottom: 10px; border-bottom: 1px solid var(--line);
+}
+.varslabel { color: var(--muted); font-size: 11px; }
+.var {
+  display: inline-flex; align-items: baseline; gap: 7px; padding: 3px 8px;
+  border: 1px solid var(--line); border-radius: 999px; cursor: pointer;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.var:hover { border-color: var(--accent); }
+.var b { color: var(--accent); font-weight: 600; }
+.var .varvalue { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.var .varfrom { color: var(--muted); font-size: 10px; }
+.var.open { border-radius: 10px; }
+.var .varfields { display: flex; flex-wrap: wrap; gap: 4px 10px; width: 100%; padding: 4px 0 2px; }
+.var .varfield { font-size: 10px; }
+.varadd { display: inline-flex; gap: 6px; align-items: center; }
+.vname, .vvalue {
+  padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg); color: var(--fg);
+  font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.vname { width: 108px; }
+.vvalue { width: 150px; }
+.varnew {
+  padding: 3px 8px; border: 1px dashed var(--line); border-radius: 999px;
+  background: none; color: var(--muted); cursor: pointer; font: 11px/1.5 inherit;
+}
+.varnew:hover { border-color: var(--accent); color: var(--accent); }
+
+/* A name whose step has not run yet: it is going to be carried, and saying so
+   beats a control that looks like it did nothing. */
+.var.waiting { border-style: dashed; cursor: default; }
+.var.waiting b { color: var(--muted); }
+
+/* Working on a UI.
+ *
+ * One column, centred, read top to bottom. The steps are dim markers in the
+ * flow rather than a list beside it, so where you were and what you saw there
+ * are read together.
+ */
+.editing { max-width: 860px; margin: 0 auto; }
+
+.topbar {
+  position: sticky; top: 0; z-index: 20; display: flex; gap: 8px; align-items: center;
+  flex-wrap: wrap; padding: 10px 0 12px; margin-bottom: 4px;
+  background: var(--bg); border-bottom: 1px solid var(--line);
+}
+.topbar .seqpick { max-width: 240px; }
+
+.reel { padding-top: 6px; }
+.nothing { max-width: 46ch; margin: 24px auto; text-align: center; }
+
+/* The marker is the quietest thing on the page: it says where, and the finding
+   under it says what. A rule either side keeps it centred without a box. */
+.mark {
+  display: flex; align-items: center; gap: 12px; margin: 26px 0 14px; cursor: pointer;
+  color: var(--muted); font: 10px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.mark::before, .mark::after {
+  content: ''; flex: 1; height: 1px; background: var(--line);
+}
+.mark .marktext {
+  flex: 0 1 auto; min-width: 0; max-width: 72%; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; opacity: 0.75;
+}
+.mark:hover .marktext { opacity: 1; color: var(--fg); }
+.mark:first-child { margin-top: 8px; }
+.mark.here .marktext { color: var(--accent); opacity: 1; }
+.mark.here::before, .mark.here::after { background: var(--accent); opacity: 0.35; }
+.mark.failed .marktext { color: var(--alert); opacity: 1; }
+
+.findingshead { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; }
+.nothing { max-width: 42ch; }
+
+/* The capture being marked, and the findings it joins: one column, newest
+   first, pictures at the width of the column so a mark is where it was put. */
+.draft, .finding {
+  padding: 12px 14px; margin-bottom: 14px;
+  border: 1px solid var(--line); border-radius: 10px;
+}
+.draft { border-color: var(--accent); }
+.drafthead, .findinghead { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; }
+.draftlabel, .findingat {
+  color: var(--muted); font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.tools { display: flex; gap: 4px; }
+.tool {
+  padding: 3px 9px; border: 1px solid transparent; border-radius: 5px; background: none;
+  color: var(--muted); cursor: pointer; font: 11px/1.5 inherit;
+}
+.tool:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.tool.on { border-color: var(--accent); color: var(--accent); }
+.tool:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.sheet {
+  display: block; width: 100%; height: auto; border-radius: 6px; background: var(--panel);
+  cursor: crosshair; touch-action: none;
+}
+.draft textarea.why {
+  width: 100%; margin-top: 10px; padding: 9px 11px; resize: vertical;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg);
+  font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+/* The marks are the controls now, so the chip is square around one. */
+.tools .tool { display: inline-flex; align-items: center; padding: 4px 6px; }
+
+.draftfoot { display: flex; gap: 10px; align-items: center; margin-top: 10px; }
+
+.findingwords { margin: 0 0 6px; font-size: 13px; }
+.findingwhere {
+  margin: 0 0 10px; color: var(--muted);
+  font: 10px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.shot {
+  display: block; width: 100%; height: auto; margin-top: 8px;
+  border: 1px solid var(--line); border-radius: 6px;
+}
+
+/* The capture beside its words. The thumbnail holds a fixed width so a column
+   of findings keeps one left edge to read down, whatever each picture's shape. */
+/* Where the note is filed, changed in place. A picker rather than a drag: the
+   steps it can move to are a list, and the list is what states them. */
+.movenote {
+  max-width: 170px; padding: 2px 6px;
+  border: 1px solid var(--line); border-radius: 5px;
+  background: var(--bg); color: var(--muted); cursor: pointer;
+  font: 10px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.movenote:hover { border-color: var(--accent); color: var(--fg); }
+
+.findingbody { display: flex; gap: 12px; align-items: flex-start; }
+.findingtext { flex: 1 1 0; min-width: 0; }
+.findingshots { display: flex; flex-direction: column; gap: 6px; flex: 0 0 auto; }
+.thumb {
+  padding: 0; border: 1px solid var(--line); border-radius: 6px;
+  background: none; cursor: zoom-in; line-height: 0; overflow: hidden;
+}
+.thumb:hover { border-color: var(--accent); }
+.thumb img { display: block; width: 132px; height: auto; }
+/* Opened, the picture is the point, so the card gives it the room the scrim
+   allows rather than the width a report of text wants. */
+.shotview { width: min(1100px, 100%); }
+
+.report .noproxy { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px; }
+.shotfull {
+  display: block; width: 100%; height: auto; margin-top: 12px;
+  border: 1px solid var(--line); border-radius: 6px;
+}
+
+/* Choosing a sequence. Stacked tiles rather than a row of cards: the names run
+   long and the description is the part that decides it, so each one gets the
+   column's width and is read down the page. */
+.tiles { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.tile {
+  display: flex; flex-direction: column; gap: 5px; width: 100%; padding: 13px 15px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--bg);
+  color: var(--fg); text-align: left; cursor: pointer; font: inherit;
+}
+.tile:hover { border-color: var(--accent); background: var(--panel); }
+.tilename { font: 600 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.tilewhat { color: var(--fg); font-size: 12px; opacity: 0.85; }
+.tileexpect { color: var(--muted); font-size: 11px; }
+.tilecounts {
+  display: flex; gap: 12px; margin-top: 2px; color: var(--muted);
+  font: 10px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.tilenotes { color: var(--accent); }
+
+/* Recording a sequence. The steps land on their own; what the page asks for is
+   the part only the person driving knows - what it is for, and where the run
+   could have gone another way. */
+.recorder { max-width: 860px; margin: 0 auto; }
+/* Naming a sequence.
+   The card sits on the column's centre line; its contents stay ranged left, so
+   the prose keeps one edge to read down while the card holds the middle. */
+.startbox {
+  max-width: 46ch; margin: 34px auto 0;
+  padding: 22px 24px 20px;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--panel);
+}
+.startbox h2 { margin: 0; font: 600 15px/1.4 system-ui, sans-serif; }
+/* Under the button it undoes, and carrying none of its weight: a second
+   filled button beside the first reads as a second way to start. */
+.startbox .cancel {
+  display: block; width: 100%; margin-top: 8px; padding: 8px 12px;
+  border: 0; background: none; color: var(--muted); cursor: pointer;
+  font: 600 11px/1.4 -apple-system, sans-serif; letter-spacing: 0.04em;
+}
+.startbox .cancel:hover { color: var(--fg); }
+.lede { margin: 6px 0 20px; font-size: 12px; line-height: 1.6; color: var(--muted); }
+.namebox {
+  width: 100%; margin: 0 0 20px; padding: 9px 11px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg);
+  font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.namebox:focus { outline: none; border-color: var(--accent); }
+
+.whowatches { margin: 0 0 18px; padding: 0; border: 0; }
+.whowatches .asklabel { padding: 0; }
+
+/* Each way to record carries what it costs, so the choice is made on the
+   consequence rather than on the label. */
+.choice {
+  display: flex; gap: 10px; align-items: flex-start; width: 100%;
+  margin-top: 8px; padding: 10px 12px; text-align: left; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--bg); color: var(--fg);
+}
+.choice:hover { border-color: var(--accent); }
+.choice.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, var(--bg)); }
+.pip {
+  flex: none; width: 13px; height: 13px; margin-top: 2px; border-radius: 50%;
+  border: 1px solid var(--line); background: var(--bg);
+}
+.choice.on .pip { border-color: var(--accent); box-shadow: inset 0 0 0 3px var(--accent); }
+.choicebody { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.choicetitle { font: 600 12px/1.4 system-ui, sans-serif; }
+.choicesaid { font-size: 11px; line-height: 1.55; color: var(--muted); }
+
+.go { width: 100%; padding: 10px 12px; }
+.go:disabled { opacity: 0.45; cursor: default; }
+
+.recname { font: 600 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+/* A recording is a state you can forget you are in, so it says so plainly. */
+.recdot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--alert);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--alert) 25%, transparent);
+}
+
+.purpose { margin: 14px 0 18px; }
+.purpose textarea.why {
+  width: 100%; margin-bottom: 12px; padding: 9px 11px; resize: vertical;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg);
+  font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* A step held for a decision sits above the list, since nothing else can be
+   done until it is settled. */
+.pending {
+  display: flex; gap: 10px; align-items: center; padding: 9px 12px; margin-bottom: 12px;
+  border: 1px solid var(--accent); border-radius: 8px;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.pendinglabel { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.taken { list-style: none; margin: 0; padding: 0; }
+.took { border-top: 1px solid var(--line); padding: 2px 0; }
+.took:last-child { border-bottom: 1px solid var(--line); }
+.tookhead {
+  display: flex; gap: 10px; align-items: baseline; padding: 7px 8px;
+  font: 11px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.took .num { flex: 0 0 24px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.took .label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tookwhat { margin: 0 8px 7px 42px; font-size: 12px; }
+.tookedit { display: flex; gap: 8px; align-items: flex-start; padding: 0 8px 10px 42px; }
+.tookedit textarea.why {
+  flex: 1; padding: 8px 10px; resize: vertical;
+  border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--fg);
+  font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* A step held while the agent reads it. Alert rather than accent once it is
+   flagged, because the two states ask different things: one waits, one wants
+   an answer. */
+.held.flagged { border-color: var(--alert); }
+.heldhead { font: 600 12px/1.5 system-ui, sans-serif; }
+.held.flagged .heldhead { color: var(--alert); }
+.helddetail { margin-top: 5px; font-size: 12px; line-height: 1.55; color: var(--muted); }
+.heldlabel {
+  margin-top: 6px; color: var(--muted);
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+.held .hint { margin: 5px 0 0; }
+
+/* One selector the agent found, as a row to take. */
+.optrow {
+  display: flex; gap: 10px; align-items: baseline; width: 100%; margin-top: 7px;
+  padding: 7px 9px; text-align: left; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 7px;
+  background: var(--bg); color: var(--fg);
+}
+.optrow:hover { border-color: var(--accent); }
+.optsel {
+  flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.optnote { flex: 1 1 auto; font-size: 11px; color: var(--muted); }
+.heldacts { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
+
+/* Named in the topbar: a page held with nothing saying why reads as a hang. */
+.watching {
+  padding: 2px 7px; border-radius: 999px;
+  border: 1px solid var(--accent); color: var(--accent);
+  font: 10px/1.6 system-ui, sans-serif; letter-spacing: 0.04em; text-transform: uppercase;
+}
+
+/* What the picked element reads, where its selector says little on its own. */
+.pickedtext {
+  margin: 6px 0 0; color: var(--muted);
+  font-size: 11px; line-height: 1.55; overflow-wrap: anywhere;
+}
+
+/* How far out an element capture reaches. Beside the label, because it names
+   what the image holds rather than what can be drawn on it. */
+.widen { display: flex; gap: 6px; align-items: center; margin-left: 12px; }
+.widen .quiet { font-size: 11px; white-space: nowrap; }
+.widen .tool { min-width: 22px; text-align: center; }
+
+/* The capture's selector, on its own line above the controls. It wraps where
+   it must instead of squeezing the tools onto a second row. */
+.draftname {
+  margin-bottom: 8px; color: var(--muted);
+  font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+.widen { margin-left: 0; }
+
+/* What the run would not do, stated where the controls that drive it are. */
+.failure {
+  margin: 0 0 12px; padding: 8px 11px;
+  border: 1px solid var(--alert); border-radius: 8px;
+  color: var(--alert); font-size: 12px; line-height: 1.55;
+}
+.noaddress { margin: 0 0 16px; max-width: 64ch; }
+
+/* Writing against a step the run has already passed. Quiet until the marker
+   is reached for, because the marker's own job is to say where you are. */
+.mark { position: relative; }
+.marknote {
+  opacity: 0; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--bg); color: var(--muted); cursor: pointer; font: 10px/1.6 inherit;
+}
+.mark:hover .marknote, .marknote:focus-visible { opacity: 1; }
+.marknote:hover { border-color: var(--accent); color: var(--accent); }
+.failure { display: flex; gap: 10px; align-items: center; }
+
+/* What the sequence is for, above the steps that carry it out. */
+.about {
+  margin-bottom: 14px; padding: 10px 12px;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--panel);
+}
+.about.open { display: flex; flex-direction: column; }
+.aboutline { display: flex; gap: 10px; align-items: baseline; }
+.aboutline + .aboutline { margin-top: 6px; }
+.abouttext { flex: 1; min-width: 0; font-size: 12px; line-height: 1.55; }
+.aboutfoot { display: flex; gap: 10px; align-items: center; margin-top: 12px; }
+.chip-toggle.bad, .tool.bad { border-color: var(--alert); color: var(--alert); }
+
+/* Editing one step: why it is there, and whether the run forks at it. */
+/* The per-step controls appear under the pointer and hold no width until they
+   do. Faded in place they still occupied the line: measured at a 500px pane,
+   the note button and this group held 256px of a 460px row at zero opacity,
+   and the label wrapped mid-token into the 140px left over. Taken out of the
+   flow they cost nothing, and taken out absolutely rather than by display the
+   label does not reflow as the pointer crosses the row. */
+.stephead { position: relative; }
+.stepedit {
+  display: flex; gap: 2px; opacity: 0;
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  z-index: 20; padding-left: 10px; background: var(--panel); border-radius: 6px;
+}
+.step:hover .stepedit, .stepedit:focus-within { opacity: 1; }
+/* Writing a note holds the group open, so the button that closes it stays
+   reachable without the pointer resting on the row. */
+.step.writing .stepedit { opacity: 1; }
+.stepedbox { display: flex; gap: 8px; align-items: flex-end; margin-top: 8px; }
+.stepedbox .why { flex: 1; }
+/* Editing one step, lined up with the step's own text rather than the gutter
+   its number sits in. Without a scoped rule the box falls back to the browser
+   default and breaks white and full-bleed across the row. */
+.stepedbox { margin: 2px 8px 10px 36px; }
+.stepedbox textarea.why {
+  flex: 1; min-width: 0; padding: 8px 10px; resize: vertical;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg); color: var(--fg);
+  font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.stepedbox textarea.why:focus { outline: none; border-color: var(--accent); }
+/* A guarded jump, laid out as the thing it builds: when <guard> <value>, run
+   <sequence>. Reading the row left to right is reading the step it writes. */
+.fork {
+  display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+  margin: 2px 8px 10px 36px; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--bg);
+}
+.fork .asklabel { padding: 0; }
+.fork .namebox { margin: 0; padding: 5px 8px; font-size: 11px; }
+.fork .namebox.grow { flex: 1 1 140px; min-width: 0; }
+.fork .seqpick { padding: 4px 6px; font-size: 11px; }
+.fork .seqpick.narrow { flex: 0 0 auto; }
+.fork .save { padding: 5px 12px; }
+
+/* Offered from a failure: the guard belongs to the step that failed, so it
+   sits against the failure line rather than down in the list. */
+.fork.guarding { margin-left: 0; border-color: var(--alert); }
+.asklabel.wide { flex: 0 0 auto; white-space: nowrap; }
+
+/* ---------------------------------------------------------------------------
+   What crossed the boundary, under the step that caused it.
+
+   The left rule carries the only question this list asks - did the step cause
+   this, or did the app do it on its own - so nothing else here is coloured.
+   A row failed or held takes the alert and hold hues already in use.
+--------------------------------------------------------------------------- */
+
+/* A browser is launched through a proxy or it is not; a running one cannot
+   gain one, so this asks rather than offering a switch. */
+.noproxy {
+  display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+  margin: 10px 0 0; padding: 9px 12px;
+  border: 1px dashed var(--line); border-radius: 9px;
+  font-size: 12px; color: var(--muted);
+}
+.noproxy .asked { color: var(--caused); font: 11px/1.6 ui-monospace, Menlo, monospace; }
+
+.crossbar {
+  display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap;
+  margin: 10px 0 0; padding: 8px 12px;
+  border: 1px solid var(--line); border-radius: 9px;
+  font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.crossbar .count { font-size: 15px; font-weight: 600; color: var(--caused); }
+.crossbar .key { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }
+.crossbar .key i { width: 12px; height: 0; border-top: 2px solid; }
+.crossbar .key i.caused { border-color: var(--caused); }
+.crossbar .key i.unowned { border-color: var(--own); border-top-style: dashed; }
+
+.crossedlist { list-style: none; margin: 6px 0 2px; padding: 0 0 0 26px; }
+.crossed {
+  border-left: 2px solid var(--caused);
+  padding: 2px 8px; border-radius: 0 6px 6px 0;
+}
+/* Nothing a step caused: it runs on the app's own schedule and keeps its place
+   in the order, because a server that stops pushing shows only by its absence. */
+.crossed.unowned { border-left-color: var(--own); border-left-style: dashed; }
+.crossed:hover, .crossed.open { background: var(--panel); }
+
+.crossedhead {
+  display: flex; gap: 10px; align-items: baseline; cursor: pointer;
+  font: 11px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.crossedhead .dir { flex: 0 0 auto; min-width: 46px; max-width: 24%; color: var(--muted);
+                    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.crossedhead .way { flex: 0 0 10px; color: var(--muted); }
+.crossedhead .what { flex: 1 1 auto; min-width: 0;
+                     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.crossed.open .crossedhead .what { white-space: normal; word-break: break-all; }
+.crossedhead .meta { flex: 0 0 auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+.crossedhead .meta.bad { color: var(--alert); }
+.crossedhead .meta.held { color: var(--own); }
+/* Read after the payload: a row is found by its URL and judged by this. */
+.crossedhead .reading { flex: 0 1 auto; min-width: 0; max-width: 26%; color: var(--muted);
+                        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* ---------------------------------------------------------------------------
+ * Beside the app, and what gives way there.
+ *
+ * The pane runs in a split beside the app it drives, so its working width is a
+ * column rather than a page. The payload is what a row is found by and the
+ * first line keeps it, along with the control that drops the row; the readings
+ * come out of the line.
+ *
+ * `display: contents` at full width, so the group is not a box and every child
+ * lays out against the head exactly as it did before the group existed.
+ *
+ * Hover puts them back as a strip positioned over the row beneath, which holds
+ * the row's own height. A row that grew on hover would push the rows under it
+ * down, out from under the pointer, and the row being read would change while
+ * it was being read.
+ *
+ * A pointer is what reveals the strip. Without one the values are reached by
+ * opening the row, which carries them in full - putting them back into a line
+ * this narrow overflows it, and the row loses the payload instead.
+ * ------------------------------------------------------------------------- */
+/* What the rule is recognised by, one constraint to a row.
+ *
+ * Each row is the constraint and the two readings it can take, the standing
+ * one lit. Dropping one widens the rule and lowers it in the order the pins
+ * are taken in, so a crossing another rule was staged for can start answering
+ * from this one: the pair is shown together rather than as a checkbox, because
+ * what the other reading does is the thing worth seeing before picking it.
+ */
+.binds { display: flex; flex-direction: column; gap: 4px; margin: 2px 0 1px; }
+.bound { display: flex; gap: 8px; align-items: center; }
+.bound .boundlabel {
+  flex: 0 0 68px; color: var(--muted);
+  font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.boundpick {
+  padding: 2px 8px; border: 1px solid var(--line); border-radius: 5px;
+  background: none; color: var(--muted); cursor: pointer;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.boundpick:hover { color: var(--fg); }
+.boundpick.on { border-color: var(--own); color: var(--own); }
+
+/* The value takes the room left over: a socket URL and a step's own call are
+   both longer than the line, and truncating them is what keeps the wildcard
+   button beside them rather than on a line of its own. */
+.boundvalue { flex: 1 1 0; min-width: 0; display: flex; gap: 4px; }
+.boundways { display: flex; gap: 4px; }
+.boundin {
+  flex: 1 1 0; min-width: 0;
+  padding: 2px 6px; border: 1px solid var(--line); border-radius: 5px;
+  background: var(--panel); color: var(--muted); cursor: pointer;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.boundvalue.on .boundin { border-color: var(--own); color: var(--own); }
+.boundin:focus { outline: none; border-color: var(--own); color: var(--fg); }
+
+/* The constraint is dropped, so the value it holds is not part of what the
+   rule matches on. Dimmed to the point of reading as inert while staying
+   reachable: the value is what binds it again, and a disabled control would
+   put that out of reach. */
+.boundvalue.off { opacity: 0.4; }
+/* Every value this constraint can take is on screen, and dropping it makes
+   them all match. Dimmed they would read as none of them matching. */
+.boundvalue.off.whole { opacity: 1; }
+.boundvalue.off .boundin { border-style: dashed; }
+
+@media (max-width: 599px) {
+  .bound { flex-wrap: wrap; }
+  .bound .boundlabel { flex: 0 0 100%; }
+}
+
+.shaved { display: contents; }
+
+/* One of the two is shown at a time. The wide form carries the origin; the
+   lean form carries what separates this row from the next one. Both are in the
+   markup so the swap costs no resize listener and no reflow at the moment the
+   pane is dragged. */
+.lean { display: none; }
+
+@media (max-width: 599px) {
+  .wide { display: none; }
+  .lean { display: inline; }
+
+  /* The spacer that pushes the controls right at full width becomes the break
+     that puts them on a line of their own here: zero height, full basis, so
+     everything after it starts a line. Left to wrap on their own the controls
+     split across two lines and which line a control sits on is set by the
+     length of the sequence name beside it, which moves as the sequence
+     changes. */
+  .runbar .grow, .topbar .grow { flex: 1 0 100%; height: 0; margin: 0; }
+  /* Takes the line it shares with the position, minus what the position needs:
+     a zero basis that grows, so the name is what gives way when it is long
+     rather than the position being pushed onto a line of its own. */
+  .runbar .seqpick, .topbar .seqpick { flex: 1 1 0; min-width: 0; max-width: none; }
+  .runbar .rule { display: none; }
+
+  /* The colour key is a reference read once, not a reading taken each pass, so
+     it goes before any count does. Left in, the bar broke into a line per item
+     and the counts it exists to carry were the hardest thing on it to find. */
+  .crossbar .key, .crossbar .rule { display: none; }
+  .crossbar { gap: 8px; }
+  /* The spacer that pushes the right-hand group right at full width becomes
+     the break that starts a second line here: zero height, full basis, so the
+     bar goes from one line to two at one width. Left to wrap on their own the
+     items leave one at a time, and which line each sits on is set by how many
+     digits a count happens to be carrying. */
+  .crossbar .grow { flex: 1 0 100%; height: 0; margin: 0; }
+  .crossbar { row-gap: 4px; }
+}
+
+@media (max-width: 599px) {
+  /* Across the whole width at this size: a centred bar leaves a margin the
+     screen cannot spare, and the controls are easier to reach spread out. */
+  .footbar { width: 100%; justify-content: space-between; }
+
+  .crossedhead, .onreplay .rulehead { position: relative; }
+  .shaved { display: none; }
+
+  .crossed:hover .shaved,
+  .crossed:focus-within .shaved,
+  .onreplay .rules li:hover .shaved,
+  .onreplay .rules li:focus-within .shaved {
+    display: flex; gap: 10px; align-items: baseline;
+    position: absolute; z-index: 30; top: 100%; left: 0; right: 0;
+    padding: 3px 8px; border: 1px solid var(--line); border-radius: 0 0 6px 6px;
+    border-top: 0; background: var(--panel);
+  }
+  /* Flat inside the strip: the widths that held a column in the line would
+     leave gaps in a strip that has no columns to align to. */
+  .crossed:hover .shaved > *,
+  .crossed:focus-within .shaved > *,
+  .onreplay .rules li:hover .shaved > *,
+  .onreplay .rules li:focus-within .shaved > * { flex: 0 0 auto; text-align: left; }
+
+  /* The verb is a word, and at this width the target needs the room. */
+  .onreplay .verb { flex: 0 0 auto; }
+}
+
+
+.payload {
+  margin: 4px 0 6px 56px; padding: 7px 9px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+  font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted);
+  white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow: auto;
+}
+
+/* What this browser may reach. A scope too tight is indistinguishable from a
+   broken app until the refusals are named beside the control that clears it. */
+.scope { margin-top: 4px; font: 12px/1.6 -apple-system, BlinkMacSystemFont, sans-serif; }
+/* One question to a block, each with what it does stated under it. Ranged
+   left and stacked: the card has height and no width to spare, and a row of
+   controls on one line is what made these unreadable. */
+.scoperow { padding: 14px 0; border-top: 1px solid var(--line); }
+.scoperow:first-child { border-top: 0; padding-top: 4px; }
+.scoperow .asklabel { display: block; margin-bottom: 8px; }
+.scoperow .hint { margin: 8px 0 0; max-width: 62ch; }
+.scoperow .chip-toggle { margin-top: 10px; }
+
+.hosts { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.hosts li {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 4px 6px 4px 10px; border: 1px solid var(--line); border-radius: 999px;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.hosts .host { color: var(--fg); word-break: break-all; }
+/* A count of what the list turned away, which is the list working. */
+.hosts.blocked li { border-style: dashed; }
+.hosts.blocked .host { color: var(--muted); }
+.hosts .times {
+  padding: 0 6px; border-radius: 999px; background: var(--panel); color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.hosts .drop {
+  padding: 0 2px; border: 0; background: none; color: var(--muted);
+  cursor: pointer; font: 13px/1 inherit;
+}
+.hosts .drop:hover { color: var(--alert); }
+
+.addhost { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+.addhost .namebox { flex: 1 1 0; min-width: 0; margin: 0; }
+.addhost .chip-toggle { margin-top: 0; }
+.scope .scopeheld {
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.scope .scopesaid { margin: 14px 0 0; color: var(--caused); font-size: 12px; }
+
+/* A row a rule answers is no longer a reading of the run, so it takes the hue
+   that means the app is not the thing deciding it any more. */
+.crossed.answers { border-left-color: var(--own) !important; border-left-style: solid !important; }
+.crossed.ruled { opacity: .55; }
+.crossedhead .tag { flex: 0 0 auto; color: var(--own); }
+.crossedhead .repeat { flex: 0 0 auto; color: var(--muted); }
+.crossedhead .kill {
+  flex: 0 0 auto; border: 0; background: none; cursor: pointer; padding: 0 2px;
+  color: var(--muted); font: inherit; opacity: 0;
+}
+.crossed:hover .kill { opacity: 1; }
+.crossedhead .kill:hover { color: var(--alert); }
+
+/* The payload, as it will be served rather than as it crossed. */
+.crossed .body { margin: 4px 0 6px 56px; }
+.crossed .edit, .onreplay .rules li .edit { display: flex; flex-direction: column; gap: 5px; }
+.crossed .editrow, .onreplay .rules li .editrow {
+  display: flex; gap: 8px; align-items: center;
+  font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted);
+}
+.crossed .edit input:not(.boundin), .crossed .edit textarea,
+.onreplay .rules li .edit input:not(.boundin), .onreplay .rules li .edit textarea {
+  padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg); color: var(--fg);
+  font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.crossed .edit input.status, .onreplay .rules li .edit input.status { width: 58px; }
+.crossed .edit textarea, .onreplay .rules li .edit textarea {
+  width: 100%; resize: vertical; min-height: 58px;
+}
+.crossed .edit input:not(.boundin):focus, .crossed .edit textarea:focus,
+.onreplay .rules li .edit input:not(.boundin):focus, .onreplay .rules li .edit textarea:focus {
+  outline: 2px solid var(--accent); outline-offset: 1px;
+}
+/* An edited box is work not yet committed, so it carries the colour of the
+   button that would commit it. */
+.crossed .edit textarea.dirty, .crossed .edit input.dirty,
+.onreplay .rules li .edit textarea.dirty, .onreplay .rules li .edit input.dirty {
+  border-color: var(--accent);
+}
+.crossed .state, .onreplay .rules li .state {
+  display: flex; gap: 8px; align-items: center;
+  font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.crossed .state .pend, .onreplay .rules li .state .pend { color: var(--accent); }
+.crossed .state .ok, .onreplay .rules li .state .ok { color: var(--muted); }
+.crossed .bodyrow, .onreplay .rules li .bodyrow {
+  display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 7px;
+}
+/* One loud button: the one that commits what is in the box. */
+.crossed .bodyrow .tool.done, .onreplay .rules li .bodyrow .tool.done {
+  border-style: dashed; color: var(--muted); cursor: default;
+}
+.crossed .bodyrow .tool.plain { border-color: transparent; color: var(--muted); }
+.crossed .bodyrow .tool.plain:hover { border-color: var(--line); color: var(--fg); }
+
+/* What this sequence will do next time it runs. */
+.onreplay {
+  margin-top: 20px; padding: 12px 14px;
+  border: 1px solid var(--line); border-radius: 9px;
+}
+.onreplayhead { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+.onreplay h2 {
+  margin: 0; font: 600 11px/1.4 inherit; letter-spacing: .08em; color: var(--muted);
+}
+.onreplay .rules { list-style: none; margin: 10px 0 0; padding: 0; }
+.onreplay .rules li {
+  border-top: 1px solid var(--line);
+  font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.onreplay .rules li:first-child { border-top: 0; }
+.onreplay .rulehead { display: flex; gap: 10px; align-items: baseline; padding: 4px 0; }
+/* Only an answer opens: a block and a hide carry no value to read. */
+.onreplay .rulehead.opens { cursor: pointer; }
+.onreplay .rulehead.opens:hover .target { color: var(--fg); }
+.onreplay .rules li.open .rulehead .target { color: var(--fg); }
+.onreplay .rules li .body { margin: 2px 0 10px 76px; }
+.onreplay .verb { flex: 0 0 66px; color: var(--own); }
+.onreplay .verb.keep { color: var(--caused); }
+.onreplay .verb.quiet { color: var(--muted); }
+.onreplay .target {
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.onreplay .hits { flex: 0 0 auto; color: var(--caused); }
+/* A rule that never fired is one whose matcher has stopped matching. */
+.onreplay .hits.cold { color: var(--alert); }
+.onreplay .rules .drop {
+  flex: 0 0 auto; border: 0; background: none; color: var(--muted); cursor: pointer; padding: 0 2px;
+}
+.onreplay .rules .drop:hover { color: var(--alert); }
+.onreplayfoot { display: flex; gap: 10px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+.onreplay .saved { color: var(--caused); font: 11px/1.6 ui-monospace, Menlo, monospace; }
+
+/* Stability is a count, never a colour: the two hues answer the ownership
+   question and nothing else takes them. A kind that trails the pass count is
+   one no step can safely wait for. */
+.crossedhead .seen {
+  flex: 0 0 42px; text-align: right; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.crossedhead .seen.moves { color: var(--fg); font-weight: 600; }
+.crossedhead .seen.moves::after { content: ' ~'; }
+
+/* A run in flight: the position says so, and the list it is filling says so. */
+.runbar .at.running { color: var(--accent); }
+ol.steps.running > li.step.now > .stephead { box-shadow: inset 2px 0 0 var(--accent); }
+
+/* ---------------------------------------------------------------------------
+   Traffic arriving.
+
+   A row is keyed by the event id, so a row already on screen keeps its node
+   across the poll and animates once - when the event itself is new. The list
+   fills at the rate the app actually crosses the boundary rather than at the
+   rate the page redraws.
+--------------------------------------------------------------------------- */
+
+@keyframes land {
+  from { opacity: 0; transform: translateY(-3px); }
+  to   { opacity: 1; transform: none; }
+}
+.crossed { animation: land 200ms ease-out; }
+
+/* The step being driven. The rule breathes while the run is in flight, so a
+   step waiting on traffic reads as waiting rather than as stalled. */
+@keyframes driving {
+  0%, 100% { box-shadow: inset 2px 0 0 var(--accent); }
+  50%      { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent) 35%, transparent); }
+}
+ol.steps.running > li.step.now > .stephead { animation: driving 1.4s ease-in-out infinite; }
+
+/* A payload opening under its row, rather than appearing whole. */
+@keyframes unfold {
+  from { opacity: 0; transform: translateY(-2px); }
+  to   { opacity: 1; transform: none; }
+}
+.crossed.open > .body { animation: unfold 160ms ease-out; }
+
+/* Motion here carries arrival, which the counts carry too. Anyone who has
+   asked for less of it loses nothing by having none. */
+@media (prefers-reduced-motion: reduce) {
+  .crossed,
+  .crossed.open > .body,
+  ol.steps.running > li.step.now > .stephead { animation: none; }
+}
+
+/* ---------------------------------------------------------------------------
+   Whether the page being driven is held.
+
+   In the corner of every tab, because the state is global and only two of the
+   four tabs carry a control for it. A held page has its JS stopped, so a click
+   on the app reaches nothing - and with nothing saying so, the app reads as
+   broken rather than as stopped.
+--------------------------------------------------------------------------- */
+
+/* Fixed at the foot and centred, over whatever the tab is showing. The page
+   pays for it in bottom padding, so the last row of a list is reachable rather
+   than sitting under the bar. */
+/* Anchored at the foot and grown upward, so the bar that is always there
+   keeps its place when the run bar above it appears and goes. */
+.footing {
+  position: fixed; z-index: 50; left: 50%; bottom: 14px; transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  /* A definite width rather than a shrink to contents: fixed and shrunk, the
+     bar settles narrower than the screen allows and breaks a control onto a
+     line of its own while the margin beside it stays empty. */
+  width: calc(100vw - 32px); pointer-events: none;
+  font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.footbar {
+  display: flex; flex-wrap: nowrap; justify-content: center; gap: 6px; align-items: center;
+  max-width: 100%; pointer-events: auto;
+  padding: 6px 12px; border: 1px solid var(--line); border-radius: 22px;
+  background: var(--bg); box-shadow: 0 6px 22px rgb(0 0 0 / 28%);
+}
+.footing .seqpick {
+  flex: 0 1 220px; min-width: 0; padding: 4px 6px; font: inherit;
+  border: 0; background: none;
+}
+.footing .at { color: var(--muted); white-space: nowrap; margin: 0 4px; }
+.footing .at b { color: var(--fg); }
+/* The hues the screens already carry: a crossing a step caused, and one the
+   sequence answered in the server's place. Same colours as the rows they
+   count, so the bar and the list read as one thing. */
+.footing .crossings { color: var(--caused); }
+.footing .answered { color: var(--own); }
+.footing .at.running { color: var(--accent); }
+/* Stopped because someone asked, not because it finished. Frost, the hue
+   already carrying "held", so the two kinds of stillness read as one family. */
+.footing .at.paused { color: var(--frost); }
+.footing .at.paused b { color: var(--frost); }
+/* The control the paused line is waiting on, in the colour of that line. */
+.footing .chip-toggle.waiting,
+.footing .chip-toggle.waiting:hover:not(:disabled) {
+  border-color: var(--frost); color: var(--frost);
+}
+.footing .rule { width: 1px; height: 18px; background: var(--line); margin: 0 2px; }
+/* The mark is the whole control, so the chip is square around it and the
+   name is carried by the tooltip and the aria-label. */
+.footing .chip-toggle { padding: 5px 7px; }
+
+/* Whether anything is recording what crosses the boundary. Red states that
+   nothing is, which is the reading that costs a session's evidence; green
+   states that it is, and the control then does nothing when pressed. */
+.footing .chip-toggle.blind,
+.footing .chip-toggle.blind:hover:not(:disabled) {
+  border-color: var(--alert); color: var(--alert);
+}
+.footing .chip-toggle.recording,
+.footing .chip-toggle.recording:hover:not(:disabled) {
+  border-color: var(--caused); color: var(--caused);
+}
+/* Recording, and nothing to record: the page it watches is held. Frost, the
+   hue every other stopped thing on this bar already carries. */
+.footing .chip-toggle.stilled,
+.footing .chip-toggle.stilled:hover:not(:disabled) {
+  border-color: var(--frost); color: var(--frost);
+}
+
+/* A frozen page is the state worth noticing: stopped, it looks like a broken
+   one. Frost marks it, which no other control on the bar uses, so the one
+   control that changes what the app does is the one that changes colour. */
+.footing .chip-toggle.frozen,
+.footing .chip-toggle.frozen:hover:not(:disabled) {
+  border-color: var(--frost); color: var(--frost);
+}
+
+.footing .held { color: var(--muted); }
+.footing .held.closed { color: var(--alert); }
+.footing .held.waiting { opacity: .5; }
+
+/* What a later crossing is recognised by. Derived, and editable because a
+   payload names itself in a different place in every app. */
+.crossed .edit input.match, .onreplay .rules li .edit input.match {
+  flex: 1 1 auto; min-width: 0;
+  padding: 4px 7px; border: 1px solid var(--line); border-radius: 5px;
+  background: var(--bg); color: var(--fg);
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.crossed .edit input.match.dirty, .onreplay .rules li .edit input.match.dirty {
+  border-color: var(--accent);
+}
+
+/* Staged, and this pass has not produced it. Shown so a rule can be seen not
+   firing, and dimmed so it is not read as something that just crossed. */
+.crossed.stale { opacity: .55; }
+.crossedhead .stale { flex: 0 0 auto; color: var(--muted); }

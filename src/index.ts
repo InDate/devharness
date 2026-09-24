@@ -54,7 +54,7 @@ import { createRequestTools } from './tools/request-tools.js';
 import { createAssertTools } from './tools/assert-tools.js';
 import { createWaitTools } from './tools/wait-tools.js';
 import { createModalTools } from './tools/modal-tools.js';
-import { createAnnotateTools } from './tools/annotate-tools.js';
+import { createBenchTools } from './tools/bench-tools.js';
 import { createReplayTools } from './tools/replay-tools.js';
 import { createServerTools } from './tools/server-tools.js';
 import { createConfigTools } from './tools/config-tools.js';
@@ -72,7 +72,25 @@ import { homedir } from 'os';
 import { ServerManager, detectAutoRestartCommand } from './server-manager.js';
 import { configManager } from './config.js';
 import { ToolError } from './tool-error.js';
-import { startProxyFor } from './proxy/registry.js';
+import { startProxyFor, markOnProxies, markNextCommand, releaseCommand } from './proxy/registry.js';
+
+/**
+ * Tools that read the app without driving it.
+ *
+ * They take no proxy cursor, so a screenshot taken while a navigate is still
+ * settling leaves the navigate's cursor in place rather than claiming the
+ * traffic it caused. Most concurrency in a session is one driving command with
+ * observers alongside, and this makes that case exact.
+ *
+ * A tool that can cause traffic belongs on the other side of this line however
+ * much it also reads.
+ */
+const OBSERVING_TOOLS = new Set([
+  'screenshot', 'content', 'inspect', 'proxy', 'network', 'console',
+  'wait', 'assert', 'dashboard', 'issues', 'message', 'listConnections',
+  'getChromeStatus', 'getDebuggerStatus', 'getDebugLoggingStatus',
+  'getSourceCode', 'detectModals', 'config',
+]);
 import { checkPortFailures, checkBreakpointPause, checkBugBlocking, checkPendingStartups, checkDuplicateSession, prependToResponse, appendToResponse, buildStatusSuffix, type StatusLineItem } from './tool-response.js';
 import { recordBlockEvent, clearBlockEvents } from './block-events.js';
 import { createStartupGate } from './startup-gate.js';
@@ -83,7 +101,7 @@ import { readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { debugLog, enableDebugLogging, disableDebugLogging, isDebugEnabled, enableHistoryLogging, disableHistoryLogging, setStartupMetrics } from './debug-logger.js';
-import { validateReference, requireValidReference, deriveConnectionReference, UNNAMED_CONNECTION, InvalidReferenceError } from './reference-validator.js';
+import { validateReference, requireValidReference, deriveConnectionReference, sanitizeReference, UNNAMED_CONNECTION, InvalidReferenceError } from './reference-validator.js';
 import { initializePaths, getOutputPath, resolveStateDir } from './helpers/paths.js';
 import { cleanupStaleTempFiles, cleanupStaleTempFilesSync } from './atomic-write.js';
 import { createSessionDetector, type SessionInfo, type SessionDetector } from './session-detector.js';
@@ -472,6 +490,7 @@ const connectionTools = {
       autoConnect: z.boolean().optional().default(true).describe('Automatically connect debugger after launch'),
       port: z.number().optional().describe('The debugging port (optional, defaults to this session\'s reserved port). Use this to launch multiple Chrome instances on different ports. Always honoured when given - with forceNewInstance the call errors if that exact port is already taken instead of moving to another port.'),
       forceNewInstance: z.boolean().optional().describe('Always spawn a fresh Chrome process instead of reusing/tabbing into an existing instance. Without `port`, a free port is chosen automatically; with `port`, that port is used and the call errors if it is already in use. Errors if `reference` is already bound to a live connection.'),
+      bringToFront: z.boolean().optional().describe('Select this tab in its window and bring Chrome in front of other apps, which moves keyboard focus to Chrome. Default false: the tab opens in the background and focus stays in the app in front.'),
       headless: z.boolean().optional().default(false).describe('Launch in headless mode (no visible window, prevents focus stealing). Default: false'),
       reference: z.string().optional().describe('Connection reference name (3 descriptive words). If not provided, defaults to "unnamed-connection-default". Use this to identify the connection when calling other tools.'),
       width: z.number().optional().describe('Viewport width in CSS px. Sizes the real OS window, not an emulated viewport, so the page keeps tracking window resizes. Bigger than the display is clamped and reported. Headless emulates instead.'),
@@ -670,8 +689,14 @@ const connectionTools = {
           // Don't pass URL to launch if auto-connect is enabled - let Puppeteer handle navigation
           // This prevents race condition where Chrome starts loading before monitors are set up
           const launchUrl = autoConnect ? undefined : url;
+          // Registered under the sanitized reference, which is what every other
+          // tool addresses the connection by. Under the raw one, the reference
+          // launchChrome tells the caller to use resolved to no proxy.
+          const proxyKey = userReference
+            ? validateReference(userReference).sanitized!
+            : `port-${port}`;
           const proxyArgs = args.proxy
-            ? (await startProxyFor(userReference ?? `port-${port}`, url)).chromeArgs
+            ? (await startProxyFor(proxyKey, url)).chromeArgs
             : [];
           const result = await chromeLauncher.launch(port, launchUrl, portReserver, args.headless, [...proxyArgs, ...(args.chromeArgs ?? [])], profileName);
           await debugLog('index', `Chrome launched successfully: ${JSON.stringify(result)}`);
@@ -785,6 +810,10 @@ const connectionTools = {
                 await debugLog('index', `Navigating to URL: ${url}`);
                 await page.goto(url, { waitUntil: 'load', timeout: 30000 });
                 await debugLog('index', `Navigation to ${url} completed`);
+              }
+
+              if (args.bringToFront) {
+                await page.bringToFront();
               }
 
               // Auto-reload page to capture initial console logs (only if not navigating and has content)
@@ -1565,7 +1594,7 @@ const allTools = {
   ...(configManager.isToolEnabled('input') ? createInputTools(proxyPuppeteerManager, proxyCdpManager, connectionManager, resolveConnectionFromReason) : {}),
   ...(configManager.isToolEnabled('content') ? createContentTools(proxyPuppeteerManager, proxyCdpManager, connectionManager, resolveConnectionFromReason, clickableCache) : {}),
   ...(configManager.isToolEnabled('modal') ? createModalTools(resolveConnectionFromReason) : {}),
-  ...(configManager.isToolEnabled('annotate') ? createAnnotateTools(proxyPuppeteerManager, sourceMapHandler, commandRecorder, executeToolCall, resolveConnectionFromReason) : {}),
+  ...(configManager.isToolEnabled('bench') ? createBenchTools(proxyPuppeteerManager, sourceMapHandler, commandRecorder, executeToolCall, resolveConnectionFromReason) : {}),
   ...(configManager.isToolEnabled('storage') ? createStorageTools(proxyPuppeteerManager, proxyCdpManager, resolveConnectionFromReason) : {}),
   // Download tools
   ...(configManager.isToolEnabled('download') ? createDownloadTools() : {}),
@@ -1768,6 +1797,16 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
     // Every guard passed - a block that recurs later is a new event
     clearBlockEvents();
 
+    // Marked here rather than beside recordCommand above: a command a guard
+    // refused never reaches the app, and stamping its index would hand later
+    // traffic to a command that did nothing.
+    const marksBoundary = commandIndex !== null && !OBSERVING_TOOLS.has(toolName);
+    if (marksBoundary) {
+      // Queued behind the previous command's release, so this command claims
+      // nothing that command is still being credited with.
+      await markNextCommand({ kind: 'command', index: commandIndex! });
+    }
+
     // Pass validated data to handler
     try {
       const result = await tool.handler(validation.data, extra?.signal);
@@ -1896,6 +1935,21 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
         ],
         isError: true
       };
+    } finally {
+      if (marksBoundary) {
+        // Scheduled and not awaited: the wait for the boundary to go quiet is
+        // paid out of the gap before the next command rather than out of this
+        // command's response. What crosses after the release carries no
+        // command and belongs to no step, which is what makes a gap readable
+        // as the app's own traffic.
+        const settle = configManager.getReplayConfig();
+        const reference = typeof validation.data?.connectionReason === 'string'
+          ? sanitizeReference(validation.data.connectionReason)
+          : undefined;
+        void releaseCommand(settle.stepSettleMs, settle.stepSettleCapMs, reference)
+          .then(at => commandRecorder.attachRelease(commandIndex!, at))
+          .catch(() => { /* a boundary that failed to settle still clears */ });
+      }
     }
   });
 }

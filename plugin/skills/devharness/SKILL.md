@@ -2,7 +2,7 @@
 name: devharness
 description: Drive and debug a running app via the devharness MCP server - launch or attach to Chrome and Node.js, set breakpoints and logpoints, inspect call stacks and variables, watch console and network, manage dev servers, replay any earlier tool call by its history index, and record reproduction sequences that verify a fix. Use whenever a task involves running or debugging a live app, reproducing or verifying a bug, re-driving setup you already did (relaunching, re-logging in, refilling a form), or the user mentions breakpoints, Chrome DevTools, CDP, replay sequences, or devharness tools (launchChrome, navigate, breakpoint, inspect, replay, server, issues, etc.).
 compatibility: Requires the devharness MCP server to be connected (tools such as launchChrome, breakpoint, inspect, replay, server, issues). The shell commands need `devharness` on PATH (`npm i -g devharness`); without it use `npx -y devharness@<version> <command>`. Previously published as cdp-tools-mcp.
-version: 0.9.17
+version: 0.10.0
 ---
 
 # devharness

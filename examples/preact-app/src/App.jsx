@@ -13,7 +13,7 @@ export function App() {
   const [saving, setSaving] = useState(null);
 
   // Deliberately transient: the status shows for 600ms and the toast for 1200ms,
-  // which is the window annotate mode exists to hold open.
+  // which is the window the bench exists to hold open.
   const save = (order) => {
     setSaving(order.id);
     setTimeout(() => {

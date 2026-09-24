@@ -85,6 +85,7 @@
   <legend>scale and targets</legend>
   <button data-testid="open-sixty">open 60 sockets</button>
   <button data-testid="open-worker">open one from a worker</button>
+  <button data-testid="open-worker-boot">worker that beats from boot</button>
   <button data-testid="navigate-away">navigate with sockets open</button>
   <button data-testid="close-all">close all</button>
 </fieldset>
@@ -159,6 +160,16 @@ $('[data-testid=open-worker]').addEventListener('click', () => {
   worker.addEventListener('message', (e) => log(`worker ${e.data}`));
   worker.postMessage(`ws://${location.host}/small?ms=800`);
   log('worker started');
+});
+
+$('[data-testid=open-worker-boot]').addEventListener('click', () => {
+  // The worker opens its socket and schedules its heartbeat before any message
+  // reaches it, which is what a wrapper installed after the worker starts
+  // misses. Nothing is posted to it.
+  const url = encodeURIComponent(`ws://${location.host}/small?ms=800`);
+  worker = new Worker(`/socket-worker.js?boot=${url}`);
+  worker.addEventListener('message', (e) => log(`worker ${e.data}`));
+  log('worker started, beating from boot');
 });
 
 $('[data-testid=navigate-away]').addEventListener('click', () => {

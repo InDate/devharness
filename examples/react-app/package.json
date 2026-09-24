@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "React dev-build fixture for devharness annotate mode - exercises component and JSX source detection",
+  "description": "React dev-build fixture for the devharness bench - exercises component and JSX source detection",
   "scripts": {
     "dev": "vite --port 3102 --strictPort"
   },

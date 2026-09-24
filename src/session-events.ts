@@ -17,7 +17,7 @@ import { promises as fs } from 'fs';
 import { join } from 'path';
 import { getOutputPath } from './helpers/paths.js';
 
-export type EventKind = 'block' | 'message' | 'annotation' | 'sequence' | 'screenshot';
+export type EventKind = 'block' | 'message' | 'annotation' | 'sequence' | 'screenshot' | 'investigate' | 'proxy';
 
 export interface SessionEvent {
   ts: string;

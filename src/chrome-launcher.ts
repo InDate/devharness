@@ -13,6 +13,7 @@ import { getGlobalBase } from './helpers/paths.js';
 import { getErrorMessage } from './messages.js';
 import type { PortReserver } from './port-reserver.js';
 import { debugLog } from './debug-logger.js';
+import WebSocket from 'ws';
 
 export type ChromeCloseReason = 'inactivity' | 'manual' | 'crash' | 'external' | 'signal' | 'unknown';
 
@@ -681,11 +682,14 @@ export class ChromeLauncher {
       '--disable-features=PasswordLeakDetection,PasswordCheck,PasswordImport,PasswordManagerOnboarding',
     ];
 
-    // Add headless mode if requested (prevents focus stealing)
+    // A window Chrome opens itself at startup is activated, and on macOS that
+    // moves keyboard focus off the app the user is typing in. Started with no
+    // window, Chrome stays in the background; the first window is opened after
+    // startup by openBackgroundWindow(), which does not activate it.
     if (headless) {
-      args.push('--headless=new'); // Use new headless mode
+      args.push('--headless=new');
     } else {
-      args.push('--start-minimized'); // Launch minimized to reduce focus stealing
+      args.push('--no-startup-window');
     }
 
     // Pass-through: any extra Chrome flags from the launchChrome call (extraArgs)
@@ -700,7 +704,7 @@ export class ChromeLauncher {
       args.push(...passthrough);
     }
 
-    if (url) {
+    if (url && headless) {
       args.push(url);
     }
 
@@ -875,6 +879,10 @@ export class ChromeLauncher {
       // (The permanent exit handler was already set up earlier)
       chromeProcess.removeListener('exit', exitHandler);
       chromeProcess.removeListener('error', exitHandler);
+
+      if (!headless) {
+        await openBackgroundWindow(port, url ?? 'about:blank');
+      }
 
       // Inspectable, so the startup logs have served their purpose and this
       // profile returns to ordinary cleanup on exit.
@@ -1408,5 +1416,32 @@ export class ChromeLauncher {
    */
   setPendingCloseReason(port: number, reason: ChromeCloseReason): void {
     this.pendingCloseReason.set(port, reason);
+  }
+}
+
+/**
+ * Opens a page in a new window with Target.createTarget `background: true`,
+ * which shows the window without activating Chrome. Every later tool attaches
+ * to a page target, so a launch that leaves none returns no connection.
+ */
+async function openBackgroundWindow(port: number, url: string): Promise<void> {
+  const version = (await (await fetch(`http://localhost:${port}/json/version`)).json()) as { webSocketDebuggerUrl: string };
+  const ws = new WebSocket(version.webSocketDebuggerUrl);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      ws.once('open', () => resolve());
+      ws.once('error', reject);
+    });
+    await new Promise<void>((resolve, reject) => {
+      ws.on('message', (data) => {
+        const reply = JSON.parse(data.toString()) as { id?: number; error?: { message: string } };
+        if (reply.id !== 1) return;
+        if (reply.error) reject(new Error(`Target.createTarget: ${reply.error.message}`));
+        else resolve();
+      });
+      ws.send(JSON.stringify({ id: 1, method: 'Target.createTarget', params: { url, newWindow: true, background: true } }));
+    });
+  } finally {
+    ws.close();
   }
 }

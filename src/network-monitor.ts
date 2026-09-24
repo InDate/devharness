@@ -4,6 +4,8 @@
  */
 
 import { Page, HTTPRequest, HTTPResponse } from 'puppeteer-core';
+import type { InitiatorRoot } from './proxy/intercept-proxy.js';
+import { SEND_BINDING, SEND_WRAPPER_SOURCE, type SocketSendReport, type RequestOriginReport } from './proxy/send-provenance.js';
 
 export interface StoredNetworkRequest {
   id: string;
@@ -177,6 +179,38 @@ const MAX_STORAGE_WRITES = 300;
 const MAX_EVENTS_PER_STREAM = 200;
 const MAX_PENDING_URLS = 200;
 
+/** One request's reported initiator, on its way to whatever joins it. */
+export interface RequestInitiatorReport {
+  method: string;
+  url: string;
+  root: InitiatorRoot;
+  at: number;
+  /** The document that named this request, for a parser or preload root. */
+  document?: string;
+}
+
+/**
+ * Which class of the app's machinery started a request.
+ *
+ * `parser` and `preload` come straight from CDP and name the document load.
+ * A script-started request is separated further by what stands above it in the
+ * stack: a timer or animation frame above it means the app's own schedule
+ * produced it, and no command did.
+ */
+function rootOfInitiator(initiator: any): InitiatorRoot {
+  const type = initiator?.type;
+  if (type === 'parser') return 'parser';
+  if (type === 'preload') return 'preload';
+  if (type !== 'script') return 'other';
+  for (let frame = initiator?.stack; frame; frame = frame.parent) {
+    const scheduled = String(frame.description ?? '');
+    if (/^(setTimeout|setInterval|requestAnimationFrame|requestIdleCallback)$/.test(scheduled)) {
+      return 'timer';
+    }
+  }
+  return 'script';
+}
+
 export class NetworkMonitor {
   private sockets: Map<string, StoredWebSocket> = new Map();
   /** localStorage and sessionStorage writes, oldest first. */
@@ -201,6 +235,17 @@ export class NetworkMonitor {
    * about the sockets' transports, so they must not stamp a close on them.
    */
   private stoppingMonitoring = false;
+  /**
+   * Where each request's reported initiator goes, when a caller wants it.
+   *
+   * Set by whoever knows which browser this monitor watches, so the monitor
+   * itself holds no reference to the proxy registry.
+   */
+  onRequestInitiator?: (report: RequestInitiatorReport) => void;
+  /** Where each socket send's reported root goes, when a caller wants it. */
+  onSocketSend?: (report: SocketSendReport) => void;
+  /** Where a request started inside a trusted dispatch goes. */
+  onRequestOrigin?: (report: RequestOriginReport) => void;
   private wsClient: any = null;
   /** The page wsClient belongs to, so re-entry can tell "again" from "elsewhere". */
   private wsPage: any = null;
@@ -269,6 +314,15 @@ export class NetworkMonitor {
       const client: any = await (page as any).createCDPSession();
       this.wsClient = client;
       await client.send('Network.enable');
+      // Without a depth, a stack stops at the synchronous frames, so a fetch
+      // from `.then`, `await` or a debounce carries no frame naming what
+      // scheduled it and every one of them reads as plain script. The depth is
+      // a Debugger setting and silently does nothing until that domain is on,
+      // which is why the enable goes first on this session.
+      void client.send('Debugger.enable')
+        .then(() => client.send('Debugger.setAsyncCallStackDepth', { maxDepth: 8 }))
+        .catch(() => { /* no debugger on this target; roots stay synchronous */ });
+      this.reportSocketSends(client);
       // The page's own session outlives every navigation, so its sockets are
       // judged on their own close events, never as target teardown.
       this.liveSessions.add('page');
@@ -293,9 +347,35 @@ export class NetworkMonitor {
         // deadlocks a service worker: its response arrives only once the target
         // runs, and the target runs only on the resume below.
         void child.send('Network.enable').catch(() => {});
+        // The wrapper goes into this target too: a socket opened inside a Web
+        // Worker reports nothing without it, and its sends then read only as
+        // bytes leaving under whatever command was in flight. Installed before
+        // the resume below, so a socket opened on the worker's first line is
+        // already wrapped.
+        this.reportSocketSends(child);
+
         if (e.waitingForDebugger) {
           void child.send('Runtime.runIfWaitingForDebugger').catch(() => {});
         }
+        // The evaluation in `reportSocketSends` goes out while the target is
+        // held, when it has no execution context to evaluate against, so it
+        // installs nothing there. This is the target announcing the context
+        // exists, which is the earliest point an evaluation can land, and it
+        // replaces a fixed wait that was a guess.
+        //
+        // It is still later than the target's first line. Holding the resume
+        // until the install lands would cover that, and it stalls a service
+        // worker's registration for as long as it waits - which
+        // `network-monitor.test.ts` pins against, because a registration that
+        // hangs is worse than a heartbeat that reads as script. So a worker
+        // that opens a socket and schedules on its first line reports `script`
+        // for those sends, and the settle window is what covers it.
+        child.on('Runtime.executionContextCreated', (created: any) => {
+          void child.send('Runtime.evaluate', {
+            expression: SEND_WRAPPER_SOURCE, awaitPromise: false, returnByValue: true,
+            ...(created?.context?.id !== undefined ? { contextId: created.context.id } : {}),
+          }).catch(() => { /* the target went with its page */ });
+        });
       });
 
       // A target that goes away takes its sockets with it and delivers no
@@ -317,6 +397,60 @@ export class NetworkMonitor {
       });
     } catch {
       // No CDP session: HTTP monitoring still works, sockets are simply unseen.
+    }
+  }
+
+  /**
+   * Install the page-side send wrapper and carry what it reports.
+   *
+   * The wrapper goes in before a document's first line runs, so a socket
+   * opened at boot is wrapped, and is evaluated once against the document
+   * already loaded - a page attached to after load would otherwise report
+   * nothing until it navigated.
+   */
+  private reportSocketSends(client: any): void {
+    // Issued in one turn and never awaited. A held target answers nothing
+    // until it is resumed, so awaiting any of these before the resume that
+    // follows would deadlock the target - the same reason `Network.enable` is
+    // not awaited. CDP holds per-session order, so each of these is processed
+    // before the resume and the wrapper is in before the target's first line.
+    try {
+      client.on('Runtime.bindingCalled', (e: any) => {
+        if (e?.name !== SEND_BINDING) return;
+        try {
+          const payload = JSON.parse(String(e.payload));
+          if (payload.kind === 'request') {
+            this.onRequestOrigin?.({
+              method: String(payload.method ?? 'GET'),
+              url: String(payload.url ?? ''),
+              at: Number(payload.at ?? Date.now()),
+            });
+            return;
+          }
+          this.onSocketSend?.({
+            url: String(payload.url ?? ''),
+            socket: Number(payload.socket ?? 0),
+            sequence: Number(payload.sequence ?? 0),
+            size: Number(payload.size ?? -1),
+            root: payload.root === 'input' || payload.root === 'timer' ? payload.root : 'script',
+            at: Number(payload.at ?? Date.now()),
+          });
+        } catch { /* a payload this build does not produce */ }
+      });
+      void client.send('Runtime.enable').catch(() => {});
+      void client.send('Runtime.addBinding', { name: SEND_BINDING }).catch(() => {});
+      // A worker target carries no Page domain, so this copy is for pages; the
+      // evaluate below is what reaches a worker, and what reaches a page that
+      // was attached to after its document had already loaded.
+      void client.send('Page.enable').catch(() => {});
+      void client.send('Page.addScriptToEvaluateOnNewDocument', { source: SEND_WRAPPER_SOURCE })
+        .catch(() => { /* no Page here; the evaluate still installs it */ });
+      void client.send('Runtime.evaluate', {
+        expression: SEND_WRAPPER_SOURCE, awaitPromise: false, returnByValue: true,
+      }).catch(() => { /* nothing to evaluate against yet */ });
+    } catch {
+      // No Runtime on this target: sends cross unreported and the wire's own
+      // reading stands.
     }
   }
 
@@ -380,6 +514,25 @@ export class NetworkMonitor {
       if (this.pendingUrls.size > MAX_PENDING_URLS) {
         const oldest = this.pendingUrls.keys().next().value;
         if (oldest) this.pendingUrls.delete(oldest);
+      }
+      // The page holds what the wire cannot: which of the app's own machinery
+      // asked for this. Reported as it is sent, so a listener on the proxy side
+      // can match it to the bytes before the response completes.
+      const report = this.onRequestInitiator;
+      if (report) {
+        const root = rootOfInitiator(e.initiator);
+        // CDP names the document on a parser root and the top frame's script
+        // on a script one. Only the first is the load a subresource belongs to.
+        const document = (root === 'parser' || root === 'preload')
+          ? (typeof e.initiator?.url === 'string' ? e.initiator.url : e.documentURL)
+          : undefined;
+        report({
+          method: String(e.request.method ?? 'GET'),
+          url: String(e.request.url),
+          root,
+          at: Date.now(),
+          ...(typeof document === 'string' ? { document } : {}),
+        });
       }
     });
 

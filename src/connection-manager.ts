@@ -4,6 +4,7 @@
  */
 
 import { CDPManager } from './cdp-manager.js';
+import { getProxy } from './proxy/registry.js';
 import { PuppeteerManager } from './puppeteer-manager.js';
 import { ConsoleMonitor } from './console-monitor.js';
 import { NetworkMonitor } from './network-monitor.js';
@@ -81,6 +82,23 @@ export class ConnectionManager {
     };
 
     this.connections.set(id, connection);
+
+    // A request's initiator is read on this connection's CDP session and the
+    // bytes cross a proxy keyed by the same reference, so this is where the
+    // two meet. A connection with no proxy reports into nothing.
+    if (networkMonitor && reference) {
+      networkMonitor.onRequestInitiator = report => {
+        getProxy(reference)?.noteInitiator(
+          report.method, report.url, report.root, report.at, report.document);
+      };
+      networkMonitor.onSocketSend = report => {
+        getProxy(reference)?.noteSend(
+          report.url, report.socket, report.sequence, report.size, report.root, report.at);
+      };
+      networkMonitor.onRequestOrigin = report => {
+        getProxy(reference)?.noteInitiator(report.method, report.url, 'input', report.at);
+      };
+    }
 
     // Track browser instance
     const browserKey = `${host}:${port}`;

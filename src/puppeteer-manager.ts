@@ -5,6 +5,24 @@
 
 import puppeteer, { Browser, Page } from 'puppeteer-core';
 
+/**
+ * Browser.newPage() creates the tab in the foreground, which on macOS
+ * activates Chrome and moves keyboard focus off the app the user is typing in.
+ * Target.createTarget with `background: true` adds the tab without activating.
+ */
+export async function openBackgroundPage(browser: Browser): Promise<Page> {
+  const session = await browser.target().createCDPSession();
+  try {
+    const { targetId } = await session.send('Target.createTarget', { url: 'about:blank', background: true });
+    const target = await browser.waitForTarget((t) => (t as any)._targetId === targetId);
+    const page = await target.page();
+    if (!page) throw new Error(`Target ${targetId} has no page`);
+    return page;
+  } finally {
+    await session.detach().catch(() => {});
+  }
+}
+
 export class PuppeteerManager {
   private browser: Browser | null = null;
   private page: Page | null = null;
@@ -28,7 +46,7 @@ export class PuppeteerManager {
       if (pages.length > 0) {
         this.page = pages[0];
       } else {
-        this.page = await this.browser.newPage();
+        this.page = await openBackgroundPage(this.browser);
       }
     } catch (error) {
       throw new Error(`Failed to connect to Puppeteer: ${error}`);
@@ -90,7 +108,7 @@ export class PuppeteerManager {
     if (!this.browser) {
       throw new Error('Not connected to browser');
     }
-    const newPage = await this.browser.newPage();
+    const newPage = await openBackgroundPage(this.browser);
     this.page = newPage;
     return newPage;
   }

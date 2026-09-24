@@ -101,6 +101,46 @@ describe('NetworkMonitor auto-attach resume', () => {
     expect(pageSession.sent.map((c) => c.method)).not.toContain('Runtime.runIfWaitingForDebugger');
   });
 
+  it('puts the wrapper install ahead of the resume on the child session', async () => {
+    // CDP holds per-session order, so a command sent before the resume is
+    // processed before the target's first line. Sending the install after the
+    // resume would leave a worker's boot-time socket unwrapped for good, and
+    // awaiting any of it would hang a service worker whose Network.enable only
+    // answers once it runs - which the two cases above pin.
+    const pageSession = fakeSession();
+    const child = fakeSession('Network.enable');
+    const monitor = new NetworkMonitor();
+
+    monitor.startMonitoring(fakePage(pageSession, new Map([['sw-1', child]])) as any);
+    await flush();
+    pageSession.emit('Target.attachedToTarget', attachEvent('sw-1', 'service_worker', true));
+
+    const order = child.sent.map((c) => c.method);
+    const binding = order.indexOf('Runtime.addBinding');
+    const resume = order.indexOf('Runtime.runIfWaitingForDebugger');
+    expect(binding).toBeGreaterThanOrEqual(0);
+    expect(resume).toBeGreaterThan(binding);
+  });
+
+  it('installs the wrapper again once the target announces a context', async () => {
+    // The install sent while the target is held has no context to evaluate
+    // against, so nothing is wrapped there. Without this the wrapper reports
+    // sends and classifies none of them, which reads as a working measurement.
+    const pageSession = fakeSession();
+    const child = fakeSession('Network.enable');
+    const monitor = new NetworkMonitor();
+
+    monitor.startMonitoring(fakePage(pageSession, new Map([['sw-1', child]])) as any);
+    await flush();
+    pageSession.emit('Target.attachedToTarget', attachEvent('sw-1', 'worker', true));
+    const before = child.sent.filter((c) => c.method === 'Runtime.evaluate').length;
+    child.emit('Runtime.executionContextCreated', { context: { id: 7 } });
+
+    const evaluates = child.sent.filter((c) => c.method === 'Runtime.evaluate');
+    expect(evaluates.length).toBe(before + 1);
+    expect((evaluates[evaluates.length - 1].params as any).contextId).toBe(7);
+  });
+
   it('records a socket opened on a held target', async () => {
     const pageSession = fakeSession();
     const child = fakeSession('Network.enable');
@@ -126,7 +166,11 @@ describe('NetworkMonitor auto-attach resume', () => {
     await flush();
     pageSession.emit('Target.attachedToTarget', attachEvent('w-1', 'worker', false));
 
-    expect(child.sent.map((c) => c.method)).toEqual(['Network.enable']);
+    // Named for the resume, so assert the resume. An exact command list breaks
+    // whenever an unrelated domain is enabled on the child, which says nothing
+    // about whether a target that was never held was resumed.
+    expect(child.sent.map((c) => c.method)).not.toContain('Runtime.runIfWaitingForDebugger');
+    expect(child.sent.map((c) => c.method)).toContain('Network.enable');
   });
 });
 

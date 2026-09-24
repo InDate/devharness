@@ -30,7 +30,7 @@ const MESSAGE_VERBS = new Set(['sessions', 'send', 'read', 'reply']);
 /** Commands that are shorthand for `issues` create, one per issue type. */
 const ISSUE_VERBS = new Set(['bug', 'feature']);
 
-export const CLI_COMMANDS = ['call', 'which', ...MESSAGE_VERBS, ...ISSUE_VERBS] as const;
+export const CLI_COMMANDS = ['call', 'which', 'bench', ...MESSAGE_VERBS, ...ISSUE_VERBS] as const;
 
 export function isCliCommand(word: string | undefined): boolean {
   return word !== undefined && (CLI_COMMANDS as readonly string[]).includes(word);
@@ -114,6 +114,28 @@ export function buildCall(parsed: ParsedArgs): { tool: string; args: Record<stri
         }
       }
       return { tool: first, args };
+    }
+
+    /**
+     * Open the bench against the session this shell belongs to.
+     *
+     * A sequence name puts the pane straight on that run rather than on a
+     * list to pick from, and a URL drives the page there first - with no
+     * browser on the reference yet, one call opens the page and the pane.
+     */
+    case 'bench': {
+      const reference = parsed.session ?? 'bench';
+      const url = rest.find(word => /^https?:\/\//.test(word));
+      const sequence = first && !/^https?:\/\//.test(first) ? first : undefined;
+      return {
+        tool: 'bench',
+        args: {
+          action: 'start',
+          connectionReason: reference,
+          ...(sequence ? { sequence } : {}),
+          ...(url ? { url } : {}),
+        },
+      };
     }
 
     case 'sessions':

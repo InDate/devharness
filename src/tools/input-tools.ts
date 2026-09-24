@@ -88,7 +88,7 @@ const inputToolSchema = z.object({
  * delivered from the rendering lifecycle, and a tab that is not the selected
  * one in its window gets no rendering opportunities - so on a hidden tab that
  * promise never settles, the CDP call never returns, and the click never
- * reaches the wire. Measured: with the annotate pane selected, the app tab
+ * reaches the wire. Measured: with the bench tab selected, the app tab
  * reports `document.hidden === true` and a selector click runs past 120s while
  * a coordinate click at the same point returns at once.
  *

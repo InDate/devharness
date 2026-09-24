@@ -523,25 +523,49 @@ export async function startRecording(
 
         // 5. Try data-testid and other test attributes
         const dataAttrs = ['data-testid', 'data-test-id', 'data-cy', 'data-id'];
+        const unique = (selector: string): boolean => {
+          try {
+            return doc.querySelectorAll(selector).length === 1;
+          } catch (e) { return false; }
+        };
         for (const attr of dataAttrs) {
           const val = el.getAttribute?.(attr);
           if (val) {
             const selector = `${tag}[${attr}="${val}"]`;
-            try {
-              if (doc.querySelectorAll(selector).length === 1) return selector;
-            } catch (e) { /* invalid selector */ }
+            if (unique(selector)) return selector;
           }
         }
 
-        // 6. Text-based selector using :has-text() (devharness extended selector)
         const text = el.textContent?.trim();
-        if (text && text.length > 0 && text.length <= 30) {
-          const escapedText = text.replace(/"/g, '\\"');
-          // :has-text is supported by devharness selector resolver
+        const escapedText = text && text.length > 0 && text.length <= 30
+          ? text.replace(/"/g, '\\"')
+          : undefined;
+
+        // 6. A test attribute on an ancestor, with this element scoped inside
+        // it. A row carries the id and the button inside it carries none, so
+        // without this every row's button records as the same selector and a
+        // replay drives whichever one the DOM yields first.
+        for (let parent = el.parentElement; parent && parent !== doc.body; parent = parent.parentElement) {
+          for (const attr of dataAttrs) {
+            const val = parent.getAttribute?.(attr);
+            if (!val) continue;
+            const scope = `[${attr}="${val.replace(/"/g, '\\"')}"]`;
+            const scoped = `${scope} ${tag}`;
+            if (unique(scoped)) return scoped;
+            if (escapedText && unique(`${scoped}:has-text("${escapedText}")`)) {
+              return `${scoped}:has-text("${escapedText}")`;
+            }
+          }
+        }
+
+        // 7. Text, once it names one element and no more. Every other branch
+        // here proves uniqueness before returning; returning text without that
+        // proof is what let three different rows record as one selector.
+        if (escapedText && unique(`${tag}:has-text("${escapedText}")`)) {
           return `${tag}:has-text("${escapedText}")`;
         }
 
-        // 7. Try class-based selector (filter out hash/generated classes)
+        // 8. Try class-based selector (filter out hash/generated classes)
         if (el.className && typeof el.className === 'string') {
           const classes = el.className.split(' ').filter((c: string) =>
             c.length > 0 && c.length <= 20 && !c.includes('__') && !c.match(/^[a-z]+-[a-f0-9]+$/i)
@@ -554,7 +578,7 @@ export async function startRecording(
           }
         }
 
-        // 8. No unique selector found - return undefined to fall back to coordinates
+        // 9. No unique selector found - return undefined to fall back to coordinates
         return undefined;
       };
 

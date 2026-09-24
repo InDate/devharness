@@ -3,6 +3,8 @@
  */
 
 import type { CommandRecorder, RecordedCommand, CommandSequence, ActiveSequenceState } from '../command-recorder.js';
+import { markOnProxies, markNextCommand, releaseCommand, boundarySettled, getProxy } from '../proxy/registry.js';
+import { tallyShapes, type ShapeRules } from '../proxy/intercept-proxy.js';
 import type { ExecuteToolCall } from '../types.js';
 import { abortableDelayResult } from '../utils/abort.js';
 import { debugLog } from '../debug-logger.js';
@@ -157,6 +159,22 @@ export interface ExecutionResult {
     label: string;
     recorded: { requests: number; failed: number; events: number; writes: number };
     observed: { requests: number; failed: number; events: number; writes: number };
+    /**
+     * What crossed the boundary, per payload shape, weighted by how much of
+     * each event this step owns. Present where the recording and the replay
+     * both ran through a proxy; a shape in one side and not the other is the
+     * difference a count cannot show.
+     */
+    shapes?: { recorded: Record<string, number>; observed: Record<string, number> };
+    /**
+     * How long each side held this step open, in ms.
+     *
+     * Unowned traffic lands in a step by duration, so a wide gap here is the
+     * first thing to read a difference against: a step held 41s while
+     * recording and 0.3s on replay differs in pacing before it differs in
+     * behaviour.
+     */
+    window?: { recorded: number; observed: number };
   }>;
 }
 
@@ -248,7 +266,12 @@ export function captureVariable(
  * those here would make a Node-only sequence spuriously launch Chrome.
  */
 export const TOOLS_NEEDING_CONNECTION = [
-  'navigate', 'content', 'input', 'console', 'network', 'dom', 'screenshot', 'storage'
+  'navigate', 'content', 'input', 'console', 'network', 'dom', 'screenshot', 'storage',
+  // `bench` takes a required connectionReason and launches Chrome when the
+  // reference is unbound. Left out, a sequence holding a bench step has its
+  // connection hoisted off and never given back, and the replay fails on a
+  // missing parameter rather than on anything the sequence did.
+  'bench',
 ];
 
 /**
@@ -1555,7 +1578,8 @@ export async function autoLaunchChrome(
   executeToolCall: ExecuteToolCall,
   connectionReason: string,
   logPrefix: string = 'auto-launch',
-  forceNewInstance: boolean = false
+  forceNewInstance: boolean = false,
+  proxy: boolean = false
 ): Promise<AutoLaunchResult> {
   // Validate connectionReason before launch (throws InvalidReferenceError if invalid)
   requireValidReference(connectionReason);
@@ -1568,7 +1592,11 @@ export async function autoLaunchChrome(
   // handling, and its "launch Chrome manually first" suggestion, never ran and
   // the user saw a raw tool error instead.
   try {
-    await executeToolCall('launchChrome', { reference: connectionReason, forceNewInstance });
+    await executeToolCall('launchChrome', {
+      reference: connectionReason,
+      forceNewInstance,
+      ...(proxy && { proxy: true }),
+    });
   } catch (launchError: any) {
     return {
       success: false,
@@ -1587,7 +1615,10 @@ export async function autoLaunchChrome(
 export async function ensureConnection(
   ctx: ExecutionContext,
   needsConnection: boolean,
-  hasLaunchBeforeConnection: boolean
+  hasLaunchBeforeConnection: boolean,
+  /** The recording ran through a proxy, so the browser this launches needs one
+   *  too - otherwise the replay drives an app whose traffic nothing captures. */
+  throughProxy: boolean = false
 ): Promise<{ success: true; didAutoLaunch: boolean } | { success: false; error: string }> {
   const { executeToolCall, connectionReason, logPrefix = 'executor' } = ctx;
 
@@ -1612,7 +1643,7 @@ export async function ensureConnection(
   } catch {
     await debugLog(logPrefix, `Connection ${connectionReason} not active, launching Chrome...`);
     // Sequence runs always get a fresh Chrome process, not a tab in an existing one
-    const launchResult = await autoLaunchChrome(executeToolCall, connectionReason, logPrefix, true);
+    const launchResult = await autoLaunchChrome(executeToolCall, connectionReason, logPrefix, true, throughProxy);
     if (!launchResult.success) {
       return { success: false, error: launchResult.error };
     }
@@ -2297,10 +2328,36 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
   // baseline the recording stored on it. Only filled when there is a baseline.
   const comparesBehaviour = commands.some(c => (c as any).traffic);
   const stepStartedAt = new Map<number, number>();
+  // When each step's boundary was released, which closes that step's span the
+  // same way a recorded command's return closes its own. Without it a replayed
+  // step runs to the next step's start while its recording ran to a release,
+  // and the two spans are not comparable.
+  const stepReleasedAt = new Map<number, number>();
+  const settleConfig = configManager.getReplayConfig();
+  const releaseStep = async (step: number): Promise<void> => {
+    const at = await releaseCommand(
+      settleConfig.stepSettleMs, settleConfig.stepSettleCapMs,
+      overrideConnectionReason ?? ctx.connectionReason
+    ).catch(() => Date.now());
+    stepReleasedAt.set(step, at);
+  };
+  let boundaryStep: number | undefined;
+
+  // Derived from the pass's own clock rather than minted here: one pass
+  // re-enters this function on resume, for a nested sequence, per forEach
+  // iteration and for teardown, and an id minted per entry would split the
+  // pass into several that no comparison could join.
+  const proxyRun = `run-${runTimestamp.toString(36)}`;
 
   for (let i = startStep; i < targetEnd; i++) {
     const cmd = commands[i];
+    // The previous step's boundary is released before this one marks, so a
+    // step's tail is credited to the step that caused it on this side exactly
+    // as it is while recording.
+    if (boundaryStep !== undefined) await releaseStep(boundaryStep);
     if (comparesBehaviour) stepStartedAt.set(i, Date.now());
+    await markNextCommand({ kind: 'replay', runId: proxyRun, step: i });
+    boundaryStep = i;
 
     // Check if aborted
     if (abortSignal?.aborted) {
@@ -2331,7 +2388,16 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
     if (cmd.delay && cmd.delay > 0) {
       debugLog(logPrefix, `Waiting ${cmd.delay}ms before step ${i + 1}`);
       const wasAborted = await abortableDelayResult(cmd.delay, abortSignal);
-      if (wasAborted) continue;
+      if (wasAborted) {
+        debugLog(logPrefix, `Replay aborted at step ${i + 1}`);
+        results.push({
+          step: i + 1,
+          tool: cmd.tool,
+          success: false,
+          error: 'Replay aborted by user'
+        });
+        break;
+      }
     }
 
     onProgress?.({ step: i + 1, totalSteps: commands.length, tool: cmd.tool });
@@ -2565,6 +2631,29 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
 
         const substepCount = condResult.substeps?.length || 0;
         debugLog(logPrefix, `Step ${i + 1} completed: conditional ${condResult.executed ? `ran ${substepCount} substeps` : 'skipped (condition not met)'}`);
+
+        // Rejoining further down, when the branch replaced the steps between.
+        // Only where the guard held: skipped over, the steps it would have
+        // replaced are the ones that still have to run.
+        if (condResult.executed && params.rejoinAt !== undefined) {
+          const rejoin = Number(params.rejoinAt);
+          // Forward only, as every other move through a run is. A backward
+          // rejoin re-runs the conditional that made it and never terminates.
+          if (!Number.isInteger(rejoin) || rejoin <= i || rejoin > targetEnd) {
+            results.push({
+              step: i + 1,
+              tool: cmd.tool,
+              success: false,
+              error: `Conditional at step ${i + 1} cannot rejoin at step ${params.rejoinAt}: `
+                + `expected a step between ${i + 2} and ${targetEnd}, counting from 1.`,
+            });
+            break;
+          }
+          debugLog(logPrefix, `Step ${i + 1} rejoins the run at step ${rejoin + 1}`);
+          i = rejoin - 1;
+          continue;
+        }
+
         continue; // Skip the regular execution path
       }
 
@@ -2650,6 +2739,11 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
           limitSource: boundedByTotal ? 'remaining totalTimeout' : 'stepTimeout',
         })
       );
+
+      // Restored after the step: a step that ran a nested sequence left the
+      // cursor cleared by that run's last release, and the traffic this step
+      // causes after that call returns belongs to this step.
+      await markNextCommand({ kind: 'replay', runId: proxyRun, step: i });
 
       if (!execResult.success) {
         // A step that failed while the run signal is aborted is the CANCEL
@@ -2882,7 +2976,11 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
   // up would destroy the state the user paused to look at.
   const stoppedShortOfEnd = targetEnd < commands.length;
   const anyFailed = results.some(r => !r.success);
-  const isPaused = stoppedShortOfEnd && !anyFailed;
+  // An abort part-way through is a pause, not an end. The aborted step is
+  // recorded as a failure, so without this the run would tear down the
+  // sequence - running its declared teardown commands - in the middle of a
+  // session somebody stopped to look at.
+  const isPaused = stoppedShortOfEnd && (!anyFailed || abortSignal?.aborted === true);
 
   const teardownOutcome = isPaused
     ? undefined
@@ -2895,8 +2993,16 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
         record,
       });
 
+  // The last step's boundary closes before anything is compared, so its span
+  // ends at a release like every other step's rather than at the comparison.
+  if (boundaryStep !== undefined) await releaseStep(boundaryStep);
+  await boundarySettled();
+
   const behaviourDrift = comparesBehaviour
-    ? await compareBehaviour(commands, stepStartedAt, ctx)
+    ? await compareBehaviour(
+        commands, stepStartedAt, stepReleasedAt, ctx, proxyRun,
+        overrideConnectionReason ?? ctx.connectionReason,
+        (sequence as any).shapeRules)
     : undefined;
 
   return {
@@ -2923,7 +3029,15 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
 async function compareBehaviour(
   commands: RecordedCommand[],
   stepStartedAt: Map<number, number>,
-  ctx: ExecutionContext
+  /** When each step's boundary closed, which ends that step's span. */
+  stepReleasedAt: Map<number, number>,
+  ctx: ExecutionContext,
+  /** The pass whose stamps name this run's traffic. */
+  proxyRun: string,
+  /** The browser whose proxy holds it. */
+  reference: string,
+  /** What a person ruled about each payload shape when this was recorded. */
+  rules?: ShapeRules
 ): Promise<ExecutionResult['behaviourDrift']> {
   const { executeToolCall, connectionReason } = ctx;
   const indices = [...stepStartedAt.keys()].sort((a, b) => a - b);
@@ -2933,7 +3047,9 @@ async function compareBehaviour(
     const recorded = (commands[index] as any).traffic;
     if (!recorded) continue;
     const from = stepStartedAt.get(index)!;
-    const to = stepStartedAt.get(indices[position + 1]) ?? Date.now();
+    const to = stepReleasedAt.get(index)
+      ?? stepStartedAt.get(indices[position + 1])
+      ?? Date.now();
 
     const http = await executeToolCall('network', {
       action: 'list', connectionReason, since: from, until: to, limit: 50,
@@ -2961,14 +3077,43 @@ async function compareBehaviour(
       events: recorded.events ?? 0,
       writes: recorded.writes ?? 0,
     };
+    // Read off the stamps rather than a clock window: a consequence arriving
+    // after the next step began carries the step that caused it, and a window
+    // hands it to whichever step was open when it landed.
+    const proxy = getProxy(reference);
+    const recordedShapes = commands[index].traffic?.shapes;
+    const recordedSeen = commands[index].traffic?.seen;
+    const tally = proxy ? tallyShapes(proxy.eventsForStep(proxyRun, index), rules) : undefined;
+    const observedShapes = tally?.weight;
+    const shapesDiffer = recordedShapes !== undefined && observedShapes !== undefined
+      && [...new Set([...Object.keys(recordedShapes), ...Object.keys(observedShapes)])]
+        .some(shape => Math.abs((recordedShapes[shape] ?? 0) - (observedShapes[shape] ?? 0)) > 0.5);
+    // Counts, not just presence: a push weighs nothing so a server that
+    // stopped pushing is invisible to the weights, and a same-path request
+    // arriving twice where it arrived once is 0.3 of weight and passes the
+    // threshold above. Shapes ruled background or unknown are not counted, so
+    // an app's own chatter does not read as drift because a step ran longer.
+    const countDiffer = recordedSeen !== undefined && tally !== undefined
+      && [...new Set([...Object.keys(recordedSeen), ...Object.keys(tally.seen)])]
+        .some(shape => (recordedSeen[shape] ?? 0) !== (tally.seen[shape] ?? 0));
+
+    const heldFor = to - from;
+    const recordedWindow = commands[index].traffic?.windowMs;
+
     const differs = (['requests', 'failed', 'events', 'writes'] as const)
       .some(field => before[field] !== observed[field]);
-    if (differs) {
+    if (differs || shapesDiffer || countDiffer) {
       drift.push({
         step: index + 1,
         label: `${commands[index].tool}.${commands[index].params?.action ?? ''}`.replace(/\.$/, ''),
         recorded: before,
         observed,
+        ...(recordedShapes && observedShapes
+          ? { shapes: { recorded: recordedShapes, observed: observedShapes } }
+          : {}),
+        ...(recordedWindow !== undefined
+          ? { window: { recorded: recordedWindow, observed: heldFor } }
+          : {}),
       });
     }
   }

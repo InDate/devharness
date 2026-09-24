@@ -21,6 +21,7 @@ const tabSchema = z.object({
   // Parameters for create action
   reference: z.string().optional().describe('Tab reference (3 descriptive words) - required for create/rename/switch/close actions'),
   url: z.string().optional().describe('URL to navigate to (for create action)'),
+  bringToFront: z.boolean().optional().describe('Select this tab in its window and bring Chrome in front of other apps, which moves keyboard focus to Chrome. Default false: create opens the tab in the background, switch leaves the window order unchanged, and focus stays in the app in front.'),
   // Parameters for rename action
   newReference: z.string().optional().describe('New reference for tab (3 descriptive words) - required for rename action'),
 }).strict();
@@ -185,6 +186,10 @@ export function createTabTools(
                 await page.goto(args.url, { waitUntil: 'load', timeout: 30000 });
               }
 
+              if (args.bringToFront) {
+                await page.bringToFront();
+              }
+
               // Get page index
               const pages = await puppeteerManager.getPages();
               const pageIndex = pages.findIndex(p => p === page);
@@ -291,6 +296,10 @@ export function createTabTools(
                 } catch (error) {
                   // Ignore errors - page might not exist
                 }
+              }
+
+              if (args.bringToFront && connection?.puppeteerManager?.isConnected()) {
+                await connection.puppeteerManager.getPage().bringToFront();
               }
 
               // Get current page info

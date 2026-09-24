@@ -3,6 +3,11 @@
  */
 
 import { z } from 'zod';
+import { markOnProxies, getProxy } from '../proxy/registry.js';
+import { tallyShapes } from '../proxy/intercept-proxy.js';
+
+/** Bumped per repeat, so two in the same millisecond keep separate ids. */
+let repeatSeq = 0;
 import { announceSequenceSaved } from '../sequence-events.js';
 import { selectSuiteFiles, sequenceFolders } from '../helpers/sequence-tree.js';
 import { promises as fs } from 'fs';
@@ -276,6 +281,7 @@ const replaySchema = z.object({
   insertAfterStep: z.number().optional(),
   condition: z.string().optional().describe("addConditional: the guard, e.g. '{{selector:.cookie-banner}}' or '{{!localStorage:token}}'"),
   thenSequence: z.string().optional().describe('addConditional: name of the sequence to run when the condition holds'),
+  rejoinAt: z.number().int().optional().describe('addConditional: 0-based step of THIS sequence to resume at once the branch has run, for a branch that replaces the steps between. Forward only - must be after the conditional itself. Omitted, the run resumes at the step after the conditional'),
   comment: z.string().optional().describe('addConditional: note stored on the step'),
   overwrite: z.boolean().optional(),
   newName: z.string().optional(),
@@ -424,7 +430,11 @@ async function handleRepeat(
   const results: Array<{ index: number; tool: string; success: boolean; error?: string }> = [];
   const startTime = Date.now();
 
+  const proxyRun = `repeat-${Date.now().toString(36)}-${(repeatSeq += 1)}`;
+  let position = 0;
+
   for (const cmd of commands) {
+    markOnProxies({ kind: 'replay', runId: proxyRun, step: position++ });
     try {
       // Fill in a batch-level connection where the command has none, and replace
       // the recorded one only when the caller explicitly asked to retarget a
@@ -608,8 +618,48 @@ async function handleCreate(args: ReplayArgs, recorder: CommandRecorder, getKnow
   // Remember what was hoisted - `insert` needs it to tell a same-browser insert
   // from a cross-browser one (see handleInsert).
   if (normalized.hoisted) (sequence as any).recordedConnection = normalized.hoisted;
+  const recordingProxy = normalized.hoisted ? getProxy(normalized.hoisted) : undefined;
+  if (recordingProxy) {
+    (sequence as any).recordedThroughProxy = true;
+    const rules = recordingProxy.shapeRules();
+    if (Object.keys(rules).length > 0) (sequence as any).shapeRules = rules;
+    // Read now and stored on the step: the proxy holds its events in memory
+    // for this session only, so a sequence replayed later has nothing to read.
+    const unmeasured: number[] = [];
+    for (const [position, command] of sequence.commands.entries()) {
+      if (command.recordedAt === undefined) continue;
+      // A step whose events the ring dropped is not a step that saw none.
+      // Storing an empty set for it would read as "nothing crossed" against
+      // every later replay, which is a drift report with no evidence in it.
+      if (!recordingProxy.measurable(command.recordedAt)) {
+        unmeasured.push(position + 1);
+        continue;
+      }
+      const tally = tallyShapes(recordingProxy.eventsForCommand(command.recordedAt), rules);
+      const traffic = (command.traffic ??= { requests: 0, failed: 0, opened: 0, writes: 0, lines: [] });
+      traffic.shapes = tally.weight;
+      traffic.seen = tally.seen;
+      // Held from this command until its boundary was released, which is the
+      // span it owns. The next command's timestamp stands in for a command
+      // whose release has not been recorded - one still settling, or one from
+      // a session that predates the release - and `create`'s own clock for the
+      // last of those, which carries the pause before saving and reads long.
+      const entry = recorder.getCommand(command.recordedAt);
+      const began = entry?.timestamp;
+      const nextAt = recorder.getCommand(command.recordedAt + 1)?.timestamp;
+      const ended = entry?.releasedAt ?? nextAt ?? Date.now();
+      if (began) traffic.windowMs = ended - began;
+    }
+    if (unmeasured.length > 0) {
+      (sequence as any).shapesUnmeasured = unmeasured;
+    }
+  }
 
-  return { content: [{ type: 'text', text: formatSequenceCreated(sequence) + formatConnectionNote(normalized) }] };
+  const dropped = (sequence as any).shapesUnmeasured as number[] | undefined;
+  const note = dropped
+    ? `\n\nStep(s) ${dropped.join(', ')} carry no boundary evidence: the proxy had already dropped their events. Those steps are left out of the traffic comparison rather than compared against nothing.`
+    : '';
+  return { content: [{ type: 'text', text: formatSequenceCreated(sequence) + formatConnectionNote(normalized) + note }] };
 }
 
 /**
@@ -670,9 +720,29 @@ function formatConnectionNote(normalized: ReturnType<typeof normalizeStepConnect
   return notes.join('');
 }
 
-async function handleList(recorder: CommandRecorder) {
+async function handleList(args: ReplayArgs, recorder: CommandRecorder) {
   const sequences = recorder.listSequences();
-  return { content: [{ type: 'text', text: formatSequenceList(sequences) }] };
+  const saved = await recorder.listSavedSequencesOnDisk();
+  const issueSequences = await listIssueSequencesOrEmpty(recorder);
+  return {
+    content: [{
+      type: 'text',
+      text: formatSequenceList(sequences, saved, issueSequences, args.showAll ?? false)
+    }]
+  };
+}
+
+/**
+ * Issue sequences, or an empty list when the issue store cannot be read. A
+ * failure there must not take the sequence list with it - the sequences on
+ * disk are what the caller asked for.
+ */
+async function listIssueSequencesOrEmpty(recorder: CommandRecorder) {
+  try {
+    return await recorder.listIssueSequencesOnDisk();
+  } catch {
+    return [];
+  }
 }
 
 async function handleGet(args: ReplayArgs, recorder: CommandRecorder) {
@@ -887,7 +957,7 @@ async function handleLoad(args: ReplayArgs, recorder: CommandRecorder, getKnownT
 
 async function handleListSaved(args: ReplayArgs, recorder: CommandRecorder) {
   const savedSequences = await recorder.listSavedSequencesOnDisk();
-  const issueSequences = await recorder.listIssueSequencesOnDisk();
+  const issueSequences = await listIssueSequencesOrEmpty(recorder);
   const showAll = args.showAll ?? false;
   return { content: [{ type: 'text', text: formatSavedSequencesList(savedSequences, issueSequences, showAll) }] };
 }
@@ -1863,6 +1933,39 @@ async function handleRun(
     }
   }
 
+  // A step naming its own connection resolves through `connections` alone, so
+  // where every connection-taking step names one reference, a run-level
+  // connectionReason reaches no step at all. The steps then drive the recorded
+  // reference - live but stale in the same session - and fail as "element not
+  // found" against the wrong window. Refused before any side effects, with the
+  // mapping that retargets them. A `{{...}}` reference resolves only at run time
+  // and is left to the per-step existence check.
+  if (args.connectionReason) {
+    const runRef = sanitizeReference(args.connectionReason);
+    const recorded = analyzeRecordedStepConnections(commands);
+    const unreached = recorded.uniform !== undefined &&
+      !recorded.mixed &&
+      !hasTemplateToken(recorded.uniform) &&
+      recorded.uniform !== runRef &&
+      !connectionMap?.[recorded.uniform]
+      ? recorded.uniform
+      : undefined;
+    if (unreached) {
+      const steps = commands
+        .map((c, i) => sanitizeReference(String(c.params?.connectionReason ?? '')) === unreached ? i + 1 : 0)
+        .filter(Boolean);
+      return createErrorResponse('INVALID_PARAMETER', {
+        parameter: 'connectionReason',
+        value: args.connectionReason,
+        message: `Step${steps.length > 1 ? 's' : ''} ${steps.join(', ')} of "${sequence.name}" name the connection "${unreached}", ` +
+          `and a run-level connectionReason does not reach a step that names its own connection - ` +
+          `those steps would drive "${unreached}" instead of "${runRef}". ` +
+          `Retarget them with connections: { "${unreached}": "${runRef}" }, ` +
+          `or run with connectionReason: "${unreached}" to drive the recorded connection.`
+      });
+    }
+  }
+
   // The run-level connection may itself have been DERIVED from the sequence (a
   // launchChrome reference), in which case it is a recorded name and needs the
   // same rebinding as the steps - otherwise it points at a reference that does
@@ -2167,7 +2270,8 @@ async function performRun(
   // Ensure connection is ready
   let didAutoLaunch = false;
   if (needsConnection && !analysis.hasLaunchBeforeConnection) {
-    const connResult = await ensureConnection(ctx, needsConnection, analysis.hasLaunchBeforeConnection);
+    const connResult = await ensureConnection(
+      ctx, needsConnection, analysis.hasLaunchBeforeConnection, sequence.recordedThroughProxy === true);
     if (!connResult.success) {
       return {
         outcome: 'failed',
@@ -2371,7 +2475,20 @@ async function performRun(
         .filter(f => d.recorded[f] !== d.observed[f])
         .map(f => `${f} ${d.recorded[f]} → ${d.observed[f]}`)
         .join(', ');
-      response += `\n- step ${d.step} \`${d.label}\`: ${moved}`;
+      const shapes = d.shapes
+        ? [...new Set([...Object.keys(d.shapes.recorded), ...Object.keys(d.shapes.observed)])]
+            .filter(k => (d.shapes!.recorded[k] ?? 0) !== (d.shapes!.observed[k] ?? 0))
+            .map(k => `${k} ${d.shapes!.recorded[k] ?? 0} → ${d.shapes!.observed[k] ?? 0}`)
+        : [];
+      const parts = [moved, ...shapes].filter(Boolean).join(', ');
+      response += `\n- step ${d.step} \`${d.label}\`: ${parts}`;
+      // The hold times sit beside the difference rather than under it: a step
+      // held far longer while recording collected traffic that arrives on the
+      // app's own schedule, and that reads as drift before anything changed.
+      if (d.window) {
+        const secs = (ms: number) => ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
+        response += ` (held ${secs(d.window.recorded)} recording, ${secs(d.window.observed)} replaying)`;
+      }
     }
   }
 
@@ -2553,7 +2670,10 @@ async function handleCancel(args: ReplayArgs, recorder: CommandRecorder) {
 async function handleStep(
   args: ReplayArgs,
   recorder: CommandRecorder,
-  executeToolCall: ExecuteToolCall
+  executeToolCall: ExecuteToolCall,
+  /** Stops the step part-way. Without it a caller that gives up still waits
+   *  out the step's own settle before the call returns. */
+  abortSignal?: AbortSignal
 ) {
   const activeSeq = recorder.getActiveSequence();
   if (!activeSeq) {
@@ -2596,7 +2716,8 @@ async function handleStep(
     sequence,
     startStep,
     endStep,
-    ctx
+    ctx,
+    ...(abortSignal ? { abortSignal } : {})
   });
 
   const lastExecuted = execResult.results.length > 0 ? execResult.results[execResult.results.length - 1].step : startStep;
@@ -2604,7 +2725,21 @@ async function handleStep(
 
   // Update active sequence state
   let closedNote = '';
-  if (failed || lastExecuted >= commands.length) {
+  if (abortSignal?.aborted) {
+    // Stopped part-way: not finished, not failed. The session stays open so a
+    // later step or finish carries on rather than starting from the first
+    // command, and it is moved to the last step that actually succeeded.
+    //
+    // Not left where it started: a call for several steps can abort on its
+    // third, and an abort can also land after a step's own tool returned but
+    // while the settle around it is still running. Both would otherwise take
+    // work that had completed and do it again.
+    //
+    // Not `lastExecuted` either - that counts the aborted step, which is the
+    // one whose input may never have reached the page.
+    const lastDone = [...execResult.results].reverse().find(r => r.success)?.step;
+    recorder.updateActiveSequenceStep(lastDone ?? startStep);
+  } else if (failed || lastExecuted >= commands.length) {
     recorder.setActiveSequence(null);
     // Stepping off the end (or onto a failure) ends the run: same cleanup a
     // straight-through run gets.
@@ -2836,6 +2971,21 @@ async function handleAddConditional(args: ReplayArgs, recorder: CommandRecorder)
 
   const commands = sequence.commands;
   const insertAfter = args.insertAfterStep !== undefined ? args.insertAfterStep : commands.length;
+  // Checked here as well as at run time: a rejoin that cannot hold is worth
+  // refusing while the person is writing it, not halfway through a later run.
+  if (args.rejoinAt !== undefined) {
+    // The conditional lands at `insertAfter`, so every later step shifts by one.
+    const landsAt = insertAfter;
+    const after = args.rejoinAt >= landsAt ? args.rejoinAt + 1 : args.rejoinAt;
+    if (after <= landsAt || after > commands.length) {
+      return createErrorResponse('INVALID_PARAMETER', {
+        parameter: 'rejoinAt',
+        value: String(args.rejoinAt),
+        message: `A conditional inserted at step ${landsAt + 1} can rejoin at a step after it, `
+          + `up to ${commands.length + 1}. Rejoining at or before itself re-runs it forever.`
+      });
+    }
+  }
   if (insertAfter < 0 || insertAfter > commands.length) {
     return createErrorResponse('INVALID_PARAMETER', {
       parameter: 'insertAfterStep',
@@ -2846,7 +2996,15 @@ async function handleAddConditional(args: ReplayArgs, recorder: CommandRecorder)
 
   const step: RecordedCommand = {
     tool: 'conditional',
-    params: { if: args.condition, then: args.thenSequence },
+    params: {
+      if: args.condition,
+      then: args.thenSequence,
+      // Stored against the list this step is being inserted into, so it still
+      // names the same step once every later one has shifted by one.
+      ...(args.rejoinAt !== undefined
+        ? { rejoinAt: args.rejoinAt >= insertAfter ? args.rejoinAt + 1 : args.rejoinAt }
+        : {}),
+    },
     ...(args.comment ? { comment: args.comment } : {})
   };
 
@@ -3688,7 +3846,7 @@ export function createReplayTools(
 ) {
   return {
     replay: createTool(
-      'Record and replay command sequences for testing and automation. Actions: repeat (immediately re-execute commands by history index - use this to repeat recent actions), history (view command history), recordInteraction (record real mouse/keyboard/navigation via a browser overlay - BLOCKS until the person finishes, so do not call it unattended; tune the capture with simplifyEvents/includeHovers/preferCoordinates/preferSelectors, and add outputFormat: events|commands|review|playwright|puppeteer to dump the recording - review is a human-readable walkthrough of the captured events), create (create sequence from history indices), list (list in-memory sequences), get (get sequence details; outputFormat: commands|playwright|puppeteer returns the raw command JSON or generated test code), delete (delete from memory), export (write a sequence to disk as sequence/playwright/puppeteer), load (load sequence from disk), listSaved (list saved files), deleteSaved (delete saved file), run (start executing a sequence in the background - returns a runId immediately; poll progress/results with status, stop it with cancel; wait: true blocks until completion and returns the full result), runAll (run every sequence in a folder of the sequences dir, or only those carrying a given tag - loads the whole tree first so cross-folder name references resolve, runs only the chosen folder, skips folders whose name starts with an underscore unless named explicitly, and reports a pass/fail line per sequence; continueOnFailure defaults true), runFromLog (execute commands from log lines), step (execute next N commands in a paused sequence), finish (complete remaining commands), insert (insert recorded commands into a sequence), addConditional (add a guarded branch step: condition + thenSequence, optionally insertAfterStep), declare (set what the sequence needs and what it is: requiredConnections - the browsers, optionally each on a persistent profile - requiredSockets - URL substrings of the WebSockets its assertions ride on - and tags, which runAll selects on; each list replaces the field, [] clears it, and the sequence is written back to its file), status (with runId: one run\'s progress or final result; without: paused session + recent runs), cancel (with runId: stop that run; without: drop the paused session, or the only executing run)',
+      'Record and replay command sequences for testing and automation. Actions: repeat (immediately re-execute commands by history index - use this to repeat recent actions), history (view command history), recordInteraction (record real mouse/keyboard/navigation via a browser overlay - BLOCKS until the person finishes, so do not call it unattended; tune the capture with simplifyEvents/includeHovers/preferCoordinates/preferSelectors, and add outputFormat: events|commands|review|playwright|puppeteer to dump the recording - review is a human-readable walkthrough of the captured events), create (create sequence from history indices), list (every sequence reachable: those in memory and those saved on disk), get (get sequence details; outputFormat: commands|playwright|puppeteer returns the raw command JSON or generated test code), delete (delete from memory), export (write a sequence to disk as sequence/playwright/puppeteer), load (load sequence from disk), listSaved (the saved files alone), deleteSaved (delete saved file), run (start executing a sequence in the background - returns a runId immediately; poll progress/results with status, stop it with cancel; wait: true blocks until completion and returns the full result), runAll (run every sequence in a folder of the sequences dir, or only those carrying a given tag - loads the whole tree first so cross-folder name references resolve, runs only the chosen folder, skips folders whose name starts with an underscore unless named explicitly, and reports a pass/fail line per sequence; continueOnFailure defaults true), runFromLog (execute commands from log lines), step (execute next N commands in a paused sequence), finish (complete remaining commands), insert (insert recorded commands into a sequence), addConditional (add a guarded branch step: condition + thenSequence, optionally insertAfterStep), declare (set what the sequence needs and what it is: requiredConnections - the browsers, optionally each on a persistent profile - requiredSockets - URL substrings of the WebSockets its assertions ride on - and tags, which runAll selects on; each list replaces the field, [] clears it, and the sequence is written back to its file), status (with runId: one run\'s progress or final result; without: paused session + recent runs), cancel (with runId: stop that run; without: drop the paused session, or the only executing run)',
       replaySchema,
       async (args, abortSignal) => {
         switch (args.action) {
@@ -3697,7 +3855,7 @@ export function createReplayTools(
           case 'create':
             return handleCreate(args, commandRecorder, getKnownToolNames);
           case 'list':
-            return handleList(commandRecorder);
+            return handleList(args, commandRecorder);
           case 'get':
             return handleGet(args, commandRecorder);
           case 'delete':
@@ -3717,7 +3875,7 @@ export function createReplayTools(
           case 'status':
             return handleStatus(args, commandRecorder);
           case 'step':
-            return handleStep(args, commandRecorder, executeToolCall);
+            return handleStep(args, commandRecorder, executeToolCall, abortSignal);
           case 'finish':
             return handleFinish(commandRecorder, executeToolCall);
           case 'insert':

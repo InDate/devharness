@@ -5,6 +5,7 @@ import {
   analyzeSequenceConnections,
   TOOLS_NEEDING_CONNECTION,
   TOOLS_ACCEPTING_CONNECTION,
+  commandTakesInjectedConnection,
 } from './replay-executor.js';
 import type { ExecutionContext } from './replay-executor.js';
 import type { CommandSequence, RecordedCommand } from '../command-recorder.js';
@@ -140,6 +141,12 @@ describe('bug-008: inspect steps and connection resolution', () => {
     expect(TOOLS_NEEDING_CONNECTION).not.toContain('inspect');
     expect(TOOLS_NEEDING_CONNECTION).not.toContain('request');
     expect(TOOLS_ACCEPTING_CONNECTION).toContain('inspect');
+
+    // bench takes a required connectionReason and launches Chrome when the
+    // reference is unbound, so a sequence holding one must get it back after
+    // the hoist - otherwise the replay fails on a missing parameter.
+    expect(TOOLS_NEEDING_CONNECTION).toContain('bench');
+    expect(commandTakesInjectedConnection({ tool: 'bench', params: { action: 'start' } })).toBe(true);
     // every browser tool still gets injection
     for (const t of TOOLS_NEEDING_CONNECTION) {
       expect(TOOLS_ACCEPTING_CONNECTION).toContain(t);

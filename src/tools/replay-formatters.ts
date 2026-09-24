@@ -462,14 +462,36 @@ export function formatSequenceCreated(sequence: CommandSequence): string {
 }
 
 /**
- * Format sequence list
+ * Format sequence list: the sequences in memory, then the ones on disk.
+ *
+ * A session starts with an empty memory, so a memory-only list reports "none"
+ * while the sequences dir holds a suite - the disk sections are folded in here
+ * so one call covers both.
  */
-export function formatSequenceList(sequences: CommandSequence[]): string {
+export function formatSequenceList(
+  sequences: CommandSequence[],
+  saved: SavedSequenceEntry[] = [],
+  issueSequences: IssueSequenceEntry[] = [],
+  showAll: boolean = false
+): string {
+  const inMemoryNames = new Set(sequences.map(seq => seq.name));
+  const diskSections = formatDiskSequenceSections(saved, issueSequences, showAll, inMemoryNames);
+
   if (sequences.length === 0) {
+    if (!diskSections) {
+      let response = getFormattedResponse('REPLAY_SEQUENCE_LIST_EMPTY', {});
+      response += `\n\n**Create a sequence:**\n`;
+      response += `1. View command history: \`replay({ action: 'history' })\`\n`;
+      response += `2. Create sequence: \`replay({ action: 'create', name: 'my-workflow', indices: [1, 2, 3] })\``;
+      return response;
+    }
+
     let response = getFormattedResponse('REPLAY_SEQUENCE_LIST_EMPTY', {});
-    response += `\n\n**Create a sequence:**\n`;
-    response += `1. View command history: \`replay({ action: 'history' })\`\n`;
-    response += `2. Create sequence: \`replay({ action: 'create', name: 'my-workflow', indices: [1, 2, 3] })\``;
+    response += `\n\n${diskSections.trimEnd()}`;
+    response += `\n\n---\n\n`;
+    response += `**Actions:**\n`;
+    response += `- View details: \`replay({ action: 'get', name: '<name>' })\`\n`;
+    response += `- Execute: \`replay({ action: 'run', name: '<name>' })\``;
     return response;
   }
 
@@ -493,6 +515,10 @@ export function formatSequenceList(sequences: CommandSequence[]): string {
     response += `- **Commands:** ${seq.commands.length}\n`;
     response += `- **Created:** ${age} minutes ago`;
   });
+
+  if (diskSections) {
+    response += `\n\n${diskSections.trimEnd()}`;
+  }
 
   response += `\n\n---\n\n`;
   response += `**Actions:**\n`;
@@ -545,17 +571,40 @@ export function formatSequenceDetails(sequence: CommandSequence): string {
   return response;
 }
 
+export type SavedSequenceEntry = {
+  filename: string;
+  name: string;
+  id: string;
+  commandCount: number;
+  description?: string;
+  expectedOutcome?: string;
+  startUrl?: string;
+  location?: string;
+  fullPath?: string;
+};
+
+export type IssueSequenceEntry = SavedSequenceEntry & {
+  issueId?: number;
+  issueType?: string;
+  issueStatus?: string;
+};
+
 /**
- * Format saved sequences on disk listing
+ * Sections for the sequences on disk, without a footer. Empty string when
+ * nothing is shown, which lets a caller drop the whole block.
  * Categories:
  * - Saved: Regular sequences in .devharness/sequences/
  * - Issues: Issue sequences that are in_progress (or all if showAll)
  * - Abandoned: Issue sequences without a linked issue (orphaned)
+ *
+ * A name in `inMemoryNames` is the same sequence as the in-memory entry above
+ * it, tagged so the two rows are not counted as two sequences.
  */
-export function formatSavedSequencesList(
-  sequences: Array<{ filename: string; name: string; id: string; commandCount: number; description?: string; expectedOutcome?: string; startUrl?: string; location?: string; fullPath?: string }>,
-  issueSequences?: Array<{ filename: string; name: string; id: string; commandCount: number; description?: string; expectedOutcome?: string; startUrl?: string; location?: string; fullPath?: string; issueId?: number; issueType?: string; issueStatus?: string }>,
-  showAll: boolean = false
+function formatDiskSequenceSections(
+  sequences: SavedSequenceEntry[],
+  issueSequences?: IssueSequenceEntry[],
+  showAll: boolean = false,
+  inMemoryNames: Set<string> = new Set()
 ): string {
   // Categorize issue sequences
   const activeIssues: typeof issueSequences = [];
@@ -584,7 +633,7 @@ export function formatSavedSequencesList(
 
   const hasAnythingToShow = hasSequences || hasActiveIssues || (showAll && (hasCompletedIssues || hasAbandoned));
   if (!hasAnythingToShow) {
-    return getFormattedResponse('REPLAY_SAVED_EMPTY', {});
+    return '';
   }
 
   let response = '';
@@ -600,7 +649,8 @@ export function formatSavedSequencesList(
     response = `**Saved** (${sorted.length})\n`;
     sorted.forEach((seq, idx) => {
       const locationTag = seq.location === 'global' ? ' [global]' : '';
-      response += `${idx + 1}. ${seq.name} (${seq.commandCount})${locationTag}\n`;
+      const memoryTag = inMemoryNames.has(seq.name) ? ' [in memory]' : '';
+      response += `${idx + 1}. ${seq.name} (${seq.commandCount})${locationTag}${memoryTag}\n`;
     });
   }
 
@@ -652,9 +702,23 @@ export function formatSavedSequencesList(
     response += `\n_${hiddenCount} other sequence(s) hidden. Use showAll: true to see all._\n`;
   }
 
-  response += `\nRun: \`replay({ action: 'run', name: '<name>' })\``;
-
   return response;
+}
+
+/**
+ * Format saved sequences on disk listing
+ */
+export function formatSavedSequencesList(
+  sequences: SavedSequenceEntry[],
+  issueSequences?: IssueSequenceEntry[],
+  showAll: boolean = false
+): string {
+  const sections = formatDiskSequenceSections(sequences, issueSequences, showAll);
+  if (!sections) {
+    return getFormattedResponse('REPLAY_SAVED_EMPTY', {});
+  }
+
+  return `${sections}\nRun: \`replay({ action: 'run', name: '<name>' })\``;
 }
 
 // =============================================================================

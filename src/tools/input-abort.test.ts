@@ -43,7 +43,14 @@ function makePage(opts: { onDispatch?: (d: Dispatch) => void; elementExists?: bo
       void fn; void args;
       return {} as any;
     }),
-    $: vi.fn(async () => (opts.elementExists === false ? null : {})),
+    // An element handle as clickSelector drives one: it resolves a handle and
+    // dispatches through page.mouse, rather than page.click, so that a click
+    // never waits on an IntersectionObserver a background tab cannot deliver.
+    $: vi.fn(async () => (opts.elementExists === false ? null : {
+      scrollIntoView: vi.fn(async () => {}),
+      clickablePoint: vi.fn(async () => ({ x: 10, y: 20 })),
+      dispose: vi.fn(async () => {}),
+    })),
     click: vi.fn(async (...a: any[]) => record('page.click', ...a)),
     type: vi.fn(async (...a: any[]) => record('page.type', ...a)),
     hover: vi.fn(async (...a: any[]) => record('page.hover', ...a)),
@@ -252,8 +259,9 @@ describe('input: cancellation does NOT undo what was already dispatched', () => 
     const controller = new AbortController();
     const { page, dispatches } = makePage({
       onDispatch: (d) => {
-        // Cancel the instant the click is handed to the page.
-        if (d.kind === 'page.click') controller.abort();
+        // Cancel the instant the click is handed to the page. A click goes out
+        // through page.mouse, not page.click - see clickSelector.
+        if (d.kind === 'mouse.click') controller.abort();
       },
     });
     const input = makeInput(page);
@@ -266,11 +274,11 @@ describe('input: cancellation does NOT undo what was already dispatched', () => 
 
     // The click IS recorded - Chrome already has it, and cancellation cannot
     // and does not take it back.
-    expect(dispatches.filter((d) => d.kind === 'page.click')).toHaveLength(1);
+    expect(dispatches.filter((d) => d.kind === 'mouse.click')).toHaveLength(1);
 
     // And nothing "undoing" it was sent afterwards: no second click, no
     // synthetic Escape, no navigation. The dispatch log ends at the click.
-    const after = dispatches.slice(dispatches.findIndex((d) => d.kind === 'page.click') + 1);
+    const after = dispatches.slice(dispatches.findIndex((d) => d.kind === 'mouse.click') + 1);
     expect(after).toEqual([]);
   });
 });

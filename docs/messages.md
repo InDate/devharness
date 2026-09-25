@@ -4232,13 +4232,15 @@ Read the whole sequence against the page and tell the person what will not survi
 
 Bench: `{{benchUrl}}` - the page runs and the picker is idle.
 
+{{#monitorCall}}**No watch reads the event stream. Arm it now:** `{{monitorCall}}`{{/monitorCall}}
+
 **Once per session:**
 
 FREEZE in the bench stops the page's JS and its CSS animations, holding a state that only exists mid-interaction; PICKER turns the next click into a pick. They are independent: driving the app needs the picker disarmed *and* the page running, because a held page has its JS stopped and a click reaches nothing. Picking works in either state - the picker is Chrome's, not the page's. While held, other devharness tools report the page as blocked at a breakpoint; `bench({ action: 'unfreeze' })` or `stop` clears that, not `execution({ action: 'resume' })`, which leaves the bench holding a page it no longer has.
 
 Nothing is injected into the page. The bench is served from `127.0.0.1` while apps sit on `localhost` - a different site, so Chrome gives it its own renderer process. Drag it into Chrome's split view to work side by side.
 
-The person picks a step in the bench's step list, clicks the element in the app tab, types a comment, saves. The note is stored in that step of the sequence file, so it travels with the sequence rather than living beside it, and hovering the note swaps its text for the selector while outlining the element on the page. Saves, sequence writes and screenshots announce themselves on this session's event stream, `{{eventStreamPath}}` - so with a Monitor armed they arrive mid-task rather than on the next tool call. Keep working while they write.
+The person picks a step in the bench's step list, clicks the element in the app tab, types a comment, saves. The note is stored in that step of the sequence file, so it travels with the sequence rather than living beside it, and hovering the note swaps its text for the selector while outlining the element on the page. Saves, sequence writes and screenshots announce themselves on this session's event stream, `{{eventStreamPath}}`. With no watch they reach you only on your next devharness call, after the moment they were about, so each bench start counts the processes reading the stream and prints the Monitor call when the count is zero. A Monitor expires at its timeout; its expiry notice is the cue to arm it again. Keep working while they write.
 
 **Suggestions:**
 - To read what they recorded: `bench({ action: 'list', connectionReason: '{{connection}}' })`

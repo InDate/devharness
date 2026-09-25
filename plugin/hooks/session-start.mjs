@@ -165,7 +165,7 @@ try {
 
 const lines = [
   `devharness event stream for this session: ${streamPath}`,
-  `Guard blocks - a dev server that died, a paused breakpoint, a pending bug - and messages from other devharness sessions are appended there as they happen. Without a watch they surface only on your next devharness call, which may be long after the event. Arm one and they arrive as notifications:`,
+  `Guard blocks - a dev server that died, a paused breakpoint, a pending bug - messages from other devharness sessions, and the notes, screenshots and sequence writes a person makes in the bench are appended there as they happen. With no watch each one reaches you only on your next devharness call, after the moment it was about. Arm this watch as your first tool call of the session, before answering, and re-arm it on its expiry notice:`,
   `Monitor({ command: "mkdir -p ${eventsDir} && touch ${streamPath} && tail -f -n0 ${streamPath}", description: "devharness events", persistent: true, timeout_ms: 3600000 })`,
 ];
 

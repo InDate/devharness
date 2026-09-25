@@ -68,7 +68,7 @@ Server merges and re-validates. Same token, repeat until it passes. Expires in 5
 
 Everything devharness pushes at you - a guard block, a message from another session, an annotation someone picked in the browser - appends one JSON line to `~/.devharness/events/<sessionId>.jsonl`. One file, one watch, and any kind added later arrives on the same watch.
 
-Installed as a plugin, a `SessionStart` hook prints that path and the `Monitor` call at the top of every session. Arm it when you see it:
+Installed as a plugin, a `SessionStart` hook prints that path and the `Monitor` call at the top of every session. Arm it as the session's first tool call:
 
 ```
 Monitor({
@@ -79,7 +79,7 @@ Monitor({
 })
 ```
 
-Nothing is lost without it: blocks and messages still surface on your next devharness call. The watch is what makes them arrive while you are doing something else, which for a dev server that died an hour ago is the difference that matters.
+With no watch, each event reaches you only on your next devharness call. A dev server that died an hour ago is reported an hour late, and a note the person wrote in the bench sits unread while they wait for an answer. A Monitor expires at its timeout, so the expiry notice is the cue to arm it again. `bench({ action: 'start' })` counts the processes reading the stream and prints this call at the head of its response when the count is zero.
 
 Each line carries `kind` and, where there is one, `resolve` - the call that clears it. `kind: "block"` also carries `guard`, one of `port`, `breakpoint`, `pendingStartup`, `bug`, `duplicateSession`; blocks are deduplicated, one line per *new* block rather than one per blocked call. `kind: "message"` carries `from` and the message id; `kind: "annotation"` carries the selector, component and comment for an element someone picked.
 

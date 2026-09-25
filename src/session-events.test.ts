@@ -10,10 +10,12 @@ import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { initializePaths, setWorkingDirOverride, getOutputPath } from './helpers/paths.js';
+import { spawn, spawnSync } from 'child_process';
 import {
   appendEvent,
   getEventStreamPath,
   getEventsDir,
+  streamReaders,
 } from './session-events.js';
 
 let dir: string;
@@ -62,5 +64,26 @@ describe('appendEvent', () => {
 
     expect(getEventStreamPath(SESSION)).toBe(join(getEventsDir(), 'aaaaaaaa.jsonl'));
     expect(readStream()).toHaveLength(3);
+  });
+});
+
+const hasLsof = spawnSync('lsof', ['-v']).error === undefined;
+
+describe.skipIf(!hasLsof)('streamReaders', () => {
+  it('counts none on a stream nothing holds open, written to or not', async () => {
+    expect(await streamReaders(SESSION)).toBe(0);
+    await appendEvent(SESSION, 'block', {});
+    expect(await streamReaders(SESSION)).toBe(0);
+  });
+
+  it('counts a tail holding the stream open, which is what a Monitor runs', async () => {
+    await appendEvent(SESSION, 'block', {});
+    const tail = spawn('tail', ['-f', '-n0', getEventStreamPath(SESSION)]);
+    try {
+      await new Promise(resolve => setTimeout(resolve, 300));
+      expect(await streamReaders(SESSION)).toBeGreaterThan(0);
+    } finally {
+      tail.kill();
+    }
   });
 });

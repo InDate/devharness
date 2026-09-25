@@ -8,11 +8,13 @@
  * event, including kinds added later, instead of one watch per feature.
  *
  * The plugin's SessionStart hook names this path to each session as it starts,
- * which is what gets the watch armed. Nothing here verifies that a watch
- * exists: a session with none simply receives nothing, the same as before the
- * stream existed.
+ * which is what gets the watch armed. A session with no watch receives
+ * nothing mid-task, so streamReaders counts the processes holding the file
+ * open, and a response that depends on the watch prints the Monitor call when
+ * that count is zero.
  */
 
+import { execFile } from 'child_process';
 import { promises as fs } from 'fs';
 import { join } from 'path';
 import { getOutputPath } from './helpers/paths.js';
@@ -31,6 +33,27 @@ export function getEventsDir(): string {
 
 export function getEventStreamPath(sessionName: string): string {
   return join(getEventsDir(), `${sessionName}.jsonl`);
+}
+
+/**
+ * The number of processes holding the stream open, read with lsof.
+ *
+ * A Monitor's `tail -f` holds the file open for as long as the watch lives,
+ * and appendEvent opens and closes it per line, so a count above zero is a
+ * live watch. Returns undefined where lsof is absent or fails, which leaves
+ * the caller with no reading rather than a false zero.
+ */
+export function streamReaders(sessionName: string): Promise<number | undefined> {
+  return new Promise(resolve => {
+    execFile('lsof', ['-t', getEventStreamPath(sessionName)], { timeout: 2000 }, (error, stdout) => {
+      const pids = stdout.split('\n').filter(Boolean).length;
+      if (pids > 0) return resolve(pids);
+      // lsof exits 1 both for a file nobody holds and for a file that does not
+      // exist; either way no watch is reading it.
+      if (error && (error as { code?: unknown }).code === 1) return resolve(0);
+      resolve(error ? undefined : 0);
+    });
+  });
 }
 
 /**

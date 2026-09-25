@@ -127,7 +127,7 @@ Chrome DevTools Protocol debugging for JavaScript/TypeScript in Chrome, Node.js,
 
 Everything devharness pushes - a guard block, a message from another session, an annotation picked in the browser - appends one JSON line to `~/.devharness/events/<sessionId>.jsonl`. One file per session, so one watch covers every kind, including kinds added later.
 
-Installed as a plugin, a `SessionStart` hook (`plugin/hooks/session-start.mjs`) creates that file and prints the `Monitor` call as session context before the first turn. In Claude Code, arm it:
+Installed as a plugin, a `SessionStart` hook (`plugin/hooks/session-start.mjs`) creates that file and prints the `Monitor` call as session context before the first turn. In Claude Code, arm it as the session's first tool call:
 
 ```
 Monitor({
@@ -138,7 +138,7 @@ Monitor({
 })
 ```
 
-Nothing is lost without a watch - blocks and messages still surface on the next tool call. The watch is what makes them arrive while the session is doing something else.
+With no watch, each event reaches the session only on its next devharness call, after the moment it was about. A Monitor expires at its timeout, so the expiry notice is the cue to arm it again. `bench({ action: 'start' })` counts the processes reading the stream and prints the call at the head of its response when the count is zero.
 
 Line kinds:
 

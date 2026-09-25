@@ -3,88 +3,85 @@
 [![npm version](https://img.shields.io/npm/v/devharness.svg)](https://www.npmjs.com/package/devharness)
 [![license](https://img.shields.io/npm/l/devharness.svg)](https://github.com/InDate/devharness/blob/main/LICENSE)
 
-MCP server. Your agent runs the app, sees what happened, and redoes none of it by
-hand.
+**Let Claude open your app, use it, and see what actually goes wrong.**
 
-```bash
-npx devharness@latest
-```
+When you build with an AI agent, you end up as its tester. It changes the code,
+then you open the browser, click through, and paste the error back. It can't see
+the page, the browser console or your server's output, so it works from what you
+paste, and "fixed" often isn't.
 
-> Was `cdp-tools-mcp`. That name described the transport. CDP is now one of three
-> things this does. [Migrating](#migrating).
-
-## Why
-
-Three things burn a debugging session, and only the first is about seeing.
-
-**You are the eyes.** You start the app, click the thing, paste the stack trace
-back into chat, reload and report whether it worked.
-
-**Everything gets re-driven by hand.** Relaunch the browser, log in again, refill
-the form, click back to the screen where the bug lives — every iteration. Slow,
-and the retyped arguments drift from what actually ran.
-
-**One failure stalls the whole session.** A dead dev server, a missing parameter,
-a wedged tool: the agent stops and waits for you.
-
-devharness closes all three. Real execution instead of guesses. Every call it has
-already made is replayable by index. Failures have recovery paths the agent takes
-itself.
-
-## What it does
-
-24 tool modules. 802 tests across 57 files, ~7s.
-
-**See** — pause real execution and read the real frame: breakpoints (line,
-conditional, logpoint, DOM mutation, event, XHR), call stack and scope, source
-maps so TypeScript breakpoints hit TypeScript lines. Chrome and Node.js
-(`node --inspect`), both at once. Console, network, storage, DOM. `content verify`
-reports dead buttons, dead links, small touch targets, and overflow clipping from
-CDP facts, not heuristics.
-
-**Repeat** — every tool response carries its own history index:
+devharness gives the agent its own Chrome window. It opens your app, clicks and
+types like you would, reads the errors in the console and the server logs, and
+can try its own fix in the browser before telling you it's done.
 
 ```
-**Repeat:** replay({ action: 'repeat', indices: [58] })
+/plugin marketplace add InDate/indate-tools
+/plugin install devharness@indate-tools
 ```
 
-`indices` takes a list, so four steps re-run in one call. Whatever the agent
-already did, it redoes by reference rather than by retyping. Worth keeping?
-`replay({ action: 'create', ... })` promotes it to a named sequence, exportable as
-a Playwright or Puppeteer test.
+> Was `cdp-tools-mcp`. [Migrating](#migrating).
 
-**Recover** — a call that fails validation comes back with a `continuationToken`
-and the list of what was missing; the retry sends only the missing field. A
-validated call blocked by a guard is already recorded, so acknowledging the block
-and replaying resumes the exact call. If the server itself wedges,
-`config({ action: 'restart' })` respawns it and replays the MCP handshake, so the
-host session never reconnects.
+## What you'll notice
 
-**Prove** — dev servers run under management (npm, flask, docker, compose) with
-port monitoring. Issues bind a bug to its reproduction: `workOn` navigates back to
-the failing state, `resolve` replays the sequence against the fix.
+- **A Chrome window opens and the agent uses your app.** You can watch it
+  navigate, fill forms and click buttons. It runs with its own temporary profile,
+  so your everyday browser, bookmarks and logins are untouched.
+- **The agent sees errors without you pasting them.** After each action it gets
+  any new output from your dev server and the newest error in the browser
+  console, with where it came from.
+- **The agent runs your dev server.** It can start it, restart it and read its
+  logs. With port monitoring on, a server that dies stops browser actions with a
+  message saying so, rather than the agent clicking away at a dead page and
+  reporting made-up results.
+- **Setup isn't redone by hand.** Every action gets a number. To get back to the
+  broken screen after a fix, the agent re-runs those numbered steps in one call,
+  with exactly the values it used the first time.
 
-## Design decisions
+## Things to ask
 
-- **A dead server blocks tools rather than warning.** An agent clicking away at a
-  dead server produces a long, confident, entirely fictional debugging session.
-  Configurable: `inform`, `error`, `block`.
-- **Closing an issue needs a human click.** `resolve` waits on a browser overlay
-  no agent can dismiss. Recording findings is automated; declaring something
-  actually fixed stays a human judgement.
-- **Repeat is on every response, not just failures.** Recovery and ordinary
-  re-running are the same mechanism, so there's nothing extra to reach for when
-  the session gets long.
-- **`getVariables` degrades, never errors.** full → reduced depth → names →
-  counts. A truncated answer that says it truncated beats a tool error.
-- **Connections are named.** Every tool takes `connectionReason`, so nested agents
-  each drive their own tab in one Chrome without fighting over "the current page".
-- **Text beats screenshots.** `extractText` costs a fraction of an image and
-  answers most page questions. Screenshot when the question is genuinely visual.
+Ask for the outcome. The agent picks the tools.
+
+- "Open the app at localhost:3000 and check the signup form works."
+- "The total on the checkout page is wrong. Find where it's calculated."
+- "Start the dev server and keep an eye on it while we work."
+- "Click through the settings page and tell me which buttons do nothing."
+- "Record the steps that reproduce this bug, then re-run them after you fix it."
+
+## Show it the problem instead of describing it
+
+Some bugs are hard to put into words: "the thing on the right, under the header,
+is too far down". Ask the agent to open the **bench**, and a panel opens beside
+your app. Click the element you mean and type a note, and attach a screenshot
+you can crop and draw on. The note records what the element is -
+its selector, and its component and source file where your dev build exposes
+them - and reaches the agent as soon as you save it.
+
+## Keep a bug and prove the fix
+
+The steps the agent takes can be saved as a **sequence** and replayed later, or
+exported as a Playwright or Puppeteer test. An **issue** can carry the sequence
+that reproduces it, so working on it starts by replaying to the broken state.
+
+Closing an issue needs you. The agent opens a Fixed / Not Fixed prompt in the
+browser and waits for your click; it can record what it found, but it can't mark
+its own work as fixed. Issues can be published to GitHub, which shows you a
+draft and posts nothing until you confirm.
 
 ## Setup
 
-**Claude Code:**
+You need **Google Chrome** installed in its usual place and **Node.js 18** or
+later.
+
+**Claude Code** (recommended) - the plugin registers the server, adds the skill
+that teaches the agent how to use it, and pins the version, so what you installed
+is what runs until you update:
+
+```
+/plugin marketplace add InDate/indate-tools
+/plugin install devharness@indate-tools
+```
+
+**Claude Code, server only:**
 ```bash
 claude mcp add devharness -- npx devharness@latest
 ```
@@ -101,32 +98,41 @@ claude mcp add devharness -- npx devharness@latest
 }
 ```
 
-**Other clients** — `npx devharness@latest` over stdio.
+**Other MCP clients:** run `npx devharness@latest` over stdio.
 
-**As a Claude Code plugin** — this registers the server for you:
-```
-/plugin marketplace add InDate/indate-tools
-/plugin install devharness@indate-tools
-```
-The plugin pins an exact server version rather than tracking `@latest`, so what
-you installed is what runs until you update it.
-
-### Skill
-
-Bundled [Agent Skill](https://agentskills.io) at `plugin/skills/devharness/`. Same
-guidance as `docs/instructions.md`, split for progressive disclosure: name and
-description at session start, full catalogue only when debugging starts.
+Without the plugin, link the skill into your project so the agent gets the same
+guidance:
 
 ```bash
 mkdir -p .claude/skills
 ln -s ../../node_modules/devharness/plugin/skills/devharness .claude/skills/devharness
 ```
 
-Installing as a Claude Code plugin does this for you.
+## For developers
 
-## Example
+devharness is an [MCP](https://modelcontextprotocol.io) server that drives Chrome
+and Node.js through the Chrome DevTools Protocol. Beyond the above:
 
-Node service:
+- **Debugger.** Breakpoints (line, conditional, logpoints, DOM changes, events,
+  XHR), stepping, the call stack and variables in scope, in Chrome and in Node.js
+  started with `--inspect`, both at once. Source maps put TypeScript
+  breakpoints on TypeScript lines.
+- **Page checks.** `content verify` reports dead buttons, dead links, small touch
+  targets, clipped overflow and horizontal scroll, from what the browser reports.
+- **Network.** Console, requests and responses, cookies and storage. With
+  `launchChrome({ proxy: true })` the browser runs through a recording proxy that
+  ties each request and socket message to the step that caused it and keeps the
+  app's own polling apart.
+- **Dev servers.** npm scripts, Docker and Docker Compose.
+  `start({ monitorPort: true })` watches the port and blocks browser tools while
+  it is down; `start({ watch: true })` restarts on file changes.
+- **Several agents.** Every tool takes a named connection, so nested agents each
+  drive their own tab in one Chrome, and sessions can message each other.
+- **Recovery.** A call missing a field returns what is missing and the retry sends
+  only that. `config({ action: 'restart' })` respawns a stuck server without the
+  client reconnecting.
+
+A Node service by hand:
 
 ```
 1. node --inspect=9229 app.js
@@ -134,25 +140,14 @@ Node service:
 3. breakpoint({ action: 'set', connectionReason: "api", file: "user.ts", line: 42 })
 4. Trigger the request.
 5. inspect({ action: 'getVariables', connectionReason: "api" })
-   → real frame: what userId and userRole actually were
 ```
 
-Browser fix:
+[examples/test-app](./examples/test-app/README.md) is an app with deliberate bugs
+to practise on.
 
-```
-1. launchChrome({ reference: "app" })   # launches and connects
-2. Record the five clicks that reproduce it.
-3. Fix the code.
-4. Replay → pass or fail, against the real app
-```
+### Command line
 
-[docs/GUIDE.md](./docs/GUIDE.md) for depth, [docs/instructions.md](./docs/instructions.md)
-for the tool reference. [examples/test-app](./examples/test-app/README.md) ships
-eight seeded bugs to exercise it against known-wrong code.
-
-## Command line
-
-`devharness <command>`, run from a shell inside an editor session, executes the tool in that session's own server process - against the browser and dev servers it already has open. Only sessions rooted at the shell's directory or above it are candidates, because issues, config and sequences resolve against the answering server's root; process ancestry picks among those. Nothing needs to be passed in.
+`devharness <command>`, run from a shell inside an editor session, executes a tool in that session's own server process, against the browser and dev servers it already has open. Only sessions rooted at the shell's directory or above it are candidates, because issues, config and sequences resolve against the answering server's root; process ancestry picks among those. Nothing needs to be passed in.
 
 ```sh
 devharness which                                  # which session this shell belongs to
@@ -160,23 +155,19 @@ devharness call config '{"action":"status"}'      # any tool, arguments as one J
 devharness sessions                               # who else is reachable
 devharness send a1b2c3d4 "check this" --wait=60000
 devharness bug "Title" Body words here            # files an issue; feature does the same
+devharness bench [sequence] [url]                 # opens the bench against this session
 ```
 
 `--session=<id>` targets a session explicitly, `--json` prints the unrendered response, and the exit code is 1 when the tool returns an error. Each session listens on a unix socket under `~/.devharness/endpoints/`, mode 0600 - not a TCP port, because the tools reachable through it evaluate JavaScript in that session's browser.
 
 `devharness run <sequenceName>` is separate: it starts its own headless Chrome and replays a saved sequence, with no session involved.
 
-## vs Chrome DevTools MCP
+### Documentation
 
-[Chrome DevTools MCP](https://github.com/ChromeDevTools/chrome-devtools-mcp) is
-better at performance tracing, device emulation, advanced browser automation.
-
-devharness adds breakpoint debugging with variable inspection, Node.js targets,
-simultaneous connections, logpoints, server lifecycle, and — the part that
-compounds over a long session — replayable call history and self-service recovery.
-
-Browser-only and performance-shaped → theirs. Backend code, stepping execution,
-long sessions where the agent keeps re-driving the same setup → this.
+- [docs/README.md](./docs/README.md): guides for installation, debugging,
+  automation, replay and troubleshooting
+- [docs/instructions.md](./docs/instructions.md): every tool and action
+- [CHANGELOG.md](./CHANGELOG.md): what each release changed
 
 ## Migrating
 

@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] - 2026-09-25
+
+### Fixed
+
+- **A note or capture taken while a recording runs is kept.** The sequence
+  has no file until the recording stops, so a note saved mid-recording was
+  refused with "no sequence open". Notes and their captures are now held
+  against the recorded step, shown under it as the recording grows, and
+  written onto the file when it lands; a cancelled recording discards them.
+
+### Changed
+
+- **`bench` start prints the event-stream watch when nothing reads the
+  stream.** It counts the processes holding the stream open and, at zero,
+  puts the `Monitor` call on its first line on every start, since notes,
+  captures and sequence writes otherwise reach the agent only on its next
+  call. The session-start hook and the skill state the watch as the
+  session's first tool call.
+- **A crop is settled from the region's own corner.** Accept and cancel
+  sit inside the bottom-right of the region drawn instead of in the header.
+
 ## [0.10.0] - 2026-09-24
 
 ### Added

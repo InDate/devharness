@@ -44,6 +44,8 @@ import {
   cancelSequence,
   recordSequence,
   commentSequenceStep,
+  cancelRecordingSequence,
+  capturesInFlight,
   type SequenceDriver,
 } from './bench-mode.js';
 
@@ -1988,6 +1990,90 @@ describe('what a mutation pass found unguarded', () => {
     };
     return { driver, commented, saved, stop: () => release() };
   }
+
+  /**
+   * The driver clears its selection for the length of a recording, so active()
+   * returns nothing until the recording lands and selects the new file.
+   */
+  async function startRecordingWithNoFile() {
+    const client = createFakeClient();
+    const { driver, stop } = recordingDriver();
+    const opened = driver.active;
+    let landed = false;
+    driver.active = () => (landed ? opened() : null);
+    await startBench({
+      page: createFakePage(client), connection: CONNECTION, sessionName: SESSION, sequences: driver,
+    });
+    const recording = recordSequence(CONNECTION, 'saving hangs');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    return { driver, recording, stop: () => { landed = true; stop(); } };
+  }
+
+  it('holds a finding and its capture written mid-recording, and writes both on stop', async () => {
+    const { driver, recording, stop } = await startRecordingWithNoFile();
+
+    await captureBenchScreenshot(CONNECTION);
+    await saveBenchScreenshot(CONNECTION);
+    const note = await saveAnnotation(CONNECTION, 'the total is stale');
+
+    expect(note?.screenshots).toHaveLength(1);
+    const midway = await getSequenceState(CONNECTION);
+    expect(midway?.failure).toBeUndefined();
+    expect(midway?.steps[1].annotations?.map(held => held.comment)).toEqual(['the total is stale']);
+
+    stop();
+    await recording;
+
+    expect(notesIn(driver)).toEqual([expect.objectContaining({ id: note!.id, screenshots: note!.screenshots })]);
+    expect(driver.steps[1].annotations).toHaveLength(1);
+  });
+
+  it('adds a capture taken from a held finding to that finding', async () => {
+    const { recording, stop } = await startRecordingWithNoFile();
+    const note = await saveAnnotation(CONNECTION, 'the total is stale');
+
+    await captureBenchScreenshot(CONNECTION, undefined, 0, note!.id);
+    await saveBenchScreenshot(CONNECTION);
+
+    const midway = await getSequenceState(CONNECTION);
+    expect(midway?.steps[1].annotations?.[0].screenshots).toHaveLength(1);
+    expect(midway?.failure).toBeUndefined();
+    stop();
+    await recording;
+  });
+
+  it('keeps a held finding\'s captures out of a sweep until the recording lands', async () => {
+    const { recording, stop } = await startRecordingWithNoFile();
+    await captureBenchScreenshot(CONNECTION);
+    await saveBenchScreenshot(CONNECTION);
+    const note = await saveAnnotation(CONNECTION, 'the total is stale');
+
+    expect(capturesInFlight()).toEqual(note!.screenshots);
+    stop();
+    await recording;
+  });
+
+  it('removes a held finding, so the file never receives it', async () => {
+    const { driver, recording, stop } = await startRecordingWithNoFile();
+    const note = await saveAnnotation(CONNECTION, 'written in error');
+
+    await removeAnnotation(CONNECTION, note!.id);
+    stop();
+    await recording;
+
+    expect(notesIn(driver)).toHaveLength(0);
+  });
+
+  it('discards held findings with a cancelled recording', async () => {
+    const { driver, recording, stop } = await startRecordingWithNoFile();
+    await saveAnnotation(CONNECTION, 'about a run that was abandoned');
+
+    await cancelRecordingSequence(CONNECTION);
+    stop();
+    await recording;
+
+    expect(notesIn(driver)).toHaveLength(0);
+  });
 
   it('holds a note written mid-recording through the poll, and writes it on stop', async () => {
     const client = createFakeClient();

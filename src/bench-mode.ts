@@ -183,6 +183,14 @@ interface BenchSession extends BenchReport {
    * discarded at the next tick. Written onto the file once the recording lands.
    */
   recordingNotes?: Map<number, { comment: string }>;
+  /**
+   * Findings written during the recording, with their captures, keyed by step.
+   *
+   * The sequence has no file until the recording stops, so an attach has
+   * nothing to write to and the finding would be refused. Written onto the
+   * file once the recording lands, as the step comments are.
+   */
+  recordingAnnotations?: Map<number, Annotation[]>;
   /** Set when the recording in progress reports each action to the agent. */
   recordingWithAgent?: boolean;
   /** Steps of the recording already announced, so each is sent once. */
@@ -995,8 +1003,9 @@ export async function highlightAnnotation(connection: string, selector: string):
 /**
  * Commit the pending pick with the comment typed in the bench.
  *
- * The note is stored in the open sequence, against the step on screen. With no
- * sequence open there is nowhere for it to go: the pick is held rather than
+ * The note is stored in the open sequence, against the step on screen. During a
+ * recording it is held against the recorded step until the recording lands.
+ * With neither there is nowhere for it to go: the pick is held rather than
  * discarded, so the same pick saves once a sequence is selected, and the pane
  * states why on its failure line.
  */
@@ -1008,14 +1017,6 @@ export async function saveAnnotation(connection: string, comment: string): Promi
   // something was picked lost the note without saying so.
   if (!session.pending && !comment.trim()) return undefined;
 
-  const active = session.sequences?.active();
-  if (!active) {
-    // Nothing to attach to yet. The pick is held rather than dropped, so
-    // selecting a sequence and saving again keeps the element already picked.
-    session.sequenceFailure = 'no sequence open - a note is stored in the step it belongs to';
-    return undefined;
-  }
-
   const target = session.pending ?? undefined;
   const annotation: Annotation = {
     id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
@@ -1024,21 +1025,19 @@ export async function saveAnnotation(connection: string, comment: string): Promi
     tick: session.tickMs,
     comment,
     ...(target ? { target } : {}),
+    ...(session.pickShots?.length ? { screenshots: [...session.pickShots] } : {}),
   };
 
-  if (session.pickShots?.length) {
-    annotation.screenshots = [...session.pickShots];
-    session.pickShots = [];
-  }
-
-  const step = noteTargetStep(session, active.currentStep, active.total);
-  const failure = await session.sequences!.attachAnnotation(step, annotation);
-  if (failure) {
-    session.sequenceFailure = failure;
+  const place = session.recordingSequence && session.sequences
+    ? await holdRecordingAnnotation(session, annotation)
+    : await attachToOpenSequence(session, annotation);
+  if ('failure' in place) {
+    session.sequenceFailure = place.failure;
     return undefined;
   }
 
   session.pending = null;
+  session.pickShots = [];
   session.noteStep = undefined;
   session.sequenceFailure = undefined;
   const firstOfSession = session.annotations === 0;
@@ -1058,14 +1057,59 @@ export async function saveAnnotation(connection: string, comment: string): Promi
         source: target.source?.fileName,
       }
       : {}),
-    sequence: `${active.name} step ${step + 1}/${active.total}`,
+    sequence: `${place.name} step ${place.step + 1}/${place.total}`,
     detail: target
       ? `${target.component ? target.component + ' ' : ''}${target.selector}${comment ? ` - "${comment}"` : ''}`
       : `about the step${comment ? ` - "${comment}"` : ''}`,
   });
 
-  await setInspectMode(session, true).catch(() => {});
+  // A recording runs with the picker disarmed: armed, the next click in the
+  // app becomes a pick and never reaches the page as an action.
+  if (!session.recordingSequence) await setInspectMode(session, true).catch(() => {});
   return annotation;
+}
+
+type NotePlace = { name: string; step: number; total: number } | { failure: string };
+
+async function attachToOpenSequence(session: BenchSession, annotation: Annotation): Promise<NotePlace> {
+  const active = session.sequences?.active();
+  // Nothing to attach to yet. The pick and its captures are held rather than
+  // dropped, so selecting a sequence and saving again keeps them.
+  if (!active) return { failure: 'no sequence open - a note is stored in the step it belongs to' };
+  const step = noteTargetStep(session, active.currentStep, active.total);
+  const failure = await session.sequences!.attachAnnotation(step, annotation);
+  return failure ? { failure } : { name: active.name, step, total: active.total };
+}
+
+/**
+ * Keep a finding against the recorded step it was written at until the
+ * recording lands, when flushRecordingNotes writes it onto the file.
+ */
+async function holdRecordingAnnotation(session: BenchSession, annotation: Annotation): Promise<NotePlace> {
+  const total = (await recordedSteps(session)).length;
+  if (total === 0) return { failure: 'nothing recorded yet - a note is stored in the step it belongs to' };
+  const step = noteTargetStep(session, total, total);
+  const held = session.recordingAnnotations ?? new Map<number, Annotation[]>();
+  session.recordingAnnotations = held;
+  held.set(step, [...(held.get(step) ?? []), annotation]);
+  return { name: session.recordingName ?? 'the recording', step, total };
+}
+
+/** The steps the recording in progress has captured so far. */
+async function recordedSteps(session: BenchSession) {
+  return session.sequences!.recordedSoFar(
+    await readCapturedEvents(session),
+    session.recordingStartUrl ?? session.page.url()
+  );
+}
+
+/** A finding held by the recording in progress, and the step it is held at. */
+function heldAnnotation(session: BenchSession, id: string): { annotation: Annotation; step: number } | undefined {
+  for (const [step, notes] of session.recordingAnnotations ?? []) {
+    const annotation = notes.find(note => note.id === id);
+    if (annotation) return { annotation, step };
+  }
+  return undefined;
 }
 
 /* ---------------------------------------------------------------------------
@@ -1227,13 +1271,12 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
   // A recording has no open run to read; its steps come from what has been
   // clicked so far, so the list fills as the person works.
   if (session.recordingSequence) {
-    const steps = session.sequences.recordedSoFar(
-      await readCapturedEvents(session),
-      session.recordingStartUrl ?? session.page.url()
-    );
+    const steps = await recordedSteps(session);
     for (const step of steps) {
       const note = session.recordingNotes?.get(step.index);
       if (note?.comment) step.comment = note.comment;
+      const findings = session.recordingAnnotations?.get(step.index);
+      if (findings?.length) step.annotations = findings;
     }
     await attachStepTraffic(session, connection, steps);
     await gateNewStep(session, connection, steps);
@@ -1620,6 +1663,7 @@ export async function recordSequence(
     session.recordingStartedAt = Date.now();
     session.stepTraffic = new Map();
     session.recordingNotes = new Map();
+    session.recordingAnnotations = new Map();
     session.recordingSequence = true;
     session.recordingName = name;
     session.recordingWithAgent = withAgent;
@@ -1661,8 +1705,10 @@ export async function recordSequence(
 async function flushRecordingNotes(session: BenchSession): Promise<void> {
   const purpose = session.recordingPurpose;
   const notes = session.recordingNotes;
+  const findings = session.recordingAnnotations;
   session.recordingPurpose = undefined;
   session.recordingNotes = undefined;
+  session.recordingAnnotations = undefined;
   session.recordingName = undefined;
   if (!session.sequences) return;
 
@@ -1677,6 +1723,13 @@ async function flushRecordingNotes(session: BenchSession): Promise<void> {
     if (note.comment) {
       const failure = await session.sequences
         .commentStep(index, note.comment)
+        .catch(error => String(error));
+      if (failure) failures.push(failure);
+    }
+  }
+  for (const [index, held] of [...(findings ?? new Map<number, Annotation[]>())].sort((a, b) => a[0] - b[0])) {
+    for (const annotation of held) {
+      const failure = await session.sequences.attachAnnotation(index, annotation)
         .catch(error => String(error));
       if (failure) failures.push(failure);
     }
@@ -1995,6 +2048,7 @@ export async function cancelRecordingSequence(connection: string): Promise<void>
   // land on whatever was recorded next.
   session.recordingPurpose = undefined;
   session.recordingNotes = undefined;
+  session.recordingAnnotations = undefined;
   session.recordingName = undefined;
   session.recordingSequence = false;
   session.pendingStep = null;
@@ -2098,6 +2152,9 @@ export function capturesInFlight(): string[] {
   const held: string[] = [];
   for (const session of sessions.values()) {
     for (const file of session.pickShots ?? []) held.push(file);
+    for (const notes of session.recordingAnnotations?.values() ?? []) {
+      for (const note of notes) held.push(...(note.screenshots ?? []));
+    }
   }
   return held;
 }
@@ -2105,6 +2162,10 @@ export function capturesInFlight(): string[] {
 /** The step a pick would land on, so the bench opens its composer there. */
 async function noteTargetFor(connection: string): Promise<number | undefined> {
   const session = sessions.get(connection);
+  if (session?.recordingSequence && session.sequences) {
+    const total = (await recordedSteps(session)).length;
+    return total > 0 ? noteTargetStep(session, total, total) : undefined;
+  }
   const active = session?.sequences?.active();
   if (!session || !active) return undefined;
   return noteTargetStep(session, active.currentStep, active.total);
@@ -2195,7 +2256,10 @@ export async function saveBenchScreenshot(
     // otherwise, it waits for the next note written. A capture is the evidence
     // for something someone is about to say, and one that stood alone left the
     // words and the picture in different places.
-    if (shot.annotationId && session.sequences) {
+    const held = shot.annotationId ? heldAnnotation(session, shot.annotationId) : undefined;
+    if (held) {
+      held.annotation.screenshots = [...(held.annotation.screenshots ?? []), file];
+    } else if (shot.annotationId && session.sequences) {
       const failure = await session.sequences.attachScreenshot(shot.annotationId, file);
       if (failure) session.sequenceFailure = failure;
     } else {
@@ -2268,7 +2332,10 @@ export async function notifyAnnotation(connection: string, id: string): Promise<
   const session = sessions.get(connection);
   if (!session?.sequences) return;
 
-  const found = session.sequences.findAnnotation(id);
+  const held = heldAnnotation(session, id);
+  const found = held
+    ? { ...held, sequence: session.recordingName ?? 'the recording' }
+    : session.sequences.findAnnotation(id);
   if (!found) {
     session.sequenceFailure = 'that note is not in the open sequence';
     return;
@@ -2302,14 +2369,34 @@ export async function notifyAnnotation(connection: string, id: string): Promise<
 export async function moveAnnotation(connection: string, id: string, step: number): Promise<void> {
   const session = sessions.get(connection);
   if (!session?.sequences) return;
+  const held = heldAnnotation(session, id);
+  if (held) {
+    dropHeldAnnotation(session, id);
+    const notes = session.recordingAnnotations!;
+    notes.set(step, [...(notes.get(step) ?? []), held.annotation]);
+    session.sequenceFailure = undefined;
+    return;
+  }
   const failure = await session.sequences.moveAnnotation(id, step).catch(error => String(error));
   session.sequenceFailure = failure;
+}
+
+/** Returns no failure: a held finding is removed from memory, with no write to refuse it. */
+function dropHeldAnnotation(session: BenchSession, id: string): undefined {
+  for (const [step, notes] of session.recordingAnnotations ?? []) {
+    const kept = notes.filter(note => note.id !== id);
+    if (kept.length) session.recordingAnnotations!.set(step, kept);
+    else session.recordingAnnotations!.delete(step);
+  }
+  return undefined;
 }
 
 export async function removeAnnotation(connection: string, id: string): Promise<void> {
   const session = sessions.get(connection);
   if (!session?.sequences) return;
-  const failure = await session.sequences.detachAnnotation(id).catch(error => String(error));
+  const failure = heldAnnotation(session, id)
+    ? dropHeldAnnotation(session, id)
+    : await session.sequences.detachAnnotation(id).catch(error => String(error));
   session.sequenceFailure = failure;
   if (!failure && session.annotations > 0) session.annotations--;
 }

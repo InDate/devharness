@@ -445,6 +445,13 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
 .tool.on { border-color: var(--accent); color: var(--accent); }
 .tool:disabled { opacity: 0.35; cursor: not-allowed; }
 
+.sheetwrap { position: relative; }
+.cropsettle {
+  position: absolute; display: flex; gap: 4px; padding: 3px;
+  transform: translate(-100%, -100%) translate(-6px, -6px);
+  border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+}
+.cropsettle .tool { display: inline-flex; align-items: center; padding: 4px 6px; }
 .sheet {
   display: block; width: 100%; height: auto; border-radius: 6px; background: var(--panel);
   cursor: crosshair; touch-action: none;

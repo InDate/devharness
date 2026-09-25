@@ -222,17 +222,10 @@ export function Draft({
           <button class="tool" disabled={marks.length === 0}
             title="take back every mark" aria-label="clear"
             onClick={() => setMarks([])}><Glyph of="clear" /></button>
-          {crop && (
-            <>
-              <button class="tool on" title="cut it down to the region held"
-                aria-label="crop to this" onClick={applyCrop}><Glyph of="tick" /></button>
-              <button class="tool" title="leave the capture as it is"
-                aria-label="cancel the crop" onClick={() => setCrop(null)}><Glyph of="cross" /></button>
-            </>
-          )}
         </div>
       </div>
 
+      <div class="sheetwrap">
       <canvas
         class="sheet"
         ref={canvas}
@@ -262,6 +255,24 @@ export function Draft({
           setMarks([...marks, held]);
         }}
       />
+      {/* Placed at the region's own corner, in percentages of the image, so it
+          stays on the region whatever width the canvas is drawn at. In the
+          header row the eye has to leave the region to settle it. */}
+      {crop && image.current && (
+        <div
+          class="cropsettle"
+          style={{
+            left: `${((crop.x + crop.w) / image.current.naturalWidth) * 100}%`,
+            top: `${((crop.y + crop.h) / image.current.naturalHeight) * 100}%`,
+          }}
+        >
+          <button class="tool on" title="cut it down to the region held"
+            aria-label="crop to this" onClick={applyCrop}><Glyph of="tick" /></button>
+          <button class="tool" title="leave the capture as it is"
+            aria-label="cancel the crop" onClick={() => setCrop(null)}><Glyph of="cross" /></button>
+        </div>
+      )}
+      </div>
 
       {picked && (
         <div class="picked">

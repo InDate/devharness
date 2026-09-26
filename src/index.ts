@@ -15,6 +15,8 @@ const STARTUP_TIME = performance.now();
  * MCP server providing Chrome DevTools Protocol debugging capabilities to AI assistants
  */
 
+import { benchHold } from './bench-mode.js';
+import { runAs } from './session-events.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
@@ -107,6 +109,11 @@ import { cleanupStaleTempFiles, cleanupStaleTempFilesSync } from './atomic-write
 import { createSessionDetector, type SessionInfo, type SessionDetector } from './session-detector.js';
 import { serverClaims } from './server-claims.js';
 import { sizeWindowToViewport } from './window-sizing.js';
+
+/** Tools that move a page, and would wait on one the bench holds still. */
+const DRIVING_TOOLS = new Set(['input', 'navigate', 'wait']);
+/** The replay actions that drive a page: a run or its steps, and a repeat of past calls. */
+const DRIVING_REPLAY = new Set(['run', 'runAll', 'step', 'finish', 'runFromLog', 'repeat']);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -1669,7 +1676,8 @@ function registerToolHandlers(server: Server) {
     };
   });
 
-  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+  // Anything a tool call causes is the agent's own doing, and its events say so.
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => runAs('agent', async () => {
     const toolName = request.params.name;
     const tool = allTools[toolName as keyof typeof allTools];
 
@@ -1688,6 +1696,16 @@ function registerToolHandlers(server: Server) {
         ],
         isError: true
       };
+    }
+
+    // A tool that drives a page the bench holds - frozen, running, recording -
+    // would wait on a page that cannot move until its timeout, and hold the
+    // call with it. Refused at once instead, naming what holds it.
+    const drives = DRIVING_TOOLS.has(toolName)
+      || (toolName === 'replay' && DRIVING_REPLAY.has(String((request.params.arguments as any)?.action)));
+    if (drives) {
+      const hold = benchHold((request.params.arguments as any)?.connectionReason);
+      if (hold) return createErrorResponse('PAGE_HELD_BY_BENCH', { ...hold, toolName });
     }
 
     // The transport starts serving before serverManager.initialize() has
@@ -1951,7 +1969,7 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
           .catch(() => { /* a boundary that failed to settle still clears */ });
       }
     }
-  });
+  }));
 }
 
 // Start the server

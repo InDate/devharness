@@ -1,9 +1,16 @@
 /** @jsxImportSource preact */
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { Glyph } from './glyph.js';
+import type { FactKind, PendingShot } from '../wire.js';
 
-/** What is drawn on a capture before it is saved, and the one that reshapes it. */
-type Tool = 'pen' | 'box' | 'arrow' | 'crop';
+/**
+ * What is drawn on a capture before it is saved, and the one that reshapes it.
+ * `viewport` is placed by a page capture rather than drawn, and is removed like
+ * any other mark.
+ */
+type Tool = 'pen' | 'box' | 'arrow' | 'crop' | 'viewport';
+
+const FACT_KINDS: FactKind[] = ['events', 'css', 'html', 'a11y'];
 
 /** A region of the capture, in the image's own pixels. */
 interface Rect { x: number; y: number; w: number; h: number; }
@@ -32,12 +39,17 @@ interface Mark {
  * sees them.
  */
 export function Draft({
-  shot, picked, onSave, onDiscard, onDropPick, onWiden, steps, filedAt, onStep,
+  shot, picked, onSave, onReadFacts, onDiscard, onDropPick, onWiden, steps, filedAt, onStep, said,
 }: {
-  shot: { data: string; label: string; selector?: string; widen: number };
+  shot: PendingShot;
+  /** The words of the note this capture joins, which the box starts from. */
+  said?: string;
   /** An element pointed at while this capture was open; the note takes it too. */
   picked?: { tag: string; selector: string; text?: string } | null;
-  onSave: (marked: string, words: string) => void;
+  /** `crop` is the region kept, in the raw capture's pixels; `facts` the element facts to keep. */
+  onSave: (marked: string, words: string, crop: Rect | null, facts: FactKind[]) => void;
+  /** Read element facts the capture was taken without, while the page is still held. */
+  onReadFacts?: (kinds: FactKind[]) => void;
   onDiscard: () => void;
   onDropPick?: () => void;
   /** Re-take an element capture with the crop widened to this many steps. */
@@ -49,7 +61,16 @@ export function Draft({
   onStep?: (step: number) => void;
 }) {
   const [tool, setTool] = useState<Tool>('box');
-  const [marks, setMarks] = useState<Mark[]>([]);
+  const [marks, setMarks] = useState<Mark[]>(() => shot.viewportMark
+    ? [{ tool: 'viewport', points: [
+      { x: shot.viewportMark.x, y: shot.viewportMark.y },
+      { x: shot.viewportMark.x + shot.viewportMark.w, y: shot.viewportMark.y + shot.viewportMark.h },
+    ] }]
+    : []);
+  // The region of the raw capture the picture now shows. Crops compose: a
+  // second crop is taken from the first, so its corner is added to the last.
+  const kept = useRef<Rect | null>(null);
+  const [keepFacts, setKeepFacts] = useState<FactKind[]>(shot.facts);
   // Held rather than applied on release: a crop discards what it cuts away,
   // and a stray drag would take part of the capture with it.
   const [crop, setCrop] = useState<Rect | null>(null);
@@ -59,7 +80,7 @@ export function Draft({
   // the repaint.
   const drawing = useRef<Mark | null>(null);
   const [, repaint] = useState(0);
-  const [words, setWords] = useState('');
+  const [words, setWords] = useState(said ?? '');
   const canvas = useRef<HTMLCanvasElement | null>(null);
   const image = useRef<HTMLImageElement | null>(null);
 
@@ -69,6 +90,7 @@ export function Draft({
     const img = new Image();
     img.onload = () => { image.current = img; paint(); };
     img.src = `data:image/png;base64,${shot.data}`;
+    kept.current = null;
   }, [shot.data]);
 
   useEffect(paint, [marks, crop]);
@@ -131,6 +153,11 @@ export function Draft({
       ...mark,
       points: mark.points.map(point => ({ x: point.x - crop.x, y: point.y - crop.y })),
     })));
+    const prior = kept.current;
+    kept.current = {
+      x: (prior?.x ?? 0) + Math.round(crop.x), y: (prior?.y ?? 0) + Math.round(crop.y),
+      w: off.width, h: off.height,
+    };
     setCrop(null);
   }
 
@@ -146,6 +173,17 @@ export function Draft({
     }
     const from = points[0];
     const to = points[points.length - 1];
+    if (mark.tool === 'viewport') {
+      pen.save();
+      pen.strokeStyle = '#4285f4';
+      pen.fillStyle = '#4285f4';
+      pen.setLineDash([pen.lineWidth * 4, pen.lineWidth * 3]);
+      pen.strokeRect(from.x, from.y, to.x - from.x, to.y - from.y);
+      pen.font = `600 ${Math.max(12, pen.lineWidth * 6)}px -apple-system, sans-serif`;
+      pen.fillText('viewport', from.x + pen.lineWidth * 3, from.y + Math.max(14, pen.lineWidth * 8));
+      pen.restore();
+      return;
+    }
     if (mark.tool === 'box') {
       pen.strokeRect(from.x, from.y, to.x - from.x, to.y - from.y);
       return;
@@ -182,6 +220,12 @@ export function Draft({
           that runs to any length, and sharing a row with the controls pushes
           them about as it grows or wraps them onto a second line. */}
       <div class="draftname">{shot.label}</div>
+      {shot.pause.taken && (
+        <p class="draftpause" title="where the page's JS is stopped: the picture is the page as this line leaves it">
+          held at {shot.pause.fn ?? '(anonymous)'}{shot.pause.url ? ` ${shot.pause.url}${shot.pause.line ? `:${shot.pause.line}` : ''}` : ''}
+          {shot.pause.by ? ` · ${shot.pause.by}` : ''}
+        </p>
+      )}
 
       <div class="drafthead">
         {shot.selector && onWiden && (
@@ -284,6 +328,30 @@ export function Draft({
         </div>
       )}
 
+      {shot.kind === 'element' && onReadFacts && (
+        <div class="draftfacts" title="read from the element while the page is still held; untick to leave one out of the file">
+          <span class="hint">also record</span>
+          {FACT_KINDS.map(kind => (
+            <label key={kind}>
+              <input
+                type="checkbox"
+                checked={keepFacts.includes(kind)}
+                onChange={() => {
+                  if (keepFacts.includes(kind)) {
+                    setKeepFacts(keepFacts.filter(k => k !== kind));
+                    return;
+                  }
+                  setKeepFacts([...keepFacts, kind]);
+                  if (!shot.facts.includes(kind)) onReadFacts([kind]);
+                }}
+              />
+              {kind}
+              {keepFacts.includes(kind) && !shot.facts.includes(kind) ? ' …' : ''}
+            </label>
+          ))}
+        </div>
+      )}
+
       <textarea
         class="why"
         rows={2}
@@ -292,7 +360,7 @@ export function Draft({
         onInput={(e: Event) => setWords((e.target as HTMLTextAreaElement).value)}
         onKeyDown={(e: KeyboardEvent) => {
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-            onSave(canvas.current!.toDataURL('image/png').split(',')[1], words);
+            onSave(canvas.current!.toDataURL('image/png').split(',')[1], words, kept.current, keepFacts);
           }
         }}
       />
@@ -311,15 +379,14 @@ export function Draft({
             ))}
           </select>
         )}
-        <button
-          class="save"
-          onClick={() => onSave(canvas.current!.toDataURL('image/png').split(',')[1], words)}
-        >SAVE</button>
-        <button class="tool" onClick={onDiscard}>DELETE</button>
         <span class="hint grow">
           {marks.length ? `${marks.length} mark${marks.length === 1 ? '' : 's'} drawn on it` : ''}
         </span>
-        <span class="hint">⌘↵</span>
+        <button class="chip-toggle bin" title="throw this capture away" aria-label="throw it away"
+          onClick={onDiscard}><Glyph of="clear" /></button>
+        <button class="chip-toggle keep" title="save this capture (⌘↵)" aria-label="save"
+          onClick={() => onSave(canvas.current!.toDataURL('image/png').split(',')[1], words, kept.current, keepFacts)}
+        ><Glyph of="save" /></button>
       </div>
     </article>
   );

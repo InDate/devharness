@@ -96,7 +96,29 @@ export interface CommentEvent {
   attachedToEventIndex?: number; // Index of the event this comment is attached to
 }
 
-export type InputEvent = MouseEvent | KeyboardEvent | PasteEvent | NavigationEvent | CommentEvent;
+/**
+ * A fixed pause the person put into the recording: a step that waits `ms`
+ * before the next action, for a delay the app's traffic gives nothing to wait
+ * on.
+ */
+export interface TimerEvent {
+  type: 'timer';
+  ms: number;
+  timestamp: number;
+}
+
+/**
+ * A value the person stored into the recording under a name: a step that
+ * sets it, for the steps after it to read as `{{var:name}}`.
+ */
+export interface VariableEvent {
+  type: 'variable';
+  name: string;
+  value: string;
+  timestamp: number;
+}
+
+export type InputEvent = MouseEvent | KeyboardEvent | PasteEvent | NavigationEvent | CommentEvent | TimerEvent | VariableEvent;
 
 export interface RecordingOptions {
   showOverlay?: boolean;
@@ -239,6 +261,14 @@ export function isKeyboardEvent(event: InputEvent): event is KeyboardEvent {
 
 export function isNavigationEvent(event: InputEvent): event is NavigationEvent {
   return event.type === 'navigation' || event.type === 'reload';
+}
+
+export function isTimerEvent(event: InputEvent): event is TimerEvent {
+  return event.type === 'timer';
+}
+
+export function isVariableEvent(event: InputEvent): event is VariableEvent {
+  return event.type === 'variable';
 }
 
 export function isCommentEvent(event: InputEvent): event is CommentEvent {
@@ -1441,7 +1471,8 @@ export function simplifyEvents(
   };
 
   for (const event of events) {
-    if (isKeyboardEvent(event) || isNavigationEvent(event) || isCommentEvent(event) || isPasteEvent(event)) {
+    if (isKeyboardEvent(event) || isNavigationEvent(event) || isCommentEvent(event) || isPasteEvent(event)
+      || isTimerEvent(event) || isVariableEvent(event)) {
       flushPending();
       simplified.push(event);
       continue;
@@ -1558,6 +1589,23 @@ export function eventsToCommands(
   let i = 0;
   while (i < processedEvents.length) {
     const event = processedEvents[i];
+
+    if (isTimerEvent(event)) {
+      addCommand({ tool: 'wait', params: { ms: event.ms } }, event.timestamp);
+      i++;
+      continue;
+    }
+
+    // The same step a variable stored from the bench is: an expression that
+    // evaluates to the value, saved under the name.
+    if (isVariableEvent(event)) {
+      addCommand({
+        tool: 'inspect',
+        params: { action: 'evaluateExpression', expression: JSON.stringify(event.value), saveAs: event.name },
+      }, event.timestamp);
+      i++;
+      continue;
+    }
 
     // Comment events - attach to the last meaningful command (skip modifier-only keys)
     if (isCommentEvent(event)) {

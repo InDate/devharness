@@ -54,7 +54,7 @@ runs against (see the skill's Quick Start).
 **Modal**: `detectModals`, `dismissModal`
 - Individual tools, not actions
 
-**Storage**: `storage` (actions: getCookies, setCookie, getLocalStorage, setLocalStorage, removeLocalStorage, getSessionStorage, setSessionStorage, removeSessionStorage, idbListDatabases, idbListStores, idbGet, idbGetAll, idbPut, idbDelete, clear)
+**Storage**: `storage` (actions: getCookies, setCookie, getLocalStorage, setLocalStorage, removeLocalStorage, getSessionStorage, setSessionStorage, removeSessionStorage, idbListDatabases, idbListStores, idbGet, idbGetAll, idbPut, idbDelete, clear, writes, authenticatorAdd, authenticatorCredentials, authenticatorRemove). authenticatorAdd puts a virtual WebAuthn authenticator on the page, so a passkey prompt is answered with no person present (`userVerified: false` for presence alone); it stands until authenticatorRemove or the tab closes
 - IndexedDB reads return typed descriptors for values JSON can't express - `{__type:'CryptoKey', algorithm, extractable, usages}` and analogues for Blob/ArrayBuffer/Map/Set/Date - so a non-extractable key is still observable. `idbPut` accepts JSON-expressible values only
 - A read never creates a database: `idbGet` on an unknown name errors rather than silently creating it
 - `clear` defaults to cookies + localStorage + sessionStorage. `indexedDB` is opt-in via `types` - dropping whole databases is far less recoverable
@@ -84,7 +84,7 @@ runs against (see the skill's Quick Start).
 - `pullSequence` writes a sequence out of an issue to disk. Nothing is written until you ask, and nothing is ever run automatically: sequence steps are `{tool, params}` for **any** tool, so a sequence in a public issue is a script, not a macro. One authored by a GitHub account other than the one `gh` is logged in as is refused until a **person** has read it and re-run with `confirm: true` - an agent must not confirm on its own. One using `execution`, `saveToDisk`, `server`, `request` or `download` is refused unless you pass `allowPrivilegedSteps: true`. Read the step list in the response before you do
 - All of these are blocked while any bug is `pending` - `acknowledge` first
 
-**Bench**: `bench` (actions: start, stop, freeze, unfreeze, picker, tick, keepStep, dropStep, flagStep, sweep, list, status)
+**Bench**: `bench` (actions: start, stop, freeze, unfreeze, picker, tick, keepStep, dropStep, flagStep, sweep, retake, capture, list, status)
 - The panel beside a driven app: it holds the page still, shows what crossed the boundary and what caused each thing, records and steps sequences, and collects element-level comments
 
 - For when describing a UI problem costs more than pointing at it. `start` opens the bench in its own tab with the page still running and Chrome's element picker idle; the person arms the picker, clicks an element in the app tab, types a comment in the bench, saves. Each annotation records the selector, the text, the component name and the JSX source location where a dev build exposes one - so the report carries what the element *is*, not a description of where it sits

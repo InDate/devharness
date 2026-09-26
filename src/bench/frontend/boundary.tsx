@@ -1,10 +1,12 @@
 /** @jsxImportSource preact */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import {
-  CrossingRow, OnReplay, choicesIn, socketName, keyOf, labelOf, isFrame, stabilityIn,
-  type RuleActions,
+  CrossingRow, choicesIn, rearmRule, socketName, keyOf, labelOf, isFrame, stabilityIn,
+  type RuleActions, type RuleScope,
 } from './crossing.js';
 import type { BoundaryEvent, BoundaryRule, BoundaryState, BoundaryTotals } from '../wire.js';
+import { useEscape } from './escape.js';
+import { Fold, Row } from './row.js';
 
 export type { BoundaryEvent, BoundaryState, BoundaryTotals } from '../wire.js';
 export { socketName } from './crossing.js';
@@ -133,10 +135,13 @@ export function Boundary({ base }: { base: string }): preact.JSX.Element {
   const [menu, setMenu] = useState<{ event: BoundaryEvent; x: number; y: number } | null>(null);
   const [report, setReport] = useState<{ event: BoundaryEvent; alike: number } | null>(null);
   const [open, setOpen] = useState<string | null>(null);
+  useEscape(open !== null, () => setOpen(null));
+  useEscape(menu !== null, () => setMenu(null));
+  useEscape(report !== null, () => setReport(null));
   const [said, setSaid] = useState('');
   const [scoped, setScoped] = useState('');
-  const [showHidden, setShowHidden] = useState(false);
-  const [saved, setSaved] = useState('');
+  // Hidden kinds stay out of this list; the proxy panel lists them and puts one back.
+  const showHidden = false;
   const note = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
@@ -174,11 +179,16 @@ export function Boundary({ base }: { base: string }): preact.JSX.Element {
   // first poll that carries an event. The typecheckers allow it, because
   // neither can say when a closure runs.
   const byKey = new Map((state?.rules ?? []).map(rule => [rule.key, rule]));
-  const ruleFor = (event: BoundaryEvent) => byKey.get(keyOf(event));
+  // A rule bound to a step governs that step's crossing of its kind and no
+  // other, so the same kind at another step is not its row.
+  const ruleFor = (event: BoundaryEvent) => {
+    const rule = byKey.get(keyOf(event));
+    return rule && (!rule.steps || (event.step !== undefined && rule.steps.includes(event.step))) ? rule : undefined;
+  };
   const stability = stabilityIn(state?.events ?? []);
 
   const passes = useCallback((event: BoundaryEvent) => {
-    if (!showHidden && byKey.get(keyOf(event))?.verb === 'hide') return false;
+    if (!showHidden && (state?.hidden ?? []).some(kind => !kind.off && kind.key === keyOf(event))) return false;
     for (const filter of filters) {
       if (filter.mode === 'out' && fieldValue(event, filter.field) === filter.value) return false;
     }
@@ -210,19 +220,26 @@ export function Boundary({ base }: { base: string }): preact.JSX.Element {
   };
 
   const rule = (event: BoundaryEvent, verb: 'answer' | 'block' | 'hide',
-                body?: string, status?: string, match?: string) => void post('/boundary/rule', {
+                body?: string, status?: string, match?: string, edited?: boolean, scope?: RuleScope, payload?: string) => void post('/boundary/rule', {
     key: match ?? keyOf(event), verb, frame: isFrame(event), label: labelOf(event),
     ...(body !== undefined ? { body } : {}),
+    ...(payload ? { payload } : {}),
+    ...(edited ? { edited: true } : {}),
     ...(status !== undefined ? { status } : {}),
     ...(event.preview !== undefined ? { recorded: event.preview } : {}),
-    ...(!isFrame(event) && event.method ? { method: event.method } : {}),
+    ...(scope
+      ? scope.method ? { method: scope.method } : {}
+      : !isFrame(event) && event.method ? { method: event.method } : {}),
+    ...(scope?.step !== undefined && scope.step !== null ? { step: scope.step } : {}),
     // A frame's payload text is the whole predicate, so the socket and the
     // direction it crossed on are recorded with it and bound the match.
-    ...(isFrame(event) ? { url: event.url, direction: event.direction } : {}),
+    ...(scope
+      ? { ...(scope.url ? { url: scope.url } : {}), ...(scope.direction ? { direction: scope.direction } : {}) }
+      : isFrame(event) ? { url: event.url, direction: event.direction } : {}),
   });
 
   const actions: RuleActions = {
-    answer: (event, body, status, match) => rule(event, 'answer', body, status, match),
+    answer: (event, body, status, match, edited, scope, payload) => rule(event, 'answer', body, status, match, edited, scope, payload),
     block: (event) => rule(event, 'block'),
     hide: (event) => rule(event, 'hide'),
     clear: (event) => void post('/boundary/rule/clear', { key: keyOf(event) }),
@@ -231,6 +248,10 @@ export function Boundary({ base }: { base: string }): preact.JSX.Element {
         e.evidence?.shape !== undefined && e.evidence.shape === event.evidence?.shape).length;
       setReport({ event, alike: alike || 1 });
     },
+    set: (standing, next) => void rearmRule((path, body) => post(path, body ?? {}), standing, next),
+    choices: choicesIn(state?.events ?? [], state?.steps, state?.forSequence),
+    names: state?.names,
+    rename: (event, name) => void post('/boundary/name', { key: keyOf(event), name }),
   };
 
   const sendReport = async (event: BoundaryEvent) => {
@@ -326,39 +347,6 @@ export function Boundary({ base }: { base: string }): preact.JSX.Element {
           }}
         />
       )}
-      <OnReplay
-        choices={choicesIn(state.events ?? [], state.steps, state.forSequence)}
-        rules={state.rules ?? []}
-        waits={state.waits ?? []}
-        hidden={showHidden}
-        said={saved}
-        onShowHidden={() => setShowHidden(!showHidden)}
-        onClear={(key) => void post('/boundary/rule/clear', { key })}
-        onSet={(rule, next) => void (async () => {
-          // The store keys by match, so a changed one would leave the old rule
-          // standing beside the new and both would answer.
-          if (next.key !== rule.key) await post('/boundary/rule/clear', { key: rule.key });
-          await post('/boundary/rule', {
-            key: next.key, verb: rule.verb, body: next.body, status: next.status,
-            ...(rule.frame ? { frame: true } : {}),
-            ...(rule.label !== undefined ? { label: rule.label } : {}),
-            ...(rule.recorded !== undefined ? { recorded: rule.recorded } : {}),
-            // Carried so a constraint dropped below keeps the value that
-            // binds it back, which a replace would otherwise discard.
-            ...(rule.staged !== undefined ? { staged: rule.staged } : {}),
-            // Absent means unbound: setBoundaryRule replaces the rule whole,
-            // so a constraint left out here is not armed on the new pin.
-            ...(next.url !== null ? { url: next.url } : {}),
-            ...(next.direction !== null ? { direction: next.direction } : {}),
-            ...(next.method !== null ? { method: next.method } : {}),
-            ...(next.step !== null ? { step: next.step } : {}),
-          });
-        })()}
-        onSave={async () => {
-          const res = await fetch(`${base}/boundary/save`, { method: 'POST' });
-          setSaved(await res.text());
-        }}
-      />
       {report && (
         <Report
           event={report.event}
@@ -390,7 +378,7 @@ export function Boundary({ base }: { base: string }): preact.JSX.Element {
  * reading of the tab that happens to be open.
  */
 export function Scope({
-  allowed, refusals, refusesWrites, refusedWrites, said, held, onClear, onOpen, onRefuse, onAllow,
+  allowed, refusals, refusesWrites, refusedWrites, said, held, counts, onClear, onOpen, onRefuse, onAllow,
 }: {
   allowed: string[];
   refusals: Array<{ host: string; count: number }>;
@@ -400,6 +388,12 @@ export function Scope({
   said: string;
   /** Events the proxy is holding, which is what CLEAR drops. */
   held: number;
+  /**
+   * What crossed, split by whether a step caused it. `sinceRecording` scopes
+   * it to a recording in progress, whose steps read their traffic from the
+   * proxy as each closes - which is why CLEAR waits for the recording to end.
+   */
+  counts?: { caused: number; own: number; failed: number; sockets: number; sinceRecording: boolean };
   onClear: () => void;
   onOpen: () => void;
   onRefuse: (on: boolean) => void;
@@ -407,6 +401,7 @@ export function Scope({
   onAllow?: (hosts: string[]) => void;
 }) {
   const [adding, setAdding] = useState('');
+  const blockedTotal = refusals.reduce((sum, one) => sum + one.count, 0);
 
   const add = (text: string) => {
     const host = text.trim();
@@ -417,24 +412,46 @@ export function Scope({
 
   return (
     <div class="scope">
-      <div class="scoperow">
-        <span class="asklabel">sites this browser is allowed to load</span>
-        {allowed.length === 0
-          ? <p class="hint">Every site loads. Add one below to allow only what you list.</p>
-          : <ul class="hosts">
-              {allowed.map(host => (
-                <li key={host}>
-                  <span class="host">{host}</span>
-                  {onAllow && (
-                    <button
-                      class="drop"
-                      title={`stop allowing ${host}`}
-                      onClick={() => onAllow(allowed.filter(one => one !== host))}
-                    >×</button>
-                  )}
-                </li>
-              ))}
-            </ul>}
+      {/* Folded to a line: the lists are long, and are read when a site will
+          not load rather than every time the panel opens. */}
+      <Fold
+        title="Sites"
+        open={false}
+        summary={<>
+          {allowed.length === 0 ? 'every site loads' : `${allowed.length} allowed`}
+          {blockedTotal > 0 && <> · <span class="bad">{blockedTotal} blocked</span></>}
+        </>}
+      >
+        <p class="sechint">Only these load; anything else is blocked before it leaves the browser.</p>
+        <ol class="activitycards">
+          {allowed.map(host => (
+            <Row
+              key={host}
+              classes={['siterow']}
+              columns={['remove']}
+              source="allowed"
+              label={<span class="what">{host}</span>}
+              reading={<span class="meta">loads</span>}
+              slots={onAllow ? { remove: () => onAllow(allowed.filter(one => one !== host)) } : {}}
+              titles={{ remove: `stop allowing ${host}` }}
+              open={false}
+              onOpen={() => {}}
+            />
+          ))}
+          {refusals.map(one => (
+            <Row
+              key={`blocked ${one.host}`}
+              classes={['siterow', 'blocked']}
+              columns={['remove']}
+              source="blocked"
+              label={<span class="what">{one.host}</span>}
+              reading={<span class="meta">{one.count}×</span>}
+              slots={{}}
+              open={false}
+              onOpen={() => {}}
+            />
+          ))}
+        </ol>
         {onAllow && (
           <div class="addhost">
             <input
@@ -450,61 +467,51 @@ export function Scope({
                 if (e.key === 'Enter') add((e.currentTarget as HTMLInputElement).value);
               }}
             />
-            <button class="chip-toggle" disabled={adding.trim() === ''} onClick={() => add(adding)}>
-              ADD
-            </button>
+            <button class="tool plain" disabled={adding.trim() === ''} onClick={() => add(adding)}>Add</button>
+            {allowed.length > 0 && <button class="tool plain" onClick={onOpen}>Allow every site</button>}
           </div>
         )}
-        {allowed.length > 0 && (
-          <>
-            <p class="hint">Anything not on this list is blocked before it leaves the browser.</p>
-            <button class="chip-toggle" onClick={onOpen}>ALLOW EVERY SITE AGAIN</button>
-          </>
-        )}
-      </div>
+      </Fold>
 
-      {refusals.length > 0 && (
-        <div class="scoperow">
-          <span class="asklabel">blocked so far</span>
-          <ul class="hosts blocked">
-            {refusals.map(one => (
-              <li key={one.host}>
-                <span class="host">{one.host}</span>
-                <span class="times">{one.count}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      <div class="scoperow">
-        <span class="asklabel">writes no rule answers</span>
-        {/* The rules bound what is answered; this bounds what the rest may do.
-            Off, a write no rule covers reaches the server and the server acts. */}
-        <button
-          class={refusesWrites ? 'chip-toggle on' : 'chip-toggle'}
-          onClick={() => onRefuse(!refusesWrites)}
-        >
-          {refusesWrites ? 'REFUSING THEM' : 'LETTING THEM THROUGH'}
-        </button>
-        <p class="hint">
+      {/* The rules bound what is answered; this bounds what the rest may do.
+          Off, a write no rule covers reaches the server and the server acts. */}
+      <section class="panelsec">
+        <h3>
+          Writes no rule answers
+          <span class="grow" />
+          <span class="segmented">
+            <button class={refusesWrites ? '' : 'on'} onClick={() => refusesWrites && onRefuse(false)}>Let through</button>
+            <button class={refusesWrites ? 'on refuse' : ''} onClick={() => !refusesWrites && onRefuse(true)}>Refuse</button>
+          </span>
+        </h3>
+        <p class="sechint">
           {refusesWrites
-            ? `A POST, PUT, PATCH or DELETE that no rule answers is answered 403, so the server never acts on it. Reads still reach the server.${
+            ? `POST, PUT, PATCH and DELETE are answered 403 and never reach the server; reads still do.${
                 refusedWrites > 0 ? ` ${refusedWrites} refused so far.` : ''}`
-            : 'A write that no rule answers reaches the server, and the server acts on it.'}
+            : 'They reach the server, and the server acts on them.'}
         </p>
-      </div>
+      </section>
 
-      <div class="scoperow">
-        <span class="asklabel">recorded so far</span>
-        <div class="addhost">
-          <span class="scopeheld">{held} crossing{held === 1 ? '' : 's'}</span>
+      <section class="panelsec">
+        <h3>
+          Recorded
+          <span class="secsummary">{held} crossing{held === 1 ? '' : 's'}</span>
+          <span class="grow" />
           {/* Drops the reading and keeps every decision: the rules stay armed,
               so the next run is scoped and answered exactly as this one was. */}
-          <button class="chip-toggle" disabled={held === 0} onClick={onClear}>CLEAR</button>
-        </div>
-        <p class="hint">Only the recording goes. Every rule stays armed.</p>
-      </div>
+          <button
+            class="tool"
+            disabled={held === 0 || counts?.sinceRecording}
+            title={counts?.sinceRecording
+              ? 'each recorded step reads its traffic from here as it closes - stop the recording first'
+              : 'drop what was recorded; every rule stays'}
+            onClick={onClear}
+          >Clear</button>
+        </h3>
+        {counts?.sinceRecording && (
+          <p class="sechint">Clear waits for the recording to stop: its steps read their traffic from here.</p>
+        )}
+      </section>
 
       {said && <p class="scopesaid">{said}</p>}
     </div>
@@ -640,7 +647,7 @@ function Report({ event, alike, said, note, onClose, onSend }: {
           }}
         />
         <div class="reportfoot">
-          <button class="save" onClick={onSend}>SEND TO THE SESSION</button>
+          <button class="save" onClick={onSend}>Send to the session</button>
           <span class="hint grow">{said || 'the reading above goes with it, so the rule can be changed'}</span>
           <span class="hint">⌘↵</span>
         </div>

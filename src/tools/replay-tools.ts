@@ -2,6 +2,7 @@
  * Command Replay Tools - Action router for sequence recording and playback
  */
 
+import { renumberSteps } from '../sequence-activity.js';
 import { z } from 'zod';
 import { markOnProxies, getProxy } from '../proxy/registry.js';
 import { tallyShapes } from '../proxy/intercept-proxy.js';
@@ -1703,6 +1704,9 @@ function socketLabel(url: string): string {
   }
 }
 
+/** The longest a `wait: true` run holds its call; see the bound in handleRun. */
+const WAIT_BOUND_MS = 120_000;
+
 /**
  * Socket problems a run CAUSED, per socket.
  *
@@ -2164,16 +2168,8 @@ async function handleRun(
     return healthy;
   };
 
-  if (args.wait === true) {
-    const { response, outcome } = await performRun(deps, abortSignal);
-    await settle(response, outcome);
-    if (outcome === 'paused') {
-      pendingDeclaredCleanups.set(cleanupKey(undefined, sequence.id), closeDeclared);
-    }
-    return response;
-  }
-
-  // Background (default): register a run and return a handle immediately.
+  // Registered whether or not the caller waits: a wait that runs out hands
+  // back this handle, so the run can still be read and stopped.
   const runId = runRegistry.newRunId();
   const controller = new AbortController();
   const record: RunRecord = {
@@ -2190,7 +2186,10 @@ async function handleRun(
   };
   runRegistry.register(record);
 
-  performRun(deps, controller.signal, runId, (ev) => {
+  // An abort from the caller's own request reaches the run it waits on.
+  if (args.wait === true) abortSignal?.addEventListener('abort', () => controller.abort(), { once: true });
+
+  const finished = performRun(deps, controller.signal, runId, (ev) => {
     record.currentStep = ev.step;
     record.currentTool = ev.tool;
   }).then(async ({ response, outcome, results }) => {
@@ -2213,6 +2212,36 @@ async function handleRun(
     record.endedAt = Date.now();
     record.status = 'failed';
   });
+
+  // A wait is bounded: a step that never finishes - a page held frozen, an
+  // element that never appears - would otherwise hold the call, and the
+  // caller with it, for as long as the run lasts. Past the bound the run goes
+  // on, and the answer is its handle and where it stands.
+  if (args.wait === true) {
+    const bound = Math.min(WAIT_BOUND_MS, args.totalTimeout ?? WAIT_BOUND_MS);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const outran = await Promise.race([
+      finished.then(() => false),
+      new Promise<boolean>(done => { timer = setTimeout(() => done(true), bound); }),
+    ]);
+    clearTimeout(timer);
+    // Answered in full within the bound: the caller holds the result, and a
+    // handle nobody needs to read is not left in the list of runs.
+    if (!outran) runRegistry.forget(runId);
+    if (!outran && record.finalResponse) return record.finalResponse;
+    if (!outran) {
+      return createErrorResponse('REPLAY_RUN_ERRORED', { name: sequence.name, error: record.error ?? 'it ended without a result' });
+    }
+    const running = createSuccessResponse('REPLAY_RUN_STILL_RUNNING', {
+      name: sequence.name, seconds: Math.round(bound / 1000), runId,
+      currentStep: record.currentStep, totalSteps: commands.length, tool: record.currentTool ?? '',
+    });
+    running._meta = {
+      tool: 'replay', action: 'run', timestamp: Date.now(),
+      replay: { runId, background: true, totalSteps: commands.length },
+    };
+    return running;
+  }
 
   const started = createSuccessResponse('REPLAY_RUN_STARTED', {
     runId,
@@ -2802,7 +2831,70 @@ async function handleFinish(
   return { content: [{ type: 'text', text: formatExecutionResults(sequence.name, execResult.results, commands.length, execResult.durationMs) + closedNote }] };
 }
 
+/**
+ * Put commands from the history into a named sequence after one of its steps,
+ * with no run: the sequence is read from memory, or from its file, changed,
+ * and written back, and everything it names by step number is renumbered.
+ */
+async function insertIntoNamed(args: ReplayArgs, recorder: CommandRecorder) {
+  const sequence = recorder.listSequences().find(one => one.name === args.name)
+    ?? await recorder.loadSequenceFromDisk(args.name!);
+  if (!sequence) {
+    return createErrorResponse('SEQUENCE_NOT_FOUND', { message: `No sequence named "${args.name}"` });
+  }
+  const indices = args.insertIndices ?? [];
+  const commandsToInsert = indices.length ? recorder.buildCommandsFromHistory(indices) : null;
+  if (!commandsToInsert) {
+    return createErrorResponse('CREATE_FAILED', {
+      message: indices.length
+        ? 'One or more insertIndices are not in the history; replay({ action: \'history\' }) lists them'
+        : 'insertIndices names the history commands to put in; replay({ action: \'history\' }) lists them',
+    });
+  }
+  const insertAfter = args.insertAfterStep!;
+  const existingCommands = rehydrateStepConnections(sequence);
+  // A sequence whose steps name no browser runs against whichever one the run
+  // is given; a step brought in naming the browser it was tried in would pin
+  // itself there and split the run across two.
+  const unpinned = !existingCommands.some(command => typeof command.params?.connectionReason === 'string');
+  const brought = unpinned
+    ? commandsToInsert.map(command => {
+        const { connectionReason: _pinned, ...params } = command.params ?? {};
+        return { ...command, params };
+      })
+    : commandsToInsert;
+  if (insertAfter < 0 || insertAfter > existingCommands.length) {
+    return createErrorResponse('INVALID_PARAMETER', {
+      parameter: 'insertAfterStep', value: String(insertAfter),
+      message: `insertAfterStep must be between 0 (before the first step) and ${existingCommands.length} (after the last)`,
+    });
+  }
+  const normalized = normalizeStepConnections([
+    ...existingCommands.slice(0, insertAfter),
+    ...brought,
+    ...existingCommands.slice(insertAfter),
+  ]);
+  renumberSteps(sequence as any, (old) => (old >= insertAfter ? old + brought.length : old));
+  (sequence as any).commands = normalized.commands;
+  if (normalized.hoisted) (sequence as any).recordedConnection = normalized.hoisted;
+  else delete (sequence as any).recordedConnection;
+  const saved = await recorder.saveSequenceToDisk(sequence.id, false, true);
+  const where = saved?.success ? `Written to ${saved.filepath}.` : `Not written to disk: ${saved?.error ?? 'the sequence is not loaded'}.`;
+  return {
+    content: [{
+      type: 'text' as const,
+      text: `**${sequence.name}:** ${brought.length} step${brought.length === 1 ? '' : 's'} put in after step ${insertAfter}, `
+        + `${normalized.commands.length} in all. ${where}` + formatConnectionNote(normalized),
+    }],
+  };
+}
+
 async function handleInsert(args: ReplayArgs, recorder: CommandRecorder) {
+  // A step is added to a sequence by naming it and the step to follow; it
+  // needs no run, and a run to a pause cannot reach a page the bench holds.
+  if (args.name && args.insertAfterStep !== undefined && !recorder.getActiveSequence()) {
+    return insertIntoNamed(args, recorder);
+  }
   const activeSeq = recorder.getActiveSequence();
   if (!activeSeq) {
     return createErrorResponse('NO_ACTIVE_SEQUENCE', {
@@ -2880,7 +2972,10 @@ async function handleInsert(args: ReplayArgs, recorder: CommandRecorder) {
   const connectionNote = formatConnectionNote(normalized);
 
   if (args.overwrite) {
-    // Update existing sequence in place
+    // Update existing sequence in place. The inserted steps push every step
+    // from `insertAfter` on down by their count, and what names those steps
+    // by number moves with them.
+    renumberSteps(sequence as any, (old) => (old >= insertAfter ? old + commandsToInsert.length : old));
     (sequence as any).commands = newCommands;
     if (normalized.hoisted) (sequence as any).recordedConnection = normalized.hoisted;
     else delete (sequence as any).recordedConnection;
@@ -3008,6 +3103,7 @@ async function handleAddConditional(args: ReplayArgs, recorder: CommandRecorder)
     ...(args.comment ? { comment: args.comment } : {})
   };
 
+  renumberSteps(sequence as any, (old) => (old >= insertAfter ? old + 1 : old));
   (sequence as any).commands = [
     ...commands.slice(0, insertAfter),
     step,

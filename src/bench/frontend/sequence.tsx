@@ -1,12 +1,14 @@
 /** @jsxImportSource preact */
 import { useEffect, useRef, useState } from 'preact/hooks';
 import {
-  CrossingRow, OnReplay, choicesIn, keyOf, labelOf, isFrame, lean, stabilityIn, passesIn,
-  type RuleActions,
+  CrossingRow, MissingRow, keyOf, lean, type RuleActions, type RowVerdict,
 } from './crossing.js';
 import { Recording } from './recording.js';
+import { useActivity, rowOf, repeatsOf, originOf } from './activity.js';
+import { onFocusRule, settleFocus, type RuleFocus } from './focus.js';
+import { kindOf } from '../kinds.js';
 import type {
-  Annotation, BenchView, BoundaryEvent, BoundaryRule, BoundaryState, CallbackEntry,
+  Annotation, BenchView, BoundaryEvent, BoundaryRule, CallbackEntry,
   SequenceCard, SequenceState, SequenceStep, SequenceVariable, TickResult,
 } from '../wire.js';
 
@@ -14,6 +16,7 @@ export type {
   Annotation, BenchView, CallbackEntry, SequenceCard, SequenceState, SequenceStep,
   SequenceVariable, TickResult,
 } from '../wire.js';
+import { useEscape } from './escape.js';
 
 /**
  * One bench owns the caret.
@@ -31,15 +34,28 @@ export function Notes({ base, starting, onDone }: {
   onDone: () => void;
 }): preact.JSX.Element {
   const [state, setState] = useState<BenchView | null>(null);
+  // A recording that has ended - saved or thrown away - ends the request for a
+  // new one too; left standing, the form came back with the old name in it.
+  const wasRecording = useRef(false);
+  const recordingNow = state?.sequence?.recording === true;
+  useEffect(() => {
+    if (wasRecording.current && !recordingNow && starting) onDone();
+    wasRecording.current = recordingNow;
+  }, [recordingNow]);
   const [ended, setEnded] = useState(false);
   const [writingAt, setWritingAt] = useState<number | null>(null);
   const [editingAt, setEditingAt] = useState<{ step: number; field: 'why' | 'fork' } | null>(null);
   const [guarding, setGuarding] = useState<number | null>(null);
-  const [boundary, setBoundary] = useState<BoundaryState | null>(null);
   const [asked, setAsked] = useState('');
-  const [reading, setReading] = useState<string | null>(null);
-  const [showHidden, setShowHidden] = useState(false);
-  const [saved, setSaved] = useState('');
+  const activity = useActivity(base, state?.sequence);
+  const { boundary, reading, setReading } = activity;
+  useEscape(writingAt !== null, () => setWritingAt(null));
+  useEscape(editingAt !== null, () => setEditingAt(null));
+  useEscape(reading !== null, () => setReading(null));
+  // A rule the proxy panel asked to see, met once the rows it lives on exist.
+  const wanted = useRef<RuleFocus | null>(null);
+  const [, askedFor] = useState(0);
+  useEffect(() => onFocusRule((focus) => { wanted.current = focus; askedFor(n => n + 1); }), []);
 
   const post = async (path: string, body?: Record<string, unknown>) => {
     await fetch(`${base}${path}`, {
@@ -62,21 +78,6 @@ export function Notes({ base, starting, onDone }: {
     };
     void poll();
     const timer = setInterval(poll, 250);
-    return () => { live = false; clearInterval(timer); };
-  }, [base]);
-
-  // The boundary runs on its own clock: the step list is read four times a
-  // second and what crossed changes far less often than that.
-  useEffect(() => {
-    let live = true;
-    const poll = async () => {
-      try {
-        const res = await fetch(`${base}/proxy/events?since=`);
-        if (live) setBoundary(await res.json());
-      } catch { /* the bench outlives a restart */ }
-    };
-    void poll();
-    const timer = setInterval(poll, 600);
     return () => { live = false; clearInterval(timer); };
   }, [base]);
 
@@ -108,46 +109,22 @@ export function Notes({ base, starting, onDone }: {
   }
 
   const failedStep = sequence?.steps?.find(step => step.failed);
-  // A decision is keyed the way the proxy matches, so a row finds its own by
-  // the same key the rule was written under.
-  const byKey = new Map((boundary?.rules ?? []).map(rule => [rule.key, rule]));
-  const ruleFor = (event: BoundaryEvent) => byKey.get(keyOf(event));
-  const crossed = crossedUnder(boundary, event => byKey.has(keyOf(event)));
-  // The pass the list is reading, so a staged row left from an older one is
-  // marked rather than read as having just crossed.
-  let pass: string | undefined;
-  for (const event of boundary?.events ?? []) if (event.runId !== undefined) pass = event.runId;
-  const stability = stabilityIn(boundary?.events ?? []);
-  const passes = passesIn(boundary?.events ?? []).length;
-
-  const rule = (event: BoundaryEvent, verb: 'answer' | 'block' | 'hide',
-                body?: string, status?: string, match?: string) => void post('/boundary/rule', {
-    key: match ?? keyOf(event), verb, frame: isFrame(event), label: labelOf(event),
-    ...(body !== undefined ? { body } : {}),
-    ...(status !== undefined ? { status } : {}),
-    ...(event.preview !== undefined ? { recorded: event.preview } : {}),
-    ...(!isFrame(event) && event.method ? { method: event.method } : {}),
-    // Staged under a step, so the rule answers at that position in the run
-    // and the same call at another position reaches the server.
-    ...(event.step !== undefined ? { step: event.step } : {}),
-    // A frame's payload text is the whole predicate, so the socket and the
-    // direction it crossed on are recorded with it and bound the match.
-    ...(isFrame(event) ? { url: event.url, direction: event.direction } : {}),
-  });
-
-  const actions: RuleActions = {
-    answer: (event, body, status, match) => rule(event, 'answer', body, status, match),
-    block: (event) => rule(event, 'block'),
-    hide: (event) => rule(event, 'hide'),
-    clear: (event) => void post('/boundary/rule/clear', { key: keyOf(event) }),
-    report: (event) => void fetch(
-      `${base}/proxy/investigate?id=${encodeURIComponent(event.id)}&note=`, { method: 'POST' }),
-    waitFor: (event) => void post('/boundary/wait', {
-      step: event.step ?? 0,
-      count: ((crossed.get(event.step ?? 0) ?? []).length),
-    }),
-  };
-
+  const {
+    ruleFor, crossed, gutter, stepCount, pass, stability, verdicts, missing, tallied, passes, move, actions,
+  } = activity;
+  if (wanted.current) {
+    const { key, step } = wanted.current;
+    const rows = step === undefined ? [...crossed.values()].flat() : (crossed.get(step) ?? []);
+    const found = [...rows].reverse().find(event => keyOf(event) === key);
+    if (found) {
+      wanted.current = null;
+      settleFocus();
+      setTimeout(() => {
+        setReading(rowOf(found.step ?? 0, found));
+        document.getElementById(`crossing-${found.id}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      }, 0);
+    }
+  }
   return (
     <div class="notes">
       {/* A recording produces the steps below it, so it is written at the head
@@ -175,36 +152,7 @@ export function Notes({ base, starting, onDone }: {
             : <button class="save" onClick={async () => {
                 const res = await fetch(`${base}/proxy/relaunch`, { method: 'POST' });
                 setAsked(await res.text());
-              }}>ASK THE SESSION TO RELAUNCH WITH A PROXY</button>}
-        </div>
-      )}
-
-      {boundary?.running && boundary.totals && (
-        <div class="crossbar">
-          <span class="count">{boundary.totals.owned}</span>
-          <span class="quiet">
-            of {boundary.totals.events}<span class="wide"> crossed under a step</span>
-          </span>
-          {boundary.totals.failed > 0 && <span class="bad">{boundary.totals.failed} failed</span>}
-          <span class="grow" />
-          <span class="quiet">
-            {boundary.totals.sockets.open
-              ? <>{boundary.totals.sockets.open} socket{boundary.totals.sockets.open === 1 ? '' : 's'}<span class="wide"> open</span></>
-              : <><span class="wide">no socket open</span><span class="lean">0 sockets</span></>}
-          </span>
-          <span class="rule" />
-          <span class="key"><i class="caused" />caused</span>
-          <span class="key"><i class="unowned" />the app's own</span>
-          {/* Drops the reading and keeps every decision, so the next run is
-              scoped and answered exactly as this one was. */}
-          <button
-            class="chip-toggle"
-            disabled={(boundary.events?.length ?? 0) === 0}
-            onClick={async () => {
-              await fetch(`${base}/proxy/clear`, { method: 'POST' });
-              setReading(null);
-            }}
-          >CLEAR {boundary.events?.length || ''}</button>
+              }}>Ask the session to relaunch with a proxy</button>}
         </div>
       )}
 
@@ -217,10 +165,10 @@ export function Notes({ base, starting, onDone }: {
             <button
               class="chip-toggle"
               onClick={() => setGuarding(guarding === null ? failedStep.index : null)}
-            >{guarding === null ? 'GUARD THIS STEP' : 'CLOSE'}</button>
+            >{guarding === null ? 'Guard this step' : 'Close'}</button>
           )}
           <button class="chip-toggle" onClick={() => void post('/sequence/failure/dismiss')}>
-            DISMISS
+            Dismiss
           </button>
         </div>
       )}
@@ -240,13 +188,20 @@ export function Notes({ base, starting, onDone }: {
 
       {!sequence?.name && <p class="hint">pick a sequence to see its steps and write against them</p>}
 
+      {tallied.length > 0 && (
+        <p class="comparesummary differs">last replay: {tallied.join(' · ')}</p>
+      )}
+
       {sequence?.name && (
         <ol class={sequence.busy ? 'steps running' : 'steps'}>
           {sequence.steps.map(step => (
             <StepRow
               key={step.index}
               step={step}
-              crossed={(crossed.get(step.index) ?? []).filter(e => ruleFor(e)?.verb !== 'hide')}
+              verdictFor={(event) => verdicts.get(rowOf(step.index, event))}
+              missing={missing.get(step.index) ?? []}
+              onMove={sequence.recording ? undefined : (event, kind, to) => move(event, kind, step.index, to)}
+              crossed={(crossed.get(step.index) ?? []).filter(e => !activity.isHidden(e))}
               base={base}
               reading={reading}
               onRead={(id) => setReading(reading === id ? null : id)}
@@ -278,45 +233,32 @@ export function Notes({ base, starting, onDone }: {
         </ol>
       )}
 
-      {boundary?.running && (
-        <OnReplay
-          rules={boundary.rules ?? []}
-          waits={boundary.waits ?? []}
-          choices={choicesIn(
-            boundary.events ?? [],
-            (sequence?.steps ?? []).map(step => ({ index: step.index, label: step.label })),
-            sequence?.name,
-          )}
-          hidden={showHidden}
-          said={saved}
-          onShowHidden={() => setShowHidden(!showHidden)}
-          onClear={(key) => void post('/boundary/rule/clear', { key })}
-        onSet={(rule, next) => void (async () => {
-          // The store keys by match, so a changed one would leave the old rule
-          // standing beside the new and both would answer.
-          if (next.key !== rule.key) await post('/boundary/rule/clear', { key: rule.key });
-          await post('/boundary/rule', {
-            key: next.key, verb: rule.verb, body: next.body, status: next.status,
-            ...(rule.frame ? { frame: true } : {}),
-            ...(rule.label !== undefined ? { label: rule.label } : {}),
-            ...(rule.recorded !== undefined ? { recorded: rule.recorded } : {}),
-            // Carried so a constraint dropped below keeps the value that
-            // binds it back, which a replace would otherwise discard.
-            ...(rule.staged !== undefined ? { staged: rule.staged } : {}),
-            // Absent means unbound: setBoundaryRule replaces the rule whole,
-            // so a constraint left out here is not armed on the new pin.
-            ...(next.url !== null ? { url: next.url } : {}),
-            ...(next.direction !== null ? { direction: next.direction } : {}),
-            ...(next.method !== null ? { method: next.method } : {}),
-            ...(next.step !== null ? { step: next.step } : {}),
-          });
-        })()}
-          onSave={async () => {
-            const res = await fetch(`${base}/boundary/save`, { method: 'POST' });
-            setSaved(await res.text());
-          }}
-        />
+      {/* What the newest pass produced after its last step ended, which no
+          step held open for. A row moved up from here joins the last step,
+          on the recording and on every run after. */}
+      {sequence?.name && gutter.length > 0 && (
+        <div class="gutter">
+          <p class="gutterhead">after the last step</p>
+          <ol class="crossedlist">
+            {gutter.map(event => (
+              <CrossingRow
+                key={rowOf(stepCount, event)}
+                event={event}
+                base={base}
+                rule={ruleFor(event)}
+                repeats={repeatsOf.get(event)}
+                open={reading === rowOf(stepCount, event)}
+                onOpen={() => setReading(reading === rowOf(stepCount, event) ? null : rowOf(stepCount, event))}
+                actions={actions}
+                moves={stepCount > 0 && !sequence.busy
+                  ? { up: () => move(event, kindOf(event), stepCount, stepCount - 1) }
+                  : undefined}
+              />
+            ))}
+          </ol>
+        </div>
       )}
+
     </div>
   );
 }
@@ -343,33 +285,7 @@ export function Notes({ base, starting, onDone }: {
  * reader who does not see it.
  */
 
-function crossedUnder(
-  boundary: BoundaryState | null,
-  ruled: (event: BoundaryEvent) => boolean
-): Map<number, BoundaryEvent[]> {
-  const events = boundary?.events ?? [];
-  let pass: string | undefined;
-  for (const event of events) if (event.runId !== undefined) pass = event.runId;
 
-  const byStep = new Map<number, Map<string, BoundaryEvent>>();
-  for (const event of events) {
-    if (event.runId === undefined || event.step === undefined) continue;
-    // This pass, or something a decision stands against.
-    if (event.runId !== pass && !ruled(event)) continue;
-    const held = byStep.get(event.step) ?? new Map<string, BoundaryEvent>();
-    // A request is its own row - two calls to one endpoint are two facts -
-    // where two frames of one shape are the same fact twice.
-    const key = event.kind === 'request' ? `${event.method} ${keyOf(event)}` : keyOf(event);
-    const standing = held.get(key);
-    if (!standing || event.at >= standing.at) held.set(key, event);
-    byStep.set(event.step, held);
-  }
-  const out = new Map<number, BoundaryEvent[]>();
-  for (const [step, kinds] of byStep) {
-    out.set(step, [...kinds.values()].sort((a, b) => a.at - b.at));
-  }
-  return out;
-}
 
 /**
  * What the run is carrying, and what it will carry once it gets there.
@@ -467,7 +383,7 @@ export function About({ sequence, post }: {
         onBlur={() => void post('/sequence/baseurl', { baseUrl: where })}
       />
       <div class="aboutfoot">
-        <button class="chip-toggle" onClick={() => { setOpen(false); setSure(false); }}>DONE</button>
+        <button class="chip-toggle" onClick={() => { setOpen(false); setSure(false); }}>Done</button>
         <span class="grow" />
         <button
           class={sure ? 'chip-toggle bad' : 'varnew'}
@@ -477,7 +393,7 @@ export function About({ sequence, post }: {
             setOpen(false);
             setSure(false);
           }}
-        >{sure ? 'ERASE IT FROM DISK' : 'delete this sequence'}</button>
+        >{sure ? 'Erase it from disk' : 'delete this sequence'}</button>
       </div>
     </div>
   );
@@ -565,7 +481,7 @@ function Fork({ step, steps, sequences, guarding, post, onDone }: {
           });
           onDone();
         }}
-      >ADD</button>
+      >Add</button>
     </div>
   );
 }
@@ -652,7 +568,7 @@ export function Variables({ variables, steps, post }: {
               onInput={(e: Event) => setValue((e.target as HTMLInputElement).value)}
               onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter') void add(); }}
             />
-            <button class="chip-toggle" onClick={() => void add()}>SET</button>
+            <button class="chip-toggle" onClick={() => void add()}>Set</button>
             <button class="drop" title="cancel" onClick={() => setAdding(false)}>×</button>
           </span>
         : <button class="varnew" onClick={() => setAdding(true)}>+ set one</button>}
@@ -684,7 +600,7 @@ export function Held({ state, post }: {
         <b>{state.tickMs}ms</b>
         <span class="quiet">{state.totalSteps} callback{state.totalSteps === 1 ? '' : 's'} run</span>
         <span class="rule" />
-        <button class="chip-toggle" onClick={() => void post('/tick', { steps: 1 })}>+1 CALLBACK</button>
+        <button class="chip-toggle" onClick={() => void post('/tick', { steps: 1 })}>+1 callback</button>
         <button class="chip-toggle" onClick={() => void post('/tick', { steps: 10 })}>+10</button>
         <span class="rule" />
         <input
@@ -695,7 +611,7 @@ export function Held({ state, post }: {
           value={ms}
           onInput={(e: Event) => setMs(Number((e.target as HTMLInputElement).value) || 1)}
         />
-        <button class="chip-toggle" onClick={() => void post('/tick', { budgetMs: ms })}>RUN THAT LONG</button>
+        <button class="chip-toggle" onClick={() => void post('/tick', { budgetMs: ms })}>Run that long</button>
       </div>
       {state.lastTick && (
         <p class="hint ticksaid">
@@ -736,7 +652,7 @@ export function Held({ state, post }: {
  * which one it means.
  */
 function StepRow({
-  step, crossed, base, reading, onRead, ruleFor, actions, stability, pass, pending,
+  step, crossed, verdictFor, missing, onMove, base, reading, onRead, ruleFor, actions, stability, pass, pending,
   writing, first, last, editing, onEdit, sequences, allSteps, post, onWrite, onSave,
   onDiscardPick, onDrop,
 }: {
@@ -744,7 +660,13 @@ function StepRow({
   /** What the proxy saw cross under this step on the newest pass. */
   crossed: BoundaryEvent[];
   base: string;
-  /** The one payload open for reading, by event id. */
+  /** A row of the latest replay against the recording of its kind on this step. */
+  verdictFor: (event: BoundaryEvent) => RowVerdict | undefined;
+  /** Kinds recorded on this step that the latest replay did not produce. */
+  missing: Array<{ kind: string; verdict: RowVerdict }>;
+  /** Move a kind to another step; absent while nothing can be moved, as during a recording. */
+  onMove?: (event: BoundaryEvent | undefined, kind: string, to: number) => void;
+  /** The one traffic row open for reading, by `rowOf`. */
   reading: string | null;
   onRead: (id: string) => void;
   /** The decision standing against one event's kind, when there is one. */
@@ -829,19 +751,40 @@ function StepRow({
         </div>
       </div>
 
-      {crossed.length > 0 && (
+      {(crossed.length > 0 || missing.length > 0) && (
         <ol class="crossedlist">
           {crossed.map(event => (
             <CrossingRow
-              key={event.id}
+              // By row, so an arrival that replaces the row's event does not
+              // remount it and drop an edit in progress.
+              key={rowOf(step.index, event)}
               event={event}
               base={base}
               rule={ruleFor(event)}
+              repeats={repeatsOf.get(event)}
               seen={stability.get(keyOf(event))}
-              stale={event.runId !== pass}
-              open={reading === event.id}
-              onOpen={() => onRead(event.id)}
+              stale={event.runId !== pass && originOf.get(event) !== 'after'}
+              open={reading === rowOf(step.index, event)}
+              onOpen={() => onRead(rowOf(step.index, event))}
               actions={{ ...actions, waitFor: actions.waitFor, waitStep: step.index }}
+              verdict={verdictFor(event)}
+              moves={onMove && {
+                ...(first ? {} : { up: () => onMove(event, kindOf(event), step.index - 1) }),
+                down: () => onMove(event, kindOf(event), step.index + 1),
+              }}
+            />
+          ))}
+          {missing.map(({ kind, verdict }) => (
+            <MissingRow
+              key={`${step.index}|missing|${kind}`}
+              kind={kind}
+              verdict={verdict}
+              open={reading === `${step.index}|missing|${kind}`}
+              onOpen={() => onRead(`${step.index}|missing|${kind}`)}
+              moves={onMove && {
+                ...(first ? {} : { up: () => onMove(undefined, kind, step.index - 1) }),
+                ...(last ? {} : { down: () => onMove(undefined, kind, step.index + 1) }),
+              }}
             />
           ))}
         </ol>
@@ -873,7 +816,7 @@ function StepRow({
               void post('/sequence/step/comment', { step: step.index, words: said });
               onEdit(null);
             }}
-          >SAVE</button>
+          >Save</button>
         </div>
       )}
 
@@ -915,7 +858,7 @@ function StepRow({
             }}
           />
           <div class="composerfoot">
-            <button class="save" onClick={save}>SAVE THE NOTE</button>
+            <button class="save" onClick={save}>Save the note</button>
             <span class="hint grow">⌘↵</span>
           </div>
         </div>

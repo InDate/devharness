@@ -7,6 +7,7 @@
  */
 
 import type { Annotation, AnnotationTarget, StepTraffic } from '../annotation.js';
+import type { ExpectedValue } from './kinds.js';
 
 export type { Annotation, AnnotationTarget, StepTraffic } from '../annotation.js';
 
@@ -61,10 +62,19 @@ export interface SequenceStep {
   resolved?: string;
   /** Variable this step captures, when it captures one. */
   captures?: string;
+  /** The value it stores, where it stores a fixed one rather than reading the page. */
+  stores?: string;
+  /** The variables it reads, by the `{{var:name}}` tokens in what it is given. */
+  reads?: string[];
+  /** The tool it calls and what it is given, for editing a saved step. */
+  tool?: string;
+  params?: Record<string, unknown>;
   /** When the action that produced this step happened, by the page's clock. */
   at?: number;
   /** What crossed the boundary while this step was being taken. */
   traffic?: StepTraffic;
+  /** Payloads marked on this step's kinds as having to hold on replay, by kind. */
+  expected?: Record<string, ExpectedValue>;
   /** Notes taken against this step, in the order they were made. */
   annotations?: Annotation[];
   done: boolean;
@@ -113,6 +123,8 @@ export interface SequenceState {
   catalogue: SequenceCard[];
   name?: string;
   steps: SequenceStep[];
+  /** Where a kind of traffic is listed and compared, by where it crossed: `"3|kind"` or `"after|kind"` → step, the step count being the gutter. */
+  placements?: Record<string, number>;
   currentStep: number;
   total: number;
   /** Set while a step or a play is mid-flight, so the page can disable itself. */
@@ -146,12 +158,20 @@ export interface SequenceState {
   withAgent?: boolean;
   /** Values the run is carrying, newest capture last. */
   variables: SequenceVariable[];
+  /**
+   * A recording going into another sequence: its name, the step the new
+   * steps follow, and that sequence's step labels, for the list to show the
+   * recording in its place.
+   */
+  into?: { name: string; after: number; labels: string[] };
   /** Set when the last step failed, which ends replay's session. */
   failure?: string;
   /** Origin every absolute URL in the run is rewritten onto, when set. */
   baseUrl?: string;
   /** Set while clicks in the page are being recorded into a new sequence. */
   recording?: boolean;
+  /** When the recording began, in ms since the epoch: what crossed before it is not the recording's. */
+  recordingSince?: number;
   /** The step capture is held on, and whether it needs the person. */
   pendingStep?: HeldStep;
   /** The tracked issue this sequence reproduces, when one references it. */
@@ -169,6 +189,116 @@ export interface PendingShot {
   widen: number;
   /** What the clip actually covers, for the bench to state. */
   label: string;
+  kind: CaptureKind;
+  /** Where the viewport sat, in the image's pixels, drawn as a mark on a page capture. */
+  viewportMark?: CaptureRect;
+  /** The page's own stop, when the page was held inside a function. */
+  pause: CapturePause;
+  /** Which element facts were read with it, and so can be kept. */
+  facts: FactKind[];
+}
+
+/** The element; what the window showed; the whole document. */
+export type CaptureKind = 'element' | 'screen' | 'page';
+
+export type FactKind = 'events' | 'css' | 'html' | 'a11y';
+
+export interface CaptureRect { x: number; y: number; w: number; h: number; }
+
+/**
+ * Where the page's JS stood when it was captured.
+ *
+ * A held page with nothing running has no location: the pause is armed for the
+ * next callback and `taken` is false. Taken, the frame is the one the page is
+ * stopped in, and the picture is the page as that line leaves it.
+ */
+export interface CapturePause {
+  taken: boolean;
+  fn?: string;
+  url?: string;
+  line?: number;
+  /** The bench's own freeze, a breakpoint, or the reason V8 gave for any other stop. */
+  by?: string;
+}
+
+/**
+ * What a capture was taken from, carried inside its PNG.
+ *
+ * Enough to take it again: the page, the window size, the region and how to
+ * find it once the layout has moved. A retake is a new file with the same
+ * `series` and the next `version`.
+ */
+export interface CaptureRecord {
+  /** Version 1's file name without `.png`; every retake carries the same one. */
+  series: string;
+  version: number;
+  at: string;
+  url: string;
+  kind: CaptureKind;
+  viewport: { width: number; height: number; dpr: number };
+  document: { width: number; height: number };
+  /** Image pixels per CSS px in this file's capture, measured from the image. */
+  scale: number;
+  /** Screen and page-with-viewport captures only. */
+  scroll?: { x: number; y: number };
+  /** The viewport's rectangle in document CSS px, on a page capture drawn with one. */
+  viewportMark?: CaptureRect;
+  element?: { selector: string; widen: number; box: CaptureRect; tag: string };
+  /**
+   * The element holding a crop of a screen or page capture, and the crop's
+   * offset from its corner, so a crop follows the content when the layout
+   * above it moves.
+   */
+  anchor?: { selector: string; offset: { x: number; y: number } };
+  /** In CSS px, measured from the element's corner, the viewport's, or the document's. */
+  crop?: CaptureRect & { from: 'element' | 'viewport' | 'document' };
+  frozen: boolean;
+  pause: CapturePause;
+  facts?: FactKind[];
+  /** Set on a retake: how it differs from the version it was compared against. */
+  compared?: CaptureComparison;
+}
+
+export interface CaptureComparison {
+  against: number;
+  changed: number;
+  edges: number;
+  share: number;
+  box?: CaptureRect;
+  size: { before: [number, number]; after: [number, number] };
+  /** How the region was found again: by the element, the crop's anchor, or the stored rectangle. */
+  placedBy: 'element' | 'anchor' | 'rectangle';
+  /**
+   * Image px per CSS px of the two captures, set when they differ. Their pixels
+   * then do not line up, and `changed` and `share` measure the scaling.
+   */
+  scales?: [number, number];
+  /**
+   * Set when the window was not at the recorded size and was set to it for
+   * the retake: width, height and pixel ratio before and during. `ran` is set
+   * when a held page was let run while the size changed, so its handlers could
+   * lay it out - the page may have moved on by that much.
+   */
+  resized?: {
+    from: [number, number, number];
+    to: [number, number, number];
+    ran: boolean;
+    /**
+     * Set when the tab was in the background: Chrome renders no frames there
+     * and so fires no resize handlers, and layout set by script kept the old size.
+     */
+    hidden?: boolean;
+  };
+  /** One line per element fact that changed. */
+  factChanges?: string[];
+}
+
+/** One version of a capture series, for the bench to list under a finding. */
+export interface CaptureVersion {
+  version: number;
+  path: string;
+  at: string;
+  compared?: CaptureComparison;
 }
 
 /**
@@ -202,13 +332,24 @@ export interface BenchView {
   primary: boolean;
   /** A capture taken and waiting on the person. */
   shot?: PendingShot;
+  /**
+   * Set while the capture dialog is open: the picker is armed for a capture,
+   * and `heldBefore` records a freeze that was already on, which closing the
+   * dialog leaves in place. `annotationId` is the note the capture joins.
+   */
+  shotArmed?: { heldBefore: boolean; annotationId?: string };
+  /** The element facts ticked in the capture dialog, kept between captures. */
+  factChoice: FactKind[];
+  /** Every version of each capture the open sequence cites, keyed by version 1's path. */
+  series?: Record<string, CaptureVersion[]>;
 }
 
 /** One thing the proxy saw cross, as the bench receives it. */
 export interface BoundaryEvent {
   id: string;
   at: number;
-  kind: 'request' | 'frame';
+  /** `write` is storage the page wrote - local, session, cookie, IndexedDB - which no network carries. */
+  kind: 'request' | 'frame' | 'write';
   direction: 'out' | 'in';
   url: string;
   method?: string;
@@ -281,10 +422,18 @@ export interface BoundaryRule {
   step?: number;
   /** answer: what is served in its place. */
   body?: string;
+  /**
+   * A saved payload served in place of `body`, by name, read from its file
+   * each time the replacement is armed, so a change to the file reaches every
+   * replacement serving it. `body` holds its content as last read.
+   */
+  payload?: string;
   /** answer, for a request: the status served with it. */
   status?: string;
-  /** The payload as it was recorded, so an edited answer reads as edited. */
+  /** The head of the payload as it was recorded, for reference beside an edited answer. */
   recorded?: string;
+  /** Set when the answer was changed from what the server sent. */
+  edited?: boolean;
   /** What the row said, for a rule whose traffic has not crossed this run. */
   label?: string;
   /**
@@ -323,11 +472,84 @@ export interface BoundaryRule {
     url?: string;
     direction?: 'out' | 'in';
   };
+  /**
+   * Which sequences on the site it answers in. `local`, only `owner`;
+   * `optIn`, only the sequences listing it as on; `optOut`, the sequences
+   * that do not list it as off.
+   */
+  mode?: 'local' | 'optIn' | 'optOut';
+  /** The sequence a local response belongs to. */
+  owner?: string;
+  /** A local response belonging to another sequence: never offered here. Never stored. */
+  foreign?: boolean;
+  /**
+   * What a step waiting on this kind waits for: how many to cross, for how
+   * many seconds, and whether a miss fails the step or lets the run go on.
+   */
+  wait?: { count: number; seconds: number; onFail: 'fail' | 'continue' };
+  /**
+   * The open sequence's steps it answers at; absent, every step. Read off the
+   * sequence's use of it, never stored on the response: a step number names a
+   * different action in each sequence.
+   */
+  steps?: number[];
+  /** Not used by the open sequence: listed, and armed in no pin. Never stored. */
+  off?: boolean;
+}
+
+/**
+ * Every response kept on disk, wherever it is kept: one entry per site file
+ * and one per sequence activity file, each with the origin it answers on.
+ */
+export interface RuleCatalogueEntry {
+  /** The origin the rules answer on; absent for a sequence whose start names none. */
+  site?: string;
+  /** The sequence whose activity file holds them; absent for a site file. */
+  sequence?: string;
+  rules: BoundaryRule[];
+  /** Site responses the sequence opts out of, by key. */
+  off?: string[];
+  /** Site responses the sequence opts into, by key, at every step or at those given. */
+  on?: Array<{ key: string; steps?: number[] }>;
+  /** A site file's hidden kinds. */
+  hidden?: HiddenKind[];
+  /** Hidden kinds the sequence opts into and out of, by key. */
+  hiddenOn?: string[];
+  hiddenOff?: string[];
+}
+
+/**
+ * A kind of traffic kept out of the list, with the types a response has:
+ * `local` to `owner`, `optIn` where a sequence opts in, `optOut` except where
+ * one opts out. `off` marks one the open sequence lists anyway.
+ */
+export interface HiddenKind {
+  /** The rule's identity; for one kind, the key that kind is matched on. */
+  key: string;
+  label?: string;
+  frame?: boolean;
+  /** The socket, stream or path it covers, matched as a substring. */
+  url?: string;
+  direction?: 'out' | 'in';
+  method?: string;
+  /** Every message on `url`, whatever it carries, rather than the one kind `key` names. */
+  any?: boolean;
+  /** Only at this step of a sequence; absent, at every step. */
+  step?: number;
+  mode: 'local' | 'optIn' | 'optOut';
+  owner?: string;
+  off?: boolean;
 }
 
 /** What `GET /proxy/events` answers with. */
 export interface BoundaryState {
+  /** Every hidden kind held for the site, each marked as the open sequence uses it. */
+  hidden?: HiddenKind[];
   running: boolean;
+  /** The origin whose site rules are armed, when one is known. */
+  site?: string;
+  /** A person's names for kinds of traffic, by rule key. */
+  names?: Record<string, string>;
   /** Hosts this browser may reach. Empty means every host. */
   allowed: string[];
   refused: number;
@@ -337,8 +559,13 @@ export interface BoundaryState {
   refusedWrites: number;
   /** Every decision standing against this connection's traffic. */
   rules: BoundaryRule[];
-  /** Steps told to wait, and how many arrivals each waits for. */
-  waits: Array<{ step: number; count: number }>;
+  /** How each wait went in the latest pass: waiting, met, failed or carried on, and how many came. */
+  waitOutcomes?: Array<{
+    runId: string; step: number; key?: string; state: 'waiting' | 'met' | 'failed' | 'carried';
+    arrived: number; count: number; seconds: number; startedAt: number;
+  }>;
+  /** Steps told to wait, each for a kind, with how many, how long, and what a miss does. */
+  waits: Array<{ step: number; key?: string; count: number; seconds: number; onFail: 'fail' | 'continue' }>;
   /**
    * Which hosts were refused, and how often.
    *

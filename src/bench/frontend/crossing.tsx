@@ -1,6 +1,10 @@
 /** @jsxImportSource preact */
-import { useEffect, useState } from 'preact/hooks';
-import type { BoundaryEvent, BoundaryRule } from '../wire.js';
+import { Fragment } from 'preact';
+import { useEffect, useRef, useState } from 'preact/hooks';
+import type { BoundaryEvent, BoundaryRule, HiddenKind, RuleCatalogueEntry } from '../wire.js';
+import { useEscape } from './escape.js';
+import { revealResponse } from './focus.js';
+import { Glyph } from './glyph.js';
 
 /**
  * One thing that crossed the boundary, wherever it is being read.
@@ -27,33 +31,25 @@ export function bytes(n: number): string {
   return `${(n / 1048576).toFixed(1)} MB`;
 }
 
-/** Status, size, how long it took, what it was - in that order of interest. */
-export function describe(event: BoundaryEvent): string {
+/** Status, size, how long it took, and with `typed` what it was - in that order of interest. */
+export function describe(event: BoundaryEvent, typed = true): string {
   const parts: string[] = [];
+  if (event.kind === 'write') return event.size ? bytes(event.size) : '';
   if (event.heldAs) parts.push(event.heldAs);
   else if (event.kind === 'request') parts.push(String(event.status ?? ''));
   if (event.open) parts.push('open');
   parts.push(bytes(event.size));
   if (event.durationMs !== undefined && event.durationMs > 0) parts.push(`${event.durationMs} ms`);
-  if (event.contentType) parts.push(event.contentType);
+  if (typed && event.contentType) parts.push(event.contentType);
   return parts.filter(Boolean).join(' · ');
 }
 
-export const isFrame = (event: BoundaryEvent) => event.kind === 'frame';
+export { isFrame, keyOf, frameMatch, leadingPairs } from '../kinds.js';
+import { isFrame, keyOf, leavesOf, samePayload, type ExpectedValue, type KindCount, type Verdict } from '../kinds.js';
+import { lineDiff, sideBySide } from './diff.js';
+import { jsonLines } from './json-lines.js';
+import { Fold, LabelInput, Row } from './row.js';
 
-/**
- * What a rule matches on.
- *
- * A request is keyed on its path, which is the substring the proxy's own pin
- * matches at.
- *
- * A frame carries no path, so it is keyed on what it said - and what it said
- * usually carries something that changes every time. `{"tag":"ready","at":
- * 1790148730882}` matched as a whole never matches a second frame, because the
- * clock moved. So the default is the part that names the message and nothing
- * after it, and the row lets that be edited: only a person can say which part
- * of a payload identifies it.
- */
 /**
  * The same text with the origin taken off every URL in it.
  *
@@ -69,68 +65,6 @@ export function lean(text: string): string {
   return text.replace(/\b[a-z][a-z0-9+.-]*:\/\/[^/\s]+/gi, '');
 }
 
-export function keyOf(event: BoundaryEvent): string {
-  if (isFrame(event)) return frameMatch(event.preview ?? event.url);
-  try {
-    return new URL(event.url).pathname;
-  } catch {
-    return event.url.split('?')[0];
-  }
-}
-
-/**
- * Keys that carry a message's name across the protocols this meets: the
- * Socket.IO and Phoenix event, the JSON-RPC method, the GraphQL-over-WS and
- * Redux-style type, the probe app's tag. Read before position, because the
- * field that names a message sits after a per-run id as readily as before it.
- */
-const NAMING_KEYS = ['tag', 'type', 'event', 'kind', 'op', 'action', 'cmd', 'method', 'topic', 'name', 'msg', 't', 'e'];
-
-/**
- * A string value that differs per run: digits, hex or a UUID, an ISO date, an
- * email, a long unbroken token. Keyed on one of these, a rule matches the
- * frame it was made from and never another.
- */
-const MOVING_VALUE = /^(?:\d+|[0-9a-f]{8,}|[0-9a-f-]{16,}|\d{4}-\d\d-\d\d[T ]\S*|[^@\s]+@[^@\s]+\.[^@\s]+|[A-Za-z0-9+/_=.-]{24,})$/i;
-
-const names = (value: unknown): value is string =>
-  typeof value === 'string' && value.length > 0 && !MOVING_VALUE.test(value);
-
-/**
- * The part of a payload that names it, as a substring the proxy can match on.
- *
- * A naming key holding a string that does not move; then the first entry
- * holding one; then the first string that is not all digits, which is the
- * rule every stored key was made under; then the first key. A number, an id
- * and a timestamp all move between runs, so keying on any of them gives every
- * frame its own key and no rule ever applies twice.
- */
-export function frameMatch(payload: string): string {
-  const text = payload.trim();
-  try {
-    const parsed = JSON.parse(text);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      const entries = Object.entries(parsed);
-      const pair = ([key, value]: [string, unknown]) => `"${key}":${JSON.stringify(value)}`;
-      const named = entries.find(([key, value]) => NAMING_KEYS.includes(key) && names(value));
-      if (named) return pair(named);
-      const stable = entries.find(([, value]) => names(value));
-      if (stable) return pair(stable);
-      for (const entry of entries) {
-        const [, value] = entry;
-        if (typeof value === 'string' && !/^\d+$/.test(value)) return pair(entry);
-      }
-      const [first] = Object.keys(parsed);
-      if (first) return `"${first}"`;
-    }
-    if (Array.isArray(parsed)) {
-      const named = parsed.find(
-        (part): part is string => typeof part === 'string' && !/^\d+$/.test(part));
-      if (named !== undefined) return JSON.stringify(named);
-    }
-  } catch { /* not JSON: the payload itself is all there is to match on */ }
-  return text.slice(0, 40);
-}
 
 /** What this row says on screen, for a rule that outlives the event. */
 export function labelOf(event: BoundaryEvent): string {
@@ -178,7 +112,61 @@ export function stabilityIn(events: BoundaryEvent[]): Map<string, Stability> {
   return out;
 }
 
+/**
+ * Whether an ignore rule covers a crossing: its socket or path, its direction
+ * or verb, its step, and then its one kind - or, for a socket-wide rule,
+ * anything that crossed there.
+ */
+export function ignoreMatches(rule: HiddenKind, event: BoundaryEvent): boolean {
+  if (rule.frame !== undefined && !!rule.frame !== isFrame(event)) return false;
+  if (rule.url && !event.url.includes(rule.url)) return false;
+  if (rule.direction && event.direction !== rule.direction) return false;
+  if (rule.method && (event.method ?? 'GET') !== rule.method) return false;
+  if (rule.step !== undefined && event.step !== rule.step) return false;
+  return !!rule.any || keyOf(event) === rule.key;
+}
+
+/**
+ * Whether an ignore rule covers a kind recorded on a step, which a run may
+ * not have produced. A recorded kind carries no socket, so a socket-wide rule
+ * covers every recorded message kind going its way.
+ */
+export function ignoreCoversKind(rule: HiddenKind, kind: string, step: number): boolean {
+  if (rule.step !== undefined && rule.step !== step) return false;
+  const arrow = kind.startsWith('← ') ? 'in' : kind.startsWith('→ ') ? 'out' : undefined;
+  if (rule.any) return !!rule.frame && arrow !== undefined && (!rule.direction || rule.direction === arrow);
+  const key = arrow ? kind.slice(2) : kind.slice(kind.indexOf(' ') + 1);
+  return key === rule.key;
+}
+
+/**
+ * Whether a saved response would answer this crossing: a frame rule by its
+ * text, socket and direction, a request rule by its path and verb - the
+ * constraints its pin is armed with.
+ */
+export function answersEvent(rule: BoundaryRule, event: BoundaryEvent): boolean {
+  if (rule.frame) {
+    if (event.kind !== 'frame') return false;
+    if (rule.url && !event.url.includes(rule.url)) return false;
+    if (rule.direction && rule.direction !== event.direction) return false;
+    return (event.preview ?? '').includes(rule.key) || keyOf(event) === rule.key;
+  }
+  if (event.kind !== 'request') return false;
+  if (rule.method && rule.method !== (event.method ?? 'GET')) return false;
+  return event.url.includes(rule.key);
+}
+
 export interface RuleActions {
+  /** Every saved response held for this site, each with the open sequence's use of it. */
+  responses?: BoundaryRule[];
+  /** Set the open sequence's use of a response. */
+  use?: (key: string, use: 'none' | 'all' | number[]) => void;
+  /** List a hidden kind again, in the open sequence. */
+  unhide?: (key: string) => void;
+  /** Make an ignore rule, from the Ignore editor. */
+  ignore?: (rule: Record<string, unknown>) => void;
+  /** The key of the ignore rule covering a crossing, where one does. */
+  ignoredBy?: (event: BoundaryEvent) => string | undefined;
   /**
    * Serve this instead of the server, with whatever the box holds.
    *
@@ -187,7 +175,7 @@ export interface RuleActions {
    * because a frame edited into something else would otherwise stop matching
    * itself, and because only a person can say which part of a payload names it.
    */
-  answer: (event: BoundaryEvent, body: string, status: string, match: string) => void;
+  answer: (event: BoundaryEvent, body: string, status: string, match: string, edited?: boolean, scope?: RuleScope, payload?: string, wait?: ResponseWait) => void;
   /** Never let it leave the browser. */
   block: (event: BoundaryEvent) => void;
   /** Keep this kind out of the list. Changes no traffic. */
@@ -197,10 +185,339 @@ export interface RuleActions {
   /** Hand the row and its reading to the session. */
   report?: (event: BoundaryEvent) => void;
   /** Tell a step to hold open until this arrives. Absent where no step owns it. */
-  waitFor?: (event: BoundaryEvent) => void;
+  waitFor?: (event: BoundaryEvent, step: number) => void;
   /** The step that would wait, for the button to name it. */
   waitStep?: number;
+  /** Whether a wait stands on this step, which the button shows and a second press drops. */
+  waiting?: (step: number, key: string) => boolean;
+  unwait?: (step: number, key: string) => void;
+  /** The wait a step holds for a kind, with what it waits for. */
+  waitOf?: (step: number, key: string) => ResponseWait | undefined;
+  setWait?: (step: number, key: string, wait: ResponseWait) => void;
+  /** Change a standing rule, where the row can open the full rule editor. */
+  set?: (rule: BoundaryRule, next: RuleEdit) => void;
+  /** What a rule's constraints can be bound to, for that editor. */
+  choices?: RuleChoices;
+  /** Whether a replay is running, which is the only time a step-bound rule can answer. */
+  replaying?: boolean;
+  /** A person's names for kinds of traffic, by rule key. */
+  names?: Record<string, string>;
+  /** Name this kind of traffic, under `key` where the row has its own; an empty name goes back to its payload. */
+  rename?: (event: BoundaryEvent, name: string, key?: string) => void;
+  /**
+   * The key a row's name is kept under, where a list names each row rather
+   * than each kind: two rows of one kind on two steps are two things said.
+   * Absent, a name is the kind's, wherever it crosses.
+   */
+  nameKey?: (event: BoundaryEvent) => string;
+  /** What is marked to hold on replay for this row's kind on its step. */
+  expected?: (event: BoundaryEvent, step?: number) => ExpectedValue | undefined;
+  /** Mark what this row's kind has to carry on replay of its step; none unmarks it. */
+  expect?: (event: BoundaryEvent, mark: ExpectedValue | undefined, step?: number) => void;
 }
+
+/** A replayed row read against its recording, with what writes the recording from this run. */
+export interface RowVerdict {
+  verdict: Verdict | 'missing';
+  /** What differs, one line each; empty on a match. */
+  reasons: string[];
+  /** The kind as recorded on this step; absent on an unexpected row. */
+  recorded?: KindCount;
+  /** Write this run's count, statuses and payload over the recording; on a missing row, drop the kind. */
+  onUpdate: () => void;
+}
+
+export const VERDICT_WORDS: Record<RowVerdict['verdict'], string> = {
+  match: 'Match', mismatch: 'Mismatch', unexpected: 'Unexpected', missing: 'Missing',
+};
+
+/** The button that writes this run over the recording, by verdict; absent where there is nothing to write. */
+function saveWords(verdict: RowVerdict | undefined): string | undefined {
+  if (!verdict) return undefined;
+  if (verdict.verdict === 'missing') return 'Remove';
+  // A pushed kind is compared by presence, so there is no payload of it to save.
+  if (verdict.recorded?.presence && verdict.verdict === 'match') return undefined;
+  if (verdict.verdict === 'unexpected' || verdict.verdict === 'mismatch') return 'Save';
+  return verdict.recorded?.body === undefined ? 'Save' : undefined;
+}
+
+/** Whether JSON is read pretty-printed or as it crossed, kept per viewer across rows and reloads. */
+function useFormatted(): [boolean, (next: boolean) => void] {
+  const read = () => {
+    try { return localStorage.getItem('bench.jsonRaw') !== '1'; } catch { return true; }
+  };
+  const [formatted, setFormatted] = useState<boolean>(read);
+  return [formatted, (next) => {
+    setFormatted(next);
+    try { localStorage.setItem('bench.jsonRaw', next ? '0' : '1'); } catch { /* per-viewer only */ }
+  }];
+}
+
+/** A JSON payload pretty-printed; anything that does not parse, as it is. */
+function formatJson(payload: string): string | undefined {
+  try {
+    return JSON.stringify(JSON.parse(payload), null, 2);
+  } catch {
+    return undefined;
+  }
+}
+
+/** The layout a diff is read in, kept per viewer across rows and reloads. */
+function useDeltaLayout(): ['inline' | 'side', (next: 'inline' | 'side') => void] {
+  const read = () => {
+    try { return localStorage.getItem('bench.deltaLayout') === 'side' ? 'side' : 'inline'; } catch { return 'inline'; }
+  };
+  const [layout, setLayout] = useState<'inline' | 'side'>(read);
+  return [layout, (next) => {
+    setLayout(next);
+    try { localStorage.setItem('bench.deltaLayout', next); } catch { /* per-viewer only */ }
+  }];
+}
+
+/**
+ * What a row carried, read once, in a box whose top edge says what it is.
+ *
+ * Against the recording as a line diff where the two differ; on its own where
+ * they do not, or nothing was recorded. A recorded kind this run did not
+ * produce shows what was recorded.
+ */
+export function PayloadBox({ verdict, replayed, contentType, compared = [], served }: {
+  verdict?: RowVerdict;
+  replayed: string | undefined;
+  contentType?: string;
+  /** The fields a replay is compared on, by dotted path; their lines are tagged. */
+  compared?: string[];
+  /**
+   * What a standing replacement serves in place of the crossing. Read against
+   * what the server sent, so what is being served is on screen on opening the
+   * row rather than behind its editor.
+   */
+  served?: string;
+}) {
+  const [layout, setLayout] = useDeltaLayout();
+  const [formatted, setFormatted] = useFormatted();
+  const was = served !== undefined ? replayed : verdict?.recorded?.body;
+  const now = served !== undefined ? served : verdict?.verdict === 'missing' ? undefined : replayed;
+  const lines = was !== undefined && now !== undefined ? lineDiff(was, now) : undefined;
+  const changed = lines?.some(line => line.op !== 'same') ?? false;
+  const shown = verdict?.verdict === 'missing' ? was : now;
+  const pretty = shown !== undefined && !changed ? formatJson(shown) : undefined;
+  // Each printed line's field, where the payload is JSON, for the tags.
+  const pathsOf = (payload: string | undefined) => {
+    try { return payload === undefined ? [] : jsonLines(JSON.parse(payload)).map(line => line.path); } catch { return []; }
+  };
+  const tag = (path: string | undefined) => path !== undefined && compared.includes(path)
+    ? <span class="fieldtag" title="a replay is compared on this field">match</span>
+    : null;
+  const laterPaths = lines && changed ? pathsOf(now) : [];
+  let later = 0;
+  const facts = [
+    contentType,
+    shown !== undefined ? bytes(shown.length) : undefined,
+    changed ? (served !== undefined ? 'server sent → served' : 'recorded → this run')
+      : served !== undefined ? 'served as the server sent it'
+      : verdict?.verdict === 'missing' ? 'as recorded' : undefined,
+  ].filter(Boolean).join(' · ');
+  return (
+    <div class="pbox" onClick={(e: MouseEvent) => e.stopPropagation()}>
+      <div class="pboxhead">
+        <span class="grow">{facts || 'payload'}</span>
+        {pretty !== undefined && (
+          <button class={formatted ? 'tool plain chosen' : 'tool plain'} aria-pressed={formatted}
+            title={formatted ? 'show it as it crossed' : 'pretty-print it'}
+            onClick={() => setFormatted(!formatted)}>Format</button>
+        )}
+        {changed && <>
+          <button class={layout === 'inline' ? 'tool plain chosen' : 'tool plain'} aria-pressed={layout === 'inline'}
+            onClick={() => setLayout('inline')}>Inline</button>
+          <button class={layout === 'side' ? 'tool plain chosen' : 'tool plain'} aria-pressed={layout === 'side'}
+            onClick={() => setLayout('side')}>Side by side</button>
+        </>}
+      </div>
+      {lines && changed
+        ? layout === 'inline'
+          ? <pre class="diff">{lines.map((line, k) => {
+              const path = line.op === 'gone' ? undefined : laterPaths[later++];
+              return <div key={k} class={line.op}>{line.op === 'gone' ? '- ' : line.op === 'new' ? '+ ' : '  '}{line.text}{tag(path)}</div>;
+            })}</pre>
+          : <div class="diff side">
+            <div class="pair head">
+              <span>{served !== undefined ? 'server sent' : 'recorded'}</span>
+              <span>{served !== undefined ? 'served' : 'this run'}</span>
+            </div>
+            {sideBySide(lines).map((row, k) => (
+              <div key={k} class="pair">
+                <pre class={row.left?.op ?? 'blank'}>{row.left?.text ?? ''}</pre>
+                <pre class={row.right?.op ?? 'blank'}>{row.right?.text ?? ''}</pre>
+              </div>
+            ))}
+          </div>
+        : <pre class="pboxbody">{shown === undefined ? 'reading…'
+            : formatted && pretty !== undefined
+              ? jsonLines(JSON.parse(shown)).map((line, k) => <div key={k}>{line.text}{tag(line.path)}</div>)
+            : shown.length > LARGE_BODY ? `${shown.slice(0, LARGE_BODY)}…` : (shown || '(nothing kept for this one)')}</pre>}
+    </div>
+  );
+}
+
+/**
+ * How this run compares with the recording, in words: what it matched on, or
+ * what differs. Absent where the row is not being compared.
+ */
+function comparison(verdict: RowVerdict | undefined, mark: ExpectedValue | undefined): string | undefined {
+  if (!verdict) return mark?.fields ? `compared on ${Object.keys(mark.fields).map(path => `.${path}`).join(', ')}` : undefined;
+  if (verdict.verdict === 'unexpected') return 'Not in the recording';
+  if (verdict.verdict === 'missing') return 'Recorded, not produced by this run';
+  if (verdict.verdict === 'mismatch') return `Differs · ${verdict.reasons.join(', ')}`;
+  if (verdict.recorded?.presence && !mark?.fields) return 'Arrived, as recorded';
+  if (mark?.fields) return `Matches on ${Object.keys(mark.fields).map(path => `.${path}`).join(', ')}`;
+  return verdict.recorded?.body === undefined ? 'Matches on status and count' : 'Matches the recording';
+}
+
+/**
+ * The line under the payload: how it compares on the left, and on the right
+ * what it is compared on and what can be done with it.
+ */
+function BodyFoot({ summary, children }: {
+  summary?: string;
+  children?: preact.ComponentChildren;
+}) {
+  return (
+    <div class="bodyfoot" onClick={(e: MouseEvent) => e.stopPropagation()}>
+      <span class="footsummary">{summary}</span>
+      <span class="grow" />
+      <span class="footactions">{children}</span>
+    </div>
+  );
+}
+
+/** The step above and below a row's kind can be moved to; an absent side has none. */
+export interface RowMoves {
+  up?: () => void;
+  down?: () => void;
+}
+
+/** A kind the recording holds on this step that this run never produced. */
+export function MissingRow({ kind, verdict, open, onOpen, moves }: {
+  kind: string;
+  verdict: RowVerdict;
+  open: boolean;
+  onOpen: () => void;
+  moves?: RowMoves;
+}) {
+  const [head, ...rest] = kind.split(' ');
+  return (
+    <Row
+      classes={['missing']}
+      source={head}
+      title="recorded on this step, and not produced by this run"
+      label={<span class="what">{rest.join(' ')}</span>}
+      reading={<>
+        <span class="verdict missing">Missing</span>
+        <span class="meta">recorded ×{verdict.recorded?.n ?? 0}</span>
+      </>}
+      slots={{
+        remove: () => verdict.onUpdate(),
+        ...(moves?.up ? { up: moves.up } : {}), ...(moves?.down ? { down: moves.down } : {}),
+      }}
+      glyphs={{ remove: 'clear' }}
+      titles={{ remove: 'take this kind out of the step\'s recording, so runs stop looking for it' }}
+      open={open}
+      onOpen={onOpen}
+    >
+      <div class="body">
+        <PayloadBox verdict={verdict} replayed={undefined} />
+        <BodyFoot summary={comparison(verdict, undefined)} />
+      </div>
+    </Row>
+  );
+}
+
+/**
+ * The fields of a JSON payload, each with a tick, in the payload box's place
+ * while the ones a replay is compared on are chosen. A replayed payload is
+ * compared whole against its recording, and one that holds an id or a clock
+ * differs on every run; comparing only the fields that matter leaves the
+ * rest free.
+ */
+function FieldList({ payload, ticked, onToggle }: {
+  payload: string;
+  ticked: string[];
+  onToggle: (path: string) => void;
+}) {
+  const leaves = leavesOf(payload);
+  return (
+    <div class="pbox" onClick={(e: MouseEvent) => e.stopPropagation()}>
+      <div class="pboxhead"><span class="grow">fields</span></div>
+      <ul class="expectfields">
+        {Object.keys(leaves).map(path => (
+          <li key={path}>
+            <label>
+              <input type="checkbox" checked={ticked.includes(path)} onChange={() => onToggle(path)} />
+              <span class="path">.{path}</span>
+              <span class="quiet">{JSON.stringify(leaves[path])}</span>
+            </label>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * Re-arm a rule under what its editor now holds.
+ *
+ * The store keys by match, so a changed match clears the old rule first, or the
+ * old and the new would both answer. Shared by the traffic row and the proxy
+ * panel, which edit the same rule.
+ */
+export async function rearmRule(
+  post: (path: string, body?: Record<string, unknown>) => Promise<unknown>,
+  rule: BoundaryRule,
+  next: RuleEdit,
+): Promise<void> {
+  if (next.key !== rule.key) await post('/boundary/rule/clear', { key: rule.key });
+  await post('/boundary/rule', {
+    key: next.key, verb: rule.verb, body: next.body, status: next.status,
+    ...(rule.frame ? { frame: true } : {}),
+    ...(rule.label !== undefined ? { label: rule.label } : {}),
+    ...(rule.recorded !== undefined ? { recorded: rule.recorded } : {}),
+    ...(rule.edited || next.body !== (rule.body ?? '') ? { edited: true } : {}),
+    // Carried so a constraint dropped below keeps the value that binds it
+    // back, which a replace would otherwise discard.
+    ...(rule.staged !== undefined ? { staged: rule.staged } : {}),
+    // Absent means unbound: the rule is replaced whole, so a constraint left
+    // out here is not armed on the new pin.
+    ...(next.url !== null ? { url: next.url } : {}),
+    ...(next.direction !== null ? { direction: next.direction } : {}),
+    ...(next.method !== null ? { method: next.method } : {}),
+    ...(next.payload ? { payload: next.payload } : {}),
+    // The open sequence's use of it, where the edit chose one: every step,
+    // or the one picked. Left out, the use stands as it was.
+    ...(next.step !== undefined ? { use: next.step === null ? 'all' : [next.step] } : {}),
+    ...(next.mode ? { mode: next.mode } : {}),
+    ...(next.wait ? { wait: next.wait } : {}),
+  });
+}
+
+/**
+ * How a rule's use reads. A rule bound to a step answers only while a replay
+ * runs that step, so outside a replay its count stands still and says so
+ * rather than reading as a rule that failed to match.
+ */
+export function ruleUse(rule: BoundaryRule, replaying: boolean): { said: string; cold: boolean } | undefined {
+  if (rule.verb === 'hide' || rule.hits === undefined) return undefined;
+  if (rule.hits > 0) return { said: `used ${rule.hits}×`, cold: false };
+  if (rule.steps && !replaying) {
+    return { said: `at step ${rule.steps.map(n => n + 1).join(', ')}, answers during a replay`, cold: false };
+  }
+  return { said: 'never fired', cold: true };
+}
+
+/** Past this a body is shown in part. */
+const LARGE_BODY = 16 * 1024;
+
+
 
 /**
  * The payload, as it will be served rather than as it crossed.
@@ -209,146 +526,536 @@ export interface RuleActions {
  * and the box below it is what goes out in its place. Held apart, because a
  * frame edited into something else would stop matching itself.
  */
-export function CrossingBody({ event, base, rule, actions }: {
+export function CrossingBody({ event, base, rule, actions, verdict }: {
   event: BoundaryEvent;
   base: string;
   rule?: BoundaryRule;
   actions?: RuleActions;
+  verdict?: RowVerdict;
 }) {
-  const [recorded, setRecorded] = useState('reading…');
+  const [payload, setPayload] = useState<string | undefined>(undefined);
+  // The replacement box opens on asking: the payload is read above it already,
+  // and a second copy of it in an editable box is the same text twice.
+  const [replacing, setReplacing] = useState(false);
+  const [ignoring, setIgnoring] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const [ticked, setTicked] = useState<string[]>([]);
   const [draft, setDraft] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
-  const [match, setMatch] = useState<string | null>(null);
 
   useEffect(() => {
     let live = true;
     void fetch(`${base}/proxy/body?id=${encodeURIComponent(event.id)}`)
       .then(res => res.text())
-      .then(text => { if (live) setRecorded(text || ''); })
-      .catch(() => { if (live) setRecorded(''); });
+      .then(text => { if (live) setPayload(text || ''); })
+      .catch(() => { if (live) setPayload(''); });
     return () => { live = false; };
   }, [event.id, base]);
 
-  if (!actions) {
-    return <div class="body"><div class="payload">{recorded || '(nothing kept for this one)'}</div></div>;
+  const stop = (e: MouseEvent) => e.stopPropagation();
+  // The step the row is listed on, which a row moved in from the gutter has
+  // and its stamp does not; a mark is kept on the step the row is read under.
+  const markStep = actions?.waitStep ?? event.step;
+  const mark = actions?.expected?.(event, markStep);
+  const canMark = !!actions?.expect && markStep !== undefined && payload !== undefined;
+  // What a replay is compared on: the whole payload, or the fields ticked.
+  const matchButton = canMark && Object.keys(leavesOf(payload ?? '')).length > 0
+    ? <button class="tool plain" title={mark?.fields ? 'change which fields a replay is compared on' : 'compare a replay on some fields only'}
+        onClick={() => { setReplacing(false); setTicked(Object.keys(mark?.fields ?? {})); setPicking(true); }}>Match Fields</button>
+    : null;
+  const save = saveWords(verdict);
+  // While fields are picked, the box lists them and the line under it holds
+  // only what finishes the choice, in the place the row's buttons stand.
+  const pickingNow = picking && payload !== undefined;
+  const box = pickingNow
+    ? <FieldList payload={payload} ticked={ticked}
+        onToggle={(path) => setTicked(ticked.includes(path) ? ticked.filter(held => held !== path) : [...ticked, path])} />
+    : <PayloadBox verdict={verdict} replayed={payload} contentType={event.contentType}
+        compared={Object.keys(mark?.fields ?? {})}
+        served={rule?.verb === 'answer' ? rule.body : undefined} />;
+  const endPicking = () => { setPicking(false); setTicked([]); };
+  const pickingFoot = pickingNow && (
+    <BodyFoot summary={ticked.length ? 'compared on the fields ticked' : 'nothing ticked: compared whole'}>
+      <button class="tool plain" onClick={() => {
+        const leaves = leavesOf(payload!);
+        actions!.expect!(event, ticked.length
+          ? { fields: Object.fromEntries(ticked.map(path => [path, leaves[path]])) }
+          : undefined, markStep);
+        endPicking();
+      }}>{ticked.length ? `Match on ${ticked.length} field${ticked.length === 1 ? '' : 's'}` : 'Match whole payload'}</button>
+      <button class="tool plain" onClick={endPicking}>Cancel</button>
+    </BodyFoot>
+  );
+  const saveButton = save && verdict && (
+    <button class="tool plain" title="make what this run carried the recording for this step"
+      onClick={() => verdict.onUpdate()}>{save}</button>
+  );
+
+  // A write never leaves the page, so it can be compared and saved and nothing else.
+  if (!actions || event.kind === 'write') {
+    return (
+      <div class="body">
+        {box}
+        {pickingFoot || <BodyFoot summary={comparison(verdict, mark)}>{saveButton}{matchButton}</BodyFoot>}
+      </div>
+    );
   }
 
-  const served = rule?.verb === 'answer' ? rule : undefined;
-  const nowBody = draft ?? served?.body ?? recorded;
-  const nowStatus = status ?? served?.status ?? String(event.status ?? '200');
-  const base0 = served ?? { body: recorded, status: String(event.status ?? '200') };
-  const dirty = nowBody !== base0.body || nowStatus !== base0.status;
-
-  const nowMatch = match ?? rule?.key ?? keyOf(event);
-  const commit = () => {
-    actions.answer(event, nowBody, nowStatus, nowMatch);
-    setDraft(null);
-    setStatus(null);
-    setMatch(null);
-  };
+  const served = rule?.verb === 'answer' && !rule.off ? rule : undefined;
+  const blocked = rule?.verb === 'block' && !rule.off;
+  // The saved responses that would answer this crossing, used here or not:
+  // one line each, so the sequence opts into the one it wants.
+  const here = actions.waitStep ?? event.step;
+  const matching = (actions.responses ?? []).filter(one => one.verb !== 'hide' && !one.foreign && answersEvent(one, event));
+  const usedHere = (one: BoundaryRule) => !one.off && (!one.steps || (here !== undefined && one.steps.includes(here)));
+  // A replacement applies to crossings of the row's kind, the same key the
+  // row is listed by; the fields a replay is compared on are a separate choice.
+  const carrying = served?.key ?? keyOf(event);
 
   return (
     <div class="body">
-      <div class="edit">
-        <div class="editrow">
-          {isFrame(event)
-            ? <>
-                <span>when a frame carries</span>
-                {/* Editable, because the default is derived: a payload names
-                    itself in a different place in every app, and a match that
-                    keeps a clock or an id never fires twice. */}
-                <input
-                  class={nowMatch !== (rule?.key ?? keyOf(event)) ? 'match dirty' : 'match'}
-                  value={nowMatch}
-                  title={`the whole payload was ${event.preview ?? '(binary)'}`}
-                  onClick={(e: MouseEvent) => e.stopPropagation()}
-                  onInput={(e: Event) => setMatch((e.target as HTMLInputElement).value)}
-                />
-              </>
-            : <>
-                <span>answer with</span>
-                <input
-                  class={dirty ? 'status dirty' : 'status'}
-                  value={nowStatus}
-                  onClick={(e: MouseEvent) => e.stopPropagation()}
-                  onInput={(e: Event) => setStatus((e.target as HTMLInputElement).value)}
-                />
-                <span class="quiet">recorded {event.status ?? '—'}</span>
-              </>}
-        </div>
-        <div class="editrow">
-          <span class="quiet">
-            {isFrame(event)
-              ? 'a later frame carrying that text is answered with the box below'
-              : `every ${event.method ?? 'GET'} to ${nowMatch} is answered with the box below`}
-          </span>
-        </div>
-        <textarea
-          class={dirty ? 'dirty' : ''}
-          spellcheck={false}
-          value={nowBody}
-          onClick={(e: MouseEvent) => e.stopPropagation()}
-          onInput={(e: Event) => setDraft((e.target as HTMLTextAreaElement).value)}
-        />
-        <div class="state">
-          {dirty
-            ? <>
-                <span class="pend">
-                  not saved · {bytes(nowBody.length)}
-                  {served ? ` · answers ${bytes(served.body?.length ?? 0)}` : ` · recorded ${bytes(recorded.length)}`}
+      {box}
+      {matching.length > 0 && !pickingNow && (
+        <ol class="savedhere">
+          {matching.map(one => {
+            const used = usedHere(one);
+            return (
+              <li key={one.key} class={used ? 'used' : ''}>
+                <span class="savedwhat" title={one.payload ?? one.body}>
+                  Response
                 </span>
-                <button class="tool" onClick={(e: MouseEvent) => {
-                  e.stopPropagation(); setDraft(null); setStatus(null);
-                }}>REVERT</button>
-              </>
-            : <span class="ok">
-                {rule?.verb === 'block' ? 'never leaves the browser'
-                  : served ? `answers ${isFrame(event) ? '' : served.status + ' · '}${bytes(served.body?.length ?? 0)}`
-                  : 'as recorded — the real request goes out'}
-              </span>}
-        </div>
-      </div>
-
-      <div class="bodyrow">
-        {rule?.verb === 'block'
-          ? <>
-              <button class="tool done">NEVER SENT ✓</button>
-              <button class="tool plain" onClick={(e: MouseEvent) => { e.stopPropagation(); actions.clear(event); }}>
-                LET IT THROUGH
-              </button>
-            </>
+                <button class="tool plain" title="open the proxy panel on this response"
+                  onClick={() => revealResponse(one.key)}>Open</button>
+                {used
+                  ? <button class="tool plain" title="stop this response answering in this sequence"
+                      onClick={() => actions.use?.(one.key, 'none')}>Opt out</button>
+                  : <button class="tool plain" title="answer with this response in this sequence, at every step"
+                      onClick={() => actions.use?.(one.key, 'all')}>Opt in</button>}
+              </li>
+            );
+          })}
+        </ol>
+      )}
+      {pickingFoot || <BodyFoot summary={comparison(verdict, mark)}>
+        {saveButton}
+        {matchButton}
+        {blocked
+          ? <button class="tool plain" title="let this leave the browser again" onClick={() => actions.use?.(rule!.key, 'none')}>Unblock</button>
           : served
-            ? <>
-                {dirty
-                  ? <button class="save" onClick={(e: MouseEvent) => { e.stopPropagation(); commit(); }}>
-                      UPDATE THE ANSWER
-                    </button>
-                  : <button class="tool done">ANSWERS THIS ✓</button>}
-                <button class="tool plain" onClick={(e: MouseEvent) => { e.stopPropagation(); actions.clear(event); }}>
-                  LET IT THROUGH
-                </button>
-              </>
+            ? <button class={replacing ? 'tool plain chosen' : 'tool plain'} title="change the saved response - for every sequence using it"
+                onClick={() => setReplacing(!replacing)}>Edit</button>
             : <>
-                <button class={dirty ? 'save' : 'tool'} onClick={(e: MouseEvent) => { e.stopPropagation(); commit(); }}>
-                  {dirty ? 'ANSWER WITH MY EDIT' : 'ANSWER WITH THIS'}
-                </button>
-                <button class="tool" onClick={(e: MouseEvent) => { e.stopPropagation(); actions.block(event); }}>
-                  NEVER SEND IT
-                </button>
+                <button class={replacing ? 'tool plain chosen' : 'tool plain'} title="serve something else in place of the response"
+                  onClick={() => setReplacing(!replacing)}>Replace</button>
+                <button class="tool plain" title="never let this leave the browser"
+                  onClick={() => actions.block(event)}>Block</button>
               </>}
-        {actions.waitFor && actions.waitStep !== undefined && (
-          <button class="tool" onClick={(e: MouseEvent) => { e.stopPropagation(); actions.waitFor!(event); }}>
-            STEP {actions.waitStep + 1} SHOULD WAIT FOR THIS
-          </button>
+        {actions.waitFor && actions.waitStep !== undefined && (actions.waiting?.(actions.waitStep, keyOf(event))
+          ? <button class="tool plain chosen" title={`step ${actions.waitStep + 1} holds open until this arrives; press to stop waiting`}
+              onClick={() => actions.unwait?.(actions.waitStep!, keyOf(event))}>Will wait</button>
+          : <button class="tool plain" title={`step ${actions.waitStep + 1} holds open until this arrives`}
+              onClick={() => actions.waitFor!(event, actions.waitStep!)}>Wait</button>)}
+        {actions.ignore && (
+          <button class={ignoring ? 'tool plain chosen' : 'tool plain'}
+            title="leave this traffic out of the list and out of comparisons"
+            onClick={() => setIgnoring(!ignoring)}>Ignore</button>
         )}
-        {actions.report && (
-          <button class="tool" onClick={(e: MouseEvent) => { e.stopPropagation(); actions.report!(event); }}>
-            SEND TO SESSION
-          </button>
-        )}
+      </BodyFoot>}
+
+      {/* What this step waits for, set here where Wait was pressed: a row
+          with no saved response has no editor to carry it. */}
+      {actions.waitStep !== undefined && actions.waiting?.(actions.waitStep, keyOf(event)) && (
+        <WaitSettings
+          wait={actions.waitOf?.(actions.waitStep, keyOf(event))}
+          onChange={(wait) => actions.setWait?.(actions.waitStep!, keyOf(event), wait)}
+        />
+      )}
+
+      {ignoring && actions.ignore && (
+        <IgnoreEditor event={event} step={actions.waitStep ?? event.step}
+          onSave={(rule) => { actions.ignore!(rule); setIgnoring(false); }}
+          onCancel={() => setIgnoring(false)} />
+      )}
+
+      {replacing && payload !== undefined && (
+        <ReplaceEditor
+          event={event}
+          rule={served}
+          recorded={payload}
+          carrying={carrying}
+          stepHere={actions.waitStep ?? event.step}
+          choices={actions.choices}
+          base={base}
+          onSave={(next) => {
+            if (served && actions.set) {
+              actions.set(served, { key: served.key, body: next.body, status: next.status, ...next.scope,
+                wait: next.wait, ...(next.payload ? { payload: next.payload } : {}) });
+            } else {
+              actions.answer(event, next.body, next.status, carrying, next.edited, next.scope, next.payload, next.wait);
+            }
+            setReplacing(false);
+          }}
+          onStop={served ? () => { actions.use?.(served.key, 'none'); setReplacing(false); } : undefined}
+          onCancel={() => setReplacing(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * What an ignore rule covers, chosen from the row it is made on: this one
+ * kind or everything on its socket or path, which way, at which step, and in
+ * which sequences.
+ */
+function IgnoreEditor({ event, step, onSave, onCancel }: {
+  event: BoundaryEvent;
+  step?: number;
+  onSave: (rule: Record<string, unknown>) => void;
+  onCancel: () => void;
+}) {
+  const frame = isFrame(event);
+  const [every, setEvery] = useState(false);
+  const [way, setWay] = useState<'in' | 'out' | null>(frame ? event.direction ?? null : null);
+  const [verb, setVerb] = useState<string | null>(frame ? null : event.method ?? 'GET');
+  const [atStep, setAtStep] = useState(false);
+  const [mode, setMode] = useState<'local' | 'optIn' | 'optOut'>('local');
+  // Matched as a substring, so the query that changes per run is left off.
+  const where = (() => { try { const at = new URL(event.url); return `${at.origin}${at.pathname}`; } catch { return event.url; } })();
+  const save = () => {
+    const key = every
+      ? `*${where}|${way ?? ''}|${verb ?? ''}|${atStep && step !== undefined ? step : ''}`
+      : keyOf(event);
+    onSave({
+      key, frame, url: where, mode,
+      label: every ? `everything on ${frame ? socketName(event.url) : where}` : labelOf(event),
+      ...(every ? { any: true } : {}),
+      ...(way ? { direction: way } : {}),
+      ...(verb ? { method: verb } : {}),
+      ...(atStep && step !== undefined ? { step } : {}),
+    });
+  };
+  return (
+    <div class="replace ignoreeditor" onClick={(e: MouseEvent) => e.stopPropagation()}>
+      <ScopeRow label="ignore">
+        <Choice on={!every} onPick={() => setEvery(false)} title="only this kind of traffic">this kind</Choice>
+        <Choice on={every} onPick={() => setEvery(true)}
+          title={frame ? 'every message on this socket or stream' : 'every call to this path'}>
+          everything on {frame ? socketName(event.url) : 'this path'}
+        </Choice>
+      </ScopeRow>
+      {frame
+        ? <ScopeRow label="direction">
+            <Choice on={way === null} onPick={() => setWay(null)}>either way</Choice>
+            <Choice on={way === 'out'} onPick={() => setWay('out')}>sent</Choice>
+            <Choice on={way === 'in'} onPick={() => setWay('in')}>received</Choice>
+          </ScopeRow>
+        : <ScopeRow label="method">
+            <Choice on={verb === null} onPick={() => setVerb(null)}>any verb</Choice>
+            <Choice on={verb !== null} onPick={() => setVerb(event.method ?? 'GET')}>{event.method ?? 'GET'}</Choice>
+          </ScopeRow>}
+      {step !== undefined && (
+        <ScopeRow label="step">
+          <Choice on={!atStep} onPick={() => setAtStep(false)}>any step</Choice>
+          <Choice on={atStep} onPick={() => setAtStep(true)}>step {step + 1}</Choice>
+        </ScopeRow>
+      )}
+      <ScopeRow label="type">
+        {RESPONSE_TYPES.map(([choice, word]) => (
+          <Choice key={choice} on={mode === choice} onPick={() => setMode(choice)}
+            title={choice === 'local' ? 'ignored in this sequence only'
+              : choice === 'optIn' ? 'ignored in the sequences that opt in - this one, as made here'
+              : 'ignored in every sequence on the site that does not opt out'}>{word}</Choice>
+        ))}
+      </ScopeRow>
+      <div class="bodyfoot">
+        <span class="grow" />
+        <span class="footactions">
+          <button class="chip-toggle keep" title="save this ignore rule" aria-label="save" onClick={save}><Glyph of="save" /></button>
+          <button class="chip-toggle bin" title="cancel" aria-label="cancel" onClick={onCancel}><Glyph of="cross" /></button>
+        </span>
       </div>
     </div>
   );
+}
+
+/**
+ * A body box that grows to what it holds, up to a screen's worth, so what is
+ * typed is on screen without a handle to drag.
+ */
+function GrowBox({ value, onInput }: { value: string; onInput: (value: string) => void }) {
+  const box = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    const area = box.current;
+    if (!area) return;
+    area.style.height = 'auto';
+    area.style.height = `${area.scrollHeight + 2}px`;
+  }, [value]);
+  return (
+    <textarea
+      ref={box}
+      class="growbox"
+      spellcheck={false}
+      value={value}
+      onClick={(e: MouseEvent) => e.stopPropagation()}
+      onInput={(e: Event) => onInput((e.target as HTMLTextAreaElement).value)}
+    />
+  );
+}
+
+/**
+ * One line of where a replacement applies: what it is on the left, the
+ * choices on the right, the one in force underlined.
+ */
+function ScopeRow({ label, children }: { label: string; children: preact.ComponentChildren }) {
+  return (
+    <div class="replrow">
+      <span class="repllabel">{label}</span>
+      <span class="grow" />
+      <span class="replchoices">{children}</span>
+    </div>
+  );
+}
+
+function Choice({ on, onPick, title, children }: {
+  on: boolean;
+  onPick: () => void;
+  title?: string;
+  children: preact.ComponentChildren;
+}) {
+  return (
+    <button class={on ? 'tool plain chosen' : 'tool plain'} aria-pressed={on} title={title}
+      onClick={(e: MouseEvent) => { e.stopPropagation(); onPick(); }}>{children}</button>
+  );
+}
+
+/**
+ * What is served in place of a crossing, and where.
+ *
+ * Every constraint is a row - the step, and for a socket message its socket
+ * and direction, for a request its verb and status - each either held to one
+ * value or left off. It applies to crossings of the row's own kind; which
+ * fields a replay is compared on is chosen apart from it. The box opens on the payload as it
+ * crossed, formatted where it is JSON; formatting alone is no edit, and what
+ * is served goes out compact, the shape it crossed in.
+ */
+function ReplaceEditor({ event, rule, recorded, carrying, stepHere, choices, base, onSave, onStop, onCancel, stepless }: {
+  event: BoundaryEvent;
+  /**
+   * Leave the step row out: opened on a saved response rather than a row, the
+   * step belongs to each sequence's use of it, not to the response.
+   */
+  stepless?: boolean;
+  /** The replacement already standing, where this edits one. */
+  rule?: BoundaryRule;
+  recorded: string;
+  carrying: string;
+  /** The step the row is listed on, which a step constraint holds to. */
+  stepHere?: number;
+  choices?: RuleChoices;
+  base: string;
+  onSave: (next: { body: string; status: string; edited: boolean; scope: RuleScope; payload?: string; wait: ResponseWait }) => void;
+  onStop?: () => void;
+  onCancel: () => void;
+}) {
+  const frame = isFrame(event);
+  // Held from opening: a socket that keeps pushing hands the row a new
+  // payload every few hundred milliseconds, and against a moving payload an
+  // untouched box would read as edited.
+  const [opened] = useState(recorded);
+  const [body, setBody] = useState(rule?.body !== undefined ? (formatJson(rule.body) ?? rule.body) : (formatJson(opened) ?? opened));
+  const [status, setStatus] = useState(rule?.status ?? String(event.status ?? '200'));
+  const [scope, setScope] = useState<RuleScope>(rule
+    ? { step: rule.steps?.length === 1 ? rule.steps[0] : null, method: rule.method ?? null, url: rule.url ?? null,
+        direction: rule.direction ?? null, mode: rule.mode ?? 'local' }
+    // New: at any step, as a replacement made from a row always began, and on
+    // this socket, this way - or with this verb - as it crossed.
+    : { step: null, method: frame ? null : event.method ?? null, url: frame ? event.url : null, direction: frame ? event.direction : null,
+        mode: 'local' });
+  const set = (next: Partial<RuleScope>) => setScope({ ...scope, ...next });
+  // What a step waiting on this kind waits for; defaults stand until changed.
+  const [wait, setWait] = useState<ResponseWait>(rule?.wait ?? { count: 1, seconds: 10, onFail: 'fail' });
+  // The step the row is listed under first: a replacement made from a row
+  // with no stamp is staged at step 0, which is where it was made, not where it sits.
+  const pickedStep = scope.step ?? stepHere ?? rule?.staged?.step ?? 0;
+  const sockets = [...new Set([event.url, ...(choices?.sockets ?? [])])].filter(url => /^wss?:/.test(url));
+
+  // Payloads saved by name, and which one this serves; none serves the box as typed.
+  const [saved, setSaved] = useState<Array<{ name: string; bytes: number }>>([]);
+  const [source, setSource] = useState<string | null>(rule?.payload ?? null);
+  const [savedText, setSavedText] = useState<string | undefined>(undefined);
+  const [naming, setNaming] = useState<string | null>(null);
+  const [failure, setFailure] = useState<string | undefined>(undefined);
+  const refresh = () => fetch(`${base}/payloads`).then(res => res.json()).then(setSaved).catch(() => {});
+  useEffect(() => { void refresh(); }, [base]);
+  useEffect(() => {
+    if (source === null) { setSavedText(undefined); return; }
+    let live = true;
+    void fetch(`${base}/payloads/read?name=${encodeURIComponent(source)}`)
+      .then(res => (res.ok ? res.text() : undefined))
+      .then(text => { if (live) setSavedText(text); })
+      .catch(() => { if (live) setSavedText(undefined); });
+    return () => { live = false; };
+  }, [base, source]);
+
+  const compact = (text: string) => (formatJson(text) !== undefined ? JSON.stringify(JSON.parse(text)) : text);
+  const served = source !== null ? savedText ?? '' : body;
+  const edited = !samePayload(served, opened);
+  const firstSaved = saved[0]?.name;
+
+  const save = () => {
+    if (source !== null) {
+      onSave({ body: savedText ?? '', status, edited, scope, payload: source, wait });
+      return;
+    }
+    onSave({ body: edited ? compact(body) : opened, status, edited, scope, wait });
+  };
+  const savePayload = async () => {
+    const name = (naming ?? '').trim();
+    const res = await fetch(`${base}/payloads/save`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name, content: formatJson(body) ?? body }),
+    }).catch(() => undefined);
+    const said = res ? await res.json().catch(() => ({})) as { failure?: string } : { failure: 'the bench did not answer' };
+    if (said.failure) { setFailure(said.failure); return; }
+    setFailure(undefined);
+    setNaming(null);
+    await refresh();
+    setSource(name);
+  };
+
+  return (
+    <div class="replace" onClick={(e: MouseEvent) => e.stopPropagation()}>
+      <ScopeRow label="response type">
+        {RESPONSE_TYPES.map(([mode, word, says]) => (
+          <Choice key={mode} on={scope.mode === mode} onPick={() => set({ mode })} title={says}>{word}</Choice>
+        ))}
+      </ScopeRow>
+      {!stepless && <ScopeRow label="step">
+        <Choice on={scope.step === null} onPick={() => set({ step: null })}>any step</Choice>
+        <Choice on={scope.step !== null} onPick={() => set({ step: pickedStep })}>
+          {/* The select fills the choice, so a click on it chooses the step
+              it shows; picking the step already shown fires no change. */}
+          <select value={String(pickedStep)}
+            onClick={(e: MouseEvent) => { e.stopPropagation(); if (scope.step === null) set({ step: pickedStep }); }}
+            onChange={(e: Event) => set({ step: Number((e.target as HTMLSelectElement).value) })}>
+            {/* Marked on the option as well as the select: set on the select
+                alone, it lands before the options exist and shows the first. */}
+            {(choices?.steps ?? []).map(step => (
+              <option key={step.index} value={String(step.index)} selected={step.index === pickedStep}>step {step.index + 1}</option>
+            ))}
+          </select>
+        </Choice>
+      </ScopeRow>}
+      {frame
+        ? <>
+            <ScopeRow label="socket">
+              <Choice on={scope.url === null} onPick={() => set({ url: null })}>any socket</Choice>
+              {sockets.map(url => (
+                <Choice key={url} on={scope.url === url} onPick={() => set({ url })} title={url}>{socketName(url)}</Choice>
+              ))}
+            </ScopeRow>
+            <ScopeRow label="direction">
+              <Choice on={scope.direction === null} onPick={() => set({ direction: null })}>either way</Choice>
+              <Choice on={scope.direction === 'out'} onPick={() => set({ direction: 'out' })}>sent</Choice>
+              <Choice on={scope.direction === 'in'} onPick={() => set({ direction: 'in' })}>received</Choice>
+            </ScopeRow>
+          </>
+        : <>
+            <ScopeRow label="method">
+              <Choice on={scope.method === null} onPick={() => set({ method: null })}>any verb</Choice>
+              <Choice on={scope.method !== null} onPick={() => set({ method: event.method ?? 'GET' })}>{scope.method ?? event.method ?? 'GET'}</Choice>
+            </ScopeRow>
+            <ScopeRow label="status">
+              <input class="replinput" value={status} onClick={(e: MouseEvent) => e.stopPropagation()}
+                onInput={(e: Event) => setStatus((e.target as HTMLInputElement).value)} />
+            </ScopeRow>
+            <ScopeRow label="path">
+              <span class="replvalue">{carrying}</span>
+            </ScopeRow>
+          </>}
+      {/* Read by any step told to Wait on this kind: how many to hold for,
+          how long, and whether a miss fails the step or lets the run on. */}
+      <ScopeRow label="wait for">
+        <input class="replinput" type="number" min={1} value={wait.count}
+          onClick={(e: MouseEvent) => e.stopPropagation()}
+          onInput={(e: Event) => setWait({ ...wait, count: Math.max(1, Number((e.target as HTMLInputElement).value) || 1) })} />
+        <span class="replvalue">within</span>
+        <input class="replinput" type="number" min={1} value={wait.seconds}
+          onClick={(e: MouseEvent) => e.stopPropagation()}
+          onInput={(e: Event) => setWait({ ...wait, seconds: Math.max(1, Number((e.target as HTMLInputElement).value) || 1) })} />
+        <span class="replvalue">s</span>
+      </ScopeRow>
+      <ScopeRow label="on timeout">
+        <Choice on={wait.onFail === 'fail'} onPick={() => setWait({ ...wait, onFail: 'fail' })}
+          title="the waiting step fails and the run stops there">fail the step</Choice>
+        <Choice on={wait.onFail === 'continue'} onPick={() => setWait({ ...wait, onFail: 'continue' })}
+          title="the run goes on without them">carry on</Choice>
+      </ScopeRow>
+      <ScopeRow label="payload">
+        <Choice on={source === null} onPick={() => setSource(null)}>typed</Choice>
+        {saved.length > 0
+          ? <Choice on={source !== null} onPick={() => setSource(source ?? firstSaved ?? null)}>
+              <select value={source ?? firstSaved} onClick={(e: MouseEvent) => e.stopPropagation()}
+                onChange={(e: Event) => setSource((e.target as HTMLSelectElement).value)}>
+                {saved.map(one => (
+                  <option key={one.name} value={one.name} selected={one.name === (source ?? firstSaved)}>{one.name}</option>
+                ))}
+              </select>
+            </Choice>
+          : <span class="quiet">none saved yet</span>}
+      </ScopeRow>
+      {source !== null
+        ? <pre class="growbox saved" title="a saved payload: change it by saving another under its name">{formatJson(savedText ?? '') ?? savedText ?? 'reading…'}</pre>
+        : <GrowBox value={body} onInput={setBody} />}
+      <div class="bodyfoot">
+        {naming !== null
+          ? <>
+              <span class="footsummary">
+                <input class="replinput naming" value={naming} placeholder="name this payload"
+                  ref={(box) => box?.focus()}
+                  onInput={(e: Event) => setNaming((e.target as HTMLInputElement).value)}
+                  onKeyDown={(e: KeyboardEvent) => {
+                    if (e.key === 'Enter') void savePayload();
+                    if (e.key === 'Escape') { e.stopPropagation(); setNaming(null); setFailure(undefined); }
+                  }} />
+                {failure && <span class="bad">{failure}</span>}
+              </span>
+              <span class="grow" />
+              <span class="footactions">
+                <button class="tool plain" disabled={!naming.trim()} onClick={() => void savePayload()}>Save payload</button>
+                <button class="tool plain" onClick={() => { setNaming(null); setFailure(undefined); }}>Cancel</button>
+              </span>
+            </>
+          : <>
+              {/* The size served, which is the compact form, not the formatted one in the box. */}
+              <span class="footsummary">
+                {source !== null ? `${source} · ` : ''}{bytes(compact(served).length)}{edited ? ' · edited' : ''}
+              </span>
+              <span class="grow" />
+              <span class="footactions">
+                {source === null && (
+                  <button class="tool plain" title="keep what is in the box under a name, for any replacement to serve"
+                    onClick={() => setNaming('')}>Save as payload…</button>
+                )}
+                <button class="tool plain" onClick={save}>{rule ? 'Update' : 'Replace with this'}</button>
+                {onStop && <button class="tool plain" onClick={onStop}>Stop replacing</button>}
+                <button class="tool plain" onClick={onCancel}>Cancel</button>
+              </span>
+            </>}
+      </div>
+    </div>
+  );
+}
+
+/** How a crossing came to sit where it does, in words, for the row's tooltip. */
+function attribution(event: BoundaryEvent): string {
+  const how = event.level === 'observed' ? 'caused by this step: the protocol ties it to the action'
+    : event.level === 'likely' ? 'probably caused by this step'
+    : event.level === 'positional' ? 'placed under this step by when it crossed'
+    : 'the app did this on its own';
+  return event.root ? `${how} · started by ${event.root}` : how;
 }
 
 /**
@@ -361,8 +1068,14 @@ export function CrossingBody({ event, base, rule, actions }: {
  */
 export function CrossingRow({
   event, base, rule, repeats, cadence: every, seen, stale, open, onOpen, actions, extra,
-  onMenu,
+  onMenu, verdict, moves, hidden,
 }: {
+  /** A hidden kind listed after all, as the footing asked: dimmed, and × shows it again. */
+  hidden?: boolean;
+  /** Move this row's kind to the step above or below, where there is one. */
+  moves?: RowMoves;
+  /** This row against its recording, on a replay of a recorded step. */
+  verdict?: RowVerdict;
   event: BoundaryEvent;
   base: string;
   rule?: BoundaryRule;
@@ -380,77 +1093,134 @@ export function CrossingRow({
   extra?: preact.JSX.Element | null;
   onMenu?: (x: number, y: number) => void;
 }) {
-  const answered = rule?.verb === 'answer';
-  const blocked = rule?.verb === 'block';
-  const edited = answered && rule?.body !== rule?.recorded;
+  // What the proxy did to this crossing, not whether a rule exists: a rule
+  // made after it crossed, or one bound to another step, left it as sent.
+  const answered = event.heldAs === 'replaced';
+  const blocked = event.heldAs === 'dropped' || event.heldAs === 'refused';
+  const pending = !answered && !blocked && !rule?.off && (rule?.verb === 'answer' || rule?.verb === 'block');
+  // A row's own name first, then one given to its kind before rows were named.
+  const named = (actions?.nameKey ? actions.names?.[actions.nameKey(event)] : undefined)
+    ?? actions?.names?.[keyOf(event)];
+  const [renaming, setRenaming] = useState(false);
   const served = blocked ? 'never sent'
-    : answered ? `${isFrame(event) ? '' : (rule?.status ?? '') + ' · '}${bytes(rule?.body?.length ?? 0)}`
-    : null;
+    : answered && rule?.verb === 'answer'
+      ? `${isFrame(event) ? '' : (rule.status ?? '') + ' · '}${bytes(rule.body?.length ?? 0)}`
+      : null;
 
+  const hidable = actions && event.kind !== 'write';
+  const intercepting = !!actions && !!rule && !rule.off && (rule.verb === 'answer' || rule.verb === 'block');
   return (
-    <li
-      class={[
-        'crossed',
+    <Row
+      id={`crossing-${event.id}`}
+      classes={[
+        // Not `write`: the step row's hover-only note button already has that
+        // class, and a row sharing it was hidden until hovered.
+        event.kind === 'write' ? 'storewrite' : '',
         stale ? 'stale' : '',
+        hidden ? 'hiddentraffic' : '',
         event.owned ? 'caused' : 'unowned',
         answered || blocked ? 'answers' : '',
         event.verdict === 'background' || event.verdict === 'unknown' ? 'ruled' : '',
-        open ? 'open' : '',
-      ].filter(Boolean).join(' ')}
-      onContextMenu={onMenu
-        ? (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); onMenu(e.clientX, e.clientY); }
-        : undefined}
-    >
-      <div class="crossedhead" onClick={onOpen}>
-        <span class="dir" title={event.url}>
-          {event.kind === 'request' ? (event.method ?? 'GET') : socketName(event.url)}
-        </span>
-        <span class="way">{event.kind === 'request' ? '' : (event.direction === 'out' ? '→' : '←')}</span>
-        <span class="what" title={event.kind === 'request' ? event.url : undefined}>
-          {event.kind === 'request'
-            ? <><span class="wide">{event.url}</span><span class="lean">{lean(event.url) || '/'}</span></>
-            : (event.preview ?? event.url)}
-        </span>
+      ]}
+      source={event.kind === 'request' ? (event.method ?? 'GET')
+        : event.kind === 'write' ? event.method
+        : socketName(event.url)}
+      sourceTitle={event.url}
+      way={event.kind === 'frame' ? (event.direction === 'out' ? '→' : '←') : ''}
+      title={attribution(event)}
+      label={<>
+        {renaming && actions?.rename
+          ? <LabelInput
+              value={named ?? ''}
+              placeholder={event.kind === 'request' ? lean(event.url) || '/' : (event.preview ?? event.url).slice(0, 60)}
+              onSave={(name) => actions.rename!(event, name, actions.nameKey?.(event))}
+              onDone={() => setRenaming(false)} />
+          // An intercepted frame's payload is not what the page got, so the
+          // tag stands in its place and says what did.
+          : answered && event.kind === 'frame' && !named ? null
+          : <span class={named ? 'what named' : 'what'}
+              title={named ? (event.kind === 'request' ? event.url : event.preview) : (event.kind === 'request' ? event.url : undefined)}>
+              {named
+                ? named
+                : event.kind === 'request'
+                  ? <><span class="wide">{event.url}</span><span class="lean">{lean(event.url) || '/'}</span></>
+                  : (event.preview ?? event.url)}
+            </span>}
+        {(answered || blocked) && (
+          <span class="tag">{blocked ? (event.heldAs === 'refused' ? 'refused' : 'never sent')
+            : `Intercepted: ${rule?.mode === 'local' ? 'Local' : 'Global'} Response`}</span>
+        )}
+        {pending && (
+          <span class="tag nexttime" title="a rule stands against this kind; the proxy applies it to the next crossing it covers">
+            {rule?.verb === 'block' ? 'blocked next time' : 'answers next time'}
+          </span>
+        )}
+        {rule?.off && (
+          <span class="tag nexttime" title="a saved response answers this in other sequences; this sequence does not use it">
+            not used here
+          </span>
+        )}
+        {stale && <span class="stale" title="staged, and this pass has not produced it">not this pass</span>}
+      </>}
+      reading={<>
+        {/* A verdict is a person's; how the crossing was attributed is in the
+            head's tooltip, in words, rather than on the line as a term. */}
+        {event.verdict && <span class="reading">{event.verdict}</span>}
+        {/* Stability is a count, never a colour: the two hues are spoken for. */}
+        {seen && seen.runs > 1 && !answered && !blocked && (
+          <span
+            class={seen.in < seen.runs ? 'seen moves' : 'seen'}
+            title={seen.in < seen.runs
+              ? `crossed in ${seen.in} of the ${seen.runs} passes still held - not settled`
+              : `crossed in every one of the ${seen.runs} passes still held`}
+          >{seen.in}/{seen.runs}</span>
+        )}
         {repeats !== undefined && repeats > 1 && (
           <span class="repeat" title={every ?? `${repeats} of this message`}>
             ×{repeats}{every ? ` ${every}` : ''}
           </span>
         )}
-        {(answered || blocked) && (
-          <span class="tag">{blocked ? 'never sent' : (edited ? 'answers, edited' : 'answers')}</span>
+        {verdict && (
+          <span class={`verdict ${verdict.verdict}`} title={verdict.reasons.join(' · ') || undefined}>
+            {VERDICT_WORDS[verdict.verdict]}
+          </span>
         )}
-        {stale && <span class="stale" title="staged, and this pass has not produced it">not this pass</span>}
-        <span class={`meta ${event.heldAs || served ? 'held' : ((event.status ?? 0) >= 400 ? 'bad' : '')}`}>
-          {served ?? describe(event)}
+        {/* Not `held`: that class is the held-step panel's, and a size sharing
+            it was drawn as a bordered panel. */}
+        <span class={`meta ${event.heldAs || served ? 'served' : ((event.status ?? 0) >= 400 ? 'bad' : '')}`}>
+          {served ?? describe(event, false)}
         </span>
-        {/* Beside the app the row has no width for these, and the payload is
-            what it is found by. Grouped so the narrow rule can take them out
-            of the line and hover can put them back over the row below, which
-            leaves the row's height alone: a row that grew under the pointer
-            would push the rows beneath it out from under the pointer. */}
-        <span class="shaved">
-          <span class="reading">{event.verdict ?? [event.level, event.root].filter(Boolean).join(' ')}</span>
-          {/* Stability is a count, never a colour: the two hues are spoken for. */}
-          {seen && seen.runs > 1 && !answered && !blocked && (
-            <span
-              class={seen.in < seen.runs ? 'seen moves' : 'seen'}
-              title={seen.in < seen.runs
-                ? `crossed in ${seen.in} of the ${seen.runs} passes still held - not settled`
-                : `crossed in every one of the ${seen.runs} passes still held`}
-            >{seen.in}/{seen.runs}</span>
-          )}
-        </span>
-        {actions && (
-          <button
-            class="kill"
-            title="not interested — keep this kind out of the list"
-            onClick={(e: MouseEvent) => { e.stopPropagation(); actions.hide(event); }}
-          >×</button>
-        )}
-      </div>
-      {extra}
-      {open && <CrossingBody event={event} base={base} rule={rule} actions={actions} />}
-    </li>
+      </>}
+      slots={{
+        ...(actions?.rename ? { rename: () => setRenaming(true) } : {}),
+        ...(actions?.report ? { send: () => actions.report!(event) } : {}),
+        ...(moves?.up ? { up: moves.up } : {}),
+        ...(moves?.down ? { down: moves.down } : {}),
+        // On an intercepted row, × takes the interception away here: a local
+        // response goes; a global one is opted out of by this sequence.
+        // × takes an interception away here: a local response goes; a global
+        // one is opted out of by this sequence.
+        ...(intercepting
+          ? { remove: () => (rule!.mode === 'local' ? actions!.clear(event) : actions!.use?.(rule!.key, 'none')) }
+          : {}),
+        // The eye hides a kind of traffic, or lists a hidden one again. Not
+        // while it is intercepted: the interception is taken away first.
+        ...(intercepting ? {}
+          : hidden ? { hide: () => actions!.unhide?.(actions!.ignoredBy?.(event) ?? keyOf(event)) }
+          : hidable ? { hide: () => actions!.hide(event) } : {}),
+      }}
+      glyphs={hidden ? { hide: 'eye' } : undefined}
+      titles={{
+        remove: rule?.mode === 'local' ? 'remove this interception' : 'stop intercepting this in this sequence',
+        hide: hidden ? 'stop ignoring this - it is listed and compared again' : 'ignore this kind: out of the list and out of comparisons',
+      }}
+      open={open}
+      onOpen={onOpen}
+      onMenu={onMenu}
+      extra={extra}
+    >
+      <CrossingBody event={event} base={base} rule={rule} actions={actions} verdict={verdict} />
+    </Row>
   );
 }
 
@@ -470,64 +1240,94 @@ export function CrossingRow({
  * anything else does: a frame the app cannot read is a failure worth
  * injecting, and nothing here decides which one that is.
  */
-export interface RuleEdit {
-  key: string;
-  body: string;
-  status: string;
-  /** null drops the constraint, so the step no longer narrows the match. */
+/**
+ * Where a new replacement applies, chosen as it is made: null leaves a
+ * constraint off, so it applies at any step, on any socket, either way, to
+ * any verb.
+ */
+export interface RuleScope {
   step: number | null;
   method: string | null;
   url: string | null;
   direction: 'out' | 'in' | null;
+  /** Which sequences on the site it answers in; see BoundaryRule.mode. */
+  mode?: 'local' | 'optIn' | 'optOut';
 }
 
 /**
- * One constraint the rule carries, and the width it costs to drop it.
- *
- * A pin answers a crossing that satisfies every constraint on it, and the
- * narrowest matching pin is the one that answers. So each of these is both
- * what the rule is recognised by and where it sits in that order: dropping one
- * widens the rule and lowers it, which is how one rule comes to answer a
- * crossing another was staged for.
+ * How many a step waits for, how long, and what a miss does. The sliders
+ * show their value as they move and save on release, so a drag writes the
+ * file once rather than at every notch - on the pointer or key coming up,
+ * since `onChange` on an input fires at every notch here.
  */
-function Bound({ label, held, off, onDrop, onBind, dim = true, children }: {
-  label: string;
-  held: boolean;
-  /** What the rule matches once the constraint is dropped. */
-  off: string;
-  onDrop: () => void;
-  /** Put the constraint back on the value the control still shows. */
-  onBind: () => void;
-  /**
-   * Whether dropping the constraint dims the value.
-   *
-   * It does where the value is one of many and the rule stops reading it. A
-   * control that enumerates every value instead shows them all matching, and
-   * dimming those would read as none of them matching.
-   */
-  dim?: boolean;
-  /** The control the value is chosen with, which binds the constraint. */
-  children: preact.JSX.Element;
+export function WaitSettings({ wait: held, onChange }: {
+  wait?: ResponseWait;
+  onChange: (wait: ResponseWait) => void;
 }) {
+  const wait = held ?? { count: 1, seconds: 10, onFail: 'fail' as const };
+  const [count, setCount] = useState(wait.count);
+  const [seconds, setSeconds] = useState(wait.seconds);
+  useEffect(() => { setCount(wait.count); setSeconds(wait.seconds); }, [wait.count, wait.seconds]);
+  const change = (next: Partial<ResponseWait>) => onChange({ ...wait, count, seconds, ...next });
   return (
-    <div class="bound">
-      <span class="boundlabel">{label}</span>
-      {/* Dropped, the control is dimmed rather than disabled. A disabled one
-          takes itself out of reach, and the value it holds is the only thing
-          that puts the constraint back - which is the dead end this pair was
-          built to remove. Reaching for it binds it again. */}
-      <span
-        class={held ? 'boundvalue on' : (dim ? 'boundvalue off' : 'boundvalue off whole')}
-        onFocusCapture={held ? undefined : () => onBind()}
-        onMouseDownCapture={held ? undefined : () => onBind()}
-      >{children}</span>
-      <button
-        class={held ? 'boundpick' : 'boundpick on'}
-        onClick={(e: MouseEvent) => { e.stopPropagation(); onDrop(); }}
-      >{off}</button>
+    <div class="body waitset" onClick={(e: MouseEvent) => e.stopPropagation()}>
+      <label class="waitslider">
+        <span class="waitlabel">wait for</span>
+        <input type="range" min={1} max={10} step={1} value={count}
+          onInput={(e: Event) => setCount(Number((e.target as HTMLInputElement).value))}
+          onPointerUp={(e: Event) => change({ count: Number((e.target as HTMLInputElement).value) })}
+          onKeyUp={(e: Event) => change({ count: Number((e.target as HTMLInputElement).value) })} />
+        <span class="waitvalue">{count} arrival{count === 1 ? '' : 's'}</span>
+      </label>
+      <label class="waitslider">
+        <span class="waitlabel">within</span>
+        <input type="range" min={1} max={60} step={1} value={seconds}
+          onInput={(e: Event) => setSeconds(Number((e.target as HTMLInputElement).value))}
+          onPointerUp={(e: Event) => change({ seconds: Number((e.target as HTMLInputElement).value) })}
+          onKeyUp={(e: Event) => change({ seconds: Number((e.target as HTMLInputElement).value) })} />
+        <span class="waitvalue">{seconds} s</span>
+      </label>
+      <div class="waitslider">
+        <span class="waitlabel">on timeout</span>
+        <span class="waitchoices">
+          <Choice on={wait.onFail === 'fail'} onPick={() => change({ onFail: 'fail' })}
+            title="the waiting step fails and the run stops there">fail the step</Choice>
+          <Choice on={wait.onFail === 'continue'} onPick={() => change({ onFail: 'continue' })}
+            title="the run goes on without them">carry on</Choice>
+        </span>
+      </div>
     </div>
   );
 }
+
+/** What a step waiting on a response's kind waits for. */
+export type ResponseWait = { count: number; seconds: number; onFail: 'fail' | 'continue' };
+
+/** The three response types, as each reads and what it does. */
+const RESPONSE_TYPES: Array<['local' | 'optIn' | 'optOut', string, string]> = [
+  ['local', 'Local', 'answers in this sequence only, and is offered to no other'],
+  ['optIn', 'Opt In', 'answers in the sequences that opt in; offered to the rest'],
+  ['optOut', 'Opt Out', 'answers in every sequence on the site that does not opt out'],
+];
+
+export interface RuleEdit {
+  key: string;
+  body: string;
+  status: string;
+  /** A saved payload served in place of the body, by name; absent serves the body as typed. */
+  payload?: string;
+  /**
+   * The open sequence's use of it: a step, or null for every step. Absent
+   * leaves the use as it stands, as an edit of the response alone does.
+   */
+  step?: number | null;
+  method: string | null;
+  url: string | null;
+  direction: 'out' | 'in' | null;
+  mode?: 'local' | 'optIn' | 'optOut';
+  wait?: ResponseWait;
+}
+
 
 /**
  * What a constraint can be bound to here.
@@ -576,353 +1376,496 @@ export function choicesIn(
   };
 }
 
-type Of = 'step' | 'method' | 'url' | 'direction';
 
-function RuleBody({ rule, choices, onSet }: {
-  rule: BoundaryRule;
+/**
+ * Every saved response, by the site it answers on, and under each the
+ * sequences whose use of it differs from its mode: the ones opted in to an
+ * opt-in response, the ones opted out of an opt-out one.
+ *
+ * Read from every file on disk rather than from what the open sequence armed:
+ * the proxy is the browser's, and what it will answer depends on which
+ * sequence is opened next. What the open sequence armed is overlaid, so its
+ * rows carry their hit counts and can be edited in place.
+ */
+export function SavedResponses({
+  base, rules, choices, replaying, names, onSet, onClear, site, sequence, onUse, onMode, reveal,
+}: {
+  base: string;
+  /** A response to open and bring into view, by key, as a traffic row asked. */
+  reveal?: string | null;
+  /** The responses held in this browser now, each with the open sequence's use of it. */
+  rules: BoundaryRule[];
+  /** The origin whose responses are held. */
+  site?: string;
+  /** The open sequence. */
+  sequence?: string;
+  /** Set the open sequence's use of a response: 'none', 'all', or step indexes. */
+  onUse: (key: string, use: 'none' | 'all' | number[]) => void;
+  onMode: (key: string, mode: 'local' | 'optIn' | 'optOut') => void;
+  names?: Record<string, string>;
   choices: RuleChoices;
+  replaying: boolean;
   onSet: (rule: BoundaryRule, next: RuleEdit) => void;
+  onClear: (key: string) => void;
 }) {
-  const [key, setKey] = useState<string | null>(null);
-  const [draft, setDraft] = useState<string | null>(null);
-  const [status, setStatus] = useState<string | null>(null);
-  // Per constraint: absent leaves it as the rule carries it, null drops it,
-  // and a string binds it to that value, which need not be the recorded one.
-  const [bound, setBound] = useState<Partial<Record<Of, string | null>>>({});
+  const [open, setOpen] = useState<string | null>(null);
+  useEscape(open !== null, () => setOpen(null));
+  // The sequence row whose step list is open, under the response it uses.
+  const [openUse, setOpenUse] = useState<string | null>(null);
+  const [catalogue, setCatalogue] = useState<RuleCatalogueEntry[]>([]);
+  useEffect(() => {
+    if (!reveal) return;
+    const id = `${site ?? ''}|${reveal}`;
+    setOpen(id);
+    setTimeout(() => document.getElementById(`response-${id}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 0);
+  }, [reveal]);
+  useEffect(() => {
+    let live = true;
+    const read = () => fetch(`${base}/boundary/catalogue`).then(res => res.json())
+      .then((entries: RuleCatalogueEntry[]) => { if (live) setCatalogue(entries); }).catch(() => {});
+    void read();
+    const timer = setInterval(read, 2000);
+    return () => { live = false; clearInterval(timer); };
+  }, [base]);
 
-  const stands = (of: Of) => (of in bound ? bound[of] !== null : rule[of] !== undefined);
-  // The recorded value outlives the constraint being dropped, so a row keeps
-  // offering the binding the rule was staged with after it has been widened.
-  const recorded = (of: Of) => String(rule[of] ?? rule.staged?.[of] ?? '');
-  const valueOf = (of: Of) => {
-    const picked = bound[of];
-    return picked === undefined || picked === null ? recorded(of) : picked;
+  // site → key → the response and each sequence's stated use of it.
+  const bySite = new Map<string, Map<string, { rule: BoundaryRule; uses: Map<string, Use> }>>();
+  const held = (origin: string) => {
+    const responses = bySite.get(origin) ?? new Map<string, { rule: BoundaryRule; uses: Map<string, Use> }>();
+    bySite.set(origin, responses);
+    return responses;
   };
-  // Binding through the value control, so choosing a value arms the
-  // constraint in the one gesture rather than needing it turned on first.
-  const bind = (of: Of, value: string) => setBound({ ...bound, [of]: value });
-  const drop = (of: Of) => setBound({ ...bound, [of]: null });
+  for (const entry of catalogue) {
+    if (entry.sequence) continue;
+    for (const rule of entry.rules) held(entry.site ?? '').set(rule.key, { rule, uses: new Map() });
+  }
+  // The sequences on each site, which an opt-out response is used by.
+  const sequencesOf = new Map<string, Set<string>>();
+  for (const entry of catalogue) {
+    if (!entry.sequence) continue;
+    sequencesOf.set(entry.site ?? '', (sequencesOf.get(entry.site ?? '') ?? new Set()).add(entry.sequence));
+  }
+  if (sequence) sequencesOf.set(site ?? '', (sequencesOf.get(site ?? '') ?? new Set()).add(sequence));
+  for (const entry of catalogue) {
+    if (!entry.sequence) continue;
+    const responses = held(entry.site ?? '');
+    for (const key of entry.off ?? []) responses.get(key)?.uses.set(entry.sequence, 'none');
+    for (const { key, steps } of entry.on ?? []) responses.get(key)?.uses.set(entry.sequence, steps?.length ? steps : 'all');
+  }
+  // What is held now is newer than the file it was last written to.
+  const here = site ?? '';
+  for (const rule of rules) {
+    const responses = held(here);
+    const known = responses.get(rule.key);
+    const uses = known?.uses ?? new Map<string, Use>();
+    if (sequence) uses.set(sequence, rule.off ? 'none' : rule.steps ?? 'all');
+    responses.set(rule.key, { rule, uses });
+  }
 
-  // The value the rule is bound to is always among the options. Left out of
-  // the list, a select falls back to showing nothing, and a rule bound to a
-  // step reads as one bound to none.
-  const steps = choices.steps.some(step => String(step.index) === recorded('step'))
-    || recorded('step') === ''
-    ? choices.steps
-    : [...choices.steps, { index: Number(recorded('step')), label: 'recorded here' }]
-        .sort((a, b) => a.index - b.index);
+  const summary = (rule: BoundaryRule) => rule.verb === 'answer'
+    ? `${rule.payload ?? (rule.frame ? bytes(rule.body?.length ?? 0) : `${rule.status ?? '200'} · ${bytes(rule.body?.length ?? 0)}`)}`
+      + (rule.edited ? ' · edited' : '')
+    : rule.verb === 'block' ? 'never sent' : 'hidden';
+  const useSays = (use: Use) => use === 'none' ? 'opted out'
+    : use === 'all' ? 'opted in · every step'
+    : `opted in · step ${use.map(n => n + 1).join(', ')}`;
 
-  const nowKey = key ?? rule.key;
-  const nowBody = draft ?? rule.body ?? '';
-  const nowStatus = status ?? rule.status ?? '200';
-  const armed = (of: Of) => {
-    const value = valueOf(of);
-    if (!stands(of) || value === '') return null;
-    if (of !== 'step') return value;
-    const index = Number(value);
-    return Number.isInteger(index) && index >= 0 ? value : null;
-  };
-  const moved = (['step', 'method', 'url', 'direction'] as const).some(of => {
-    const was = rule[of] === undefined ? null : String(rule[of]);
-    return armed(of) !== was;
-  });
-  const dirty = nowKey !== rule.key || nowBody !== (rule.body ?? '')
-    || nowStatus !== (rule.status ?? '200') || moved;
-
-  const commit = () => {
-    const step = armed('step');
-    const direction = armed('direction');
-    onSet(rule, {
-      key: nowKey, body: nowBody, status: nowStatus,
-      step: step === null ? null : Number(step),
-      method: armed('method'),
-      url: armed('url'),
-      direction: direction === 'out' || direction === 'in' ? direction : null,
-    });
-    setKey(null);
-    setDraft(null);
-    setStatus(null);
-    setBound({});
-  };
-
-  return (
-    <div class="body">
-      <div class="edit">
-        <div class="editrow">
-          {rule.frame
-            ? <>
-                <span>when a frame carries</span>
-                <input
-                  class={nowKey !== rule.key ? 'match dirty' : 'match'}
-                  value={nowKey}
-                  onClick={(e: MouseEvent) => e.stopPropagation()}
-                  onInput={(e: Event) => setKey((e.target as HTMLInputElement).value)}
-                />
-                {rule.matchedAs && (
-                  <span class="quiet" title={rule.matchedAs === 'field'
-                    ? 'one "key":value pair - compared against the frame\'s top-level JSON field, by value'
-                    : 'anything else - matched as characters anywhere in the payload'}>
-                    {rule.matchedAs === 'field' ? 'as a field' : 'as text'}
-                  </span>
-                )}
-              </>
+  const response = (origin: string, key: string, rule: BoundaryRule, uses: Map<string, Use>) => {
+    const live = origin === here ? rules.find(one => one.key === key) : undefined;
+    const mode = rule.mode ?? 'local';
+    const given: Use = mode === 'optOut' ? 'all' : 'none';
+    // Listed: the sequences whose use differs from what the mode gives, and
+    // the open one, whose use can be changed here.
+    const listed = [...uses.entries()]
+      .filter(([name, use]) => name === sequence || JSON.stringify(use) !== JSON.stringify(given))
+      .sort(([a], [b]) => (a === sequence ? -1 : b === sequence ? 1 : a.localeCompare(b)));
+    if (live && !live.foreign && sequence && !uses.has(sequence)) listed.unshift([sequence, given]);
+    // Uses: the sequences it answers in. Opt out counts every sequence on the
+    // site less those opting out; the other two count those opting in.
+    const used = mode === 'optOut'
+      ? [...(sequencesOf.get(origin) ?? [])].filter(name => uses.get(name) !== 'none').length
+      : [...uses.entries()].filter(([name, one]) => one !== 'none' && (mode !== 'local' || name === rule.owner)).length;
+    const use = live ? (live.off ? 'none' : live.steps ?? 'all') as Use : undefined;
+    const hits = live ? ruleUse({ ...live, steps: undefined }, replaying) : undefined;
+    const rowId = `${origin}|${key}`;
+    const stepsHere = choices.steps;
+    const toggle = (step: number) => {
+      const now = use === 'all' ? stepsHere.map(one => one.index) : use === 'none' || !use ? [] : use;
+      const next = now.includes(step) ? now.filter(n => n !== step) : [...now, step];
+      onUse(key, next.length === 0 ? 'none' : next.length === stepsHere.length ? 'all' : next);
+    };
+    return (
+      <Fragment key={rowId}>
+        <Row
+          id={`response-${rowId}`}
+          classes={['rulerow', reveal === key && origin === here ? 'revealed' : '']}
+          source={rule.frame ? 'frame' : (rule.method ?? 'any')}
+          sourceTitle={rule.url}
+          way={rule.frame ? (rule.direction === 'out' ? '→' : rule.direction === 'in' ? '←' : '↔') : ''}
+          title={key}
+          label={<span class="what">{names?.[key] ?? (rule.frame ? rule.label : undefined) ?? key}</span>}
+          reading={<>
+            <span class="meta">{summary(rule)}</span>
+            {hits && !live?.off && <span class={hits.cold ? 'hits cold' : 'hits'}>{hits.cold ? hits.said : ` · ${hits.said}`}</span>}
+            <span class="meta"> · {used} use{used === 1 ? '' : 's'}</span>
+          </>}
+          slots={live ? { remove: () => onClear(key) } : {}}
+          titles={{ remove: 'delete this response from every sequence on the site' }}
+          open={open === rowId}
+          onOpen={() => setOpen(open === rowId ? null : rowId)}
+        >
+          {live && live.verb === 'answer'
+            ? <ReplaceEditor
+                stepless
+                event={responseEvent(live)}
+                rule={live}
+                recorded={live.recorded ?? live.body ?? ''}
+                carrying={key}
+                choices={choices}
+                base={base}
+                onSave={(next) => {
+                  onSet(live, {
+                    key, body: next.body, status: next.status,
+                    method: next.scope.method, url: next.scope.url, direction: next.scope.direction,
+                    ...(next.scope.mode ? { mode: next.scope.mode } : {}),
+                    wait: next.wait,
+                    ...(next.payload ? { payload: next.payload } : {}),
+                  });
+                }}
+                onCancel={() => setOpen(null)}
+              />
             : <>
-                <span>answer with</span>
-                <input
-                  class={nowStatus !== (rule.status ?? '200') ? 'status dirty' : 'status'}
-                  value={nowStatus}
-                  onClick={(e: MouseEvent) => e.stopPropagation()}
-                  onInput={(e: Event) => setStatus((e.target as HTMLInputElement).value)}
-                />
-                <span class="quiet">on {nowKey}</span>
-              </>}
-        </div>
-        {/* Which rows appear follows the kind of crossing the rule answers,
-            not the constraints it happens to carry: a rule staged from the
-            live stream carries no step, and a row only for what was recorded
-            leaves that rule answering at every position with no way to bind
-            it to one. */}
-        <div class="binds">
-          <Bound
-            label="step"
-            held={stands('step')}
-            off="any step"
-            onDrop={() => drop('step')}
-            onBind={() => bind('step', valueOf('step'))}
-          >
-            <select
-              class="boundin"
-              value={valueOf('step')}
-              onClick={(e: MouseEvent) => e.stopPropagation()}
-              onChange={(e: Event) => bind('step', (e.target as HTMLSelectElement).value)}
-            >
-              <option value="">pick a step</option>
-              {steps.map(step => (
-                <option key={step.index} value={String(step.index)}>
-                  step {step.index + 1}{step.label ? ` · ${step.label}` : ''}
-                </option>
-              ))}
-            </select>
-          </Bound>
-          {rule.frame
-            ? <>
-                <Bound
-                  label="socket"
-                  held={stands('url')}
-                  off="any socket"
-                  onDrop={() => drop('url')}
-                  onBind={() => bind('url', valueOf('url'))}
-                >
-                  <input
-                    class="boundin"
-                    list="boundsockets"
-                    placeholder="any part of the socket's URL"
-                    value={valueOf('url')}
-                    onClick={(e: MouseEvent) => e.stopPropagation()}
-                    onInput={(e: Event) => bind('url', (e.target as HTMLInputElement).value)}
-                  />
-                </Bound>
-                <Bound
-                  label="direction"
-                  held={stands('direction')}
-                  off="either way"
-                  onDrop={() => drop('direction')}
-                  onBind={() => bind('direction', valueOf('direction'))}
-                  dim={false}
-                >
-                  {/* A frame goes one way or the other, so these two are the
-                      whole of what a direction can be. Dropped, the rule
-                      matches both, and both read as matching - which is what
-                      `either way` names. Clicking one narrows to it. */}
-                  <span class="boundways">
-                    {([['out', 'sent'], ['in', 'received']] as const).map(([way, said]) => (
-                      <button
-                        key={way}
-                        class={!stands('direction') || valueOf('direction') === way
-                          ? 'boundpick on' : 'boundpick'}
-                        onClick={(e: MouseEvent) => { e.stopPropagation(); bind('direction', way); }}
-                      >{said}</button>
+                <div class="replace responsemode" onClick={(e: MouseEvent) => e.stopPropagation()}>
+                  <ScopeRow label="response type">
+                    {RESPONSE_TYPES.map(([choice, word, says]) => (
+                      <Choice key={choice} on={mode === choice} onPick={() => live && onMode(key, choice)} title={says}>{word}</Choice>
                     ))}
-                  </span>
-                </Bound>
-              </>
-            : <Bound
-                label="method"
-                held={stands('method')}
-                off="any verb"
-                onDrop={() => drop('method')}
-                onBind={() => bind('method', valueOf('method'))}
-              >
-                <input
-                  class="boundin"
-                  list="boundmethods"
-                  placeholder="the verb it crossed with"
-                  value={valueOf('method')}
-                  onClick={(e: MouseEvent) => e.stopPropagation()}
-                  onInput={(e: Event) => bind('method', (e.target as HTMLInputElement).value.toUpperCase())}
-                />
-              </Bound>}
-          {/* One rule body is open at a time, so these are named rather than
-              keyed per rule. */}
-          <datalist id="boundsockets">
-            {choices.sockets.map(url => <option key={url} value={url}>{socketName(url)}</option>)}
-          </datalist>
-          <datalist id="boundmethods">
-            {choices.methods.map(verb => <option key={verb} value={verb} />)}
-          </datalist>
-        </div>
-        <div class="editrow">
-          <span class="quiet">
-            {rule.frame
-              ? 'a later frame satisfying every one of these is answered with the box below'
-              : `a request satisfying every one of these is answered with the box below`}
-          </span>
-        </div>
-        <textarea
-          class={dirty ? 'dirty' : ''}
-          spellcheck={false}
-          value={nowBody}
-          onClick={(e: MouseEvent) => e.stopPropagation()}
-          onInput={(e: Event) => setDraft((e.target as HTMLTextAreaElement).value)}
-        />
-        {rule.recorded !== undefined && (
-          <div class="editrow">
-            <span class="quiet" title={rule.recorded}>
-              replaces {bytes(rule.recorded.length)} the server sent: {rule.recorded.slice(0, 80)}
-            </span>
-          </div>
-        )}
-        <div class="state">
-          {dirty
-            ? <>
-                <span class="pend">
-                  not saved · {bytes(nowBody.length)} · serves {bytes(rule.body?.length ?? 0)}
-                </span>
-                <button class="tool" onClick={(e: MouseEvent) => {
-                  e.stopPropagation(); setKey(null); setDraft(null); setStatus(null);
-                }}>REVERT</button>
-              </>
-            : <span class="ok">serves {bytes(nowBody.length)}</span>}
-        </div>
-      </div>
+                  </ScopeRow>
+                </div>
+                {rule.verb === 'answer' && <pre class="payload">{rule.body ?? ''}</pre>}
+              </>}
+        </Row>
+        {/* The sequences whose use of it differs from its mode: rows of the
+            list under the response, not inside it. */}
+        {open === rowId && listed.map(([name, stated]) => {
+          const mine = live && !live.foreign && name === sequence;
+          return (
+            <Row
+              key={`${rowId}|${name}`}
+              classes={['usedrow', mine ? 'rulerow' : '', stated === 'none' ? 'off' : '']}
+              source="sequence"
+              label={<span class="what">{name}</span>}
+              reading={<span class="meta">{useSays(stated)}</span>}
+              {...(mine ? {
+                more: use === 'none'
+                  ? <button class="tool plain" onClick={() => onUse(key, 'all')}>opt in</button>
+                  : <button class="tool plain" onClick={() => onUse(key, 'none')}>opt out</button>,
+              } : {})}
+              columns={[]}
+              slots={{}}
+              open={!!mine && openUse === `${rowId}|${name}`}
+              onOpen={() => { if (mine) setOpenUse(openUse === `${rowId}|${name}` ? null : `${rowId}|${name}`); }}
+            >
+              {/* Which of its steps it answers at, each named, so a long
+                  sequence is chosen from by what each step does. */}
+              <div class="steppick" onClick={(e: MouseEvent) => e.stopPropagation()}>
+                <label>
+                  <input type="radio" checked={use === 'all'} onChange={() => onUse(key, 'all')} /> every step
+                </label>
+                <label>
+                  <input type="radio" checked={use === 'none'} onChange={() => onUse(key, 'none')} /> no steps (opted out)
+                </label>
+                <ol>
+                  {stepsHere.map(step => (
+                    <li key={step.index}>
+                      <label>
+                        <input type="checkbox"
+                          checked={use === 'all' || (Array.isArray(use) && use.includes(step.index))}
+                          onChange={() => toggle(step.index)} />
+                        <span class="stepnum">{step.index + 1}</span>
+                        <span class="steplabel">{step.label}</span>
+                      </label>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            </Row>
+          );
+        })}
+      </Fragment>
+    );
+  };
 
-      <div class="bodyrow">
-        {dirty
-          ? <button class="save" onClick={(e: MouseEvent) => { e.stopPropagation(); commit(); }}>
-              UPDATE THE ANSWER
-            </button>
-          : <button class="tool done">ANSWERS THIS ✓</button>}
+  const origins = [...bySite.keys()].filter(origin => bySite.get(origin)!.size > 0)
+    .sort((a, b) => (a === here ? -1 : b === here ? 1 : a.localeCompare(b)));
+  const total = origins.reduce((sum, origin) => sum + bySite.get(origin)!.size, 0);
+  return (
+    <Fold title="Saved responses" count={total}>
+      {!origins.length && (
+        <p class="sechint">None yet. Open a request or frame on a step and choose what it should be answered with.</p>
+      )}
+      <div class="saved">
+        {origins.map(origin => {
+          const all = [...bySite.get(origin)!.entries()];
+          const shown = all.filter(([, one]) => one.rule.verb !== 'hide');
+          return (
+            <Fold key={origin} level="group" title={origin ? new URL(origin).host : 'no site'} count={shown.length}>
+              <ol class="activitycards">{shown.map(([key, one]) => response(origin, key, one.rule, one.uses))}</ol>
+
+            </Fold>
+          );
+        })}
       </div>
-    </div>
+    </Fold>
   );
 }
 
 /**
- * What this sequence will do next time it runs.
- *
- * One line per decision, never one per gesture: several actions land on one
- * key over a session - a variant hidden, then the surviving one answered - and
- * listed in the order they were made they contradict each other. The store
- * keeps one rule per key, so this is already reconciled by the time it is read.
- *
- * The events are not here and are not written. They are a reading of one pass;
- * the rule is what every later pass should do.
+ * The kinds kept out of the list, by site, each with its type and, opened,
+ * the sequences that hide it or list it anyway. Read from every file on disk,
+ * with what the open sequence holds laid over it.
  */
-export function OnReplay({ rules, waits, choices, hidden, said, onShowHidden, onClear, onSave, onSet }: {
-  rules: BoundaryRule[];
-  waits: Array<{ step: number; count: number }>;
-  /** What the constraints in an open rule can be bound to. */
-  choices: RuleChoices;
-  /** Whether the hidden kinds are listed rather than folded away. */
-  hidden: boolean;
-  said: string;
-  onShowHidden: () => void;
+export function SavedHidden({ base, hidden, site, sequence, onUse, onMode, onClear }: {
+  base: string;
+  hidden: HiddenKind[];
+  site?: string;
+  sequence?: string;
+  onUse: (key: string, on: boolean) => void;
+  onMode: (key: string, mode: HiddenKind['mode']) => void;
   onClear: (key: string) => void;
-  onSave: () => void;
-  /** Re-arm one rule under a changed match, body, status or set of bounds. */
-  onSet?: (rule: BoundaryRule, next: RuleEdit) => void;
 }) {
   const [open, setOpen] = useState<string | null>(null);
-  const shown = hidden ? rules : rules.filter(rule => rule.verb !== 'hide');
-  const hiddenCount = rules.filter(rule => rule.verb === 'hide').length;
-  const answers = rules.filter(rule => rule.verb === 'answer').length;
-  const blocks = rules.filter(rule => rule.verb === 'block').length;
+  const [catalogue, setCatalogue] = useState<RuleCatalogueEntry[]>([]);
+  useEffect(() => {
+    let live = true;
+    const read = () => fetch(`${base}/boundary/catalogue`).then(res => res.json())
+      .then((entries: RuleCatalogueEntry[]) => { if (live) setCatalogue(entries); }).catch(() => {});
+    void read();
+    const timer = setInterval(read, 2000);
+    return () => { live = false; clearInterval(timer); };
+  }, [base]);
 
+  // site → key → the kind, and each sequence's stated choice: hidden or listed.
+  const bySite = new Map<string, Map<string, { kind: HiddenKind; said: Map<string, boolean> }>>();
+  const held = (origin: string) => {
+    const kinds = bySite.get(origin) ?? new Map<string, { kind: HiddenKind; said: Map<string, boolean> }>();
+    bySite.set(origin, kinds);
+    return kinds;
+  };
+  const sequencesOf = new Map<string, Set<string>>();
+  for (const entry of catalogue) {
+    if (entry.sequence) {
+      sequencesOf.set(entry.site ?? '', (sequencesOf.get(entry.site ?? '') ?? new Set()).add(entry.sequence));
+      continue;
+    }
+    for (const kind of entry.hidden ?? []) held(entry.site ?? '').set(kind.key, { kind, said: new Map() });
+  }
+  for (const entry of catalogue) {
+    if (!entry.sequence) continue;
+    const kinds = held(entry.site ?? '');
+    for (const key of entry.hiddenOn ?? []) kinds.get(key)?.said.set(entry.sequence, true);
+    for (const key of entry.hiddenOff ?? []) kinds.get(key)?.said.set(entry.sequence, false);
+  }
+  const here = site ?? '';
+  if (sequence) sequencesOf.set(here, (sequencesOf.get(here) ?? new Set()).add(sequence));
+  for (const kind of hidden) {
+    const known = held(here).get(kind.key);
+    const said = known?.said ?? new Map<string, boolean>();
+    if (sequence && kind.mode !== 'local') said.set(sequence, !kind.off);
+    held(here).set(kind.key, { kind, said });
+  }
+
+  const row = (origin: string, key: string, kind: HiddenKind, said: Map<string, boolean>) => {
+    const live = origin === here ? hidden.find(one => one.key === key) : undefined;
+    const hiddenIn = kind.mode === 'local' ? [kind.owner ?? '']
+      : kind.mode === 'optIn' ? [...said.entries()].filter(([, hid]) => hid).map(([name]) => name)
+      : [...(sequencesOf.get(origin) ?? [])].filter(name => said.get(name) !== false);
+    const listed = kind.mode === 'local' ? (kind.owner ? [[kind.owner, true] as const] : [])
+      : [...said.entries()];
+    const rowId = `hidden|${origin}|${key}`;
+    return (
+      <Fragment key={rowId}>
+        <Row
+          classes={['hiddenrow', live?.off ? 'off' : '']}
+          columns={['remove']}
+          source={kind.frame ? (kind.url ? socketName(kind.url) : 'frame') : (kind.method ?? 'GET')}
+          sourceTitle={kind.url}
+          way={kind.frame ? (kind.direction === 'out' ? '→' : '←') : ''}
+          title={key}
+          label={<span class="what">{kind.any ? kind.label ?? `everything on ${kind.url ?? 'a socket'}` : kind.label?.replace(/^\S+\s+/, '') ?? key}</span>}
+          reading={<span class="meta">
+            {kind.mode === 'local' ? 'Local' : kind.mode === 'optIn' ? 'Opt In' : 'Opt Out'} · {hiddenIn.length} use{hiddenIn.length === 1 ? '' : 's'}
+          </span>}
+          slots={live ? { remove: () => onClear(key) } : {}}
+          titles={{ remove: 'delete this rule: what it matches is listed and compared again, in every sequence' }}
+          open={open === rowId}
+          onOpen={() => setOpen(open === rowId ? null : rowId)}
+        >
+          <div class="replace responsemode" onClick={(e: MouseEvent) => e.stopPropagation()}>
+            {/* What the rule matches, as it was made. */}
+            <ScopeRow label="matches">
+              <span class="replvalue">
+                {kind.any ? 'every message' : 'this kind'}
+                {kind.url ? ` on ${kind.frame ? socketName(kind.url) : kind.url}` : ''}
+                {kind.direction ? (kind.direction === 'in' ? ' · received' : ' · sent') : ''}
+                {kind.method ? ` · ${kind.method}` : ''}
+                {kind.step !== undefined ? ` · step ${kind.step + 1}` : ' · any step'}
+              </span>
+            </ScopeRow>
+            <ScopeRow label="type">
+              {RESPONSE_TYPES.map(([mode, word]) => (
+                <Choice key={mode} on={kind.mode === mode} onPick={() => live && onMode(key, mode)}
+                  title={mode === 'local' ? 'ignored in this sequence only'
+                    : mode === 'optIn' ? 'ignored in the sequences that opt in'
+                    : 'ignored in every sequence on the site that does not opt out'}>{word}</Choice>
+              ))}
+            </ScopeRow>
+          </div>
+        </Row>
+        {open === rowId && listed.map(([name, hid]) => {
+          const mine = live && kind.mode !== 'local' && name === sequence;
+          return (
+            <Row
+              key={`${rowId}|${name}`}
+              classes={['usedrow', hid ? '' : 'off']}
+              columns={[]}
+              source="sequence"
+              label={<span class="what">{name}</span>}
+              reading={<span class="meta">{hid ? 'ignored here' : 'compared here'}</span>}
+              {...(mine ? {
+                more: <button class="tool plain" onClick={() => onUse(key, !hid)}>{hid ? 'compare here' : 'ignore here'}</button>,
+              } : {})}
+              slots={{}}
+              open={false}
+              onOpen={() => {}}
+            />
+          );
+        })}
+      </Fragment>
+    );
+  };
+
+  const origins = [...bySite.keys()].filter(origin => bySite.get(origin)!.size > 0)
+    .sort((a, b) => (a === here ? -1 : b === here ? 1 : a.localeCompare(b)));
+  const total = origins.reduce((sum, origin) => sum + bySite.get(origin)!.size, 0);
   return (
-    <section class="onreplay">
-      <div class="onreplayhead">
-        <h2>ON REPLAY</h2>
-        {choices.forSequence && <span class="target">{choices.forSequence}</span>}
-        <span class="hint grow">
-          What {choices.forSequence ?? 'this sequence'} will do next time it runs. The events
-          stay in the proxy; only these rules are written.
-        </span>
-        {hiddenCount > 0 && (
-          <button class="tool" onClick={onShowHidden}>
-            {hidden ? 'FOLD HIDDEN AWAY' : `SHOW ${hiddenCount} HIDDEN`}
-          </button>
-        )}
-      </div>
+    <Fold title="Ignored" count={total} open={false}>
+      {!origins.length && (
+        <p class="sechint">None. The eye, or Ignore, on a traffic row leaves traffic out of the list and out of comparisons.</p>
+      )}
+      {origins.map(origin => (
+        <Fold key={origin} level="group" title={origin ? new URL(origin).host : 'no site'} count={bySite.get(origin)!.size}>
+          <ol class="activitycards">
+            {[...bySite.get(origin)!.entries()].map(([key, one]) => row(origin, key, one.kind, one.said))}
+          </ol>
+        </Fold>
+      ))}
+    </Fold>
+  );
+}
 
-      {shown.length === 0 && waits.length === 0
-        ? <p class="hint">nothing yet — delete the noise, choose what answers</p>
-        : <ol class="rules">
-            {waits.map(wait => (
-              <li key={`wait${wait.step}`}>
-                <span class="verb keep">wait for</span>
-                <span class="target">step {wait.step + 1}</span>
-                <span class="hint">{wait.count} to arrive before moving on</span>
-              </li>
-            ))}
-            {shown.map(rule => (
-              <li key={rule.key} class={open === rule.key ? 'open' : ''}>
-                <div
-                  class={rule.verb === 'answer' && onSet ? 'rulehead opens' : 'rulehead'}
-                  onClick={rule.verb === 'answer' && onSet
-                    ? () => setOpen(open === rule.key ? null : rule.key)
-                    : undefined}
-                >
-                  <span class={rule.verb === 'hide' ? 'verb quiet' : 'verb'}>{rule.verb}</span>
-                  <span class="target" title={rule.key}>{rule.label ?? rule.key}</span>
-                  {/* The count stays on the line at every width: a rule that
-                      stopped matching reads `never fired` here, and that is the
-                      one thing on the row that calls for an edit. */}
-                  {rule.hits !== undefined && rule.verb !== 'hide' && (
-                    <span class={rule.hits > 0 ? 'hits' : 'hits cold'}>
-                      {rule.hits > 0 ? `used ${rule.hits}×` : 'never fired'}
-                    </span>
-                  )}
-                  <span class="shaved">
-                    {rule.step !== undefined && rule.verb !== 'hide' && (
-                      <span class="quiet" title="answers only while this step runs">step {rule.step + 1}</span>
-                    )}
-                    <span class="hint">
-                      {rule.verb === 'answer'
-                        ? `${rule.frame ? '' : (rule.status ?? '200') + ' · '}${bytes(rule.body?.length ?? 0)}`
-                          + (rule.body !== rule.recorded ? ', edited' : '')
-                        : rule.verb === 'block' ? 'never leaves the browser' : 'kept out of the list'}
-                    </span>
-                  </span>
-                  <button
-                    class="drop"
-                    title="drop this rule"
-                    onClick={(e: MouseEvent) => { e.stopPropagation(); onClear(rule.key); }}
-                  >×</button>
-                </div>
-                {open === rule.key && rule.verb === 'answer' && onSet && (
-                  <RuleBody rule={rule} choices={choices} onSet={onSet} />
-                )}
-              </li>
-            ))}
-          </ol>}
+/**
+ * The crossing a saved response answers, rebuilt from what it matches on, so
+ * the editor a traffic row opens can open on the response alone.
+ */
+function responseEvent(rule: BoundaryRule): BoundaryEvent {
+  return {
+    id: `response:${rule.key}`, at: 0, owned: false,
+    kind: rule.frame ? 'frame' : 'request',
+    url: rule.url ?? rule.key,
+    ...(rule.frame ? { direction: rule.direction ?? 'in' } : { method: rule.method ?? 'GET' }),
+    ...(rule.status ? { status: Number(rule.status) } : {}),
+    ...(rule.recorded !== undefined ? { preview: rule.recorded } : {}),
+  } as BoundaryEvent;
+}
 
-      <div class="onreplayfoot">
-        <button class="save" onClick={onSave}>SAVE ONTO THE SEQUENCE</button>
-        <span class="hint grow">
-          {answers} answered · {blocks} blocked · {hiddenCount} hidden · {waits.length} waiting
+/** A sequence's use of a response: not at all, at every step, or at these step indexes. */
+type Use = 'none' | 'all' | number[];
+
+
+/**
+ * The payloads saved by name, each a row: its name, its size, and on opening
+ * it its content to change. Saving one re-arms every replacement serving it.
+ */
+export function SavedPayloads({ base }: { base: string }) {
+  const [saved, setSaved] = useState<Array<{ name: string; bytes: number }>>([]);
+  const [open, setOpen] = useState<string | null>(null);
+  const refresh = () => fetch(`${base}/payloads`).then(res => res.json()).then(setSaved).catch(() => {});
+  useEffect(() => {
+    void refresh();
+    const timer = setInterval(() => void refresh(), 2000);
+    return () => clearInterval(timer);
+  }, [base]);
+  return (
+    <Fold title="Saved payloads" count={saved.length}>
+    {!saved.length
+      ? <p class="sechint">None yet. Save as payload… in a replacement keeps one here.</p>
+      : <ol class="activitycards payloads">
+      {saved.map(one => (
+        <Row
+          key={one.name}
+          classes={['payloadrow']}
+          columns={['remove']}
+          source="payload"
+          label={<span class="what">{one.name}</span>}
+          reading={<span class="meta">{bytes(one.bytes)}</span>}
+          slots={{
+            remove: () => void fetch(`${base}/payloads/delete`, {
+              method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: one.name }),
+            }).then(() => { if (open === one.name) setOpen(null); return refresh(); }),
+          }}
+          titles={{ remove: 'delete this payload; replacements serving it keep what they last read' }}
+          open={open === one.name}
+          onOpen={() => setOpen(open === one.name ? null : one.name)}
+        >
+          <PayloadEditor base={base} name={one.name} onSaved={() => void refresh()} />
+        </Row>
+      ))}
+    </ol>}
+    </Fold>
+  );
+}
+
+/** One saved payload's content, changed in place and saved under its own name. */
+function PayloadEditor({ base, name, onSaved }: { base: string; name: string; onSaved: () => void }) {
+  const [held, setHeld] = useState<string | undefined>(undefined);
+  const [text, setText] = useState('');
+  const [said, setSaid] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    let live = true;
+    void fetch(`${base}/payloads/read?name=${encodeURIComponent(name)}`)
+      .then(res => (res.ok ? res.text() : ''))
+      .then(content => {
+        if (!live) return;
+        const shown = formatJson(content) ?? content;
+        setHeld(shown);
+        setText(shown);
+      });
+    return () => { live = false; };
+  }, [base, name]);
+  if (held === undefined) return <p class="quiet">reading…</p>;
+  const changed = text !== held;
+  const save = async () => {
+    const res = await fetch(`${base}/payloads/save`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, content: text }),
+    }).catch(() => undefined);
+    const answer = res ? await res.json().catch(() => ({})) as { failure?: string } : { failure: 'the bench did not answer' };
+    if (answer.failure) { setSaid(answer.failure); return; }
+    setHeld(text);
+    setSaid('saved · replacements serving it now serve this');
+    onSaved();
+  };
+  return (
+    <div class="body" onClick={(e: MouseEvent) => e.stopPropagation()}>
+      <GrowBox value={text} onInput={(next) => { setText(next); setSaid(undefined); }} />
+      <div class="bodyfoot">
+        <span class="footsummary">{said ?? `${bytes(text.length)}${changed ? ' · not saved' : ''}`}</span>
+        <span class="grow" />
+        <span class="footactions">
+          <button class="tool plain" disabled={!changed} onClick={() => void save()}>Save</button>
+          <button class="tool plain" disabled={!changed} onClick={() => { setText(held); setSaid(undefined); }}>Revert</button>
         </span>
-        {said && <span class="saved">{said}</span>}
       </div>
-    </section>
+    </div>
   );
 }

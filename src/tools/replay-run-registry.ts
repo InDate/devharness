@@ -60,6 +60,11 @@ class RunRegistry {
     this.prune();
   }
 
+  /** Drop a run whose caller already has its result, so it is not listed as one to read. */
+  forget(runId: string): void {
+    this.runs.delete(runId);
+  }
+
   get(runId: string): RunRecord | undefined {
     this.prune();
     return this.runs.get(runId);

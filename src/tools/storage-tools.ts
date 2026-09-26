@@ -293,7 +293,8 @@ const storageSchema = z.object({
     'getSessionStorage', 'setSessionStorage', 'removeSessionStorage',
     'idbListDatabases', 'idbListStores', 'idbGet', 'idbGetAll', 'idbPut', 'idbDelete',
     'clear', 'writes',
-  ]).describe('Storage action: getCookies, setCookie, getLocalStorage, setLocalStorage, removeLocalStorage (delete one localStorage key), getSessionStorage, setSessionStorage, removeSessionStorage (delete one sessionStorage key), idbListDatabases, idbListStores, idbGet, idbGetAll, idbPut, idbDelete, clear (clear storage), writes (localStorage and sessionStorage writes as they happened, which no state read can show - these cross no network boundary, so a step that only wrote locally has no other evidence)'),
+    'authenticatorAdd', 'authenticatorCredentials', 'authenticatorRemove',
+  ]).describe('Storage action: getCookies, setCookie, getLocalStorage, setLocalStorage, removeLocalStorage (delete one localStorage key), getSessionStorage, setSessionStorage, removeSessionStorage (delete one sessionStorage key), idbListDatabases, idbListStores, idbGet, idbGetAll, idbPut, idbDelete, clear (clear storage), writes (localStorage and sessionStorage writes as they happened, which no state read can show - these cross no network boundary, so a step that only wrote locally has no other evidence), authenticatorAdd (a virtual WebAuthn authenticator on this page, answering passkey prompts), authenticatorCredentials (the passkeys it holds), authenticatorRemove'),
   connectionReason: z.string().optional().describe('Connection reference (use the reference from launchChrome output, e.g., "unnamed-connection-default" or your renamed tab)'),
   since: z.number().optional().describe('writes: epoch ms. Only writes at or after this, so a step\'s own writes separate from the rest'),
   until: z.number().optional().describe('writes: epoch ms. Only writes before this'),
@@ -317,8 +318,13 @@ const storageSchema = z.object({
   limit: z.number().optional().describe('Maximum records to return for idbGetAll (default: 50)'),
   // Parameters for clear action
   reason: z.string().optional().describe('Why storage needs to be cleared (required for clear action)'),
+  userVerified: z.boolean().optional().describe('authenticatorAdd: whether the authenticator reports the user verified (default: true)'),
   types: z.array(z.enum(['cookies', 'localStorage', 'sessionStorage', 'indexedDB'])).optional().describe('Storage types to clear (for clear action, default: cookies + localStorage + sessionStorage; indexedDB must be requested explicitly)'),
 }).strict();
+
+/** The virtual authenticator each page holds, and the session it lives on. The
+ *  authenticator stands while its session does, so the session is kept. */
+const authenticators = new WeakMap<object, { session: any; authenticatorId: string; userVerified: boolean }>();
 
 export function createStorageTools(
   puppeteerManager: PuppeteerManager,
@@ -643,6 +649,50 @@ export function createStorageTools(
 
         // Handle each action
         switch (action) {
+          case 'authenticatorAdd': {
+            const held = authenticators.get(page);
+            if (held) {
+              await held.session.send('WebAuthn.removeVirtualAuthenticator', { authenticatorId: held.authenticatorId }).catch(() => {});
+            }
+            const userVerified = args.userVerified !== false;
+            const session = held?.session ?? await (page as any).createCDPSession();
+            await session.send('WebAuthn.enable', { enableUI: false });
+            const { authenticatorId } = await session.send('WebAuthn.addVirtualAuthenticator', {
+              options: {
+                protocol: 'ctap2', transport: 'internal', hasResidentKey: true,
+                hasUserVerification: true, isUserVerified: userVerified, automaticPresenceSimulation: true,
+              },
+            });
+            authenticators.set(page, { session, authenticatorId, userVerified });
+            return {
+              content: [{ type: 'text', text: `Virtual authenticator ${authenticatorId} added; passkey prompts on this page are answered${userVerified ? ' with the user verified' : ' with the user present and not verified'}.` }],
+              _meta: { tool: 'storage', action, timestamp: Date.now(), storage: { authenticator: { id: authenticatorId, userVerified } } },
+            };
+          }
+
+          case 'authenticatorCredentials': {
+            const held = authenticators.get(page);
+            if (!held) return createErrorResponse('NO_AUTHENTICATOR', {});
+            const { credentials } = await held.session.send('WebAuthn.getCredentials', { authenticatorId: held.authenticatorId });
+            // The private key is the authenticator's, and never leaves it here.
+            const listed = (credentials ?? []).map((c: any) => ({ credentialId: c.credentialId, rpId: c.rpId, userHandle: c.userHandle, signCount: c.signCount, resident: c.isResidentCredential }));
+            return {
+              content: [{ type: 'text', text: `${listed.length} passkey(s)\n\n${formatCodeBlock(listed)}` }],
+              _meta: { tool: 'storage', action, timestamp: Date.now(), storage: { authenticator: { id: held.authenticatorId, credentials: listed } } },
+            };
+          }
+
+          case 'authenticatorRemove': {
+            const held = authenticators.get(page);
+            if (!held) return createErrorResponse('NO_AUTHENTICATOR', {});
+            await held.session.send('WebAuthn.removeVirtualAuthenticator', { authenticatorId: held.authenticatorId });
+            authenticators.delete(page);
+            return {
+              content: [{ type: 'text', text: `Virtual authenticator ${held.authenticatorId} removed.` }],
+              _meta: { tool: 'storage', action, timestamp: Date.now(), storage: { authenticator: { id: held.authenticatorId, removed: true } } },
+            };
+          }
+
           case 'getCookies': {
             const cookies = args.url ? await page.cookies(args.url) : await page.cookies();
 

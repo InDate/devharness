@@ -1,6 +1,6 @@
 /** @jsxImportSource preact */
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { BenchView, HeldStep, SequenceStep } from '../wire.js';
+import type { BenchView, HeldStep } from '../wire.js';
 
 const CLIENT_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
 
@@ -21,6 +21,8 @@ export function Recording({ base, onCancel }: {
   const [state, setState] = useState<BenchView | null>(null);
   const [ended, setEnded] = useState(false);
   const [name, setName] = useState('');
+  const [what, setWhat] = useState('');
+  const [end, setEnd] = useState('');
   // Held from the moment the form opens: bound to the poll it would be
   // rewritten between one keystroke and the next by the page's own URL.
   const [where, setWhere] = useState<string | null>(null);
@@ -63,11 +65,20 @@ export function Recording({ base, onCancel }: {
         onName={setName}
         startUrl={where ?? state.pageUrl ?? ''}
         onStartUrl={setWhere}
-        onStart={(withAgent) => void post('/sequence/record', {
-          name: name.trim(),
-          startUrl: (where ?? state.pageUrl ?? '').trim(),
-          ...(withAgent ? { withAgent } : {}),
-        })}
+        what={what}
+        onWhat={setWhat}
+        end={end}
+        onEnd={setEnd}
+        onStart={(withAgent) => void (async () => {
+          await post('/sequence/record', {
+            name: name.trim(),
+            startUrl: (where ?? state.pageUrl ?? '').trim(),
+            ...(withAgent ? { withAgent } : {}),
+          });
+          if (what.trim() || end.trim()) {
+            await post('/sequence/describe', { description: what.trim(), expectedOutcome: end.trim() });
+          }
+        })()}
         onCancel={onCancel}
       />
     );
@@ -82,10 +93,10 @@ export function Recording({ base, onCancel }: {
         {sequence?.withAgent && <span class="watching">agent reading each step</span>}
         <span class="grow" />
         <button class="chip-toggle" onClick={() => void post('/sequence/record/cancel')}>
-          THROW IT AWAY
+          Throw it away
         </button>
         <button class="save" onClick={() => void post('/sequence/record/stop')}>
-          STOP AND KEEP
+          Save
         </button>
       </div>
 
@@ -105,16 +116,9 @@ export function Recording({ base, onCancel }: {
         />
       )}
 
-      <ol class="taken">
-        {steps.map(step => (
-          <Taken
-            key={step.index}
-            step={step}
-            onComment={(words) => void post('/sequence/step/comment', { step: step.index, words })}
-          />
-        ))}
-      </ol>
-
+      {/* The steps themselves are the step list under this, the same rows a
+          replay draws, each with its own why; a second list here drew every
+          step twice in two styles. */}
       {steps.length === 0 && (
         <p class="hint nothing">
           nothing taken yet. Drive the app in the other tab and the steps land here.
@@ -131,18 +135,26 @@ export function Recording({ base, onCancel }: {
  * agent reads each step, so that is a choice beside the field rather than a
  * second button competing with the first.
  */
-function Start({ name, onName, startUrl, onStartUrl, onStart, onCancel }: {
+function Start({ name, onName, startUrl, onStartUrl, what, onWhat, end, onEnd, onStart, onCancel }: {
   name: string;
   onName: (name: string) => void;
   /** Where the recording opens, seeded with the page being driven. */
   startUrl: string;
   onStartUrl: (url: string) => void;
+  /** What the sequence is for and what should hold at its end; either may be left blank. */
+  what: string;
+  onWhat: (what: string) => void;
+  end: string;
+  onEnd: (end: string) => void;
   onStart: (withAgent: boolean) => void;
   /** Leave without recording, where there is a screen to go back to. */
   onCancel?: () => void;
 }) {
   const [withAgent, setWithAgent] = useState(false);
   const ready = name.trim().length > 0;
+  // Opened to name a sequence, so the name box takes the keys straight away.
+  const nameBox = useRef<HTMLInputElement>(null);
+  useEffect(() => { nameBox.current?.focus(); }, []);
 
   return (
     <div class="recorder">
@@ -158,6 +170,7 @@ function Start({ name, onName, startUrl, onStartUrl, onStart, onCancel }: {
         <label class="asklabel" for="recname">name it</label>
         <input
           id="recname"
+          ref={nameBox}
           class="namebox"
           placeholder="three words is plenty"
           value={name}
@@ -174,6 +187,25 @@ function Start({ name, onName, startUrl, onStartUrl, onStart, onCancel }: {
           placeholder="http://localhost:3000/"
           value={startUrl}
           onInput={(e: Event) => onStartUrl((e.target as HTMLInputElement).value)}
+        />
+
+        <label class="asklabel" for="recwhat">what is this sequence for? <span class="quiet">optional</span></label>
+        <textarea
+          id="recwhat"
+          class="why"
+          rows={2}
+          value={what}
+          placeholder="drive the orders list to the state where saving hangs"
+          onInput={(e: Event) => onWhat((e.target as HTMLTextAreaElement).value)}
+        />
+        <label class="asklabel" for="recend">what should be true when it ends? <span class="quiet">optional</span></label>
+        <textarea
+          id="recend"
+          class="why"
+          rows={2}
+          value={end}
+          placeholder="the pill reads Saved and the row shows the new total"
+          onInput={(e: Event) => onEnd((e.target as HTMLTextAreaElement).value)}
         />
 
         <fieldset class="whowatches">
@@ -195,12 +227,12 @@ function Start({ name, onName, startUrl, onStartUrl, onStart, onCancel }: {
         </fieldset>
 
         <button class="save go" type="submit" disabled={!ready}>
-          {withAgent ? 'START WITH THE AGENT' : 'START RECORDING'}
+          {withAgent ? 'Start with the agent' : 'Start recording'}
         </button>
         {/* Under the button it undoes, and quiet: leaving is the lesser of
             the two things to do from here. */}
         {onCancel && (
-          <button class="cancel" type="button" onClick={onCancel}>CANCEL</button>
+          <button class="cancel" type="button" onClick={onCancel}>Cancel</button>
         )}
       </form>
     </div>
@@ -226,10 +258,11 @@ function Choice({ on, onPick, title, said }: {
 }
 
 /**
- * What the sequence is for, and what it should end up doing.
+ * What the sequence is for, and what it should end up doing, while it records.
  *
- * Asked at the top and kept editable: the purpose is usually clear before the
- * first click, and the expectation often only once the last one lands.
+ * Asked on the start form. A field given there stays editable here; one left
+ * blank is not shown, so the recording is not headed by an empty box. Both can
+ * still be written once it is saved, from the sequence's ABOUT.
  */
 function Purpose({ description, expected, onSave }: {
   description: string;
@@ -264,8 +297,11 @@ function Purpose({ description, expected, onSave }: {
     onSave(nowWhat, nowEnd);
   };
 
+  if (!description.trim() && !expected.trim()) return null;
+
   return (
     <div class="purpose">
+      {description.trim() && <>
       <label class="asklabel" for="recwhat">what is this sequence for?</label>
       <textarea
         id="recwhat"
@@ -277,6 +313,8 @@ function Purpose({ description, expected, onSave }: {
         onInput={(e: Event) => setWhat((e.target as HTMLTextAreaElement).value)}
         onBlur={save}
       />
+      </>}
+      {expected.trim() && <>
       <label class="asklabel" for="recend">what should be true when it ends?</label>
       <textarea
         id="recend"
@@ -288,6 +326,7 @@ function Purpose({ description, expected, onSave }: {
         onInput={(e: Event) => setEnd((e.target as HTMLTextAreaElement).value)}
         onBlur={save}
       />
+      </>}
     </div>
   );
 }
@@ -300,7 +339,7 @@ function Purpose({ description, expected, onSave }: {
  * once it is flagged the reason stands at the top, any selector it found is a
  * row to click, and keeping or dropping the step ends the hold.
  */
-function Held({ held, onChoose, onKeep, onDrop }: {
+export function Held({ held, onChoose, onKeep, onDrop }: {
   held: HeldStep;
   onChoose: (index: number) => void;
   onKeep: () => void;
@@ -325,54 +364,11 @@ function Held({ held, onChoose, onKeep, onDrop }: {
 
       {flagged && (
         <div class="heldacts">
-          <button class="chip-toggle" onClick={onDrop}>DROP STEP</button>
-          <button class="save" onClick={onKeep}>KEEP AS RECORDED</button>
+          <button class="chip-toggle" onClick={onDrop}>Drop step</button>
+          <button class="save" onClick={onKeep}>Keep as recorded</button>
         </div>
       )}
     </div>
   );
 }
 
-/**
- * One step as it lands, with the one thing only the recorder knows.
- *
- * Why the step is there, and nothing else. A step is a projection of the
- * page's captured events - removing one means rewinding that buffer, which is
- * what the held-step DROP does - so there is no per-step remove here, and a
- * guard belongs on a saved sequence where replay can evaluate it.
- */
-function Taken({ step, onComment }: {
-  step: SequenceStep;
-  onComment: (words: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [words, setWords] = useState(step.comment ?? '');
-
-  return (
-    <li class="took">
-      <div class="tookhead">
-        <span class="num">{step.index + 1}</span>
-        <span class="label">{step.label}</span>
-        <span class="grow" />
-        <button class="tool" onClick={() => setOpen(!open)}>
-          {step.comment ? 'why ✓' : 'why'}
-        </button>
-      </div>
-
-      {step.comment && !open && <p class="tookwhat">{step.comment}</p>}
-
-      {open && (
-        <div class="tookedit">
-          <textarea
-            class="why"
-            rows={2}
-            value={words}
-            placeholder="what is this step for?"
-            onInput={(e: Event) => setWords((e.target as HTMLTextAreaElement).value)}
-          />
-          <button class="save" onClick={() => { onComment(words); setOpen(false); }}>SAVE</button>
-        </div>
-      )}
-    </li>
-  );
-}

@@ -10,6 +10,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync, mkdirSync } from 'fs';
+import { encodePng } from './png.js';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { request } from 'http';
@@ -61,6 +62,9 @@ const DESCRIBED = {
   rect: { x: 10, y: 20, width: 100, height: 20 },
 };
 
+/** A 2×2 PNG: the capture code decodes what it saves, so the fake returns a real one. */
+const TINY_PNG = encodePng({ width: 2, height: 2, data: Buffer.alloc(16, 200) }).toString('base64');
+
 interface SentCall {
   method: string;
   params: any;
@@ -95,7 +99,16 @@ function createFakeClient() {
       if (method === 'DOM.getDocument') return { root: { nodeId: 1 } };
       if (method === 'DOM.querySelector') return { nodeId: client.missingNode ? 0 : 42 };
       if (method === 'Page.captureScreenshot') {
-        return { data: Buffer.from('png-bytes').toString('base64') };
+        return { data: TINY_PNG };
+      }
+      if (method === 'Page.getLayoutMetrics') {
+        return {
+          cssLayoutViewport: { clientWidth: 1280, clientHeight: 800, pageX: 0, pageY: 0 },
+          cssContentSize: { width: 1280, height: 2000 },
+        };
+      }
+      if (method === 'Runtime.evaluate' && params?.expression === 'devicePixelRatio') {
+        return { result: { value: 1 } };
       }
       if (method === 'Runtime.evaluate' && String(params?.expression ?? '').includes('getBoundingClientRect')) {
         return client.missingNode
@@ -214,6 +227,11 @@ function noteSequences() {
     at: 1,
     hosts: () => [],
     saveBoundaryRules: async () => undefined,
+    siteOf: () => undefined,
+    openSiteRules: async () => [],
+    saveSiteRules: async () => undefined,
+    catalogueRules: async () => [],
+    openSiteHidden: async () => [],
     openBoundaryRules: () => ({ rules: [], waits: [], refuseWrites: false }),
     listCatalogue: async () => [],
     describe: async () => undefined,
@@ -468,14 +486,14 @@ describe('picking an element', () => {
     expect(notesIn(noteDriver)[0].tick).toBe(300);
   });
 
-  it('re-arms the picker after a save, so picks continue without another call', async () => {
+  it('disarms the picker after a save, so the next click reaches the page', async () => {
     const client = createFakeClient();
     await start(client);
     await pick(client);
 
     await saveAnnotation(CONNECTION, 'one');
 
-    expect(getBenchSession(CONNECTION)).toMatchObject({ picks: 1, annotations: 1, pickerArmed: true });
+    expect(getBenchSession(CONNECTION)).toMatchObject({ picks: 1, annotations: 1, pickerArmed: false });
     expect(getPendingPick(CONNECTION)).toBeNull();
   });
 
@@ -598,9 +616,9 @@ describe('picking an element', () => {
     const client = createFakeClient();
     await start(client);
     await pick(client);
-    await captureBenchScreenshot(CONNECTION, '#row-3 > span');
+    await captureBenchScreenshot(CONNECTION, { kind: 'element', selector: '#row-3 > span' });
     await saveBenchScreenshot(CONNECTION);
-    await captureBenchScreenshot(CONNECTION);
+    await captureBenchScreenshot(CONNECTION, { kind: 'page' });
     await saveBenchScreenshot(CONNECTION);
 
     await saveAnnotation(CONNECTION, 'the pill is wrong');
@@ -619,7 +637,7 @@ describe('picking an element', () => {
     await saveAnnotation(CONNECTION, 'the pill is wrong');
     const [note] = notesIn(noteDriver);
 
-    await captureBenchScreenshot(CONNECTION, '#row-3 > span', 0, note.id);
+    await captureBenchScreenshot(CONNECTION, { kind: 'element', selector: '#row-3 > span', annotationId: note.id });
     await saveBenchScreenshot(CONNECTION);
 
     expect(notesIn(noteDriver)[0].screenshots).toHaveLength(1);
@@ -632,8 +650,8 @@ describe('picking an element', () => {
     await saveAnnotation(CONNECTION, 'the pill is wrong');
     const [note] = notesIn(noteDriver);
 
-    await captureBenchScreenshot(CONNECTION, '#row-3 > span', 0, note.id);
-    await captureBenchScreenshot(CONNECTION, '#row-3 > span', 2, note.id);
+    await captureBenchScreenshot(CONNECTION, { kind: 'element', selector: '#row-3 > span', annotationId: note.id });
+    await captureBenchScreenshot(CONNECTION, { kind: 'element', selector: '#row-3 > span', widen: 2, annotationId: note.id });
     await saveBenchScreenshot(CONNECTION);
 
     expect(notesIn(noteDriver)[0].screenshots).toHaveLength(1);
@@ -653,7 +671,7 @@ describe('picking an element', () => {
     const client = createFakeClient();
     await start(client);
     await pick(client);
-    await captureBenchScreenshot(CONNECTION, '#row-3 > span');
+    await captureBenchScreenshot(CONNECTION, { kind: 'element', selector: '#row-3 > span' });
     await saveBenchScreenshot(CONNECTION);
 
     await discardPick(CONNECTION);
@@ -880,6 +898,11 @@ describe('a step and the rest of devharness', () => {
       return {
         hosts: () => [],
     saveBoundaryRules: async () => undefined,
+    siteOf: () => undefined,
+    openSiteRules: async () => [],
+    saveSiteRules: async () => undefined,
+    catalogueRules: async () => [],
+    openSiteHidden: async () => [],
     openBoundaryRules: () => ({ rules: [], waits: [], refuseWrites: false }),
     listCatalogue: async () => [],
     describe: async () => undefined,
@@ -906,9 +929,17 @@ describe('a step and the rest of devharness', () => {
         record: async () => undefined,
         trafficIn: async () => ({ requests: 0, failed: 0, opened: 0, writes: 0, lines: [] }),
         saveStepTraffic: async () => undefined,
+        saveExpected: async () => undefined,
+        saveRecorded: async () => undefined,
+        saveMove: async () => undefined,
+        rewordAnnotation: async () => undefined,
     stopRecording: async () => {},
     cancelRecording: async () => {},
     removeStep: async () => undefined,
+    insertTimer: async () => undefined,
+    spliceRecording: async () => undefined,
+    labelsOf: () => [],
+    editStep: async () => undefined,
     setVariable: async () => undefined,
     removeVariable: async () => undefined,
     moveStep: async () => undefined,
@@ -950,6 +981,11 @@ describe('stepping a sequence', () => {
       open: () => open,
       hosts: () => [],
     saveBoundaryRules: async () => undefined,
+    siteOf: () => undefined,
+    openSiteRules: async () => [],
+    saveSiteRules: async () => undefined,
+    catalogueRules: async () => [],
+    openSiteHidden: async () => [],
     openBoundaryRules: () => ({ rules: [], waits: [], refuseWrites: false }),
     listCatalogue: async () => [],
     describe: async () => undefined,
@@ -967,9 +1003,17 @@ describe('stepping a sequence', () => {
       record: async () => undefined,
       trafficIn: async () => ({ requests: 0, failed: 0, opened: 0, writes: 0, lines: [] }),
         saveStepTraffic: async () => undefined,
+        saveExpected: async () => undefined,
+        saveRecorded: async () => undefined,
+        saveMove: async () => undefined,
+        rewordAnnotation: async () => undefined,
     stopRecording: async () => {},
     cancelRecording: async () => {},
     removeStep: async () => undefined,
+    insertTimer: async () => undefined,
+    spliceRecording: async () => undefined,
+    labelsOf: () => [],
+    editStep: async () => undefined,
     setVariable: async () => undefined,
     removeVariable: async () => undefined,
     moveStep: async () => undefined,
@@ -1265,7 +1309,7 @@ describe('capturing the page', () => {
     const client = createFakeClient();
     await start(client);
 
-    const taken = await captureBenchScreenshot(CONNECTION);
+    const taken = await captureBenchScreenshot(CONNECTION, { kind: 'page' });
 
     expect('shot' in taken).toBe(true);
     expect(readEvents().filter(e => e.kind === 'screenshot')).toHaveLength(0);
@@ -1274,7 +1318,7 @@ describe('capturing the page', () => {
   it('writes the accepted capture and announces where it landed', async () => {
     const client = createFakeClient();
     await start(client);
-    await captureBenchScreenshot(CONNECTION);
+    await captureBenchScreenshot(CONNECTION, { kind: 'page' });
 
     const saved = await saveBenchScreenshot(CONNECTION);
 
@@ -1287,7 +1331,7 @@ describe('capturing the page', () => {
   it('names the file after the element it is a picture of', async () => {
     const client = createFakeClient();
     await start(client);
-    await captureBenchScreenshot(CONNECTION, '.session-row:has-text("8d76da6e") .entry-count');
+    await captureBenchScreenshot(CONNECTION, { kind: 'element', selector: '.session-row:has-text("8d76da6e") .entry-count' });
 
     const saved = await saveBenchScreenshot(CONNECTION);
 
@@ -1304,7 +1348,7 @@ describe('capturing the page', () => {
     const client = createFakeClient();
     await start(client);
 
-    await captureBenchScreenshot(CONNECTION, '#row-3 > span', 2);
+    await captureBenchScreenshot(CONNECTION, { kind: 'element', selector: '#row-3 > span', widen: 2 });
 
     const box = client.calls('Runtime.evaluate')
       .filter((c: any) => String(c.params?.expression ?? '').includes('getBoundingClientRect')).at(-1);
@@ -1325,9 +1369,9 @@ describe('capturing the page', () => {
     const client = createFakeClient();
     await start(client);
 
-    await captureBenchScreenshot(CONNECTION);
+    await captureBenchScreenshot(CONNECTION, { kind: 'page' });
     const whole = client.lastCall('Page.captureScreenshot');
-    await captureBenchScreenshot(CONNECTION, '#row-3 > span');
+    await captureBenchScreenshot(CONNECTION, { kind: 'element', selector: '#row-3 > span' });
     const clipped = client.lastCall('Page.captureScreenshot');
 
     expect(whole.params.captureBeyondViewport).toBe(true);
@@ -1339,7 +1383,7 @@ describe('capturing the page', () => {
   it('records the selector on the event, so the picture says what it is of', async () => {
     const client = createFakeClient();
     await start(client);
-    await captureBenchScreenshot(CONNECTION, '#row-3 > span');
+    await captureBenchScreenshot(CONNECTION, { kind: 'element', selector: '#row-3 > span' });
 
     await saveBenchScreenshot(CONNECTION);
 
@@ -1351,7 +1395,7 @@ describe('capturing the page', () => {
     client.missingNode = true;
     await start(client);
 
-    const shot = await captureBenchScreenshot(CONNECTION, '.gone');
+    const shot = await captureBenchScreenshot(CONNECTION, { kind: 'element', selector: '.gone' });
 
     expect(shot).toMatchObject({ failure: expect.stringContaining('.gone') });
     expect(client.calls('Page.captureScreenshot')).toHaveLength(0);
@@ -1984,6 +2028,10 @@ describe('what a mutation pass found unguarded', () => {
       cancelRecording: async () => {},
       commentStep: async (index: number, words: string) => { commented.push({ index, words }); return undefined; },
       trafficIn: async () => ({ requests: 2, failed: 1, opened: 0, writes: 0, lines: ['POST /save 500'] }),
+      saveExpected: async () => undefined,
+        saveRecorded: async () => undefined,
+        saveMove: async () => undefined,
+        rewordAnnotation: async () => undefined,
       saveStepTraffic: async (entries: Array<{ index: number; traffic: any }>) => {
         saved.push(...entries); return undefined;
       },
@@ -2012,7 +2060,7 @@ describe('what a mutation pass found unguarded', () => {
   it('holds a finding and its capture written mid-recording, and writes both on stop', async () => {
     const { driver, recording, stop } = await startRecordingWithNoFile();
 
-    await captureBenchScreenshot(CONNECTION);
+    await captureBenchScreenshot(CONNECTION, { kind: 'page' });
     await saveBenchScreenshot(CONNECTION);
     const note = await saveAnnotation(CONNECTION, 'the total is stale');
 
@@ -2032,7 +2080,7 @@ describe('what a mutation pass found unguarded', () => {
     const { recording, stop } = await startRecordingWithNoFile();
     const note = await saveAnnotation(CONNECTION, 'the total is stale');
 
-    await captureBenchScreenshot(CONNECTION, undefined, 0, note!.id);
+    await captureBenchScreenshot(CONNECTION, { kind: 'page', annotationId: note!.id });
     await saveBenchScreenshot(CONNECTION);
 
     const midway = await getSequenceState(CONNECTION);
@@ -2044,7 +2092,7 @@ describe('what a mutation pass found unguarded', () => {
 
   it('keeps a held finding\'s captures out of a sweep until the recording lands', async () => {
     const { recording, stop } = await startRecordingWithNoFile();
-    await captureBenchScreenshot(CONNECTION);
+    await captureBenchScreenshot(CONNECTION, { kind: 'page' });
     await saveBenchScreenshot(CONNECTION);
     const note = await saveAnnotation(CONNECTION, 'the total is stale');
 

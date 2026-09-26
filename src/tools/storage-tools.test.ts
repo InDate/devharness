@@ -820,3 +820,52 @@ describe('storage - IndexedDB actions (feature-011)', () => {
     expect(Object.keys(idb.__state)).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// virtual authenticator
+// ---------------------------------------------------------------------------
+
+describe('storage authenticator actions', () => {
+  function sessionPage() {
+    const sent: { method: string; params: any }[] = [];
+    const session = {
+      send: vi.fn(async (method: string, params: any) => {
+        sent.push({ method, params });
+        if (method === 'WebAuthn.addVirtualAuthenticator') return { authenticatorId: 'auth-1' };
+        if (method === 'WebAuthn.getCredentials') return { credentials: [{ credentialId: 'cred-1', rpId: 'keel.test', userHandle: 'aG9sZGVy', signCount: 2, isResidentCredential: true, privateKey: 'secret' }] };
+        return {};
+      }),
+    };
+    return { page: { ...fakePage(), createCDPSession: vi.fn(async () => session) }, sent };
+  }
+
+  it('adds an authenticator that reports the user verified, and lists passkeys without their private keys', async () => {
+    const { page, sent } = sessionPage();
+    const { tools } = buildTool(page);
+    const added: any = await tools.storage.handler({ action: 'authenticatorAdd' });
+    expect(added._meta.storage.authenticator).toEqual({ id: 'auth-1', userVerified: true });
+    const options = sent.find((s) => s.method === 'WebAuthn.addVirtualAuthenticator')!.params.options;
+    expect(options).toMatchObject({ protocol: 'ctap2', transport: 'internal', hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true });
+
+    const listed: any = await tools.storage.handler({ action: 'authenticatorCredentials' });
+    expect(listed._meta.storage.authenticator.credentials).toEqual([{ credentialId: 'cred-1', rpId: 'keel.test', userHandle: 'aG9sZGVy', signCount: 2, resident: true }]);
+    expect(JSON.stringify(listed)).not.toContain('secret');
+
+    const removed: any = await tools.storage.handler({ action: 'authenticatorRemove' });
+    expect(removed._meta.storage.authenticator).toEqual({ id: 'auth-1', removed: true });
+  });
+
+  it('adds one that reports presence without verification where asked', async () => {
+    const { page, sent } = sessionPage();
+    const { tools } = buildTool(page);
+    await tools.storage.handler({ action: 'authenticatorAdd', userVerified: false });
+    expect(sent.find((s) => s.method === 'WebAuthn.addVirtualAuthenticator')!.params.options.isUserVerified).toBe(false);
+  });
+
+  it('refuses a credentials read on a page holding no authenticator', async () => {
+    const { tools } = buildTool(sessionPage().page);
+    const r: any = await tools.storage.handler({ action: 'authenticatorCredentials' });
+    expect(r.isError).toBe(true);
+    expect(r._errorId).toBe('NO_AUTHENTICATOR');
+  });
+});

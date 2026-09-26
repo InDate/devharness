@@ -178,7 +178,12 @@ function buildListResponse(
         warnCount: monitor.getCount('warn'),
         truncatedCount,
         totalTokens,
-        entries: messages.map(m => ({ id: m.id, type: m.type, ...(m.location?.url && { url: m.location.url }) })),
+        entries: messages.map(m => ({
+          id: m.id, type: m.type,
+          ...(m.location?.url && { url: m.location.url }),
+          // Read by click validation to tell a failed request from a script error.
+          ...(typeof m.text === 'string' ? { text: m.text.slice(0, 200) } : {}),
+        })),
       },
     },
   };

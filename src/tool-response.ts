@@ -11,6 +11,7 @@ import type { BlockEventInfo } from './block-events.js';
 import type { LaunchObservations } from './chrome-launcher.js';
 import type { SessionMessage } from './session-messages.js';
 import type { Annotation, BenchReport, TickResult } from './bench-mode.js';
+import type { CaptureRecord, CaptureVersion } from './bench/wire.js';
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -285,7 +286,7 @@ export interface ToolResponseMeta {
  *  rendered text. */
 export interface BenchToolMeta {
   action: 'start' | 'stop' | 'tick' | 'freeze' | 'unfreeze' | 'picker' | 'list' | 'status'
-    | 'keepStep' | 'dropStep' | 'flagStep' | 'sweep';
+    | 'keepStep' | 'dropStep' | 'flagStep' | 'sweep' | 'retake' | 'capture';
   /** Whether the page is frozen with the picker armed, after this call. */
   active?: boolean;
   connection?: string;
@@ -308,6 +309,13 @@ export interface BenchToolMeta {
   };
   /** The sequence card's state, after a call that changed it. */
   sequence?: unknown;
+  /** retake: the version written; capture: the file read, with its series. */
+  capture?: {
+    path: string;
+    record: CaptureRecord;
+    facts?: Record<string, unknown>;
+    versions?: CaptureVersion[];
+  };
 }
 
 /** Structured result of a cross-session message action. Behaviour reads this,

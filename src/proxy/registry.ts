@@ -8,19 +8,78 @@
 import { InterceptProxy, type ProxyCursor } from './intercept-proxy.js';
 
 const proxies = new Map<string, InterceptProxy>();
+/** The flags that launch a browser through each reference's proxy. */
+const launchArgs = new Map<string, string[]>();
 
 /** What was last marked, so a proxy started mid-command inherits it. */
 let current: ProxyCursor | undefined;
+
+/**
+ * A replay step held open until what it waits for has crossed: `count` of
+ * the kind `key` names, or of anything with no key, within `seconds`. On
+ * `onFail: 'fail'` a step whose crossings never came fails; on `continue` the
+ * run goes on without them.
+ */
+export interface StepWait {
+  step: number;
+  key?: string;
+  count: number;
+  seconds: number;
+  onFail: 'fail' | 'continue';
+}
+
+const stepWaits = new Map<string, StepWait[]>();
+const waitFailures = new Map<string, string>();
+
+/**
+ * How one wait went in one pass: `waiting` while its step is held, then met,
+ * failed, or carried on without what it waited for, with how many arrived.
+ */
+export interface WaitOutcome {
+  runId: string;
+  step: number;
+  key?: string;
+  state: 'waiting' | 'met' | 'failed' | 'carried';
+  arrived: number;
+  count: number;
+  seconds: number;
+  startedAt: number;
+}
+
+const waitOutcomes = new Map<string, WaitOutcome[]>();
+
+/** How this browser's waits went, newest pass last. */
+export function waitOutcomesFor(reference: string): WaitOutcome[] {
+  return waitOutcomes.get(reference) ?? [];
+}
+
+/** The waits a browser's replays hold their steps open for, replacing any it had. */
+export function setStepWaits(reference: string, waits: StepWait[]): void {
+  if (waits.length) stepWaits.set(reference, waits);
+  else stepWaits.delete(reference);
+}
+
+/** The failure a wait left on this browser's last released step, taken once. */
+export function takeWaitFailure(reference: string | undefined): string | undefined {
+  if (reference === undefined) return undefined;
+  const failure = waitFailures.get(reference);
+  waitFailures.delete(reference);
+  return failure;
+}
 
 export async function startProxyFor(reference: string, appUrl?: string): Promise<{
   proxy: InterceptProxy;
   chromeArgs: string[];
 }> {
+  // A browser relaunched under the same reference outlives nothing of the old
+  // one: it needs the flags again, or it starts outside the proxy that is
+  // still recording for it and every crossing goes unseen.
   const existing = proxies.get(reference);
-  if (existing) return { proxy: existing, chromeArgs: [] };
+  if (existing) return { proxy: existing, chromeArgs: launchArgs.get(reference) ?? [] };
 
   const proxy = new InterceptProxy();
   const { chromeArgs } = await proxy.start();
+  launchArgs.set(reference, chromeArgs);
   // Only the app under test reaches the network. Everything the browser does
   // on its own account is refused, which is what makes a count of events
   // between two steps a statement about the app.
@@ -124,6 +183,33 @@ export function releaseCommand(
   return onBoundary(async () => {
     if (reference === undefined) await settleProxies(quietMs, capMs);
     else await proxies.get(reference)?.settle(quietMs, capMs);
+    // Held open, still marked, until what the step waits for has crossed:
+    // released on time alone, what arrives after is stamped with no step.
+    const cursor = current;
+    const proxy = reference === undefined ? undefined : proxies.get(reference);
+    if (proxy && cursor?.kind === 'replay') {
+      for (const wait of stepWaits.get(reference!) ?? []) {
+        if (wait.step !== cursor.step) continue;
+        // Kept per browser for the pass's rows; a pass replaces the one before.
+        const outcome: WaitOutcome = {
+          runId: cursor.runId, step: cursor.step, ...(wait.key ? { key: wait.key } : {}),
+          state: 'waiting', arrived: 0, count: wait.count, seconds: wait.seconds, startedAt: Date.now(),
+        };
+        const kept = (waitOutcomes.get(reference!) ?? []).filter(one => one.runId === cursor.runId
+          && !(one.step === outcome.step && one.key === outcome.key));
+        waitOutcomes.set(reference!, [...kept, outcome]);
+        const came = await proxy.awaitCrossings({
+          runId: cursor.runId, step: cursor.step, count: wait.count, timeoutMs: wait.seconds * 1000,
+          ...(wait.key ? { key: wait.key } : {}),
+        });
+        outcome.arrived = came.arrived;
+        outcome.state = came.met ? 'met' : wait.onFail === 'fail' ? 'failed' : 'carried';
+        if (outcome.state === 'failed') {
+          waitFailures.set(reference!, `step ${wait.step + 1} waited ${wait.seconds}s for ${wait.count} of ${wait.key ?? 'anything'} and got ${came.arrived}`);
+          break;
+        }
+      }
+    }
     markOnProxies(undefined);
     return Date.now();
   });
@@ -132,6 +218,15 @@ export function releaseCommand(
 /** Resolve once every queued mark and release has run. */
 export function boundarySettled(): Promise<void> {
   return boundary;
+}
+
+/**
+ * What is in flight now, as every proxy stamps it: a replay's run and step, or
+ * a command. Read by what records outside the proxy - storage writes - so it
+ * carries the same step as the traffic beside it.
+ */
+export function currentCursor(): ProxyCursor | undefined {
+  return current;
 }
 
 export function getProxy(reference: string): InterceptProxy | undefined {
@@ -151,6 +246,7 @@ export async function stopProxyFor(reference: string): Promise<boolean> {
   const proxy = proxies.get(reference);
   if (!proxy) return false;
   proxies.delete(reference);
+  launchArgs.delete(reference);
   await proxy.stop().catch(() => {});
   return true;
 }

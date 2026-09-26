@@ -35,6 +35,12 @@ export interface Annotation {
   target?: AnnotationTarget;
   /** Pictures taken with the note, in the order they were accepted. */
   screenshots?: string[];
+  /**
+   * The activity the note is listed under within its step, by the kind that
+   * row lists; `''` lists it above every activity. Absent, or naming a kind
+   * the run did not produce, lists it below them all.
+   */
+  after?: string;
 }
 
 /**
@@ -73,6 +79,12 @@ export interface StepTraffic {
    * to `shapes` and visible here.
    */
   seen?: Record<string, number>;
+  /**
+   * What crossed, by kind - `POST /draft`, `← "tag":"big"`, `localStorage
+   * socket-app:draft` - with how many and which statuses. What a replay of
+   * the step is compared against.
+   */
+  kinds?: Record<string, { n: number; statuses?: number[]; presence?: true; body?: string }>;
   /**
    * How long this step's bucket was held open, in ms.
    *

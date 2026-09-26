@@ -16,13 +16,21 @@
  * port; the token is what stops one that was not handed the URL.
  */
 
+import { runAs } from './session-events.js';
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'http';
 import { randomBytes } from 'crypto';
 import { readFile } from 'fs/promises';
 import { resolve, sep, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { getOutputPath } from './helpers/paths.js';
-import type { BenchView, BoundaryState } from './bench/wire.js';
+import { readCapture } from './capture-file.js';
+import { deletePayload, listPayloads, readPayload } from './saved-payloads.js';
+import { decodePng, encodePng } from './png.js';
+import { diffPixels, sideBySide } from './pixel-diff.js';
+import type { BenchView, BoundaryState, CaptureKind, CaptureRect, FactKind, RuleCatalogueEntry } from './bench/wire.js';
+import type { ActivityMove, ExpectedValue, KindCount } from './bench/kinds.js';
+
+const FACT_KINDS: FactKind[] = ['events', 'css', 'html', 'a11y'];
 
 export type { BenchView } from './bench/wire.js';
 
@@ -50,6 +58,8 @@ export interface BenchHandlers {
   dismissFailure: () => Promise<void>;
   /** What the proxy has seen, when this browser was launched through one. */
   proxyEvents: (sinceId: string | null) => Promise<BoundaryState>;
+  /** Every response kept on disk, across every site and sequence. */
+  ruleCatalogue: () => Promise<RuleCatalogueEntry[]>;
   /** The payload kept for one event, for reading and for holding. */
   proxyBody: (id: string) => Promise<string | null>;
   /** Answer this from now on with what it answered here. */
@@ -78,19 +88,50 @@ export interface BenchHandlers {
   setRule: (rule: Record<string, unknown>) => Promise<void>;
   /** Drop the decision against one key. */
   clearRule: (key: string) => Promise<void>;
+  /** Ignore traffic a rule matches: out of the list and out of every comparison. */
+  ignoreTraffic: (rule: Record<string, unknown>) => Promise<void>;
+  /** Show a hidden kind again, in every sequence. */
+  unhideKind: (key: string) => Promise<void>;
+  /** Hide a kind in the open sequence, or list it there. */
+  setHiddenUse: (key: string, on: boolean) => Promise<void>;
+  setHiddenMode: (key: string, mode: 'local' | 'optIn' | 'optOut') => Promise<void>;
+  /** How the open sequence uses one response: 'none', 'all', or a list of step indexes. */
+  setResponseUse: (key: string, use: unknown) => Promise<void>;
+  /** Which sequences a response answers in by default. */
+  setResponseMode: (key: string, mode: 'local' | 'optIn' | 'optOut') => Promise<void>;
   /** Hold a step open until `count` things have crossed under it. 0 clears. */
-  setWait: (step: number, count: number) => Promise<void>;
+  setWait: (step: number, count: number, key?: string, details?: { seconds?: number; onFail?: 'fail' | 'continue' }) => Promise<void>;
+  /** Name a kind of traffic; an empty name drops it. */
+  setName: (key: string, name: string) => Promise<void>;
+  /** Mark what one kind on one step has to carry on replay; none unmarks it. */
+  setExpected: (step: number, kind: string, expected: ExpectedValue | undefined) => Promise<void>;
+  /** Replace what one kind on one step was recorded as; none removes it from the recording. */
+  setRecorded: (step: number, kind: string, recorded: KindCount | undefined) => Promise<void>;
+  /** Move one kind to the adjacent step, or between the last step and the gutter. */
+  moveActivity: (move: ActivityMove) => Promise<void>;
   /** Answer every unmatched write 403, or forward it. */
   setRefuseWrites: (on: boolean) => Promise<string>;
   /** Write the decisions onto the open sequence. */
   saveRules: () => Promise<string>;
   recordSequence: (name: string, withAgent: boolean, startUrl: string) => Promise<void>;
+  /** Record new steps on the page as it stands, into the open sequence after step `after`. */
+  recordInto: (after: number) => Promise<void>;
   stopRecordingSequence: () => Promise<void>;
   cancelRecordingSequence: () => Promise<void>;
   removeSequenceStep: (index: number) => Promise<void>;
+  /** Replace what a step is given. */
+  editSequenceStep: (index: number, params: unknown) => Promise<void>;
+  /** Put a fixed pause of `ms` after a step. */
+  insertSequenceTimer: (after: number, ms: number) => Promise<void>;
   moveSequenceStep: (from: number, to: number) => Promise<void>;
   setSequenceVariable: (name: string, value: string) => Promise<void>;
   removeSequenceVariable: (name: string) => Promise<void>;
+  /** Store a named value after the last recorded action, for later steps to read. */
+  addRecordingVariable: (name: string, value: string) => Promise<void>;
+  /** Change a variable the recording stores, or with null drop it. */
+  editRecordingVariable: (name: string, value: string | null) => Promise<void>;
+  /** Put a fixed pause of `ms` after the last recorded action. */
+  addRecordingTimer: (ms: number) => Promise<void>;
   keepRecordedStep: () => Promise<void>;
   flagRecordedStep: (reason: string, options?: Array<{ selector: string; note: string }>, detail?: string) => Promise<void>;
   chooseStepSelector: (index: number) => Promise<void>;
@@ -98,13 +139,31 @@ export interface BenchHandlers {
   noteAtStep: (step: number) => Promise<void>;
   removeAnnotation: (id: string) => Promise<void>;
   /** Carry one note to another step of the open sequence. */
-  moveAnnotation: (id: string, step: number) => Promise<void>;
+  moveAnnotation: (id: string, step: number, after?: string) => Promise<void>;
+  /** Replace one note's words. */
+  rewordAnnotation: (id: string, words: string) => Promise<void>;
+  /** Save a payload by name, re-arming the replacements that serve it; answers the failure, if any. */
+  savePayload: (name: string, content: string) => Promise<string | undefined>;
   notifyAnnotation: (id: string) => Promise<void>;
-  /** No selector captures the page; a selector captures that element's box. */
-  captureScreenshot: (selector: string | undefined, widen: number, annotationId?: string) => Promise<void>;
-  /** `marked` is the capture with its drawing baked in, as a base64 PNG. */
-  saveScreenshot: (marked?: string) => Promise<void>;
+  captureScreenshot: (ask: {
+    kind: CaptureKind; selector?: string; widen?: number; annotationId?: string; viewportMark?: boolean;
+  }) => Promise<void>;
+  /** Hold the page and arm the picker for a capture: the dialog opening. */
+  /** `annotationId` is the note the capture joins, when opened from one. */
+  beginCapture: (annotationId?: string) => Promise<void>;
+  cancelCapture: () => Promise<void>;
+  setFactChoice: (kinds: FactKind[]) => Promise<void>;
+  /** Read facts the held element capture was taken without. */
+  readMoreFacts: (kinds: FactKind[]) => Promise<void>;
+  /**
+   * `marked` is the capture with its drawing baked in, as a base64 PNG,
+   * `crop` the region kept, in the raw capture's pixels, and `facts` the
+   * element facts to keep of those read.
+   */
+  saveScreenshot: (marked?: string, crop?: CaptureRect, facts?: FactKind[]) => Promise<void>;
   discardScreenshot: () => Promise<void>;
+  /** Take a capture file's region again and compare it with version `against`. */
+  retakeCapture: (path: string, against?: number) => Promise<void>;
   highlightAnnotation: (selector: string) => Promise<void>;
   setBaseUrl: (baseUrl: string) => Promise<void>;
 }
@@ -113,6 +172,29 @@ export interface BenchServer {
   url: string;
   port: number;
   close: () => Promise<void>;
+}
+
+/** A posted mark: the whole value as text, or fields as an object; anything else unmarks. */
+function expectedIn(raw: unknown): ExpectedValue | undefined {
+  if (raw === null || typeof raw !== 'object') return undefined;
+  const { value, fields } = raw as { value?: unknown; fields?: unknown };
+  if (fields !== null && typeof fields === 'object' && Object.keys(fields).length) {
+    return { fields: fields as Record<string, unknown> };
+  }
+  return typeof value === 'string' ? { value } : undefined;
+}
+
+/** A posted recording of one kind; anything without a count removes it. */
+function recordedIn(raw: unknown): KindCount | undefined {
+  if (raw === null || typeof raw !== 'object') return undefined;
+  const { n, statuses, presence, body } = raw as Record<string, unknown>;
+  if (typeof n !== 'number' || n < 1) return undefined;
+  return {
+    n,
+    ...(Array.isArray(statuses) ? { statuses: statuses.map(Number).filter(Number.isFinite) } : {}),
+    ...(presence === true ? { presence: true as const } : {}),
+    ...(typeof body === 'string' ? { body } : {}),
+  };
 }
 
 async function readJson(req: IncomingMessage): Promise<any> {
@@ -176,7 +258,8 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
   let primarySeenAt = 0;
 
   const server: Server = createServer((req, res) => {
-    void (async () => {
+    // The bench page is a person's; a request the agent sends marks itself.
+    void runAs(req.headers['x-devharness-by'] === 'agent' ? 'agent' : 'person', async () => {
       const path = (req.url ?? '/').split('?')[0].replace(/\/$/, '');
       if (!path.startsWith(prefix)) return send(res, 404, 'Not found', 'text/plain');
       const route = path.slice(prefix.length) || '/';
@@ -204,14 +287,69 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
         // screenshots directory are served - the path arrives from a page, so
         // anything else would make this an open file reader on the machine.
         if (req.method === 'GET' && route === '/shot/img') {
-          const wanted = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams.get('p') ?? '';
+          const asked = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams;
+          const wanted = asked.get('p') ?? '';
           const root = resolve(getOutputPath('screenshots'));
           const file = resolve(wanted);
           if (!file.startsWith(root + sep)) return send(res, 403, 'Outside the screenshots directory', 'text/plain');
           try {
-            const bytes = await readFile(file);
+            // A retake's picture is before, after and the difference side by
+            // side; `clean` asks for the take alone, which the file carries
+            // beside the picture. A capture with no clean copy is its picture.
+            const clean = asked.get('clean') === '1' ? (await readCapture(file).catch(() => undefined))?.clean : undefined;
+            const bytes = clean ? encodePng(clean) : await readFile(file);
             res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-store' });
             return res.end(bytes);
+          } catch {
+            return send(res, 404, 'No such capture', 'text/plain');
+          }
+        }
+
+        if (req.method === 'GET' && route === '/boundary/catalogue') {
+          return send(res, 200, JSON.stringify(await handlers.ruleCatalogue()), 'application/json');
+        }
+        if (req.method === 'GET' && route === '/payloads') {
+          return send(res, 200, JSON.stringify(await listPayloads()), 'application/json');
+        }
+        if (req.method === 'GET' && route === '/payloads/read') {
+          const name = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams.get('name') ?? '';
+          const content = readPayload(name);
+          return content === undefined
+            ? send(res, 404, 'No such payload', 'text/plain')
+            : send(res, 200, content, 'text/plain; charset=utf-8');
+        }
+        if (req.method === 'POST' && route === '/payloads/delete') {
+          const body = await readJson(req);
+          return send(res, 200, JSON.stringify({ ok: deletePayload(String(body.name ?? '')) }), 'application/json');
+        }
+        if (req.method === 'POST' && route === '/payloads/save') {
+          const body = await readJson(req);
+          const failure = await handlers.savePayload(String(body.name ?? ''), String(body.content ?? ''));
+          return send(res, failure ? 400 : 200, JSON.stringify(failure ? { failure } : { ok: true }), 'application/json');
+        }
+
+        // Any two takes of a capture against each other, by the same comparison
+        // a retake makes: earlier, later and the difference as one strip, with
+        // what it measured in a header.
+        if (req.method === 'GET' && route === '/shot/diff') {
+          const asked = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams;
+          const root = resolve(getOutputPath('screenshots'));
+          const files = [asked.get('a') ?? '', asked.get('b') ?? ''].map(wanted => resolve(wanted));
+          if (files.some(file => !file.startsWith(root + sep))) {
+            return send(res, 403, 'Outside the screenshots directory', 'text/plain');
+          }
+          try {
+            // The take alone where the file carries it; a retake's picture is a strip already.
+            const take = async (file: string) => (await readCapture(file).catch(() => undefined))?.clean
+              ?? decodePng(await readFile(file));
+            const [before, after] = await Promise.all(files.map(take));
+            const diff = diffPixels(before, after);
+            res.writeHead(200, {
+              'content-type': 'image/png',
+              'cache-control': 'no-store',
+              'x-diff': JSON.stringify({ changed: diff.changed, share: diff.share, box: diff.box }),
+            });
+            return res.end(encodePng(sideBySide([before, after, diff.image])));
           } catch {
             return send(res, 404, 'No such capture', 'text/plain');
           }
@@ -315,8 +453,17 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
               await handlers.recordSequence(
                 String(body.name ?? ''), !!body.withAgent, String(body.startUrl ?? ''));
               break;
+            case '/sequence/record/into':
+              await handlers.recordInto(Number.isInteger(body.after) ? Math.max(-1, body.after as number) : -1);
+              break;
             case '/sequence/record/stop': await handlers.stopRecordingSequence(); break;
             case '/sequence/record/cancel': await handlers.cancelRecordingSequence(); break;
+            case '/sequence/step/edit':
+              await handlers.editSequenceStep(Math.max(0, Number(body.index) || 0), body.params);
+              break;
+            case '/sequence/step/timer':
+              await handlers.insertSequenceTimer(Math.max(0, Number(body.after) || 0), Math.min(600000, Math.max(0, Number(body.ms) || 0)));
+              break;
             case '/sequence/step/remove':
               await handlers.removeSequenceStep(Math.max(0, Number(body.index) || 0));
               break;
@@ -333,6 +480,16 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
               );
               break;
             case '/sequence/record/keep': await handlers.keepRecordedStep(); break;
+            case '/sequence/record/variable/edit':
+              await handlers.editRecordingVariable(String(body.name ?? ''),
+                body.remove === true ? null : String(body.value ?? '').slice(0, 4000));
+              break;
+            case '/sequence/record/variable':
+              await handlers.addRecordingVariable(String(body.name ?? '').trim(), String(body.value ?? '').slice(0, 4000));
+              break;
+            case '/sequence/record/timer':
+              await handlers.addRecordingTimer(Math.min(600000, Math.max(0, Number(body.ms) || 0)));
+              break;
             case '/sequence/record/flag':
               await handlers.flagRecordedStep(String(body.reason ?? ''), body.options, body.detail);
               break;
@@ -343,28 +500,100 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
             case '/sequence/note': await handlers.noteAtStep(Math.max(0, Number(body.step) || 0)); break;
             case '/annotation/delete': await handlers.removeAnnotation(String(body.id ?? '')); break;
             case '/annotation/move':
-              await handlers.moveAnnotation(String(body.id ?? ''), Math.max(0, Number(body.step) || 0));
+              await handlers.moveAnnotation(
+                String(body.id ?? ''), Math.max(0, Number(body.step) || 0),
+                typeof body.after === 'string' ? body.after : undefined,
+              );
+              break;
+            case '/annotation/reword':
+              await handlers.rewordAnnotation(String(body.id ?? ''), String(body.words ?? '').slice(0, 4000));
               break;
             case '/annotation/notify': await handlers.notifyAnnotation(String(body.id ?? '')); break;
             case '/shot':
-              await handlers.captureScreenshot(
-                body.selector ? String(body.selector) : undefined,
-                Math.max(0, Number(body.widen) || 0),
-                body.annotationId ? String(body.annotationId) : undefined
-              );
+              await handlers.captureScreenshot({
+                kind: body.selector ? 'element' : body.kind === 'screen' ? 'screen' : 'page',
+                ...(body.selector ? { selector: String(body.selector) } : {}),
+                widen: Math.max(0, Number(body.widen) || 0),
+                ...(body.annotationId ? { annotationId: String(body.annotationId) } : {}),
+                ...(body.viewport ? { viewportMark: true } : {}),
+              });
               break;
-            case '/shot/save':
-              await handlers.saveScreenshot(
-                typeof body.marked === 'string' ? body.marked : undefined);
+            case '/shot/begin':
+              await handlers.beginCapture(body.annotationId ? String(body.annotationId) : undefined);
               break;
+            case '/shot/cancel': await handlers.cancelCapture(); break;
+            case '/shot/facts/read':
+              await handlers.readMoreFacts((Array.isArray(body.kinds) ? body.kinds : [])
+                .filter((k: unknown): k is FactKind => typeof k === 'string' && FACT_KINDS.includes(k as FactKind)));
+              break;
+            case '/shot/facts':
+              await handlers.setFactChoice((Array.isArray(body.kinds) ? body.kinds : [])
+                .filter((k: unknown): k is FactKind => typeof k === 'string' && FACT_KINDS.includes(k as FactKind)));
+              break;
+            case '/shot/save': {
+              const crop = body.crop && typeof body.crop === 'object'
+                ? {
+                  x: Number(body.crop.x) || 0, y: Number(body.crop.y) || 0,
+                  w: Number(body.crop.w) || 0, h: Number(body.crop.h) || 0,
+                }
+                : undefined;
+              const facts = Array.isArray(body.facts)
+                ? body.facts.filter((k: unknown): k is FactKind => typeof k === 'string' && FACT_KINDS.includes(k as FactKind))
+                : undefined;
+              await handlers.saveScreenshot(typeof body.marked === 'string' ? body.marked : undefined, crop, facts);
+              break;
+            }
             case '/shot/discard': await handlers.discardScreenshot(); break;
+            case '/shot/retake':
+              await handlers.retakeCapture(
+                String(body.path ?? ''),
+                body.against === undefined ? undefined : Math.max(1, Number(body.against) || 1));
+              break;
             case '/annotation/highlight': await handlers.highlightAnnotation(String(body.selector ?? '')); break;
             case '/sequence/baseurl': await handlers.setBaseUrl(String(body.baseUrl ?? '')); break;
             case '/boundary/rule': await handlers.setRule(body); break;
             case '/boundary/rule/clear': await handlers.clearRule(String(body.key ?? '')); break;
+            case '/boundary/ignore': await handlers.ignoreTraffic(body); break;
+            case '/boundary/hidden/clear': await handlers.unhideKind(String(body.key ?? '')); break;
+            case '/boundary/hidden/use': await handlers.setHiddenUse(String(body.key ?? ''), body.on === true); break;
+            case '/boundary/hidden/mode':
+              if (body.mode === 'local' || body.mode === 'optIn' || body.mode === 'optOut') {
+                await handlers.setHiddenMode(String(body.key ?? ''), body.mode);
+              }
+              break;
+            case '/boundary/rule/use': await handlers.setResponseUse(String(body.key ?? ''), body.use); break;
+            case '/boundary/rule/mode':
+              if (body.mode === 'local' || body.mode === 'optIn' || body.mode === 'optOut') {
+                await handlers.setResponseMode(String(body.key ?? ''), body.mode);
+              }
+              break;
             case '/boundary/wait':
               await handlers.setWait(
-                Math.max(0, Number(body.step) || 0), Math.max(0, Number(body.count) || 0));
+                Math.max(0, Number(body.step) || 0), Math.max(0, Number(body.count) || 0),
+                typeof body.key === 'string' && body.key ? body.key : undefined, {
+                  ...(Number(body.seconds) > 0 ? { seconds: Number(body.seconds) } : {}),
+                  ...(body.onFail === 'fail' || body.onFail === 'continue' ? { onFail: body.onFail } : {}),
+                });
+              break;
+            case '/boundary/name':
+              await handlers.setName(String(body.key ?? ''), String(body.name ?? '').slice(0, 80));
+              break;
+            case '/sequence/activity/move':
+              await handlers.moveActivity({
+                kind: String(body.kind ?? ''),
+                at: Math.max(0, Number(body.at) || 0),
+                to: Math.max(0, Number(body.to) || 0),
+                ...(typeof body.origin === 'string' ? { origin: body.origin } : {}),
+                ...(recordedIn(body.recorded) ? { recorded: recordedIn(body.recorded) } : {}),
+              });
+              break;
+            case '/sequence/recorded':
+              await handlers.setRecorded(
+                Math.max(0, Number(body.step) || 0), String(body.kind ?? ''), recordedIn(body.recorded));
+              break;
+            case '/sequence/expected':
+              await handlers.setExpected(
+                Math.max(0, Number(body.step) || 0), String(body.kind ?? ''), expectedIn(body.expected));
               break;
             default: return send(res, 404, 'Not found', 'text/plain');
           }
@@ -374,7 +603,7 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
       } catch (error) {
         send(res, 500, JSON.stringify({ error: String(error) }), 'application/json');
       }
-    })();
+    });
   });
 
   await new Promise<void>((resolve, reject) => {

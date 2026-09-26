@@ -10,7 +10,7 @@
 
 import { z } from 'zod';
 import { promises as fs } from 'fs';
-import { join, resolve } from 'path';
+import { basename, dirname, join, resolve } from 'path';
 import { getOutputPath } from '../helpers/paths.js';
 import { getIssuesBySequenceFile } from '../issue-tracker.js';
 import { getProxy } from '../proxy/registry.js';
@@ -25,9 +25,13 @@ import { createSuccessResponse, createErrorResponse } from '../messages.js';
 import { checkBrowserAutomation } from '../error-helpers.js';
 import { resolveSessionName } from '../session-identity.js';
 import { getSessionInfo } from './dashboard-tools.js';
-import { getEventStreamPath, getEventsDir, appendEvent, streamReaders } from '../session-events.js';
+import { getEventStreamPath, getEventsDir, appendEvent, streamReaders, currentOrigin, runAs } from '../session-events.js';
 import { announceSequenceSaved } from '../sequence-events.js';
+import { activityPathFor, readActivity, readSiteActivity, renumberSteps, siteActivityPath, stepMap, writeSiteActivity } from '../sequence-activity.js';
 import type { ToolResponseMeta, BenchToolMeta } from '../tool-response.js';
+import { readCapture, readRecord, versionsOf, forget } from '../capture-file.js';
+import { formatCodeBlock } from '../messages.js';
+import type { ActivityMove, ExpectedValue, KindCount } from '../bench/kinds.js';
 import {
   startBench,
   stopBench,
@@ -43,13 +47,16 @@ import {
   dropRecordedStep,
   flagRecordedStep,
   type Annotation,
+  type AnnotationTarget,
   type SequenceState,
   capturesInFlight,
+  retakeCapture,
 } from '../bench-mode.js';
+import type { BoundaryRule, HiddenKind, RuleCatalogueEntry } from '../bench/wire.js';
 
 const benchSchema = z.object({
-  action: z.enum(['start', 'stop', 'tick', 'freeze', 'unfreeze', 'picker', 'list', 'status', 'keepStep', 'dropStep', 'flagStep', 'sweep'])
-    .describe('start (open the bench with the page running and the picker idle), freeze/unfreeze (hold the page or let it run, without closing the bench - driving the app needs it running), picker (arm or disarm, via armed), tick (run forward by steps or budgetMs), stop (release the page and close), keepStep/dropStep (settle the recorded step capture is held on), sweep (report the note captures no sequence refers to, and with remove:true delete them), list, status'),
+  action: z.enum(['start', 'stop', 'tick', 'freeze', 'unfreeze', 'picker', 'list', 'status', 'keepStep', 'dropStep', 'flagStep', 'sweep', 'retake', 'capture'])
+    .describe('start (open the bench with the page running and the picker idle), freeze/unfreeze (hold the page or let it run, without closing the bench - driving the app needs it running), picker (arm or disarm, via armed), tick (run forward by steps or budgetMs), stop (release the page and close), keepStep/dropStep (settle the recorded step capture is held on), sweep (report the note captures no sequence refers to, and with remove:true delete them), retake (take a capture\'s region again and compare), capture (read a capture file\'s record and element facts), list, status'),
   connectionReason: z.string()
     .describe('Connection reference (use the reference from launchChrome output)'),
   steps: z.number().int().positive().max(1000).optional()
@@ -77,6 +84,10 @@ const benchSchema = z.object({
     .describe('flagStep: selectors the person can lock in with one click, one row each. Offer only ones checked against the page'),
   step: z.number().int().min(0).optional()
     .describe('start: with sequence, run it to this step (0-based) and hold there - the state that step produces is what is on screen when the pane opens'),
+  capture: z.string().optional()
+    .describe('retake/capture: path of a capture file, any version of its series'),
+  against: z.number().int().positive().optional()
+    .describe('retake: the version to compare with (default 1)'),
 }).strict();
 
 type BenchArgs = z.infer<typeof benchSchema>;
@@ -117,6 +128,9 @@ async function sweepCaptures(remove: boolean): Promise<NonNullable<BenchToolMeta
   // A capture taken and not yet saved is cited by nothing on disk.
   const inFlight = capturesInFlight();
   for (const shot of inFlight) cited.add(resolve(shot));
+  // A note cites version 1, whose file name is the series; every later version
+  // of that series is in use with it.
+  const citedSeries = new Set([...cited].map(path => basename(path, '.png')));
 
   const root = getOutputPath('screenshots');
   const orphans: Array<{ path: string; bytes: number }> = [];
@@ -129,6 +143,10 @@ async function sweepCaptures(remove: boolean): Promise<NonNullable<BenchToolMeta
       if (name.startsWith('screenshot-')) continue;
       const full = join(dir, name);
       if (cited.has(resolve(full))) continue;
+      if (name.endsWith('.png')) {
+        const record = await readRecord(full).catch(() => undefined);
+        if (record && citedSeries.has(record.series)) continue;
+      }
       const stat = await fs.stat(full).catch(() => null);
       if (!stat?.isFile()) continue;
       orphans.push({ path: full, bytes: stat.size });
@@ -137,10 +155,12 @@ async function sweepCaptures(remove: boolean): Promise<NonNullable<BenchToolMeta
 
   let removed = 0;
   if (remove) {
+    const deleted: string[] = [];
     for (const orphan of orphans) {
       const gone = await fs.unlink(orphan.path).then(() => true).catch(() => false);
-      if (gone) removed += 1;
+      if (gone) { removed += 1; deleted.push(orphan.path); }
     }
+    forget(deleted);
   }
   return {
     root,
@@ -213,8 +233,39 @@ function swapPaneUrl(url: string, connection: string, to: 'token' | 'live'): str
 }
 
 /** The page a recording began on, as its opening step. */
-function navigateFirst(url: string) {
-  return { tool: 'navigate', params: { action: 'goto', url }, comment: 'open the page' };
+function navigateFirst(url: string): { tool: string; params: Record<string, any>; comment?: string } {
+  return { tool: 'navigate', params: { action: 'goto', url } };
+}
+
+/** `http://localhost:7788/a?b` → `http://localhost:7788`; nothing for a url that names no web origin. */
+function originOf(url: string | undefined): string | undefined {
+  try {
+    const origin = url ? new URL(url).origin : 'null';
+    return origin === 'null' ? undefined : origin;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The value a step stores, where it stores a fixed one: an expression that is
+ * a JSON string literal, saved under a name. A step that captures from the
+ * page has an expression that is code, and stores nothing known beforehand.
+ */
+function storedValue(command: { tool: string; params?: Record<string, any> }): string | undefined {
+  if (command.tool !== 'inspect' || typeof command.params?.saveAs !== 'string') return undefined;
+  try {
+    const value = JSON.parse(String(command.params.expression ?? ''));
+    return typeof value === 'string' ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The variables a step reads, by the `{{var:name}}` tokens anywhere in what it is given. */
+function readsOf(command: { params?: Record<string, any> }): string[] {
+  const found = JSON.stringify(command.params ?? {}).matchAll(/\{\{var:([A-Za-z_][A-Za-z0-9_]*)/g);
+  return [...new Set([...found].map(match => match[1]))];
 }
 
 /** Where the sequence files that hold the notes live. */
@@ -540,12 +591,34 @@ export function createSequenceDriver(
     return selected ? loadedByName(selected) : undefined;
   };
 
-  /** Writes the sequence back to the file it came from. */
-  const persist = async (sequence: { id: string; name: string }): Promise<string | undefined> => {
+  /** Writes the sequence back to the file it came from, announcing `change` as what was written. */
+  // Clicks on ↑ and ↓ land one step at a time, and each announced alone puts a
+  // line on the event stream per click. Moves of the same step are held until
+  // the clicks stop and announced once, as where it started and where it ended.
+  const MOVE_QUIET_MS = 2000;
+  let pendingMove: {
+    sequence: { name: string; commands?: unknown[] }; command: unknown; from: number;
+    filepath: string; timer: ReturnType<typeof setTimeout>; by?: 'agent' | 'person';
+  } | undefined;
+  const flushMove = async (): Promise<void> => {
+    if (!pendingMove) return;
+    const { sequence, command, from, filepath, timer, by } = pendingMove;
+    clearTimeout(timer);
+    pendingMove = undefined;
+    const to = (sequence.commands ?? []).indexOf(command);
+    if (to < 0 || to === from) return;
+    const announce = () => announceSequenceSaved(sequence as any, filepath, `step ${from + 1} moved to step ${to + 1}`);
+    // Announced from a timer, outside the request that moved it, so the
+    // origin taken at the move is set again for the event.
+    await (by ? runAs(by, announce) : announce());
+  };
+
+  const persist = async (sequence: { id: string; name: string }, change?: string): Promise<string | undefined> => {
     const saved = await commandRecorder.saveSequenceToDisk(sequence.id, false, true);
     if (!saved) return `"${sequence.name}" is no longer loaded`;
     if (!saved.success) return saved.error;
-    await announceSequenceSaved(sequence as any, saved.filepath);
+    await flushMove();
+    await announceSequenceSaved(sequence as any, saved.filepath, change);
     return undefined;
   };
 
@@ -631,10 +704,16 @@ export function createSequenceDriver(
             ...(command.comment ? { comment: command.comment } : {}),
             ...(resolved ? { resolved } : {}),
             ...(typeof command.params?.saveAs === 'string' ? { captures: command.params.saveAs } : {}),
+            ...(storedValue(command) !== undefined ? { stores: storedValue(command) } : {}),
+            ...(readsOf(command).length ? { reads: readsOf(command) } : {}),
+            tool: command.tool,
+            params: command.params ?? {},
             ...(command.annotations?.length ? { annotations: command.annotations } : {}),
             ...(command.traffic ? { traffic: command.traffic } : {}),
+            ...(command.expected ? { expected: command.expected } : {}),
           };
         }),
+        ...(sequence.boundaryPlacements ? { placements: sequence.boundaryPlacements } : {}),
         variables: Object.entries(store).map(([name, value]) => {
           const step = capturedAt.get(name);
           return {
@@ -792,10 +871,10 @@ export function createSequenceDriver(
       const command = sequence.commands?.[step];
       if (!command) return `step ${step + 1} is not in "${sequence.name}"`;
       command.annotations = [...(command.annotations ?? []), annotation];
-      return persist(sequence);
+      return persist(sequence, `note added to step ${step + 1}`);
     },
 
-    moveAnnotation: async (id: string, step: number) => {
+    moveAnnotation: async (id: string, step: number, after?: string) => {
       const sequence = openSequence();
       if (!sequence) return 'no sequence is open';
       const target = sequence.commands?.[step];
@@ -812,8 +891,19 @@ export function createSequenceDriver(
         else delete command.annotations;
       }
       if (!moving) return 'that note is not in the open sequence';
+      if (after === undefined) delete moving.after;
+      else moving.after = after;
       target.annotations = [...(target.annotations ?? []), moving];
-      return persist(sequence);
+      return persist(sequence, `note moved to step ${step + 1}`);
+    },
+
+    rewordAnnotation: async (id: string, words: string) => {
+      const sequence = openSequence();
+      if (!sequence) return 'no sequence is open';
+      const held = (sequence.commands ?? []).flatMap(command => command.annotations ?? []).find(note => note.id === id);
+      if (!held) return 'that note is not in the open sequence';
+      held.comment = words;
+      return persist(sequence, 'note reworded');
     },
 
     detachAnnotation: async (id: string) => {
@@ -829,7 +919,7 @@ export function createSequenceDriver(
         }
       }
       if (!found) return 'that note is not in the open sequence';
-      return persist(sequence);
+      return persist(sequence, 'note removed');
     },
 
     record: async (name: string, connection: string, startUrl: string) => {
@@ -873,41 +963,225 @@ export function createSequenceDriver(
       await stopRecording(connection);
     },
 
+    labelsOf: (name: string) => (loadedByName(name)?.commands ?? []).map(command => labelFor(command)),
+
+    spliceRecording: async (recordedName: string, into: string, after: number) => {
+      const recorded = loadedByName(recordedName);
+      const target = loadedByName(into) ?? await commandRecorder.loadSequenceFromDisk(into);
+      if (!recorded || !target) return `"${recorded ? into : recordedName}" is not loaded`;
+      // The recording ran on the page the run stood on, so its steps follow
+      // on from that step with nothing of their own to open.
+      const steps = (recorded.commands ?? []).filter((command, index) => !(index === 0 && command.tool === 'navigate'));
+      const commands = [...(target.commands ?? [])];
+      const at = Math.min(Math.max(after + 1, 0), commands.length);
+      renumberSteps(target, (old) => (old >= at ? old + steps.length : old));
+      target.commands = [...commands.slice(0, at), ...steps, ...commands.slice(at)] as any;
+      // The recording was only ever a carrier: its file and its activity go.
+      const saved = await commandRecorder.saveSequenceToDisk(recorded.id, false, true);
+      if (saved?.success) {
+        await commandRecorder.deleteSequenceFromDisk(saved.filepath);
+        await fs.unlink(activityPathFor(saved.filepath)).catch(() => {});
+      }
+      commandRecorder.deleteSequence(recorded.id);
+      selected = target.name;
+      return persist(target, `${steps.length} recorded step${steps.length === 1 ? '' : 's'} put in after step ${after + 1}`);
+    },
+
     cancelRecording: async (connection: string) => {
       await cancelRecording(connection);
     },
 
     saveBoundaryRules: async (
       rules: Array<Record<string, unknown>>,
-      waits: Array<{ step: number; count: number }>,
-      refuseWrites: boolean
+      waits: Array<{ step: number; count: number; key?: string; seconds?: number; onFail?: 'fail' | 'continue' }>,
+      refuseWrites: boolean,
+      names: Record<string, string> = {},
+      change?: string,
+      off: string[] = [],
+      on: Array<{ key: string; steps?: number[] }> = [],
+      hidden: { on: string[]; off: string[] } = { on: [], off: [] },
     ) => {
       const sequence = openSequence();
       if (!sequence) return 'no sequence is open';
       const held = sequence as {
         boundaryRules?: Array<Record<string, unknown>>;
-        boundaryWaits?: Array<{ step: number; count: number }>;
+        boundaryWaits?: Array<{ step: number; count: number; key?: string; seconds?: number; onFail?: 'fail' | 'continue' }>;
         boundaryRefuse?: 'writes';
+        boundaryNames?: Record<string, string>;
+        boundaryRulesOff?: string[];
+        boundaryRulesOn?: Array<{ key: string; steps?: number[] }>;
+        boundaryHiddenOn?: string[];
+        boundaryHiddenOff?: string[];
       };
       if (rules.length) held.boundaryRules = rules; else delete held.boundaryRules;
       if (waits.length) held.boundaryWaits = waits; else delete held.boundaryWaits;
       if (refuseWrites) held.boundaryRefuse = 'writes'; else delete held.boundaryRefuse;
-      return persist(sequence);
+      if (Object.keys(names).length) held.boundaryNames = names; else delete held.boundaryNames;
+      if (off.length) held.boundaryRulesOff = off; else delete held.boundaryRulesOff;
+      if (on.length) held.boundaryRulesOn = on; else delete held.boundaryRulesOn;
+      if (hidden.on.length) held.boundaryHiddenOn = hidden.on; else delete held.boundaryHiddenOn;
+      if (hidden.off.length) held.boundaryHiddenOff = hidden.off; else delete held.boundaryHiddenOff;
+      return persist(sequence, change ?? 'rules updated');
+    },
+
+    siteOf: () => originOf(baseUrl) ?? originOf(openSequence()?.startUrl),
+
+    catalogueRules: async () => {
+      const activityDir = join(dirname(getSequencesRoot(commandRecorder)), 'activity');
+      const entries: RuleCatalogueEntry[] = [];
+      const siteDir = join(activityDir, '_site');
+      for (const file of await fs.readdir(siteDir).catch(() => [] as string[])) {
+        if (!file.endsWith('.json')) continue;
+        const held = await readSiteActivity(join(siteDir, file));
+        if (held?.site && (held.responses?.length || held.hidden?.length)) {
+          entries.push({
+            site: held.site, rules: (held.responses ?? []) as BoundaryRule[],
+            ...(held.hidden?.length ? { hidden: held.hidden as HiddenKind[] } : {}),
+          });
+        }
+      }
+      for (const saved of await commandRecorder.listSavedSequencesOnDisk().catch(() => [])) {
+        // Every sequence, whether or not it names a response: an opt-out
+        // response is used by each one on its site that does not opt out.
+        const activity = await readActivity(saved.fullPath);
+        const site = originOf(saved.startUrl);
+        entries.push({
+          ...(site ? { site } : {}),
+          sequence: String(saved.name ?? saved.filename).replace(/\.json$/, ''),
+          rules: (activity?.responses ?? []) as BoundaryRule[],
+          ...(activity?.responsesOff?.length ? { off: activity.responsesOff } : {}),
+          ...(activity?.responsesOn?.length ? { on: activity.responsesOn } : {}),
+          ...(activity?.hiddenOn?.length ? { hiddenOn: activity.hiddenOn } : {}),
+          ...(activity?.hiddenOff?.length ? { hiddenOff: activity.hiddenOff } : {}),
+        });
+      }
+      return entries;
+    },
+
+    openSiteHidden: async (origin: string) =>
+      ((await readSiteActivity(siteActivityPath(join(dirname(getSequencesRoot(commandRecorder)), 'activity'), origin)))?.hidden ?? []) as Array<Record<string, unknown>>,
+
+    openSiteRules: async (origin: string) =>
+      ((await readSiteActivity(siteActivityPath(join(dirname(getSequencesRoot(commandRecorder)), 'activity'), origin)))?.responses ?? []) as Array<Record<string, unknown>>,
+
+    saveSiteRules: async (origin: string, rules: Array<Record<string, unknown>>, change?: string, hidden: Array<Record<string, unknown>> = []) => {
+      const path = siteActivityPath(join(dirname(getSequencesRoot(commandRecorder)), 'activity'), origin);
+      try {
+        await writeSiteActivity(path, origin, rules, hidden);
+      } catch (error) {
+        return String(error);
+      }
+      await appendEvent(resolveSessionName(getSessionInfo()?.shortId), 'sequence', {
+        site: origin, path, responses: rules.length,
+        ...(change ? { change } : {}),
+        detail: `site ${origin}: ${change ?? 'responses updated'}`,
+      }).catch(() => {});
+      return undefined;
     },
 
     openBoundaryRules: () => {
       const sequence = openSequence();
-      if (!sequence) return { rules: [], waits: [], refuseWrites: false };
+      if (!sequence) return { rules: [], waits: [], refuseWrites: false, names: {}, off: [], on: [], hiddenOn: [], hiddenOff: [] };
       const held = sequence as {
         boundaryRules?: Array<Record<string, unknown>>;
-        boundaryWaits?: Array<{ step: number; count: number }>;
+        boundaryWaits?: Array<{ step: number; count: number; key?: string; seconds?: number; onFail?: 'fail' | 'continue' }>;
         boundaryRefuse?: 'writes';
+        boundaryNames?: Record<string, string>;
+        boundaryRulesOff?: string[];
+        boundaryRulesOn?: Array<{ key: string; steps?: number[] }>;
+        boundaryHiddenOn?: string[];
+        boundaryHiddenOff?: string[];
       };
       return {
         rules: held.boundaryRules ?? [],
         waits: held.boundaryWaits ?? [],
         refuseWrites: held.boundaryRefuse === 'writes',
+        names: held.boundaryNames ?? {},
+        off: held.boundaryRulesOff ?? [],
+        on: held.boundaryRulesOn ?? [],
+        hiddenOn: held.boundaryHiddenOn ?? [],
+        hiddenOff: held.boundaryHiddenOff ?? [],
       };
+    },
+
+    saveExpected: async (index: number, kind: string, expected: ExpectedValue | undefined) => {
+      const sequence = openSequence();
+      if (!sequence) return 'no sequence is open';
+      const command = sequence.commands?.[index];
+      if (!command) return `no step ${index + 1}`;
+      const held = { ...command.expected };
+      if (expected) held[kind] = expected; else delete held[kind];
+      if (Object.keys(held).length) command.expected = held; else delete command.expected;
+      return persist(sequence, expected?.fields
+        ? `${kind} on step ${index + 1} compared on ${Object.keys(expected.fields).map(path => `.${path}`).join(', ')}`
+        : `${kind} on step ${index + 1} compared in full`);
+    },
+
+    saveMove: async (move: ActivityMove) => {
+      const sequence = openSequence();
+      if (!sequence) return 'no sequence is open';
+      const commands = sequence.commands ?? [];
+      // One past the last step is the gutter, which the recording holds nothing for.
+      const gutter = commands.length;
+      const { kind, at, to } = move;
+      const where = (index: number) => index === gutter ? 'after the last step' : `step ${index + 1}`;
+      if (to < 0 || to > gutter || at < 0 || at > gutter) return `no step ${to + 1}`;
+      const kindsOf = (index: number) => {
+        const command = commands[index];
+        command.traffic ??= { requests: 0, failed: 0, opened: 0, writes: 0, lines: [] };
+        return (command.traffic.kinds ??= {});
+      };
+
+      let moving = move.recorded;
+      let mark: ExpectedValue | undefined;
+      if (at < gutter) {
+        moving = kindsOf(at)[kind] ?? moving;
+        delete kindsOf(at)[kind];
+        mark = commands[at].expected?.[kind];
+        if (mark) {
+          delete commands[at].expected![kind];
+          if (!Object.keys(commands[at].expected!).length) delete commands[at].expected;
+        }
+      }
+      if (to < gutter && moving) {
+        // Onto a step that records the same kind, the two are one kind crossing
+        // more often; the payload it already holds stays the one compared.
+        // A pushed kind is compared by presence, so its count stays the one
+        // already recorded rather than growing with each move.
+        const standing = kindsOf(to)[kind];
+        const statuses = [...new Set([...(standing?.statuses ?? []), ...(moving.statuses ?? [])])];
+        kindsOf(to)[kind] = standing ? {
+          n: standing.presence || moving.presence ? standing.n : standing.n + moving.n,
+          ...(statuses.length ? { statuses } : {}),
+          ...(standing.presence || moving.presence ? { presence: true as const } : {}),
+          ...(standing.body ?? moving.body ? { body: standing.body ?? moving.body } : {}),
+        } : moving;
+        if (mark && !commands[to].expected?.[kind]) commands[to].expected = { ...commands[to].expected, [kind]: mark };
+      }
+
+      if (move.origin !== undefined) {
+        const key = `${move.origin}|${kind}`;
+        const home = move.origin === 'after' ? gutter : Number(move.origin);
+        const placements = { ...sequence.boundaryPlacements };
+        if (to === home) delete placements[key]; else placements[key] = to;
+        if (Object.keys(placements).length) sequence.boundaryPlacements = placements;
+        else delete sequence.boundaryPlacements;
+      }
+      return persist(sequence, `${kind} moved from ${where(at)} to ${where(to)}`);
+    },
+
+    saveRecorded: async (index: number, kind: string, recorded: KindCount | undefined) => {
+      const sequence = openSequence();
+      if (!sequence) return 'no sequence is open';
+      const command = sequence.commands?.[index];
+      if (!command) return `no step ${index + 1}`;
+      const traffic = command.traffic ?? { requests: 0, failed: 0, opened: 0, writes: 0, lines: [] };
+      const kinds = { ...traffic.kinds };
+      if (recorded) kinds[kind] = recorded; else delete kinds[kind];
+      command.traffic = { ...traffic, kinds };
+      return persist(sequence, recorded
+        ? `${kind} on step ${index + 1} saved as recorded`
+        : `${kind} taken out of step ${index + 1}'s recording`);
     },
 
     saveStepTraffic: async (entries: Array<{ index: number; traffic: any }>) => {
@@ -917,7 +1191,7 @@ export function createSequenceDriver(
       for (const { index, traffic } of entries) {
         if (index >= 0 && index < commands.length) commands[index].traffic = traffic;
       }
-      return persist(sequence);
+      return persist(sequence, `traffic recorded for ${entries.length} step${entries.length === 1 ? '' : 's'}`);
     },
 
     trafficIn: async (connection: string, from: number, to: number) => {
@@ -962,7 +1236,7 @@ export function createSequenceDriver(
       };
     },
 
-    recordedSoFar: (eventsJson: string, startUrl: string) => {
+    recordedSoFar: (eventsJson: string, startUrl: string, edits?: Map<number, Record<string, unknown>>) => {
       let events: any[] = [];
       try { events = JSON.parse(eventsJson); } catch { events = []; }
       const times: number[] = [];
@@ -974,7 +1248,10 @@ export function createSequenceDriver(
       // its position in the file, and a note written here lands on the step
       // before the one it was written against.
       const lead = startUrl && converted[0]?.tool !== 'navigate' ? [navigateFirst(startUrl)] : [];
-      const commands = [...lead, ...converted];
+      // A step changed in the bench reads as changed: its label, and the
+      // variables it reads, come from what it is given now.
+      const commands = [...lead, ...converted].map((command, index) =>
+        (edits?.has(index) ? { ...command, params: edits.get(index)! } : command));
       // The synthesised opening navigate has no source event, so it takes the
       // clock of whatever followed it.
       const at = [...lead.map(() => times[0]), ...times];
@@ -982,6 +1259,11 @@ export function createSequenceDriver(
         index,
         label: labelFor(command),
         ...(command.comment ? { comment: command.comment } : {}),
+        ...(typeof command.params?.saveAs === 'string' ? { captures: command.params.saveAs } : {}),
+        ...(storedValue(command) !== undefined ? { stores: storedValue(command) } : {}),
+        ...(readsOf(command).length ? { reads: readsOf(command) } : {}),
+        tool: command.tool,
+        params: command.params ?? {},
         ...(at[index] !== undefined ? { at: at[index] } : {}),
         done: true,
         current: false,
@@ -1006,8 +1288,9 @@ export function createSequenceDriver(
       if (at >= 0) commands[at] = step;
       // After a leading navigate, so the value is set against the page it names.
       else commands.splice(commands[0]?.tool === 'navigate' ? 1 : 0, 0, step);
+      if (at < 0) renumberSteps(sequence, stepMap(sequence.commands ?? [], commands));
       sequence.commands = commands;
-      return persist(sequence);
+      return persist(sequence, `variable ${name} set`);
     },
 
     /**
@@ -1025,7 +1308,7 @@ export function createSequenceDriver(
       else delete held.description;
       if (expectedOutcome.trim()) held.expectedOutcome = expectedOutcome.trim();
       else delete held.expectedOutcome;
-      return persist(sequence);
+      return persist(sequence, 'description changed');
     },
 
     /** Say why a step is here, against the step itself. */
@@ -1037,7 +1320,7 @@ export function createSequenceDriver(
       const held = command as { comment?: string };
       if (words.trim()) held.comment = words.trim();
       else delete held.comment;
-      return persist(sequence);
+      return persist(sequence, `reason for step ${index + 1} changed`);
     },
 
     /**
@@ -1062,7 +1345,7 @@ export function createSequenceDriver(
         ...(rejoinAt !== undefined ? { rejoinAt } : {}),
       });
       if (failure) return failure;
-      return persist(sequence);
+      return persist(sequence, `fork added after step ${index + 1}`);
     },
 
     removeVariable: async (name: string) => {
@@ -1071,8 +1354,31 @@ export function createSequenceDriver(
       const commands = sequence.commands ?? [];
       const at = commands.findIndex(c => c.params?.saveAs === name && c.tool === 'inspect');
       if (at < 0) return `"${name}" is not set by this sequence`;
-      sequence.commands = commands.filter((_, i) => i !== at);
-      return persist(sequence);
+      const kept = commands.filter((_, i) => i !== at);
+      renumberSteps(sequence, stepMap(commands, kept));
+      sequence.commands = kept;
+      return persist(sequence, `variable ${name} removed`);
+    },
+
+    editStep: async (index: number, params: Record<string, unknown>) => {
+      const sequence = openSequence();
+      if (!sequence) return 'no sequence is open';
+      const commands = [...(sequence.commands ?? [])];
+      if (index < 0 || index >= commands.length) return `step ${index + 1} is not in "${sequence.name}"`;
+      commands[index] = { ...commands[index], params } as any;
+      sequence.commands = commands;
+      return persist(sequence, `step ${index + 1} edited`);
+    },
+
+    insertTimer: async (after: number, ms: number) => {
+      const sequence = openSequence();
+      if (!sequence) return 'no sequence is open';
+      const commands = [...(sequence.commands ?? [])];
+      if (after < 0 || after >= commands.length) return `step ${after + 1} is not in "${sequence.name}"`;
+      commands.splice(after + 1, 0, { tool: 'wait', params: { ms } } as any);
+      renumberSteps(sequence, stepMap(sequence.commands ?? [], commands));
+      sequence.commands = commands;
+      return persist(sequence, `a ${ms / 1000}s pause after step ${after + 1}`);
     },
 
     removeStep: async (index: number) => {
@@ -1080,8 +1386,10 @@ export function createSequenceDriver(
       if (!sequence) return 'no sequence is open';
       const commands = sequence.commands ?? [];
       if (index < 0 || index >= commands.length) return `step ${index + 1} is not in "${sequence.name}"`;
-      sequence.commands = commands.filter((_, i) => i !== index);
-      return persist(sequence);
+      const kept = commands.filter((_, i) => i !== index);
+      renumberSteps(sequence, stepMap(commands, kept));
+      sequence.commands = kept;
+      return persist(sequence, `step ${index + 1} removed`);
     },
 
     moveStep: async (from: number, to: number) => {
@@ -1093,18 +1401,29 @@ export function createSequenceDriver(
       if (target === from) return undefined;
       const [moved] = commands.splice(from, 1);
       commands.splice(target, 0, moved);
+      renumberSteps(sequence, stepMap(sequence.commands ?? [], commands));
       sequence.commands = commands;
-      return persist(sequence);
+      const saved = await commandRecorder.saveSequenceToDisk(sequence.id, false, true);
+      if (!saved) return `"${sequence.name}" is no longer loaded`;
+      if (!saved.success) return saved.error;
+      if (pendingMove && (pendingMove.command !== moved || pendingMove.sequence !== sequence)) await flushMove();
+      if (pendingMove) clearTimeout(pendingMove.timer);
+      pendingMove = {
+        sequence, command: moved, from: pendingMove?.from ?? from, filepath: saved.filepath,
+        timer: setTimeout(() => void flushMove(), MOVE_QUIET_MS), by: currentOrigin(),
+      };
+      return undefined;
     },
 
-    attachScreenshot: async (id: string, path: string) => {
+    attachScreenshot: async (id: string, path: string, target?: AnnotationTarget) => {
       const sequence = openSequence();
       if (!sequence) return 'no sequence is open';
       for (const command of sequence.commands ?? []) {
         const annotation = (command.annotations ?? []).find(note => note.id === id);
         if (!annotation) continue;
         annotation.screenshots = [...(annotation.screenshots ?? []), path];
-        return persist(sequence);
+        if (target && !annotation.target) annotation.target = target;
+        return persist(sequence, 'capture added to a note');
       }
       return 'that note is not in the open sequence';
     },
@@ -1167,6 +1486,28 @@ export function createBenchTools(
           };
         }
 
+        // Reads one file, so it needs no browser.
+        if (action === 'capture') {
+          if (!args.capture) return createErrorResponse('BENCH_CAPTURE_UNREAD', { path: '(none given)', reason: 'pass `capture` with the file path' });
+          const read = await readCapture(args.capture).catch((error: unknown) => ({ error: String(error) }));
+          if ('error' in read || !read.record) {
+            return createErrorResponse('BENCH_CAPTURE_UNREAD', {
+              path: args.capture,
+              reason: 'error' in read ? read.error : 'the PNG carries no capture record',
+            });
+          }
+          const versions = await versionsOf(read.record.series);
+          const response = createSuccessResponse('BENCH_CAPTURE_READ', {
+            path: args.capture,
+            series: read.record.series,
+            version: read.record.version,
+            versions: versions.map(v => `v${v.version}`).join(' '),
+            record: formatCodeBlock(JSON.stringify(read.record, null, 2), 'json'),
+            facts: read.facts ? formatCodeBlock(JSON.stringify(read.facts, null, 2), 'json') : '_no element facts recorded_',
+          });
+          return { ...response, _meta: buildMeta('capture', { capture: { path: args.capture, record: read.record, ...(read.facts ? { facts: read.facts } : {}), versions } }) };
+        }
+
         // Reads the sequence stores and the capture directories, so it needs
         // no browser - asking for one would make tidying up wait on a launch.
         if (action === 'sweep') {
@@ -1189,7 +1530,10 @@ export function createBenchTools(
 
         let resolved = await resolveConnectionFromReason(connectionReason);
         if (!resolved && action === 'start') {
-          const launched = await autoLaunchChrome(executeToolCall, connectionReason, 'bench.start');
+          // A reference whose proxy is still recording was launched through it,
+          // and a browser launched outside it leaves every crossing unseen.
+          const launched = await autoLaunchChrome(
+            executeToolCall, connectionReason, 'bench.start', false, getProxy(connectionReason) !== undefined);
           if (!launched.success) {
             return createErrorResponse(launched.errorType, {
               reference: connectionReason,
@@ -1313,6 +1657,40 @@ export function createBenchTools(
               steps: state?.steps?.length ?? 0,
             });
             return { ...response, _meta: buildMeta(action, { connection, sequence: state }) };
+          }
+
+          case 'retake': {
+            if (!getBenchSession(connection)) {
+              return createErrorResponse('BENCH_NOT_ACTIVE', { connection, action });
+            }
+            if (!args.capture) {
+              return createErrorResponse('BENCH_RETAKE_FAILED', { reason: 'pass `capture` with the file path to take again' });
+            }
+            const taken = await retakeCapture(connection, args.capture, args.against ?? 1);
+            if ('failure' in taken) return createErrorResponse('BENCH_RETAKE_FAILED', { reason: taken.failure });
+            const { compared } = taken.record;
+            const response = createSuccessResponse('BENCH_RETAKEN', {
+              version: taken.record.version,
+              against: compared!.against,
+              share: (compared!.share * 100).toFixed(1),
+              changed: compared!.changed,
+              edges: compared!.edges,
+              box: compared!.box ? `${compared!.box.x},${compared!.box.y} ${compared!.box.w}×${compared!.box.h}` : 'none',
+              size: `${compared!.size.before.join('×')} → ${compared!.size.after.join('×')}`,
+              placedBy: compared!.placedBy,
+              window: compared!.resized
+                ? `The window was at ${compared!.resized.from.slice(0, 2).join('×')}@${compared!.resized.from[2]}x and was set to the recorded `
+                  + `${compared!.resized.to.slice(0, 2).join('×')}@${compared!.resized.to[2]}x for the retake, then put back`
+                  + `${compared!.resized.ran ? '; the held page ran while it resized, so it may have moved on' : ''}`
+                  + `${compared!.resized.hidden ? '; the tab was in the background, where Chrome renders no frames, so layout set by script did not follow the size and a difference there may be that' : ''}.`
+                : 'The window was at the recorded size.',
+              scales: compared!.scales
+                ? `\n\nThe two captures are at different scales, ${compared!.scales[0]}x and ${compared!.scales[1]}x image px per CSS px, so their pixels do not line up and the figures above measure the scaling, not the page. Compare the two panels by eye.`
+                : '',
+              factChanges: compared!.factChanges?.length ? compared!.factChanges.map(line => `- ${line}`).join('\n') : '_no element fact changed, or none recorded_',
+              path: taken.path,
+            });
+            return { ...response, _meta: buildMeta('retake', { connection, capture: { path: taken.path, record: taken.record } }) };
           }
 
           case 'tick': {

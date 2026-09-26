@@ -2,8 +2,9 @@
  * Replay Executor - Core execution engine for command sequences
  */
 
+import type { StepTraffic } from '../annotation.js';
 import type { CommandRecorder, RecordedCommand, CommandSequence, ActiveSequenceState } from '../command-recorder.js';
-import { markOnProxies, markNextCommand, releaseCommand, boundarySettled, getProxy } from '../proxy/registry.js';
+import { markOnProxies, markNextCommand, releaseCommand, boundarySettled, getProxy, takeWaitFailure } from '../proxy/registry.js';
 import { tallyShapes, type ShapeRules } from '../proxy/intercept-proxy.js';
 import type { ExecuteToolCall } from '../types.js';
 import { abortableDelayResult } from '../utils/abort.js';
@@ -2022,7 +2023,9 @@ export async function validateClickAction(
   ctx: ExecutionContext,
   preState: PreClickState,
   clickResult: any,
-  config: ClickValidationConfig
+  config: ClickValidationConfig,
+  /** What this step did when it was recorded, where the sequence kept it. */
+  recorded?: StepTraffic,
 ): Promise<ClickValidationResult> {
   const { executeToolCall, connectionReason, logPrefix = 'executor' } = ctx;
   const errors: string[] = [];
@@ -2070,11 +2073,22 @@ export async function validateClickAction(
     // identifiable as browser noise unrelated to the click (e.g. a favicon 404).
     if (config.failOnConsoleErrors && newErrorCount > preState.consoleErrorCount) {
       const diff = newErrorCount - preState.consoleErrorCount;
-      const newEntries: Array<{ id: string; url?: string }> = consoleResult?._meta?.console?.entries || [];
+      const newEntries: Array<{ id: string; url?: string; text?: string }> = consoleResult?._meta?.console?.entries || [];
       const genuinelyNew = newEntries.filter(e => !preState.errorIdsBeforeClick.has(e.id));
       const actionable = genuinelyNew.filter(e => !isNoiseConsoleUrl(e.url));
+      // Chrome logs a request answered 4xx or 5xx as a console error. The
+      // recording ran into the same ones when this step failed that many
+      // requests, so they are what the step does rather than what broke; a
+      // script error, or more failures than were recorded, still stops it.
+      const failedRequests = actionable.filter(e => /^Failed to load resource/.test(e.text ?? ''));
+      const asRecorded = actionable.length > 0
+        && failedRequests.length === actionable.length
+        && failedRequests.length <= (recorded?.failed ?? 0);
 
-      if (genuinelyNew.length === 0 || actionable.length > 0) {
+      if (asRecorded) {
+        const lines = (recorded?.lines ?? []).filter(line => / [45]\d\d$/.test(line));
+        info.push(`${failedRequests.length} failed request(s) after click, as recorded${lines.length ? ` (${lines.join(', ')})` : ''}`);
+      } else if (genuinelyNew.length === 0 || actionable.length > 0) {
         const msg = `${diff} new console error(s) after click`;
         if (config.consoleErrorsFailMode === 'error') {
           errors.push(msg);
@@ -2340,7 +2354,17 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
       overrideConnectionReason ?? ctx.connectionReason
     ).catch(() => Date.now());
     stepReleasedAt.set(step, at);
+    // A wait whose crossings never came fails the step that waited, not the
+    // one after it: the result it already has is the one that is wrong.
+    const waited = takeWaitFailure(overrideConnectionReason ?? ctx.connectionReason);
+    if (waited) {
+      const held = results.find(result => result.step === step + 1);
+      if (held) Object.assign(held, { success: false, error: waited });
+      else results.push({ step: step + 1, tool: commands[step].tool, success: false, error: waited });
+      waitFailed = true;
+    }
   };
+  let waitFailed = false;
   let boundaryStep: number | undefined;
 
   // Derived from the pass's own clock rather than minted here: one pass
@@ -2355,6 +2379,7 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
     // step's tail is credited to the step that caused it on this side exactly
     // as it is while recording.
     if (boundaryStep !== undefined) await releaseStep(boundaryStep);
+    if (waitFailed) break;
     if (comparesBehaviour) stepStartedAt.set(i, Date.now());
     await markNextCommand({ kind: 'replay', runId: proxyRun, step: i });
     boundaryStep = i;
@@ -2829,7 +2854,8 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
 
       // Click validation (after successful execution)
       if (cmd.tool === 'input' && params.action === 'click' && stepConnection && preClickState && clickConfig.enabled) {
-        const clickValidation = await validateClickAction(stepCtx, preClickState, execResult.result, clickConfig);
+        const clickValidation = await validateClickAction(
+          stepCtx, preClickState, execResult.result, clickConfig, (cmd as { traffic?: StepTraffic }).traffic);
 
         // Log info messages (console activity)
         for (const infoMsg of clickValidation.info) {

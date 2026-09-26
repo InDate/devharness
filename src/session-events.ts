@@ -14,12 +14,13 @@
  * that count is zero.
  */
 
+import { AsyncLocalStorage } from 'async_hooks';
 import { execFile } from 'child_process';
 import { promises as fs } from 'fs';
 import { join } from 'path';
 import { getOutputPath } from './helpers/paths.js';
 
-export type EventKind = 'block' | 'message' | 'annotation' | 'sequence' | 'screenshot' | 'investigate' | 'proxy';
+export type EventKind = 'block' | 'message' | 'annotation' | 'sequence' | 'screenshot' | 'comparison' | 'investigate' | 'proxy';
 
 export interface SessionEvent {
   ts: string;
@@ -57,6 +58,34 @@ export function streamReaders(sessionName: string): Promise<number | undefined> 
 }
 
 /**
+ * Who caused what is being done: the agent, through a tool call or a bench
+ * request it marks as its own, or a person, through the bench. Carried on each
+ * event, so a watch can leave out the agent's echo of its own changes.
+ */
+const origin = new AsyncLocalStorage<{ by: 'agent' | 'person'; live: boolean }>();
+
+/**
+ * Run `work` as `by`. The mark holds only while the work runs: a listener it
+ * sets up that fires later - a launch's page events, a bench's picks - carries
+ * the context it was made in, and an event from it then is no longer the
+ * call's doing.
+ */
+export async function runAs<T>(by: 'agent' | 'person', work: () => Promise<T>): Promise<T> {
+  const context = { by, live: true };
+  try {
+    return await origin.run(context, work);
+  } finally {
+    context.live = false;
+  }
+}
+
+/** Who is running the current work, for an event announced after that work has returned. */
+export function currentOrigin(): 'agent' | 'person' | undefined {
+  const context = origin.getStore();
+  return context?.live ? context.by : undefined;
+}
+
+/**
  * Append one event. Failures are logged and swallowed: the stream is a
  * notification path, and losing a line must not fail the operation that
  * produced it.
@@ -66,7 +95,9 @@ export async function appendEvent(
   kind: EventKind,
   payload: Record<string, unknown>
 ): Promise<void> {
-  const event: SessionEvent = { ts: new Date().toISOString(), kind, ...payload };
+  const context = origin.getStore();
+  const by = context?.live ? context.by : undefined;
+  const event: SessionEvent = { ts: new Date().toISOString(), kind, ...payload, ...(by ? { by } : {}) };
   try {
     await fs.mkdir(getEventsDir(), { recursive: true });
     await fs.appendFile(getEventStreamPath(sessionName), JSON.stringify(event) + '\n');

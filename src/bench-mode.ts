@@ -98,7 +98,7 @@ async function withPageReleased<T>(session: BenchSession, work: () => Promise<T>
  */
 
 import { promises as fs } from 'fs';
-import { join } from 'path';
+import { basename, join } from 'path';
 import type { Page, CDPSession } from 'puppeteer-core';
 import { getOutputPath } from './helpers/paths.js';
 import { appendEvent } from './session-events.js';
@@ -107,14 +107,22 @@ import { CANCELLED } from './tools/bench-tools.js';
 import { parseExtendedSelector } from './utils/selector-resolver.js';
 import { debugLog } from './debug-logger.js';
 import { startBenchServer, type BenchServer } from './bench-control.js';
-import { getProxy } from './proxy/registry.js';
+import { getProxy, setStepWaits, waitOutcomesFor, type StepWait } from './proxy/registry.js';
 import { levelOf, causeOf, type ProxyEvent } from './proxy/intercept-proxy.js';
 import type { Annotation, AnnotationTarget, StepTraffic } from './annotation.js';
 import type {
-  BenchView, BoundaryEvent, BoundaryRule, BoundaryState, BoundaryTotals, CallbackEntry,
-  HeldStep, PendingShot, SequenceCard, SequenceState, SequenceStep, SequenceVariable,
+  BenchView, BoundaryEvent, BoundaryRule, BoundaryState, BoundaryTotals, CallbackEntry, RuleCatalogueEntry, HiddenKind,
+  CaptureComparison, CaptureKind, CapturePause, CaptureRecord, CaptureRect, CaptureVersion,
+  FactKind, HeldStep, PendingShot, SequenceCard, SequenceState, SequenceStep, SequenceVariable,
   TickResult,
 } from './bench/wire.js';
+import { cropPixels, decodePng } from './png.js';
+import { diffPixels, sideBySide, strokeDashed } from './pixel-diff.js';
+import { indexCapture, readCapture, readRecord, seriesIndex, versionsOf, writeCapture } from './capture-file.js';
+import { WriteWatch, writeLine } from './write-watch.js';
+import { countKinds, kindOf, type ActivityMove, type ExpectedValue, type KindCount } from './bench/kinds.js';
+import { readPayload, savePayload } from './saved-payloads.js';
+import { diffFacts, readFacts, trackStyleSheets, type ElementFacts, type StyleSheets } from './element-facts.js';
 
 export type { Annotation, AnnotationTarget, StepTraffic } from './annotation.js';
 export type {
@@ -148,6 +156,17 @@ export interface BenchReport {
   benchUrl: string;
 }
 
+/** The part of a capture's record known at capture time, completed on save. */
+interface CaptureContext {
+  layout: { viewport: { width: number; height: number; dpr: number }; scroll: { x: number; y: number }; document: { width: number; height: number } };
+  url: string;
+  frozen: boolean;
+  element?: CaptureRecord['element'];
+  facts?: ElementFacts;
+  /** Set on a capture from the dialog: whether the page was held before the dialog opened. */
+  heldBefore?: boolean;
+}
+
 interface BenchSession extends BenchReport {
   client: CDPSession;
   page: Page;
@@ -162,6 +181,14 @@ interface BenchSession extends BenchReport {
   noteStep?: number;
   /** A capture taken and waiting to be accepted or discarded. */
   pendingShot?: PendingShot | null;
+  /** What the held capture was taken from, kept here rather than sent to the bench on every poll. */
+  pendingCapture?: CaptureContext;
+  /** Set while the capture dialog is open; see BenchView.shotArmed. */
+  shotArmed?: { heldBefore: boolean; annotationId?: string };
+  /** The element facts an element capture reads, as last ticked in the dialog. */
+  factChoice: FactKind[];
+  /** The last Debugger.paused, while the page stays stopped in it. */
+  pausedEvent?: any;
   /** Captures accepted and waiting for the note they are evidence for. */
   pickShots?: string[];
   recordingSequence?: boolean;
@@ -183,6 +210,10 @@ interface BenchSession extends BenchReport {
    * discarded at the next tick. Written onto the file once the recording lands.
    */
   recordingNotes?: Map<number, { comment: string }>;
+  /** Where a recording goes when it goes into another sequence, for the list to show it in place. */
+  recordingInto?: { name: string; after: number };
+  /** What a step of the recording in progress is given, as changed in the bench; written once it is saved. */
+  recordingEdits?: Map<number, Record<string, unknown>>;
   /**
    * Findings written during the recording, with their captures, keyed by step.
    *
@@ -215,12 +246,36 @@ interface BenchSession extends BenchReport {
   keptEvents?: number;
   /** Set when the page was frozen to hold a step, so only that freeze is undone. */
   heldForStep?: boolean;
+  /** Drives nested inside the one that brought the app's tab to the front. */
+  appInFront?: number;
+  /** Storage writes, which the proxy never sees. */
+  writeWatch?: WriteWatch;
   /** The page the recording began on, which becomes its first step. */
   recordingStartUrl?: string;
   /** When the recording began, which bounds its first step. */
   recordingStartedAt?: number;
   /** The newest step's clock, which the recording ending closes the window on. */
   lastStepAt?: number;
+  /**
+   * When each recorded step was taken, by position. A person's click is no
+   * tool command, so nothing stamps the proxy's cursor while a recording runs;
+   * the events route places each crossing under the step whose window holds it.
+   */
+  recordingStepTimes?: Array<number | undefined>;
+  /**
+   * When the last recording stopped, and the sequence it produced. The step
+   * windows above keep placing that recording's crossings after it stops, so
+   * its rows stay under their steps; what crossed after this time is the
+   * recording's tail, placed under no step.
+   */
+  recordingEndedAt?: number;
+  recordedName?: string;
+  /**
+   * Whether the open sequence has rules on its file. Clearing the last rule
+   * still writes, so the file loses it; with none written, an empty set is not
+   * written onto every sequence opened.
+   */
+  rulesWritten?: boolean;
   /** Traffic per step index, computed once the step's window has closed. */
   stepTraffic?: Map<number, StepTraffic>;
   /**
@@ -230,10 +285,32 @@ interface BenchSession extends BenchReport {
    * they ask for it.
    */
   boundaryRules?: Map<string, BoundaryRule>;
-  /** Steps told to hold open, and how many arrivals each waits for. */
-  boundaryWaits?: Map<number, number>;
+  /**
+   * Steps told to hold open, by step and the kind each waits for. How many,
+   * how long and what a miss does are read off the response on that kind;
+   * `count` stands in where no response is kept for it.
+   */
+  boundaryWaits?: Map<string, StoredWait>;
+  /** A person's names for kinds of traffic, by rule key. */
+  boundaryNames?: Map<string, string>;
   /** The proxy pin each answering rule armed, so clearing one releases it. */
   boundaryPins?: Map<string, string>;
+  /** The origin whose responses are held, which names the site file they are written to. */
+  site?: string;
+  /**
+   * How the open sequence uses each response, where it says: a response it
+   * names nothing about takes its mode's default - every step for `optOut`,
+   * none for `optIn`.
+   */
+  uses?: Map<string, ResponseUse>;
+  /** The responses as last written, so a change that leaves them alone writes no site file. */
+  siteWritten?: string;
+  /** The open sequence's steps as last armed, so a change to them re-arms what is held by step number. */
+  armedShape?: string;
+  /** The site's hidden kinds, by key. */
+  hiddenKinds?: Map<string, HiddenKind>;
+  /** Where the open sequence differs from a hidden kind's type: hidden here, or listed anyway. */
+  hiddenUses?: Map<string, boolean>;
   stepBreakpointsSet: boolean;
   /** Driving a sequence one step at a time, when one is wired in. */
   sequences?: SequenceDriver;
@@ -274,6 +351,8 @@ interface BenchSession extends BenchReport {
   pauseTaken: boolean;
   /** scriptId -> url, from Debugger.scriptParsed, to name a callback's source. */
   scripts: Map<string, string>;
+  /** styleSheetId -> url, from CSS.styleSheetAdded, to name a rule's source. */
+  sheets: StyleSheets;
 }
 
 /**
@@ -346,9 +425,15 @@ export interface SequenceDriver {
       comment?: string;
       resolved?: string;
       captures?: string;
+      stores?: string;
+      reads?: string[];
+      tool?: string;
+      params?: Record<string, unknown>;
       annotations?: Annotation[];
       traffic?: StepTraffic;
+      expected?: Record<string, ExpectedValue>;
     }>;
+    placements?: Record<string, number>;
     variables: SequenceVariable[];
     /** 0-based index of the step that failed, when one did. */
     failedStep?: number;
@@ -407,20 +492,38 @@ export interface SequenceDriver {
    * wrong one is wrong in the file rather than only on screen - and without
    * this the only way back is to erase it and take the capture again.
    */
-  moveAnnotation: (id: string, step: number) => Promise<string | undefined>;
-  /** Add a picture to a note already saved, and write the file back. */
-  attachScreenshot: (id: string, path: string) => Promise<string | undefined>;
+  /** `after` places it among the step's activities; see Annotation.after. */
+  moveAnnotation: (id: string, step: number, after?: string) => Promise<string | undefined>;
+  /** Replace a saved note's words, and write the file back. */
+  rewordAnnotation: (id: string, words: string) => Promise<string | undefined>;
+  /**
+   * Add a picture to a note already saved, and write the file back. `target`
+   * is the element the picture was picked from, which a note about no element
+   * takes on.
+   */
+  attachScreenshot: (id: string, path: string, target?: AnnotationTarget) => Promise<string | undefined>;
   /**
    * Record clicks in the page into a new sequence, returning when the person
    * stops. Returns the failure text when nothing was recorded.
    */
   record: (name: string, connection: string, startUrl: string) => Promise<string | undefined>;
+  /**
+   * Move what a recording captured into another sequence after one of its
+   * steps, and drop the recording. Returns the failure text.
+   */
+  spliceRecording: (recordedName: string, into: string, after: number) => Promise<string | undefined>;
+  /** The labels of a loaded sequence's steps, in order. */
+  labelsOf: (name: string) => string[];
   /** Finish a recording in progress, from the pane rather than the page. */
   stopRecording: (connection: string) => Promise<void>;
   /** Abandon a recording in progress, saving nothing. */
   cancelRecording: (connection: string) => Promise<void>;
   /** Erase one step of the open sequence and write the file back. */
   removeStep: (index: number) => Promise<string | undefined>;
+  /** Replace what one step is given, and write the file back. */
+  editStep: (index: number, params: Record<string, unknown>) => Promise<string | undefined>;
+  /** Put a fixed pause of `ms` straight after one step, and write the file back. */
+  insertTimer: (after: number, ms: number) => Promise<string | undefined>;
   /** Move one step to another position and write the file back. */
   moveStep: (from: number, to: number) => Promise<string | undefined>;
   /**
@@ -451,8 +554,29 @@ export interface SequenceDriver {
    */
   saveBoundaryRules: (
     rules: Array<Record<string, unknown>>,
-    waits: Array<{ step: number; count: number }>,
-    refuseWrites: boolean
+    waits: Array<{ step: number; count: number; key?: string; seconds?: number; onFail?: 'fail' | 'continue' }>,
+    refuseWrites: boolean,
+    names?: Record<string, string>,
+    /** What changed, for the announcement of the write. */
+    change?: string,
+    /** Keys of the site's responses this sequence opts out of. */
+    off?: string[],
+    /** The site's responses this sequence opts into, at every step or at those given. */
+    on?: Array<{ key: string; steps?: number[] }>,
+    /** The site's hidden kinds this sequence opts into and out of. */
+    hidden?: { on: string[]; off: string[] },
+  ) => Promise<string | undefined>;
+  /** The origin the open sequence runs against, whose site rules it arms. */
+  siteOf: () => string | undefined;
+  /** The rules kept for a whole site, as they stand on disk. */
+  openSiteRules: (origin: string) => Promise<Array<Record<string, unknown>>>;
+  /** The kinds a site keeps out of the list, as they stand on disk. */
+  openSiteHidden: (origin: string) => Promise<Array<Record<string, unknown>>>;
+  /** Every response on disk: each site file, and each sequence's activity file. */
+  catalogueRules: () => Promise<RuleCatalogueEntry[]>;
+  /** Write a whole site's rules, replacing what stood there. Returns the failure text. */
+  saveSiteRules: (
+    origin: string, rules: Array<Record<string, unknown>>, change?: string, hidden?: Array<Record<string, unknown>>,
   ) => Promise<string | undefined>;
   /**
    * The decisions written onto the open sequence, as they stand on disk.
@@ -463,8 +587,13 @@ export interface SequenceDriver {
    */
   openBoundaryRules: () => {
     rules: Array<Record<string, unknown>>;
-    waits: Array<{ step: number; count: number }>;
+    waits: Array<{ step: number; count: number; key?: string; seconds?: number; onFail?: 'fail' | 'continue' }>;
     refuseWrites: boolean;
+    names?: Record<string, string>;
+    off?: string[];
+    on?: Array<{ key: string; steps?: number[] }>;
+    hiddenOn?: string[];
+    hiddenOff?: string[];
   };
   /**
    * Write each step's traffic onto the sequence on disk.
@@ -474,6 +603,12 @@ export interface SequenceDriver {
    * losing the evidence it was written about.
    */
   saveStepTraffic: (entries: Array<{ index: number; traffic: StepTraffic }>) => Promise<string | undefined>;
+  /** Mark, or with none unmark, what one kind on one step has to carry on replay. */
+  saveExpected: (index: number, kind: string, expected: ExpectedValue | undefined) => Promise<string | undefined>;
+  /** Replace, or with none remove, what one kind on one step was recorded as. */
+  saveRecorded: (index: number, kind: string, recorded: KindCount | undefined) => Promise<string | undefined>;
+  /** Move one kind to the adjacent step, or between the last step and the gutter, on every run. */
+  saveMove: (move: ActivityMove) => Promise<string | undefined>;
   /**
    * What crossed the boundary between two clocks, for one connection.
    *
@@ -486,7 +621,8 @@ export interface SequenceDriver {
    * The events are read by the caller over CDP: Puppeteer's page.evaluate
    * blocks on a paused isolate, and the page is held while a step is judged.
    */
-  recordedSoFar: (eventsJson: string, startUrl: string) => SequenceStep[];
+  /** `edits` replace what a step is given, by position, before its label is read. */
+  recordedSoFar: (eventsJson: string, startUrl: string, edits?: Map<number, Record<string, unknown>>) => SequenceStep[];
   /** One note of the open sequence with the step holding it, by id. */
   findAnnotation: (id: string) => { annotation: Annotation; step: number; sequence: string } | undefined;
   /** The tracked issue whose reproduction is the open sequence, when there is one. */
@@ -859,6 +995,31 @@ async function release(session: BenchSession): Promise<void> {
 }
 
 /**
+ * Whether the bench holds a page a tool would drive, and how to let it go:
+ * frozen, its JS stopped, so a click or a step waits on it until its timeout;
+ * running a sequence, whose steps a second driver would interleave with; or
+ * recording, which would take the tool's clicks for the person's. Nothing
+ * for a page the bench holds in none of these ways, or a connection with no
+ * bench; with no connection named, the first bench that holds its page.
+ */
+export function benchHold(connection?: string): { connection: string; why: string; release: string } | undefined {
+  const held = connection !== undefined ? [[connection, sessions.get(connection)] as const] : [...sessions.entries()];
+  for (const [name, session] of held) {
+    if (!session) continue;
+    if (session.recordingSequence) {
+      return { connection: name, why: 'a recording is in progress, and it would record these actions as the person\'s', release: 'save or throw away the recording in the bench' };
+    }
+    if (session.sequenceBusy) {
+      return { connection: name, why: 'the bench is running a sequence on it', release: 'let the run finish, or stop it in the bench' };
+    }
+    if (session.frozen) {
+      return { connection: name, why: 'its page is frozen, with its JS stopped', release: `bench({ action: 'unfreeze', connectionReason: '${name}' }), or the freeze button in the bench` };
+    }
+  }
+  return undefined;
+}
+
+/**
  * Hold the page, or let it run. Driving the app needs an unfrozen page - under
  * a freeze its JS is stopped, so a click reaches nothing - and picking works
  * either way, since Chrome's picker is browser-side.
@@ -900,9 +1061,7 @@ export function pageHeldElsewhere(page: Page, exceptConnection: string): boolean
 
 export function getBenchSession(connection: string): BenchReport | undefined {
   const session = sessions.get(connection);
-  if (!session) return undefined;
-  const { client: _c, page: _p, server: _s, benchPage: _bp, pending: _pending, ...state } = session;
-  return state;
+  return session ? getStateOf(session) : undefined;
 }
 
 export function isBenchOpen(connection: string): boolean {
@@ -1063,9 +1222,9 @@ export async function saveAnnotation(connection: string, comment: string): Promi
       : `about the step${comment ? ` - "${comment}"` : ''}`,
   });
 
-  // A recording runs with the picker disarmed: armed, the next click in the
-  // app becomes a pick and never reaches the page as an action.
-  if (!session.recordingSequence) await setInspectMode(session, true).catch(() => {});
+  // The note is written, so the pick that began it is over: left armed, the
+  // next click in the app becomes a pick and never reaches the page.
+  await setInspectMode(session, false).catch(() => {});
   return annotation;
 }
 
@@ -1099,7 +1258,10 @@ async function holdRecordingAnnotation(session: BenchSession, annotation: Annota
 async function recordedSteps(session: BenchSession) {
   return session.sequences!.recordedSoFar(
     await readCapturedEvents(session),
-    session.recordingStartUrl ?? session.page.url()
+    // Recorded into a sequence mid-run: the page is already where its steps
+    // left it, so the recording opens nothing of its own.
+    session.recordingInto ? '' : session.recordingStartUrl ?? session.page.url(),
+    session.recordingEdits,
   );
 }
 
@@ -1145,8 +1307,87 @@ function rulesOf(connection: string): BoundaryRule[] {
   return [...(session.boundaryRules?.values() ?? [])].map(rule => {
     const pin = session.boundaryPins?.get(rule.key);
     const live = pin === undefined ? undefined : served.get(pin);
-    return live === undefined ? rule : { ...rule, ...live };
+    const use = useOf(session, rule);
+    return {
+      ...rule, ...live,
+      ...(use === 'none' ? { off: true } : {}),
+      ...(Array.isArray(use) ? { steps: use } : {}),
+      ...(rule.mode === 'local' && rule.owner !== nameOf(session) ? { foreign: true } : {}),
+    };
   });
+}
+
+/** How the open sequence uses a response: not at all, at every step, or at these steps. */
+export type ResponseUse = 'none' | 'all' | number[];
+
+/**
+ * What the open sequence says, or else the response's mode: `optOut` answers
+ * everywhere, `optIn` nowhere. A `local` response answers only in the
+ * sequence it belongs to, whatever another says.
+ */
+function useOf(session: BenchSession, rule: BoundaryRule): ResponseUse {
+  if (rule.mode === 'local' && rule.owner !== nameOf(session)) return 'none';
+  return session.uses?.get(rule.key) ?? (rule.mode === 'optOut' ? 'all' : 'none');
+}
+
+/** The sequence being recorded, or else the one open. */
+function nameOf(session: BenchSession): string | undefined {
+  return session.recordingSequence ? session.recordingName : session.sequences?.active()?.name;
+}
+
+/** A response's wait as a file or the bench gives it; nothing for anything else. */
+function waitFrom(raw: unknown): BoundaryRule['wait'] | undefined {
+  if (raw === null || typeof raw !== 'object') return undefined;
+  const { count, seconds, onFail } = raw as Record<string, unknown>;
+  const n = Math.max(1, Math.floor(Number(count) || 1));
+  const s = Math.max(1, Number(seconds) || 10);
+  return { count: n, seconds: s, onFail: onFail === 'continue' ? 'continue' : 'fail' };
+}
+
+/** A use as the bench sends it; nothing for anything else. */
+function useFrom(raw: unknown): ResponseUse | undefined {
+  if (raw === 'none' || raw === 'all') return raw;
+  if (!Array.isArray(raw)) return undefined;
+  const steps = [...new Set(raw.filter((n): n is number => Number.isInteger(n) && n >= 0))].sort((a, b) => a - b);
+  return steps.length ? steps : 'none';
+}
+
+/** A rule as a file or the bench sends it; nothing for one with no key. */
+function ruleFrom(raw: Record<string, unknown>): BoundaryRule | undefined {
+  const key = String(raw.key ?? '');
+  if (!key) return undefined;
+  return {
+    key,
+    verb: (raw.verb === 'block' || raw.verb === 'hide') ? raw.verb : 'answer',
+    ...(raw.frame ? { frame: true } : {}),
+    ...(typeof raw.method === 'string' && raw.method ? { method: raw.method } : {}),
+    ...(typeof raw.step === 'number' ? { step: raw.step } : {}),
+    ...(typeof raw.body === 'string' ? { body: raw.body } : {}),
+    ...(typeof raw.payload === 'string' && raw.payload ? { payload: raw.payload } : {}),
+    ...(raw.status !== undefined ? { status: String(raw.status) } : {}),
+    ...(typeof raw.recorded === 'string' ? { recorded: raw.recorded } : {}),
+    ...(raw.edited === true ? { edited: true } : {}),
+    ...(typeof raw.label === 'string' ? { label: raw.label } : {}),
+    ...(typeof raw.url === 'string' ? { url: raw.url } : {}),
+    ...(raw.direction === 'out' || raw.direction === 'in' ? { direction: raw.direction } : {}),
+    ...(raw.mode === 'local' || raw.mode === 'optIn' || raw.mode === 'optOut' ? { mode: raw.mode } : {}),
+    ...(waitFrom(raw.wait) ? { wait: waitFrom(raw.wait)! } : {}),
+    ...(typeof raw.owner === 'string' && raw.owner ? { owner: raw.owner } : {}),
+    // Dropped here, a saved rule comes back without the values its dropped
+    // constraints were recorded with, so the round trip through the file
+    // undoes the widening and takes the row that reverses it.
+    ...(raw.staged !== null && typeof raw.staged === 'object'
+      ? { staged: raw.staged as BoundaryRule['staged'] } : {}),
+  };
+}
+
+/**
+ * A response as the site file holds it: what the session reads off the pin
+ * and what the open sequence's use of it sets, left out.
+ */
+function storedRule(rule: BoundaryRule): BoundaryRule {
+  const { hits: _hits, matchedAs: _how, steps: _steps, off: _off, step: _step, foreign: _foreign, ...kept } = rule;
+  return kept;
 }
 
 /** The open sequence's positions, which a rule can be bound to. */
@@ -1155,15 +1396,162 @@ function openSteps(connection: string): Array<{ index: number; label: string }> 
   return steps.map((step, index) => ({ index, label: step.label }));
 }
 
+/**
+ * The recorded step a crossing falls under, by time, while a recording runs.
+ *
+ * Positional: the crossing is placed in the window between one step and the
+ * next, which is the attribution the file's per-step traffic already uses. A
+ * crossing a command stamped keeps its stamp; one from before the recording
+ * began belongs to no step of it.
+ */
+function recordedStepOf(connection: string, event: ProxyEvent): Partial<BoundaryEvent> {
+  const session = sessions.get(connection);
+  const times = session?.recordingStepTimes;
+  const ended = !session?.recordingSequence && session?.recordingEndedAt !== undefined
+    && event.at < session.recordingEndedAt && openSequence(connection) === session.recordedName;
+  if (!(session?.recordingSequence || ended) || !times?.length || (event as { step?: number }).step !== undefined) return {};
+  if (session.recordingStartedAt !== undefined && event.at < session.recordingStartedAt) return {};
+  let step: number | undefined;
+  for (let index = 0; index < times.length; index++) {
+    // The opening step is the page the recording started on, so its window
+    // opens with the recording rather than at the first click it is timed by.
+    const from = index === 0 ? session.recordingStartedAt ?? times[0] : times[index];
+    if (from !== undefined && from <= event.at) step = index;
+  }
+  // The recording is the pass these rows read, which is what the step list
+  // keeps a row by: a crossing with no pass is read as left over from none.
+  return step === undefined ? {} : {
+    step, owned: true, level: 'positional', runId: `recording-${session.recordingStartedAt ?? 0}`,
+  };
+}
+
+/** The most of one payload a recording keeps, the proxy's own body cap. */
+const RECORDED_BODY_CAP = 64 * 1024;
+
+/**
+ * A step's traffic with the storage writes its window holds.
+ *
+ * The network log counts local and session storage writes and none of
+ * IndexedDB or cookies; the watch holds all four, so its count replaces the
+ * log's, and a few of its lines join the requests', which is what a later run
+ * of the sequence is compared against.
+ */
+function withWrites(session: BenchSession, traffic: StepTraffic, from: number, to: number): StepTraffic {
+  const writes = session.writeWatch?.between(from, to) ?? [];
+  // Counted by kind from what the proxy and the write watch hold for the
+  // window, which is what a replay of the step is compared against.
+  const proxy = getProxy(session.connection);
+  const crossed = (proxy?.eventsIn() ?? []).filter(event => event.at >= from && event.at < to);
+  const written = writeEvents(session.connection).filter(event => event.at >= from && event.at < to);
+  const kinds = countKinds([...crossed, ...written]);
+  // The payload of the last of each kind, which a replayed row is compared
+  // against; the proxy holds its bodies in memory for this session only.
+  const values = new Map((session.writeWatch?.writes ?? []).map(write => [write.id, write.value]));
+  for (const event of [...crossed, ...written]) {
+    const count = kinds[kindOf(event)];
+    if (!count || count.presence) continue;
+    const body = event.kind === 'write' ? values.get(event.id) : proxy?.bodyOf(event.id);
+    if (body !== undefined) count.body = body.slice(0, RECORDED_BODY_CAP);
+  }
+  if (Object.keys(kinds).length) traffic = { ...traffic, kinds };
+  if (!writes.length) return traffic;
+  // The log's own storage lines say less than the watch's and would list
+  // each local or session write twice.
+  const others = traffic.lines.filter(line => !/^(local|session)Storage /.test(line));
+  return {
+    ...traffic,
+    writes: Math.max(traffic.writes, writes.length),
+    lines: [...others, ...writes.slice(0, 4).map(writeLine)],
+  };
+}
+
+/**
+ * The page's storage writes as rows beside the traffic.
+ *
+ * Stamped with a replay's step where one was in flight when the write landed,
+ * placed by time while a recording runs, and otherwise the app's own.
+ */
+function writeEvents(connection: string, after = 0): BoundaryEvent[] {
+  const watch = sessions.get(connection)?.writeWatch;
+  if (!watch) return [];
+  return watch.writes.filter(write => write.at > after).map(write => {
+    const row = {
+      id: write.id, at: write.at, kind: 'write' as const, direction: 'out' as const,
+      url: `${write.store}:${write.key ?? ''}`, method: write.store,
+      preview: writeLine(write).slice(write.store.length + 1),
+      size: write.value?.length ?? 0, level: 'unprompted' as const, owned: false,
+    };
+    if (write.cursor?.kind === 'replay') {
+      return { ...row, step: write.cursor.step, runId: write.cursor.runId, owned: true, level: 'positional' as const };
+    }
+    return { ...row, ...recordedStepOf(connection, { at: write.at } as ProxyEvent) } as BoundaryEvent;
+  });
+}
+
 /** The sequence those positions count within. */
 function openSequence(connection: string): string | undefined {
   return sessions.get(connection)?.sequences?.active()?.name;
 }
 
-function waitsOf(connection: string): Array<{ step: number; count: number }> {
-  return [...(sessions.get(connection)?.boundaryWaits?.entries() ?? [])]
-    .map(([step, count]) => ({ step, count }))
+function namesOf(connection: string): Record<string, string> {
+  return Object.fromEntries(sessions.get(connection)?.boundaryNames ?? []);
+}
+
+/** What a name is kept against, in words: a kind, or a kind on one step. */
+function nameTarget(key: string): string {
+  const row = /^(\d+|after)\|(.*)$/.exec(key);
+  if (!row) return key;
+  return `${row[2]} on ${row[1] === 'after' ? 'the gutter' : `step ${Number(row[1]) + 1}`}`;
+}
+
+/**
+ * Save a payload, and re-arm every replacement serving it, so each serves the
+ * payload as it now stands.
+ */
+export async function savePayloadFor(connection: string, name: string, content: string): Promise<string | undefined> {
+  const failure = await savePayload(name, content);
+  if (failure) return failure;
+  const session = sessions.get(connection);
+  const serving = [...(session?.boundaryRules?.values() ?? [])].filter(rule => rule.payload === name);
+  for (const rule of serving) setBoundaryRule(connection, rule);
+  if (serving.length) await persistRules(connection, false, `payload ${name} changed, served by ${serving.length}`);
+  return undefined;
+}
+
+/** Name a kind of traffic, or with an empty name go back to its payload. */
+export function setBoundaryName(connection: string, key: string, name: string): void {
+  const session = sessions.get(connection);
+  if (!session || !key) return;
+  const names = session.boundaryNames ??= new Map();
+  if (name.trim()) names.set(key, name.trim());
+  else names.delete(key);
+}
+
+/** A step's wait as kept: what it set for itself, over the response's settings. */
+type StoredWait = { step: number; key?: string; count?: number; seconds?: number; onFail?: 'fail' | 'continue' };
+
+/**
+ * Each wait with what it waits for: what the step set for itself, then the
+ * settings of the response on its kind, then one within 10 seconds, failing.
+ */
+function waitsOf(connection: string): StepWait[] {
+  const session = sessions.get(connection);
+  return [...(session?.boundaryWaits?.values() ?? [])]
+    .map(({ step, key, count, seconds, onFail }) => {
+      const given = key ? session?.boundaryRules?.get(key)?.wait : undefined;
+      return {
+        step, ...(key ? { key } : {}),
+        count: count ?? given?.count ?? 1,
+        seconds: seconds ?? given?.seconds ?? 10,
+        onFail: onFail ?? given?.onFail ?? 'fail' as const,
+      };
+    })
     .sort((a, b) => a.step - b.step);
+}
+
+/** Hand the waits to the registry, which holds each replay step open for its own. */
+function armWaits(connection: string): void {
+  setStepWaits(connection, waitsOf(connection));
 }
 
 /**
@@ -1181,6 +1569,16 @@ export function setBoundaryRule(connection: string, rule: BoundaryRule): Boundar
   const pins = session.boundaryPins ??= new Map();
   const proxy = getProxy(connection);
 
+  // An edit keeps the response's type and the sequence a local one belongs
+  // to; a new response is local to the sequence it was made in.
+  const staging = rule.step;
+  const prior = rules.get(rule.key);
+  const mode = rule.mode ?? prior?.mode ?? 'local';
+  const owner = mode === 'local' ? rule.owner ?? prior?.owner ?? nameOf(session) : undefined;
+  const { owner: _owner, ...rest } = storedRule(rule);
+  rule = { ...rest, mode, ...(owner ? { owner } : {}) };
+  const use = useOf(session, rule);
+
   // One decision per key: the pin behind the old one goes with it, or the
   // proxy keeps answering from a rule the list no longer shows.
   const previous = pins.get(rule.key);
@@ -1193,14 +1591,20 @@ export function setBoundaryRule(connection: string, rule: BoundaryRule): Boundar
   const staged = {
     ...rules.get(rule.key)?.staged,
     ...rule.staged,
-    ...(rule.step !== undefined ? { step: rule.step } : {}),
+    ...(staging !== undefined ? { step: staging } : {}),
     ...(rule.method !== undefined ? { method: rule.method } : {}),
     ...(rule.url !== undefined ? { url: rule.url } : {}),
     ...(rule.direction !== undefined ? { direction: rule.direction } : {}),
   };
   rule = Object.keys(staged).length > 0 ? { ...rule, staged } : rule;
 
-  if (proxy && rule.verb !== 'hide') {
+  // A saved payload is read as it stands now, so its file is what is served.
+  if (rule.payload) {
+    const saved = readPayload(rule.payload);
+    if (saved !== undefined) rule = { ...rule, body: saved };
+  }
+
+  if (proxy && rule.verb !== 'hide' && use !== 'none') {
     const body = rule.verb === 'answer' ? (rule.body ?? '') : '';
     if (rule.frame) {
       // Bound to the socket and direction the frame was read from. Without
@@ -1210,7 +1614,7 @@ export function setBoundaryRule(connection: string, rule: BoundaryRule): Boundar
         textIncludes: rule.key,
         ...(rule.url ? { urlIncludes: rule.url } : {}),
         ...(rule.direction ? { direction: rule.direction === 'out' ? 'sent' as const : 'received' as const } : {}),
-        ...(rule.step !== undefined ? { step: rule.step } : {}),
+        ...(Array.isArray(use) ? { steps: use } : {}),
         ...(rule.verb === 'answer' ? { replaceWith: body } : {}),
       });
       pins.set(rule.key, pin.id);
@@ -1218,7 +1622,7 @@ export function setBoundaryRule(connection: string, rule: BoundaryRule): Boundar
       const pin = proxy.pin({
         urlIncludes: rule.key,
         ...(rule.method ? { method: rule.method } : {}),
-        ...(rule.step !== undefined ? { step: rule.step } : {}),
+        ...(Array.isArray(use) ? { steps: use } : {}),
         status: rule.verb === 'answer' ? (Number(rule.status) || 200) : 204,
         body,
       });
@@ -1227,18 +1631,207 @@ export function setBoundaryRule(connection: string, rule: BoundaryRule): Boundar
   }
 
   rules.set(rule.key, { ...rule, hits: 0 });
+  armWaits(connection);
   return rulesOf(connection);
 }
 
-/** Drop the rule against one key, and the pin it armed with it. */
-export function clearBoundaryRule(connection: string, key: string): BoundaryRule[] {
-  const session = sessions.get(connection);
-  if (!session) return [];
+/** Take one rule out of the armed set, and the pin it armed with it. */
+function dropRule(session: BenchSession, connection: string, key: string): void {
   const pin = session.boundaryPins?.get(key);
   if (pin) getProxy(connection)?.unpin(pin);
   session.boundaryPins?.delete(key);
   session.boundaryRules?.delete(key);
+}
+
+/**
+ * Drop the response against one key, from the site file and so from every
+ * sequence on the site.
+ */
+export function clearBoundaryRule(connection: string, key: string): BoundaryRule[] {
+  const session = sessions.get(connection);
+  if (!session) return [];
+  dropRule(session, connection, key);
+  session.uses?.delete(key);
   return rulesOf(connection);
+}
+
+/**
+ * Set how the open sequence uses one response, and re-arm it.
+ *
+ * A use its mode already gives - every step under `optOut`, none under
+ * `optIn` - is not recorded, so the sequence's file lists only where it
+ * differs from the site, which is what the panel lists under a response.
+ */
+export function setResponseUse(connection: string, key: string, use: ResponseUse): BoundaryRule[] {
+  const session = sessions.get(connection);
+  const rule = session?.boundaryRules?.get(key);
+  if (!session || !rule) return rulesOf(connection);
+  const uses = session.uses ??= new Map();
+  const given = rule.mode === 'optOut' ? 'all' : 'none';
+  if (use === given) uses.delete(key);
+  else uses.set(key, use);
+  return setBoundaryRule(connection, rule);
+}
+
+/**
+ * Set which sequences a response answers in, and re-arm it. Made local, it
+ * belongs to the open sequence.
+ */
+export function setResponseMode(connection: string, key: string, mode: 'local' | 'optIn' | 'optOut'): BoundaryRule[] {
+  const session = sessions.get(connection);
+  const rule = session?.boundaryRules?.get(key);
+  if (!session || !rule) return rulesOf(connection);
+  const use = useOf(session, rule);
+  const { owner: _owner, ...rest } = rule;
+  setBoundaryRule(connection, { ...rest, mode, ...(mode === 'local' ? { owner: nameOf(session) } : {}) });
+  return setResponseUse(connection, key, use);
+}
+
+/** Whether the open sequence keeps a hidden kind out of its list: by its type, unless it says otherwise. */
+function hiddenHere(session: BenchSession, kind: HiddenKind): boolean {
+  if (kind.mode === 'local') return kind.owner === nameOf(session);
+  return session.hiddenUses?.get(kind.key) ?? kind.mode === 'optOut';
+}
+
+/** Every hidden kind, each marked `off` where the open sequence lists it anyway. */
+function hiddenOf(connection: string): HiddenKind[] {
+  const session = sessions.get(connection);
+  if (!session) return [];
+  return [...(session.hiddenKinds?.values() ?? [])]
+    .map(kind => (hiddenHere(session, kind) ? kind : { ...kind, off: true }));
+}
+
+/** A hidden kind as a file or the bench gives it; nothing for one with no key. */
+function hiddenFrom(raw: Record<string, unknown>): HiddenKind | undefined {
+  const key = String(raw.key ?? '');
+  if (!key) return undefined;
+  return {
+    key,
+    mode: raw.mode === 'optIn' || raw.mode === 'optOut' ? raw.mode : 'local',
+    ...(typeof raw.owner === 'string' && raw.owner ? { owner: raw.owner } : {}),
+    ...(typeof raw.label === 'string' ? { label: raw.label } : {}),
+    ...(raw.frame ? { frame: true } : {}),
+    ...(typeof raw.url === 'string' ? { url: raw.url } : {}),
+    ...(raw.direction === 'out' || raw.direction === 'in' ? { direction: raw.direction } : {}),
+    ...(typeof raw.method === 'string' && raw.method ? { method: raw.method } : {}),
+    ...(raw.any === true ? { any: true } : {}),
+    ...(typeof raw.step === 'number' ? { step: raw.step } : {}),
+  };
+}
+
+/**
+ * Keep a kind out of the open sequence's list. A kind hidden nowhere yet is
+ * hidden here only; one the site already hides by another type is taken up
+ * by this sequence.
+ */
+export function hideKind(connection: string, raw: Record<string, unknown>): void {
+  const session = sessions.get(connection);
+  const kind = hiddenFrom(raw);
+  if (!session || !kind) return;
+  const kinds = session.hiddenKinds ??= new Map();
+  const held = kinds.get(kind.key);
+  if (!held) {
+    // Local unless the rule was made with another type; an opt-in rule made
+    // here is opted into here.
+    const mode = raw.mode === 'optIn' || raw.mode === 'optOut' ? raw.mode : 'local';
+    kinds.set(kind.key, { ...kind, mode, ...(mode === 'local' && nameOf(session) ? { owner: nameOf(session) } : {}) });
+    if (mode === 'optIn') setHiddenUse(connection, kind.key, true);
+    return;
+  }
+  setHiddenUse(connection, kind.key, true);
+}
+
+/** Show a kind again everywhere: its hiding leaves the site file. */
+export function unhideKind(connection: string, key: string): void {
+  const session = sessions.get(connection);
+  session?.hiddenKinds?.delete(key);
+  session?.hiddenUses?.delete(key);
+}
+
+/** Hide a kind in the open sequence, or list it there; a choice its type already gives is not recorded. */
+export function setHiddenUse(connection: string, key: string, on: boolean): void {
+  const session = sessions.get(connection);
+  const kind = session?.hiddenKinds?.get(key);
+  if (!session || !kind) return;
+  const uses = session.hiddenUses ??= new Map();
+  if (kind.mode === 'local') {
+    if (!on && kind.owner === nameOf(session)) kinds(session).delete(key);
+    return;
+  }
+  if (on === (kind.mode === 'optOut')) uses.delete(key);
+  else uses.set(key, on);
+}
+
+/** Change which sequences a hidden kind is hidden in. Made local, it belongs to the open sequence. */
+export function setHiddenMode(connection: string, key: string, mode: HiddenKind['mode']): void {
+  const session = sessions.get(connection);
+  const kind = session?.hiddenKinds?.get(key);
+  if (!session || !kind) return;
+  const here = hiddenHere(session, kind);
+  const { owner: _owner, ...rest } = kind;
+  kinds(session).set(key, { ...rest, mode, ...(mode === 'local' && nameOf(session) ? { owner: nameOf(session) } : {}) });
+  session.hiddenUses?.delete(key);
+  if (mode !== 'local') setHiddenUse(connection, key, here);
+}
+
+function kinds(session: BenchSession): Map<string, HiddenKind> {
+  return session.hiddenKinds ??= new Map();
+}
+
+/**
+ * Write the session's rules, waits and refuse setting onto the open sequence.
+ *
+ * Called on every change, so a rule made is a rule kept: an explicit save was
+ * a step that, forgotten, lost every decision with the session. While a
+ * recording runs there is no file to write to, and the rules are written once
+ * it lands. `force` writes an empty set too, which a change never needs to.
+ */
+async function persistRules(connection: string, force = false, change?: string): Promise<string | undefined> {
+  const session = sessions.get(connection);
+  if (!session?.sequences) return undefined;
+
+  // The site file is written apart from the sequence: it has one whether or
+  // not a sequence is open, and a recording has no sequence file yet.
+  const responses = [...(session.boundaryRules?.values() ?? [])].map(storedRule);
+  const hidden = [...(session.hiddenKinds?.values() ?? [])];
+  const siteNow = JSON.stringify([responses, hidden]);
+  if (session.site && siteNow !== (session.siteWritten ?? '[[],[]]')) {
+    const failure = await session.sequences.saveSiteRules(session.site, responses as unknown as Array<Record<string, unknown>>,
+      change, hidden as unknown as Array<Record<string, unknown>>);
+    if (failure) {
+      session.sequenceFailure = failure;
+      return failure;
+    }
+    session.siteWritten = siteNow;
+  }
+
+  if (session.recordingSequence || !session.sequences.active()) return undefined;
+  const held = [...(session.uses?.entries() ?? [])].filter(([key]) => session.boundaryRules?.has(key));
+  const off = held.filter(([, use]) => use === 'none').map(([key]) => key);
+  const on = held.filter(([, use]) => use !== 'none')
+    .map(([key, use]) => (Array.isArray(use) ? { key, steps: use } : { key }));
+  const waits = [...(session.boundaryWaits?.values() ?? [])].map(({ step, key, count, seconds, onFail }) => ({
+    step, count: count ?? 1, ...(key ? { key } : {}),
+    ...(seconds !== undefined ? { seconds } : {}), ...(onFail ? { onFail } : {}),
+  }));
+  const refuseWrites = getProxy(connection)?.refusesWrites ?? false;
+  const names = namesOf(connection);
+  const any = waits.length > 0 || refuseWrites || Object.keys(names).length > 0 || held.length > 0
+    || (session.hiddenUses?.size ?? 0) > 0;
+  if (!force && !any && !session.rulesWritten) return undefined;
+  const hiddenUses = [...(session.hiddenUses?.entries() ?? [])].filter(([key]) => session.hiddenKinds?.has(key));
+  const failure = await session.sequences.saveBoundaryRules([], waits, refuseWrites, names, change, off, on, {
+    on: hiddenUses.filter(([, hid]) => hid).map(([key]) => key),
+    off: hiddenUses.filter(([, hid]) => !hid).map(([key]) => key),
+  });
+  if (failure) {
+    session.sequenceFailure = failure;
+    return failure;
+  }
+  session.rulesWritten = any;
+  return `${held.length} response use${held.length === 1 ? '' : 's'}`
+    + ` and ${waits.length} wait${waits.length === 1 ? '' : 's'}`
+    + `${refuseWrites ? ', refusing unmatched writes,' : ''} written onto the sequence`;
 }
 
 /**
@@ -1250,13 +1843,24 @@ export function clearBoundaryRule(connection: string, key: string): BoundaryRule
 export function setBoundaryWait(
   connection: string,
   step: number,
-  count: number
-): Array<{ step: number; count: number }> {
+  count: number,
+  key?: string,
+  details: { seconds?: number; onFail?: 'fail' | 'continue' } = {},
+): StepWait[] {
   const session = sessions.get(connection);
   if (!session) return [];
   const waits = session.boundaryWaits ??= new Map();
-  if (count > 0) waits.set(step, count);
-  else waits.delete(step);
+  const id = `${step}|${key ?? ''}`;
+  if (count > 0) {
+    waits.set(id, {
+      ...waits.get(id), step, ...(key ? { key } : {}), count,
+      ...(details.seconds !== undefined ? { seconds: details.seconds } : {}),
+      ...(details.onFail ? { onFail: details.onFail } : {}),
+    });
+  } else {
+    waits.delete(id);
+  }
+  armWaits(connection);
   return waitsOf(connection);
 }
 
@@ -1272,6 +1876,7 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
   // clicked so far, so the list fills as the person works.
   if (session.recordingSequence) {
     const steps = await recordedSteps(session);
+    session.recordingStepTimes = steps.map(step => step.at);
     for (const step of steps) {
       const note = session.recordingNotes?.get(step.index);
       if (note?.comment) step.comment = note.comment;
@@ -1293,6 +1898,14 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
       currentStep: steps.length,
       total: steps.length,
       busy: session.sequenceBusy, recording: true, variables: [],
+      ...(session.recordingInto ? {
+        into: {
+          name: session.recordingInto.name,
+          after: session.recordingInto.after,
+          labels: session.sequences.labelsOf(session.recordingInto.name),
+        },
+      } : {}),
+      ...(session.recordingStartedAt ? { recordingSince: session.recordingStartedAt } : {}),
       ...(session.pendingStep ? { pendingStep: session.pendingStep } : {}),
       ...(session.sequences.baseUrl() ? { baseUrl: session.sequences.baseUrl() } : {}),
       ...(session.sequenceFailure ? { failure: session.sequenceFailure } : {}),
@@ -1312,6 +1925,16 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
     };
   }
 
+  // The steps changed under the bench - a step put in, taken out or moved,
+  // here or by an edit elsewhere - so what it armed by step number is armed
+  // again from the file, which the change renumbered.
+  const shape = `${active.name}\u0000${active.steps.map(step => step.label).join('\u0000')}`;
+  if (session.armedShape !== undefined && session.armedShape !== shape && !session.sequenceBusy) {
+    session.armedShape = shape;
+    await armSavedRules(connection);
+  }
+  session.armedShape = shape;
+
   const issue = await session.sequences.issue().catch(() => undefined);
 
   return {
@@ -1328,6 +1951,7 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
     ...(session.sequencePaused ? { paused: true } : {}),
     ...(session.recordingSequence ? { recording: true } : {}),
     variables: active.variables,
+    ...(active.placements ? { placements: active.placements } : {}),
     ...(session.sequences.baseUrl() ? { baseUrl: session.sequences.baseUrl() } : {}),
     ...(session.sequenceFailure ? { failure: session.sequenceFailure } : {}),
     steps: active.steps.map((step, index) => ({
@@ -1336,12 +1960,16 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
       ...(step.comment ? { comment: step.comment } : {}),
       ...(step.resolved ? { resolved: step.resolved } : {}),
       ...(step.captures ? { captures: step.captures } : {}),
+      ...(step.stores !== undefined ? { stores: step.stores } : {}),
+      ...(step.reads?.length ? { reads: step.reads } : {}),
+      ...(step.tool ? { tool: step.tool, params: step.params ?? {} } : {}),
       // Dropping these here is invisible at the write - the note reaches the
       // file and the event stream all the same - and leaves the pane showing
       // nothing under the step it was just filed against. The same held for
       // traffic: written to the file, whitelisted out on the way back.
       ...(step.annotations?.length ? { annotations: step.annotations } : {}),
       ...(step.traffic ? { traffic: step.traffic } : {}),
+      ...(step.expected ? { expected: step.expected } : {}),
       done: index < active.currentStep,
       current: index === active.currentStep,
       ...(active.failedStep === index ? { failed: true } : {}),
@@ -1358,6 +1986,33 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
  * this worth doing by hand: the freeze is issued by the runner rather than by
  * someone noticing a state and reaching for a button.
  */
+/**
+ * Run `drive` with the app's tab in front, then put the bench back.
+ *
+ * Chrome delivers no synthesised mouse input to a hidden tab, so a step's
+ * click on an app tab behind the bench landed nowhere while the step read as
+ * done. Counted, so a play wrapping many steps switches tabs once rather than
+ * once per step; a tab already visible - beside the bench in split view - is
+ * left alone.
+ */
+async function withAppInFront<T>(session: BenchSession, drive: () => Promise<T>): Promise<T> {
+  if ((session.appInFront ?? 0) > 0) {
+    session.appInFront = (session.appInFront ?? 0) + 1;
+    try { return await drive(); } finally { session.appInFront = (session.appInFront ?? 1) - 1; }
+  }
+  const visible = await request(session.client, 'Runtime.evaluate', {
+    expression: 'document.visibilityState', returnByValue: true,
+  }).then(r => r?.result?.value !== 'hidden').catch(() => true);
+  session.appInFront = 1;
+  if (!visible) await session.page.bringToFront().catch(() => {});
+  try {
+    return await drive();
+  } finally {
+    session.appInFront = 0;
+    if (!visible) await session.benchPage?.bringToFront().catch(() => {});
+  }
+}
+
 async function driveSequence(
   connection: string,
   drive: (driver: SequenceDriver, signal: AbortSignal) => Promise<string | undefined>
@@ -1379,9 +2034,11 @@ async function driveSequence(
   const unlatch = setTimeout(() => { session.sequenceBusy = false; }, STEP_TIMEOUT_MS + 15000);
 
   try {
-    // The picker would swallow the step's own click.
-    if (wasArmed) await setInspectMode(session, false);
-    session.sequenceFailure = await withPageReleased(session, async () => {
+    // The picker would swallow the step's own click. Disarmed whatever the
+    // flag says: Chrome's inspect mode outlives a pick, and a flag that read
+    // off while it was on let every replayed click land as a pick.
+    await setInspectMode(session, false);
+    session.sequenceFailure = await withAppInFront(session, () => withPageReleased(session, async () => {
       // Let the page paint before driving it: a step following a navigate can
       // otherwise look for an element the framework has not rendered yet.
       // Bounded, because rAF never fires on a page that is still held.
@@ -1401,7 +2058,7 @@ async function driveSequence(
         new Promise<string>(resolve =>
           setTimeout(() => resolve('the step did not finish in time'), STEP_TIMEOUT_MS)),
       ]);
-    });
+    }));
   } catch (error) {
     debugLog('bench', `sequence step failed: ${error}`);
   } finally {
@@ -1426,7 +2083,9 @@ async function driveSequence(
  */
 export const selectSequence = async (connection: string, name: string) => {
   const state = await driveSequence(connection, (driver) => driver.start(name, connection));
-  armSavedRules(connection);
+  const session = sessions.get(connection);
+  if (session) session.armedShape = undefined;
+  await armSavedRules(connection);
   return state;
 };
 
@@ -1442,37 +2101,99 @@ export const selectSequence = async (connection: string, name: string) => {
  * that sequence's decisions, and leaving them armed answers traffic the open
  * sequence never asked about.
  */
-function armSavedRules(connection: string): void {
+async function armSavedRules(connection: string): Promise<void> {
   const session = sessions.get(connection);
   if (!session?.sequences) return;
-  for (const key of [...(session.boundaryRules?.keys() ?? [])]) clearBoundaryRule(connection, key);
   session.boundaryWaits?.clear();
 
   const held = session.sequences.openBoundaryRules();
+  session.boundaryNames = new Map(Object.entries(held.names ?? {}));
+  session.rulesWritten = held.rules.length > 0 || held.refuseWrites || (held.waits?.length ?? 0) > 0
+    || session.boundaryNames.size > 0 || (held.off?.length ?? 0) > 0 || (held.on?.length ?? 0) > 0;
   getProxy(connection)?.refuseUnmatchedWrites(held.refuseWrites);
+  const uses = new Map<string, ResponseUse>([
+    ...(held.off ?? []).map(key => [key, 'none'] as const),
+    ...(held.on ?? []).map(({ key, steps }) => [key, steps?.length ? steps : 'all'] as const),
+  ]);
+  const hiddenUses = new Map<string, boolean>([
+    ...(held.hiddenOn ?? []).map(key => [key, true] as const),
+    ...(held.hiddenOff ?? []).map(key => [key, false] as const),
+  ]);
+  await armSiteRules(connection, session.sequences.siteOf() ?? originOf(session.page.url()), uses, hiddenUses);
+  // A response kept on the sequence before responses moved to the site file:
+  // moved there, used by this sequence where it answered before.
   for (const raw of held.rules) {
-    const key = String(raw.key ?? '');
-    if (!key) continue;
-    setBoundaryRule(connection, {
-      key,
-      verb: (raw.verb === 'block' || raw.verb === 'hide') ? raw.verb : 'answer',
-      ...(raw.frame ? { frame: true } : {}),
-      ...(typeof raw.method === 'string' ? { method: raw.method } : {}),
-      ...(typeof raw.step === 'number' ? { step: raw.step } : {}),
-      ...(typeof raw.body === 'string' ? { body: raw.body } : {}),
-      ...(raw.status !== undefined ? { status: String(raw.status) } : {}),
-      ...(typeof raw.recorded === 'string' ? { recorded: raw.recorded } : {}),
-      ...(typeof raw.label === 'string' ? { label: raw.label } : {}),
-      ...(typeof raw.url === 'string' ? { url: raw.url } : {}),
-      ...(raw.direction === 'out' || raw.direction === 'in' ? { direction: raw.direction } : {}),
-      // Dropped here, a saved rule comes back without the values its dropped
-      // constraints were recorded with, so the round trip through the file
-      // undoes the widening and takes the row that reverses it.
-      ...(raw.staged !== null && typeof raw.staged === 'object'
-        ? { staged: raw.staged as BoundaryRule['staged'] } : {}),
+    const rule = ruleFrom(raw);
+    if (rule?.verb === 'hide') {
+      if (!session.hiddenKinds?.has(rule.key)) hideKind(connection, { ...raw, label: rule.label });
+      continue;
+    }
+    if (!rule || session.boundaryRules?.has(rule.key)) continue;
+    setBoundaryRule(connection, { ...rule, mode: 'local' });
+    setResponseUse(connection, rule.key, rule.step !== undefined ? [rule.step] : 'all');
+  }
+  // A wait names the kind it counts; one saved before waits did counted
+  // every crossing under its step, which no step means, so it is dropped.
+  // Old hides moved out of the responses are written back at once, so the
+  // site file stops holding a hide where an answer belongs.
+  if (session.siteWritten === 'moved') await persistRules(connection, false, 'hidden kinds moved to their own list');
+  for (const wait of held.waits.filter(one => one.key)) {
+    setBoundaryWait(connection, wait.step, wait.count, wait.key, {
+      ...(wait.seconds !== undefined ? { seconds: wait.seconds } : {}), ...(wait.onFail ? { onFail: wait.onFail } : {}),
     });
   }
-  for (const wait of held.waits) setBoundaryWait(connection, wait.step, wait.count);
+}
+
+/**
+ * Replace every held response with the site's, used as `uses` says.
+ *
+ * What a new recording starts from as well as what an opened sequence builds
+ * on: without it a recording kept answering from whichever sequence was open
+ * before it, and saved those answers as its own.
+ */
+async function armSiteRules(
+  connection: string, site: string | undefined, uses: Map<string, ResponseUse>,
+  hiddenUses: Map<string, boolean> = new Map(),
+): Promise<void> {
+  const session = sessions.get(connection);
+  if (!session?.sequences) return;
+  for (const key of [...(session.boundaryRules?.keys() ?? [])]) dropRule(session, connection, key);
+  session.site = site;
+  session.uses = uses;
+  session.hiddenUses = hiddenUses;
+  session.hiddenKinds = new Map();
+  const raws = site ? await session.sequences.openSiteRules(site).catch(() => []) : [];
+  const hidden = site ? await session.sequences.openSiteHidden(site).catch(() => []) : [];
+  for (const raw of hidden) {
+    const kind = hiddenFrom(raw);
+    if (kind) session.hiddenKinds.set(kind.key, kind);
+  }
+  // A kind hidden before hiding had its own list was kept as a response
+  // with the verb `hide`; it moves to the hidden list, and the next write
+  // takes it out of the responses.
+  let moved = false;
+  for (const raw of raws) {
+    const rule = ruleFrom(raw);
+    if (rule?.verb === 'hide') {
+      const kind = hiddenFrom({ ...raw, mode: rule.mode === 'optIn' || rule.mode === 'optOut' ? rule.mode : 'local' });
+      if (kind && !session.hiddenKinds.has(kind.key)) session.hiddenKinds.set(kind.key, kind);
+      moved = true;
+      continue;
+    }
+    if (rule) setBoundaryRule(connection, rule);
+  }
+  session.siteWritten = moved ? 'moved'
+    : JSON.stringify([[...(session.boundaryRules?.values() ?? [])].map(storedRule), [...session.hiddenKinds.values()]]);
+}
+
+/** `http://localhost:7788/a?b` → `http://localhost:7788`; nothing for a page with no web origin. */
+function originOf(url: string | undefined): string | undefined {
+  try {
+    const origin = url ? new URL(url).origin : 'null';
+    return origin === 'null' ? undefined : origin;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Clear the failure line, which otherwise stands until something else fails. */
@@ -1488,6 +2209,8 @@ export async function setSequenceBaseUrl(connection: string, baseUrl: string): P
   const session = sessions.get(connection);
   if (!session?.sequences) return undefined;
   session.sequences.setBaseUrl(baseUrl.trim());
+  // Another host is another site, with its own site rules.
+  await armSavedRules(connection);
   return getSequenceState(connection);
 }
 
@@ -1591,26 +2314,29 @@ export async function playSequence(connection: string): Promise<SequenceState | 
   let state = await getSequenceState(connection);
   const total = state?.total ?? 0;
 
-  // Bounded by the step count: a step that fails ends the run, and one that
-  // does not advance would otherwise loop forever.
-  for (let guard = 0; guard <= total; guard++) {
-    const before = state?.currentStep ?? 0;
-    state = await stepSequence(connection);
-    // Asked for part-way through: the step in flight is allowed to finish, so
-    // the run stops on a step rather than inside one.
-    if (session.sequenceHalt) {
-      session.sequenceHalt = false;
-      session.sequencePaused = true;
-      // Interrupted, not failed: the step stopped because someone asked, and
-      // a failure line here puts a red box in front of what they chose.
-      session.sequenceFailure = undefined;
-      state = await getSequenceState(connection);
-      break;
+  // The app stays in front for the whole run, so the tabs switch once.
+  await withAppInFront(session, async () => {
+    // Bounded by the step count: a step that fails ends the run, and one that
+    // does not advance would otherwise loop forever.
+    for (let guard = 0; guard <= total; guard++) {
+      const before = state?.currentStep ?? 0;
+      state = await stepSequence(connection);
+      // Asked for part-way through: the step in flight is allowed to finish, so
+      // the run stops on a step rather than inside one.
+      if (session.sequenceHalt) {
+        session.sequenceHalt = false;
+        session.sequencePaused = true;
+        // Interrupted, not failed: the step stopped because someone asked, and
+        // a failure line here puts a red box in front of what they chose.
+        session.sequenceFailure = undefined;
+        state = await getSequenceState(connection);
+        break;
+      }
+      if (!state || state.failure) break;
+      if (state.currentStep >= state.total) break;
+      if (state.currentStep === before) break;
     }
-    if (!state || state.failure) break;
-    if (state.currentStep >= state.total) break;
-    if (state.currentStep === before) break;
-  }
+  });
   session.sequencePlaying = false;
   return getSequenceState(connection);
 }
@@ -1627,7 +2353,9 @@ export async function recordSequence(
   name: string,
   withAgent = false,
   /** Where the recording opens. Empty leaves the page where it stands. */
-  startUrl = ''
+  startUrl = '',
+  /** Record into this sequence, after this step, rather than as a sequence of its own. */
+  into?: { name: string; after: number },
 ): Promise<SequenceState | undefined> {
   const session = sessions.get(connection);
   if (!session?.sequences) return undefined;
@@ -1649,7 +2377,7 @@ export async function recordSequence(
   }
 
   try {
-    if (wasArmed) await setInspectMode(session, false);
+    await setInspectMode(session, false);
     // Nothing carried over from a previous recording: the page keeps its buffer
     // across runs, and a stale event would land as this recording's first step.
     await evaluateInPage(session, 'globalThis.__cdpRecordingEvents = []').catch(() => {});
@@ -1660,9 +2388,17 @@ export async function recordSequence(
       await session.page.goto(startUrl, { waitUntil: 'load' }).catch(() => {});
     }
     session.recordingStartUrl = startUrl || session.page.url();
+    session.recordingInto = into;
+    // A new sequence answers with the site's rules and nothing else: the open
+    // sequence's own are its decisions, not this one's.
+    session.boundaryWaits?.clear();
+    await armSiteRules(connection, originOf(session.recordingStartUrl) ?? session.sequences.siteOf(), new Map(), new Map());
     session.recordingStartedAt = Date.now();
+    session.recordingEndedAt = undefined;
+    session.recordedName = undefined;
     session.stepTraffic = new Map();
     session.recordingNotes = new Map();
+    session.recordingEdits = new Map();
     session.recordingAnnotations = new Map();
     session.recordingSequence = true;
     session.recordingName = name;
@@ -1682,6 +2418,8 @@ export async function recordSequence(
     session.sequenceFailure = String(error);
   } finally {
     session.recordingSequence = false;
+    session.recordingEndedAt = Date.now();
+    session.recordedName = cancelled ? undefined : name;
     session.recordingWithAgent = false;
     session.pendingStep = null;
     if (wasArmed) await setInspectMode(session, true).catch(() => {});
@@ -1689,8 +2427,30 @@ export async function recordSequence(
   }
 
   if (!cancelled) await flushRecordingNotes(session);
+  // Rules made while recording were held on the session, since the sequence
+  // had no file; it has one now, and is the one selected.
+  if (!cancelled) await persistRules(connection);
   if (!cancelled) await persistStepTraffic(session, connection);
+  // Steps changed while recording were held against their positions; the
+  // file exists now, so they are written into it.
+  if (!cancelled) {
+    for (const [index, params] of session.recordingEdits ?? []) {
+      const failure = await session.sequences.editStep(index, params).catch(error => String(error));
+      if (failure) session.sequenceFailure = failure;
+    }
+  }
+  session.recordingEdits = undefined;
   if (withAgent) await announceRecording(session, connection, name, cancelled);
+  // Recorded into another sequence: its steps go there, after the step the
+  // run stood on, and that sequence is the one open again.
+  session.recordingInto = undefined;
+  if (into) {
+    if (!cancelled) {
+      const failure = await session.sequences.spliceRecording(name, into.name, into.after).catch(error => String(error));
+      if (failure) session.sequenceFailure = failure;
+    }
+    await selectSequence(connection, into.name);
+  }
   return getSequenceState(connection);
 }
 
@@ -1758,9 +2518,10 @@ async function persistStepTraffic(session: BenchSession, connection: string): Pr
   const steps = session.sequences.active()?.steps ?? [];
   const last = steps.length - 1;
   if (last >= 0 && !held.has(last) && session.lastStepAt !== undefined) {
-    const traffic = await session.sequences.trafficIn(connection, session.lastStepAt, Date.now())
+    const to = Date.now();
+    const traffic = await session.sequences.trafficIn(connection, session.lastStepAt, to)
       .catch(() => undefined);
-    if (traffic) held.set(last, traffic);
+    if (traffic) held.set(last, withWrites(session, traffic, session.lastStepAt, to));
   }
 
   const entries = [...held.entries()]
@@ -1806,8 +2567,8 @@ async function attachStepTraffic(
     if (from !== undefined && to === undefined) session.lastStepAt = from;
     if (from === undefined || to === undefined) continue;
 
-    const traffic = await session.sequences.trafficIn(connection, from, to)
-      .catch(() => ({ requests: 0, failed: 0, opened: 0, writes: 0, lines: [] as string[] }));
+    const traffic = withWrites(session, await session.sequences.trafficIn(connection, from, to)
+      .catch(() => ({ requests: 0, failed: 0, opened: 0, writes: 0, lines: [] as string[] })), from, to);
     held.set(index, traffic);
     if (hasEvidence(traffic)) steps[index].traffic = traffic;
     return;
@@ -1876,6 +2637,45 @@ async function evaluateInPage(session: BenchSession, expression: string): Promis
 /** Stop or resume the page's own capture, which the recorder checks per event. */
 async function setCapturePaused(session: BenchSession, paused: boolean): Promise<void> {
   await evaluateInPage(session, `globalThis.__cdpRecordingPaused = ${paused ? 'true' : 'false'}`)
+    .catch(() => {});
+}
+
+/**
+ * Put a fixed pause into the recording, after the last action: it lands in
+ * the page's buffer with the clicks, so it takes its place in their order and
+ * becomes a `wait` step when the recording is saved.
+ */
+export async function addRecordingTimer(connection: string, ms: number): Promise<void> {
+  const session = sessions.get(connection);
+  if (!session?.recordingSequence || !(ms > 0)) return;
+  await evaluateInPage(session,
+    `(globalThis.__cdpRecordingEvents ||= []).push({ type: 'timer', ms: ${Math.round(ms)}, timestamp: Date.now() })`)
+    .catch(() => {});
+}
+
+/** Store a named value into the recording, after the last action; see VariableEvent. */
+export async function addRecordingVariable(connection: string, name: string, value: string): Promise<string | undefined> {
+  const session = sessions.get(connection);
+  if (!session?.recordingSequence) return 'nothing is recording';
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return `"${name}" is not a usable variable name`;
+  await evaluateInPage(session,
+    `(globalThis.__cdpRecordingEvents ||= []).push(Object.assign(${JSON.stringify({ type: 'variable', name, value })}, { timestamp: Date.now() }))`)
+    .catch(() => {});
+  return undefined;
+}
+
+/**
+ * Change or drop a variable the recording stores: every stored value of that
+ * name in the page's buffer takes the new value, or goes. Nothing else in the
+ * buffer moves, so the steps around it keep their places.
+ */
+export async function editRecordingVariable(connection: string, name: string, value: string | null): Promise<void> {
+  const session = sessions.get(connection);
+  if (!session?.recordingSequence) return;
+  const match = `(event) => event && event.type === 'variable' && event.name === ${JSON.stringify(name)}`;
+  await evaluateInPage(session, value === null
+    ? `globalThis.__cdpRecordingEvents = (globalThis.__cdpRecordingEvents || []).filter(event => !(${match})(event))`
+    : `(globalThis.__cdpRecordingEvents || []).filter(${match}).forEach(event => { event.value = ${JSON.stringify(value)}; })`)
     .catch(() => {});
 }
 
@@ -2066,10 +2866,52 @@ export async function removeSequenceStep(connection: string, index: number): Pro
   const session = sessions.get(connection);
   if (!session?.sequences) return undefined;
   session.sequenceFailure = await session.sequences.removeStep(index).catch(error => String(error));
+  if (!session.sequenceFailure) await armSavedRules(connection);
   return getSequenceState(connection);
 }
 
-/** Move a step to another position in the open sequence. */
+/** Replace what a step is given, as edited in the bench. */
+export async function editSequenceStep(connection: string, index: number, params: unknown): Promise<SequenceState | undefined> {
+  const session = sessions.get(connection);
+  if (!session?.sequences) return undefined;
+  if (params === null || typeof params !== 'object' || Array.isArray(params)) {
+    session.sequenceFailure = `step ${index + 1}: what a step is given has to be a JSON object`;
+    return getSequenceState(connection);
+  }
+  // A recording has no file yet: the change is held against the step and
+  // written when the recording is saved.
+  if (session.recordingSequence) {
+    (session.recordingEdits ??= new Map()).set(index, params as Record<string, unknown>);
+    session.sequenceFailure = undefined;
+    return getSequenceState(connection);
+  }
+  session.sequenceFailure = await session.sequences.editStep(index, params as Record<string, unknown>).catch(error => String(error));
+  return getSequenceState(connection);
+}
+
+/**
+ * Put a fixed pause after a step: into the file for a saved sequence, and
+ * for one being recorded, after its latest action, which is the only place a
+ * recording can take one.
+ */
+export async function insertSequenceTimer(connection: string, after: number, ms: number): Promise<SequenceState | undefined> {
+  const session = sessions.get(connection);
+  if (!session?.sequences || !(ms > 0)) return undefined;
+  if (session.recordingSequence) await addRecordingTimer(connection, ms);
+  else {
+    session.sequenceFailure = await session.sequences.insertTimer(after, ms).catch(error => String(error));
+    if (!session.sequenceFailure) await armSavedRules(connection);
+  }
+  return getSequenceState(connection);
+}
+
+/**
+ * Move a step to another position in the open sequence.
+ *
+ * The file's waits, names and uses are renumbered by the move; the copies armed
+ * in memory still carry the old step numbers, and the next rules write would
+ * put those back, so they are read again from the file.
+ */
 export async function moveSequenceStep(
   connection: string,
   from: number,
@@ -2078,6 +2920,7 @@ export async function moveSequenceStep(
   const session = sessions.get(connection);
   if (!session?.sequences) return undefined;
   session.sequenceFailure = await session.sequences.moveStep(from, to).catch(error => String(error));
+  if (!session.sequenceFailure) await armSavedRules(connection);
   return getSequenceState(connection);
 }
 
@@ -2190,44 +3033,297 @@ export async function noteAtStep(connection: string, step: number): Promise<void
   await setInspectMode(session, true).catch(() => {});
 }
 
+/** The window, where it is scrolled to, and the document's size, in CSS px. */
+interface Layout {
+  viewport: { width: number; height: number; dpr: number };
+  scroll: { x: number; y: number };
+  document: { width: number; height: number };
+}
+
+/**
+ * Read from Page.getLayoutMetrics, which the browser answers on a held page.
+ * The pixel ratio comes from the page: a capture's pixels are CSS px times it,
+ * and every rectangle in a record is kept in CSS px so a retake on another
+ * display still lands on the same region.
+ */
+async function layoutOf(session: BenchSession): Promise<Layout> {
+  const metrics = await request(session.client, 'Page.getLayoutMetrics');
+  const css = metrics.cssLayoutViewport;
+  const ratio = await request(session.client, 'Runtime.evaluate', {
+    expression: 'devicePixelRatio', returnByValue: true,
+  }).catch(() => undefined);
+  return {
+    viewport: { width: css.clientWidth, height: css.clientHeight, dpr: Number(ratio?.result?.value) || 1 },
+    scroll: { x: css.pageX, y: css.pageY },
+    document: { width: Math.round(metrics.cssContentSize.width), height: Math.round(metrics.cssContentSize.height) },
+  };
+}
+
+/** Where the page's JS stands, for a capture to carry. */
+function pauseOf(session: BenchSession): CapturePause {
+  const event = session.pausedEvent;
+  if (!session.pauseTaken || !event) return { taken: false };
+  const entry = describePause(session, event, 0);
+  const by = event.hitBreakpoints?.length ? 'breakpoint'
+    : session.pauseRequested && !session.heldByOther ? 'bench'
+    : event.reason === 'other' ? 'debugger statement'
+    : String(event.reason ?? 'other');
+  return {
+    taken: true,
+    ...(entry.fn ? { fn: entry.fn } : {}),
+    ...(entry.url ? { url: entry.url } : {}),
+    ...(entry.line !== undefined ? { line: entry.line } : {}),
+    by,
+  };
+}
+
+/**
+ * Open the capture dialog: hold the page and arm the picker for a capture.
+ *
+ * A freeze already on is recorded, so closing the dialog releases only the
+ * hold the dialog made. Opened from a note, the capture taken joins that note.
+ */
+export async function beginCapture(connection: string, annotationId?: string): Promise<void> {
+  const session = sessions.get(connection);
+  if (!session) return;
+  const heldBefore = session.shotArmed?.heldBefore ?? session.frozen;
+  session.pendingShot = null;
+  session.pendingCapture = undefined;
+  await freeze(session);
+  session.shotArmed = { heldBefore, ...(annotationId ? { annotationId } : {}) };
+  await setInspectMode(session, true);
+}
+
+/** Close the dialog with nothing taken. */
+export async function cancelCapture(connection: string): Promise<void> {
+  const session = sessions.get(connection);
+  if (!session?.shotArmed) return;
+  const { heldBefore } = session.shotArmed;
+  session.shotArmed = undefined;
+  await setInspectMode(session, false).catch(() => {});
+  if (!heldBefore) await unfreeze(session);
+}
+
+/** Release a hold the capture dialog made, once its capture is saved or dropped. */
+async function endCaptureHold(session: BenchSession, heldBefore: boolean | undefined): Promise<void> {
+  if (heldBefore === false) await unfreeze(session);
+}
+
+export function setFactChoice(connection: string, kinds: FactKind[]): void {
+  const session = sessions.get(connection);
+  if (session) session.factChoice = kinds;
+}
+
+/**
+ * Read element facts the held capture was taken without, and keep them with it.
+ *
+ * The capture dialog's page hold lasts until the draft is saved, so facts read
+ * now belong to the same moment as the picture. Also becomes the dialog's
+ * choice, so the next element capture reads them from the start.
+ */
+export async function readMoreFacts(connection: string, kinds: FactKind[]): Promise<void> {
+  const session = sessions.get(connection);
+  const shot = session?.pendingShot;
+  const context = session?.pendingCapture;
+  if (!session || !shot || !context || shot.kind !== 'element' || !shot.selector) return;
+  session.factChoice = [...new Set([...session.factChoice, ...kinds])];
+  const missing = kinds.filter(kind => !shot.facts.includes(kind));
+  if (!missing.length) return;
+  const objectId = await elementObject(session, shot.selector, shot.widen);
+  if (!objectId) {
+    session.sequenceFailure = `\`${shot.selector}\` no longer matches an element, so its ${missing.join(', ')} could not be read`;
+    return;
+  }
+  try {
+    const read = await readFacts(session.client, objectId, missing, { scripts: session.scripts, sheets: session.sheets });
+    const { unread, ...found } = read;
+    context.facts = {
+      ...context.facts, ...found,
+      ...(unread || context.facts?.unread ? { unread: { ...context.facts?.unread, ...unread } } : {}),
+    };
+    shot.facts = [...shot.facts, ...missing.filter(kind => !unread?.[kind])];
+  } finally {
+    await send(session.client, 'Runtime.releaseObject', { objectId });
+  }
+}
+
+/** The element a selector names, walked out by `widen`, as a remote object. */
+async function elementObject(session: BenchSession, selector: string, widen: number): Promise<string | undefined> {
+  const { result } = await request(session.client, 'Runtime.evaluate', {
+    expression: `(() => {
+      let el = ${matchExpression(selector)};
+      if (!el) return null;
+      for (let out = 0; out < ${Math.max(0, Math.trunc(widen))}; out++) {
+        if (!el.parentElement || el.parentElement === document.body) break;
+        el = el.parentElement;
+      }
+      return el;
+    })()`,
+    returnByValue: false,
+  }).catch(() => ({ result: undefined }));
+  return result?.objectId;
+}
+
+/**
+ * The page's own CDP session, which Puppeteer sized the viewport through.
+ *
+ * Chrome keeps a size override per session and a clipped or beyond-viewport
+ * capture applies the capturing session's own for its duration: sent from the
+ * bench's session, it drops the size a headless launch set, and the element is
+ * captured laid out at the bare window's width. Captures and the retake's
+ * resize go through the session holding that size instead.
+ */
+function pageSession(session: BenchSession): CDPSession {
+  const own = (session.page as unknown as { _client?: () => CDPSession })._client?.();
+  return own ?? session.client;
+}
+
+/**
+ * A clip's `scale` multiplies the device scale factor, so scale 1 returns the
+ * element at the display's own resolution, as the window and page captures are.
+ */
+async function shoot(
+  session: BenchSession,
+  kind: CaptureKind,
+  clip?: { x: number; y: number; width: number; height: number },
+): Promise<string | undefined> {
+  const shot = await request(pageSession(session), 'Page.captureScreenshot', {
+    format: 'png',
+    captureBeyondViewport: kind === 'page',
+    ...(clip ? { clip: { ...clip, scale: 1 } } : {}),
+  }, 10_000);
+  return shot?.data;
+}
+
 /**
  * Take a capture and hold it; saveBenchScreenshot writes it once accepted.
- * `widen` walks up from the element the selector names, by that many parents.
+ *
+ * `element` clips to the box a selector names, walked out `widen` parents;
+ * `screen` is what the window shows; `page` is the whole document, with the
+ * window's rectangle offered as a mark when `viewportMark` is set.
  */
 export async function captureBenchScreenshot(
   connection: string,
-  selector?: string,
-  widen = 0,
-  annotationId?: string
+  ask: {
+    kind: CaptureKind;
+    selector?: string;
+    widen?: number;
+    annotationId?: string;
+    viewportMark?: boolean;
+    /** From the dialog: whether the page was held before it opened. */
+    heldBefore?: boolean;
+  },
 ): Promise<{ shot: PendingShot } | { failure: string }> {
   const session = sessions.get(connection);
   if (!session) return { failure: 'the bench is not open here' };
-  const { client } = session;
-
-  let clip: { x: number; y: number; width: number; height: number; scale: number } | undefined;
-  let label = 'the whole page';
-  if (selector) {
-    const box = await elementBox(session, selector, widen);
-    if (!box) return { failure: `nothing on the page matches \`${selector}\`` };
-    clip = { x: box.x, y: box.y, width: box.width, height: box.height, scale: 1 };
-    label = widen > 0 ? `${box.tag} - ${widen} out from ${selector}` : selector;
-  }
+  const widen = ask.widen ?? 0;
+  // A widen re-takes the capture already open, which keeps the dialog's hold.
+  const heldBefore = ask.heldBefore ?? session.pendingCapture?.heldBefore;
 
   try {
-    const shot = await request(client, 'Page.captureScreenshot', {
-      format: 'png',
-      captureBeyondViewport: !clip,
-      ...(clip ? { clip } : {}),
-    });
-    if (!shot?.data) return { failure: 'the page returned no image' };
-    session.pendingShot = { data: shot.data, selector, widen, label, ...(annotationId ? { annotationId } : {}) };
+    const layout = await layoutOf(session);
+    let label = ask.kind === 'screen' ? 'the window as shown' : 'the whole page';
+    let element: CaptureContext['element'];
+    let clip: { x: number; y: number; width: number; height: number } | undefined;
+    if (ask.kind === 'element') {
+      if (!ask.selector) return { failure: 'an element capture needs a selector' };
+      const box = await elementBox(session, ask.selector, widen);
+      if (!box) return { failure: `nothing on the page matches \`${ask.selector}\`` };
+      clip = { x: box.x, y: box.y, width: box.width, height: box.height };
+      label = widen > 0 ? `${box.tag} - ${widen} out from ${ask.selector}` : ask.selector;
+      element = {
+        selector: ask.selector, widen, tag: box.tag,
+        box: { x: box.x, y: box.y, w: box.width, h: box.height },
+      };
+    }
+
+    const data = await shoot(session, ask.kind, clip);
+    if (!data) return { failure: 'the page returned no image' };
+
+    let facts: ElementFacts | undefined;
+    const kinds = ask.kind === 'element' ? session.factChoice : [];
+    if (kinds.length && ask.selector) {
+      const objectId = await elementObject(session, ask.selector, widen);
+      if (objectId) {
+        facts = await readFacts(session.client, objectId, kinds, { scripts: session.scripts, sheets: session.sheets });
+        await send(session.client, 'Runtime.releaseObject', { objectId });
+      }
+    }
+
+    // IHDR's width, read without decoding the image.
+    const scale = imageScale({ width: Buffer.from(data, 'base64').readUInt32BE(16) }, ask.kind, layout, element?.box.w);
+    const viewportMark = ask.kind === 'page' && ask.viewportMark
+      ? {
+        x: layout.scroll.x * scale, y: layout.scroll.y * scale,
+        w: layout.viewport.width * scale, h: layout.viewport.height * scale,
+      }
+      : undefined;
+    const pause = pauseOf(session);
+
+    session.pendingShot = {
+      data, widen, label, kind: ask.kind, pause,
+      facts: facts ? kinds.filter(kind => !facts!.unread?.[kind]) : [],
+      ...(ask.selector && ask.kind === 'element' ? { selector: ask.selector } : {}),
+      ...(ask.annotationId ? { annotationId: ask.annotationId } : {}),
+      ...(viewportMark ? { viewportMark } : {}),
+    };
+    session.pendingCapture = {
+      layout,
+      url: session.page.url(),
+      frozen: session.frozen,
+      ...(element ? { element } : {}),
+      ...(facts ? { facts } : {}),
+      ...(heldBefore !== undefined ? { heldBefore } : {}),
+    };
     return { shot: session.pendingShot };
   } catch (error) {
     return { failure: String(error) };
   }
 }
 
-/** Write a held capture, named after what it is a picture of, and announce it. */
+/**
+ * The smallest element holding a region of the document, and the region's
+ * offset from its corner.
+ *
+ * A screen or page crop stored only as coordinates lands on other content once
+ * anything above it changes height. Stored against the element around it, the
+ * crop moves with that element.
+ */
+async function anchorFor(
+  session: BenchSession,
+  region: { x: number; y: number; w: number; h: number },
+): Promise<CaptureRecord['anchor'] | undefined> {
+  const { result } = await request(session.client, 'Runtime.evaluate', {
+    expression: `(() => {
+      const r = ${JSON.stringify(region)};
+      let best = null, area = Infinity;
+      for (const el of document.body.querySelectorAll('*')) {
+        const b = el.getBoundingClientRect();
+        const x = b.left + scrollX, y = b.top + scrollY;
+        if (x > r.x || y > r.y || x + b.width < r.x + r.w || y + b.height < r.y + r.h) continue;
+        if (b.width * b.height < area) { best = el; area = b.width * b.height; }
+      }
+      return best || document.body;
+    })()`,
+    returnByValue: false,
+  }).catch(() => ({ result: undefined }));
+  const objectId = result?.objectId;
+  if (!objectId) return undefined;
+  try {
+    const described = await request(session.client, 'Runtime.callFunctionOn', {
+      objectId, functionDeclaration: DESCRIBE_ELEMENT, returnByValue: true,
+    });
+    const selector = described?.result?.value?.selector;
+    if (typeof selector !== 'string' || !selector) return undefined;
+    const box = await elementBox(session, selector, 0);
+    if (!box) return undefined;
+    return { selector, offset: { x: region.x - box.x, y: region.y - box.y } };
+  } finally {
+    await send(session.client, 'Runtime.releaseObject', { objectId });
+  }
+}
+
+/** Write a held capture, with its record, and announce it. */
 export async function saveBenchScreenshot(
   connection: string,
   /**
@@ -2238,29 +3334,85 @@ export async function saveBenchScreenshot(
    * kept beside the image would have to be composited by every reader, and a
    * reader that did not know about them would see an unmarked page.
    */
-  marked?: string
+  marked?: string,
+  /** The region kept, in the raw capture's pixels. */
+  crop?: CaptureRect,
+  /** The element facts to keep, of those read; all of them when absent. */
+  keepFacts?: FactKind[],
 ): Promise<{ path: string } | { failure: string }> {
   const session = sessions.get(connection);
-  if (!session?.pendingShot) return { failure: 'nothing is waiting to be saved' };
-  const shot = marked ? { ...session.pendingShot, data: marked, marked: true } : session.pendingShot;
+  const shot = session?.pendingShot;
+  const context = session?.pendingCapture;
+  if (!session || !shot || !context) return { failure: 'nothing is waiting to be saved' };
 
   try {
     const date = new Date().toISOString().split('T')[0];
     const dir = getOutputPath('screenshots', date);
     await fs.mkdir(dir, { recursive: true });
-    const file = join(dir, `${shotFilename(shot)}.png`);
-    await fs.writeFile(file, Buffer.from(shot.data, 'base64'));
+    const name = shotFilename(shot.kind, shot.selector, shot.widen);
+    const file = join(dir, `${name}.png`);
+
+    const raw = decodePng(Buffer.from(shot.data, 'base64'));
+    const cut = crop && crop.w >= 1 && crop.h >= 1 ? crop : undefined;
+    const clean = cut ? cropPixels(raw, cut) : raw;
+    const { layout } = context;
+    const scale = imageScale(raw, shot.kind, layout, context.element?.box.w);
+
+    let cropRecord: CaptureRecord['crop'];
+    let anchor: CaptureRecord['anchor'];
+    if (cut) {
+      const css = { x: cut.x / scale, y: cut.y / scale, w: cut.w / scale, h: cut.h / scale };
+      const from = shot.kind === 'element' ? 'element' : shot.kind === 'screen' ? 'viewport' : 'document';
+      cropRecord = { ...css, from };
+      if (shot.kind !== 'element') {
+        const origin = shot.kind === 'screen' ? layout.scroll : { x: 0, y: 0 };
+        anchor = await anchorFor(session, { ...css, x: css.x + origin.x, y: css.y + origin.y });
+      }
+    }
+
+    const factKinds = shot.facts.filter(kind => !keepFacts || keepFacts.includes(kind));
+    const record: CaptureRecord = {
+      series: name,
+      version: 1,
+      at: new Date().toISOString(),
+      url: context.url,
+      kind: shot.kind,
+      viewport: layout.viewport,
+      document: layout.document,
+      scale,
+      ...(shot.kind === 'screen' || shot.viewportMark ? { scroll: layout.scroll } : {}),
+      ...(shot.viewportMark
+        ? { viewportMark: { x: layout.scroll.x, y: layout.scroll.y, w: layout.viewport.width, h: layout.viewport.height } }
+        : {}),
+      ...(context.element ? { element: context.element } : {}),
+      ...(anchor ? { anchor } : {}),
+      ...(cropRecord ? { crop: cropRecord } : {}),
+      frozen: context.frozen,
+      pause: shot.pause,
+      ...(factKinds.length ? { facts: factKinds } : {}),
+    };
+    const kept = context.facts && factKinds.length
+      ? Object.fromEntries(Object.entries(context.facts).filter(([key]) => factKinds.includes(key as FactKind) || key === 'unread'))
+      : undefined;
+    await writeCapture(file, marked ? Buffer.from(marked, 'base64') : raw, record, clean, kept);
     session.pendingShot = null;
+    session.pendingCapture = undefined;
 
     // Where the capture goes: taken from a note, it joins that note; taken
     // otherwise, it waits for the next note written. A capture is the evidence
     // for something someone is about to say, and one that stood alone left the
     // words and the picture in different places.
     const held = shot.annotationId ? heldAnnotation(session, shot.annotationId) : undefined;
+    // An element picked for a note's capture goes to that note, as a pick
+    // made from the toolbar goes to the note written with it, and is not left
+    // pending for a new note.
+    const picked = shot.annotationId && shot.kind === 'element' ? session.pending ?? undefined : undefined;
+    if (shot.annotationId) session.pending = null;
     if (held) {
       held.annotation.screenshots = [...(held.annotation.screenshots ?? []), file];
+      if (picked && !held.annotation.target) held.annotation.target = picked;
     } else if (shot.annotationId && session.sequences) {
-      const failure = await session.sequences.attachScreenshot(shot.annotationId, file);
+      const failure = await session.sequences.attachScreenshot(shot.annotationId, file, picked);
       if (failure) session.sequenceFailure = failure;
     } else {
       session.pickShots = [...(session.pickShots ?? []), file];
@@ -2269,25 +3421,298 @@ export async function saveBenchScreenshot(
     await appendEvent(session.session, 'screenshot', {
       connection,
       path: file,
-      url: session.page.url(),
+      url: context.url,
+      shot: shot.kind,
       ...(shot.selector ? { selector: shot.selector } : {}),
       ...(marked ? { marked: true } : {}),
+      ...(shot.pause.taken ? { pause: shot.pause } : {}),
+      ...(factKinds.length ? { facts: factKinds } : {}),
       detail: `screenshot of ${shot.label}${marked ? ', marked up,' : ''} at ${file}`,
     });
+    await endCaptureHold(session, context.heldBefore);
     return { path: file };
   } catch (error) {
     return { failure: String(error) };
   }
 }
 
+/**
+ * Image pixels per CSS px in a capture.
+ *
+ * Measured from the image against the CSS width of what it covers, rather
+ * than taken from the pixel ratio: a capture drops a size override another
+ * CDP session holds, so under such emulation the image comes back at 1x
+ * whatever the page reports.
+ */
+function imageScale(
+  raw: { width: number },
+  kind: CaptureKind,
+  layout: Layout,
+  elementWidth?: number,
+): number {
+  const css = kind === 'element' ? elementWidth : kind === 'screen' ? layout.viewport.width : layout.document.width;
+  return css ? raw.width / css : layout.viewport.dpr;
+}
+
+/** Drop a held capture, releasing a hold the dialog made for it. */
+export async function discardBenchScreenshot(connection: string): Promise<void> {
+  const session = sessions.get(connection);
+  if (!session) return;
+  const heldBefore = session.pendingCapture?.heldBefore;
+  session.pendingShot = null;
+  session.pendingCapture = undefined;
+  await endCaptureHold(session, heldBefore);
+}
+
 /** Capped: a long selector path would exceed the name limit and fail the write. */
-function shotFilename(shot: PendingShot): string {
-  const base = shot.selector
+function shotFilename(kind: CaptureKind, selector: string | undefined, widen: number): string {
+  const base = selector
     // A leading dot - which every class selector starts with - makes the file
     // hidden, so a capture would not appear in the directory it was saved to.
-    ? shot.selector.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^[.\-]+|[.\-]+$/g, '').slice(0, 120)
-    : 'page';
-  return `${base || 'element'}${shot.widen > 0 ? `-out${shot.widen}` : ''}-${Date.now()}`;
+    ? selector.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^[.\-]+|[.\-]+$/g, '').slice(0, 120)
+    : kind;
+  return `${base || 'element'}${widen > 0 ? `-out${widen}` : ''}-${Date.now()}`;
+}
+
+/**
+ * Take a capture again the way its record says, and compare it with an
+ * earlier version of the same series.
+ *
+ * The window is set to the recorded size and the page held as it was, so a
+ * difference between the two is the page's and not the setup's. Both are put
+ * back afterwards. The new version's picture is before, after and the
+ * difference side by side; its clean copy is the new capture alone.
+ */
+export async function retakeCapture(
+  connection: string,
+  file: string,
+  against = 1,
+): Promise<{ path: string; record: CaptureRecord } | { failure: string }> {
+  const session = sessions.get(connection);
+  if (!session) return { failure: 'the bench is not open here' };
+  const given = await readRecord(file).catch(() => undefined);
+  if (!given) return { failure: `${file} carries no capture record, so there is nothing to take it again from` };
+  await indexCapture(file, given);
+
+  const versions = await versionsOf(given.series);
+  const base = versions.find(v => v.version === against);
+  if (!base) return { failure: `version ${against} of ${given.series} is not on disk` };
+  const before = await readCapture(base.path);
+  if (!before.record || !before.clean) return { failure: `${base.path} has no clean copy to compare against` };
+  const recipe = before.record;
+  if (recipe.url !== session.page.url()) {
+    return { failure: `the capture was taken on ${recipe.url} and the page is on ${session.page.url()}` };
+  }
+
+  const heldBefore = session.frozen;
+  const current = await layoutOf(session);
+  // Puppeteer's record of a size it set - a headless or sized launch - or null
+  // for a page that follows its window.
+  const pinned = session.page.viewport?.() ?? null;
+  const { width, height, dpr } = recipe.viewport;
+  const resize = current.viewport.width !== width || current.viewport.height !== height || current.viewport.dpr !== dpr;
+  let ranToResize = false;
+  let laidOut = true;
+  try {
+    if (resize) {
+      // A held page runs none of the resize handlers an app lays itself out
+      // with, so the size changes while it runs and it is held again after.
+      if (session.frozen) {
+        ranToResize = true;
+        await unfreeze(session);
+      }
+      await request(pageSession(session), 'Emulation.setDeviceMetricsOverride', {
+        width, height, deviceScaleFactor: dpr, mobile: false,
+      });
+      laidOut = await settleLayout(session);
+      const reached = (await layoutOf(session)).viewport;
+      if (reached.width !== width || reached.height !== height || reached.dpr !== dpr) {
+        return {
+          failure: `the window was set to ${width}×${height} at ${dpr}x for the retake and reached `
+            + `${reached.width}×${reached.height} at ${reached.dpr}x, so the capture would not match`,
+        };
+      }
+    }
+    if (recipe.frozen || heldBefore) await freeze(session);
+    if (recipe.kind === 'screen' && recipe.scroll) {
+      await request(session.client, 'Runtime.evaluate', {
+        expression: `scrollTo(${recipe.scroll.x}, ${recipe.scroll.y})`,
+      });
+    }
+    const layout = await layoutOf(session);
+
+    // Where the kept region's corner sits in the raw capture, in CSS px, and how that was found.
+    let clip: { x: number; y: number; width: number; height: number } | undefined;
+    let origin = { x: 0, y: 0 };
+    let placedBy: CaptureComparison['placedBy'] = 'rectangle';
+    let element: CaptureRecord['element'];
+    if (recipe.kind === 'element' && recipe.element) {
+      const box = await elementBox(session, recipe.element.selector, recipe.element.widen);
+      const found = box ?? {
+        x: recipe.element.box.x, y: recipe.element.box.y,
+        width: recipe.element.box.w, height: recipe.element.box.h, tag: recipe.element.tag,
+      };
+      placedBy = box ? 'element' : 'rectangle';
+      clip = { x: found.x, y: found.y, width: found.width, height: found.height };
+      element = { ...recipe.element, box: { x: found.x, y: found.y, w: found.width, h: found.height }, tag: found.tag };
+      if (recipe.crop) origin = { x: recipe.crop.x, y: recipe.crop.y };
+    } else if (recipe.crop) {
+      const anchored = recipe.anchor ? await elementBox(session, recipe.anchor.selector, 0) : undefined;
+      const doc = anchored
+        ? { x: anchored.x + recipe.anchor!.offset.x, y: anchored.y + recipe.anchor!.offset.y }
+        : recipe.crop.from === 'viewport'
+          ? { x: recipe.crop.x + (recipe.scroll?.x ?? 0), y: recipe.crop.y + (recipe.scroll?.y ?? 0) }
+          : { x: recipe.crop.x, y: recipe.crop.y };
+      placedBy = anchored ? 'anchor' : 'rectangle';
+      origin = recipe.kind === 'screen' ? { x: doc.x - layout.scroll.x, y: doc.y - layout.scroll.y } : doc;
+    }
+
+    const data = await shoot(session, recipe.kind, clip);
+    if (!data) return { failure: 'the page returned no image' };
+    const raw = decodePng(Buffer.from(data, 'base64'));
+    const scale = imageScale(raw, recipe.kind, layout, clip?.width);
+    const after = recipe.crop
+      ? cropPixels(raw, { x: origin.x * scale, y: origin.y * scale, w: recipe.crop.w * scale, h: recipe.crop.h * scale })
+      : raw;
+
+    let facts: ElementFacts | undefined;
+    let factChanges: string[] | undefined;
+    if (recipe.facts?.length && element) {
+      const objectId = await elementObject(session, element.selector, element.widen);
+      if (objectId) {
+        facts = await readFacts(session.client, objectId, recipe.facts, { scripts: session.scripts, sheets: session.sheets });
+        await send(session.client, 'Runtime.releaseObject', { objectId });
+        factChanges = diffFacts((before.facts ?? {}) as ElementFacts, facts);
+      }
+    }
+
+    // Pixels at two scales do not line up, so the percentage would measure the
+    // scaling. The scales are reported instead of a change that is not there.
+    const sameScale = Math.abs(scale - recipe.scale) < 0.01;
+    const diff = diffPixels(before.clean, after);
+    const panels = [before.clean, after].map(p => ({ ...p, data: Buffer.from(p.data) }));
+    if (recipe.kind === 'page' && recipe.viewportMark) {
+      // Each panel gets the window as it stood when that panel was taken.
+      const marks = [recipe.viewportMark, {
+        x: layout.scroll.x, y: layout.scroll.y, w: layout.viewport.width, h: layout.viewport.height,
+      }];
+      const cropAt = [
+        { x: recipe.crop?.x ?? 0, y: recipe.crop?.y ?? 0 },
+        origin,
+      ];
+      const scales = [recipe.scale, scale];
+      marks.forEach((mark, i) => strokeDashed(panels[i], {
+        x: (mark.x - cropAt[i].x) * scales[i], y: (mark.y - cropAt[i].y) * scales[i],
+        w: mark.w * scales[i], h: mark.h * scales[i],
+      }, [66, 133, 244], Math.max(2, Math.round(scales[i] * 2))));
+    }
+
+    const compared: CaptureComparison = {
+      against,
+      changed: diff.changed,
+      edges: diff.edges,
+      share: Math.round(diff.share * 10000) / 10000,
+      ...(diff.box ? { box: diff.box } : {}),
+      size: { before: [before.clean.width, before.clean.height], after: [after.width, after.height] },
+      placedBy,
+      ...(sameScale ? {} : { scales: [recipe.scale, scale] as [number, number] }),
+      ...(resize
+        ? {
+          resized: {
+            from: [current.viewport.width, current.viewport.height, current.viewport.dpr],
+            to: [width, height, dpr],
+            ran: ranToResize,
+            ...(laidOut ? {} : { hidden: true }),
+          },
+        }
+        : {}),
+      ...(factChanges?.length ? { factChanges } : {}),
+    };
+    const version = Math.max(...versions.map(v => v.version)) + 1;
+    const record: CaptureRecord = {
+      ...recipe,
+      version,
+      at: new Date().toISOString(),
+      url: session.page.url(),
+      viewport: layout.viewport,
+      document: layout.document,
+      scale,
+      ...(recipe.scroll ? { scroll: layout.scroll } : {}),
+      ...(element ? { element } : {}),
+      frozen: session.frozen,
+      pause: pauseOf(session),
+      compared,
+    };
+    if (recipe.viewportMark) {
+      record.viewportMark = { x: layout.scroll.x, y: layout.scroll.y, w: layout.viewport.width, h: layout.viewport.height };
+    }
+
+    const date = new Date().toISOString().split('T')[0];
+    const dir = getOutputPath('screenshots', date);
+    await fs.mkdir(dir, { recursive: true });
+    const path = join(dir, `${shotFilename(recipe.kind, recipe.element?.selector, recipe.element?.widen ?? 0)}.png`);
+    await writeCapture(path, sideBySide([...panels, diff.image]), record, after, facts as Record<string, unknown> | undefined);
+
+    const where = diff.box ? `, box ${diff.box.x},${diff.box.y} ${diff.box.w}×${diff.box.h}` : '';
+    const size = compared.size.before.join('×') === compared.size.after.join('×')
+      ? '' : `, size ${compared.size.before.join('×')} → ${compared.size.after.join('×')}`;
+    await appendEvent(session.session, 'comparison', {
+      connection,
+      path,
+      series: recipe.series,
+      version,
+      against,
+      compared,
+      detail: `${recipe.element?.selector ?? recipe.kind} v${version} against v${against}: `
+        + `${(compared.share * 100).toFixed(1)}% changed${where}${size}, placed by ${placedBy}`
+        + `${compared.scales ? `, captured at ${compared.scales[0]}x and ${compared.scales[1]}x so the figures measure the scaling` : ''}`
+        + `${compared.resized ? `, window set from ${compared.resized.from[0]}×${compared.resized.from[1]}@${compared.resized.from[2]}x to the recorded ${width}×${height}@${dpr}x${compared.resized.ran ? ' (the held page ran while it resized)' : ''}${compared.resized.hidden ? ' (the tab was in the background, so layout set by script did not follow the size)' : ''}` : ''}`
+        + `${factChanges?.length ? ` · ${factChanges.join(' · ')}` : ''} - ${path}`,
+    });
+    return { path, record };
+  } catch (error) {
+    return { failure: String(error) };
+  } finally {
+    if (recipe.kind === 'screen' && recipe.scroll) {
+      await send(session.client, 'Runtime.evaluate', {
+        expression: `scrollTo(${current.scroll.x}, ${current.scroll.y})`,
+      });
+    }
+    if (resize) {
+      if (session.frozen) await unfreeze(session);
+      // Back to the size Puppeteer holds, or to none, so a window-sized page
+      // keeps following its window.
+      if (pinned) {
+        await session.page.setViewport(pinned)
+          .catch((error) => debugLog('bench', `restoring the ${pinned.width}×${pinned.height} viewport failed: ${error}`));
+      } else {
+        await send(pageSession(session), 'Emulation.clearDeviceMetricsOverride');
+      }
+      await settleLayout(session);
+    }
+    if (heldBefore) await freeze(session);
+    else if (session.frozen) await unfreeze(session);
+  }
+}
+
+/**
+ * Let a running page lay itself out after a size change: two animation frames,
+ * the first for the resize event and its handlers, the second for the layout
+ * they cause.
+ *
+ * Chrome renders no frames for a tab in the background, and it dispatches
+ * resize as part of rendering one, so a hidden page never settles: CSS follows
+ * the new size and script does not. Returns false for a hidden page instead of
+ * waiting on frames that will not come.
+ */
+async function settleLayout(session: BenchSession): Promise<boolean> {
+  const { result } = await request(session.client, 'Runtime.evaluate', {
+    expression: `document.visibilityState === 'hidden' ? false
+      : new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => r(true), 50))))`,
+    awaitPromise: true,
+    returnByValue: true,
+  }, 2000).catch(() => ({ result: { value: false } }));
+  return result?.value === true;
 }
 
 /**
@@ -2366,19 +3791,33 @@ export async function notifyAnnotation(connection: string, id: string): Promise<
 
 /** Erase one note from the open sequence and write the file back. */
 /** Carry one note to another step, and write the sequence back. */
-export async function moveAnnotation(connection: string, id: string, step: number): Promise<void> {
+export async function moveAnnotation(connection: string, id: string, step: number, after?: string): Promise<void> {
   const session = sessions.get(connection);
   if (!session?.sequences) return;
   const held = heldAnnotation(session, id);
   if (held) {
     dropHeldAnnotation(session, id);
+    if (after === undefined) delete held.annotation.after;
+    else held.annotation.after = after;
     const notes = session.recordingAnnotations!;
     notes.set(step, [...(notes.get(step) ?? []), held.annotation]);
     session.sequenceFailure = undefined;
     return;
   }
-  const failure = await session.sequences.moveAnnotation(id, step).catch(error => String(error));
+  const failure = await session.sequences.moveAnnotation(id, step, after).catch(error => String(error));
   session.sequenceFailure = failure;
+}
+
+/** Replace one note's words: in memory while a recording holds it, in the file once it is saved. */
+export async function rewordAnnotation(connection: string, id: string, words: string): Promise<void> {
+  const session = sessions.get(connection);
+  if (!session?.sequences) return;
+  const held = heldAnnotation(session, id);
+  if (held) {
+    held.annotation.comment = words;
+    return;
+  }
+  session.sequenceFailure = await session.sequences.rewordAnnotation(id, words).catch(error => String(error));
 }
 
 /** Returns no failure: a held finding is removed from memory, with no write to refuse it. */
@@ -2410,6 +3849,22 @@ export async function discardPick(connection: string): Promise<void> {
   await setInspectMode(session, true).catch(() => {});
 }
 
+/**
+ * The versions of every capture the open sequence's notes cite, keyed by the
+ * path the note holds - version 1, whose file name is the series.
+ */
+async function seriesOfNotes(sequence: SequenceState | undefined): Promise<Record<string, CaptureVersion[]> | undefined> {
+  const cited = (sequence?.steps ?? []).flatMap(step => (step.annotations ?? []).flatMap(note => note.screenshots ?? []));
+  if (!cited.length) return undefined;
+  const index = await seriesIndex();
+  const found: Record<string, CaptureVersion[]> = {};
+  for (const path of cited) {
+    const versions = index.get(basename(path, '.png'));
+    if (versions?.length) found[path] = versions;
+  }
+  return found;
+}
+
 export async function startBench(params: {
   page: Page;
   connection: string;
@@ -2426,6 +3881,15 @@ export async function startBench(params: {
     ? (fileName: string) => sourceMapHandler.getOriginalContent(fileName)
     : undefined;
 
+  // A session outlives the browser it was opened in when that browser is
+  // killed rather than its tab closed: the tab's close never fires. Its page,
+  // tab and CDP session are all gone, so it is ended and a new one begun.
+  const stale = sessions.get(connection);
+  const gone = (held?: Page) => held !== undefined
+    && (held.isClosed?.() === true || held.browser?.()?.connected === false);
+  if (stale && (gone(stale.page) || gone(stale.benchPage))) {
+    await stopBench(connection).catch(() => {});
+  }
   const existing = sessions.get(connection);
   if (existing) {
     await setInspectMode(existing, true);
@@ -2455,16 +3919,22 @@ export async function startBench(params: {
     heldByOther: false,
     sequenceBusy: false,
     pauseTaken: false,
+    factChoice: ['events'],
     sequences,
     scripts: new Map(),
+    sheets: new Map(),
     totalSteps: 0,
     callbacks: [],
     stepBreakpointsSet: false,
   };
   sessions.set(connection, session);
+  // The site's rules answer from the start, before any sequence is opened.
+  await armSavedRules(connection).catch(error => debugLog('bench', `site rules not armed: ${error}`));
 
+  client.on('Debugger.resumed', () => { session.pausedEvent = undefined; });
   client.on('Debugger.paused', (event: any) => {
     session.pauseTaken = true;
+    session.pausedEvent = event;
     // A pause we did not ask for is someone else's - a breakpoint, a debugger
     // statement. Recorded so it can be reported; the bench still releases its
     // own hold normally, but never attaches a second agent to force theirs.
@@ -2503,11 +3973,24 @@ export async function startBench(params: {
         target.source = await verifySourceLine(target.source, target.tag, readOriginal);
       }
 
-      // Chrome disarms its picker once it fires; the bench shows that,
-      // and re-arms when the pick is saved or discarded.
-      session.pickerArmed = false;
+      // Chrome's inspect mode stays on after a pick and turns every later
+      // click in the app into another pick, so it is switched off here and
+      // the button shows it off; picking again is a press of the picker.
+      await setInspectMode(session, false).catch(() => { session.pickerArmed = false; });
       session.picks++;
       session.pending = target;
+
+      // Picked from the capture dialog: the pick is the element to capture,
+      // and stays pending so the note written with the capture is about it.
+      const armed = session.shotArmed;
+      if (armed) {
+        session.shotArmed = undefined;
+        const taken = await captureBenchScreenshot(connection, {
+          kind: 'element', selector: target.selector, heldBefore: armed.heldBefore,
+          ...(armed.annotationId ? { annotationId: armed.annotationId } : {}),
+        });
+        session.sequenceFailure = 'failure' in taken ? taken.failure : undefined;
+      }
     } catch (error) {
       debugLog('bench', `pick failed: ${error}`);
       await setInspectMode(session, true).catch(() => {});
@@ -2536,23 +4019,40 @@ export async function startBench(params: {
     }
   });
   await client.send('Page.enable');
+  // Enabled while the page runs: CSS.enable goes unanswered on a held page,
+  // and the element facts read the rules while it is held.
+  // Storage the page writes never reaches the proxy; this is what shows it.
+  session.writeWatch = new WriteWatch(client, page);
+  await session.writeWatch.start().catch((error) => {
+    debugLog('bench', `watching storage writes failed: ${error}`);
+  });
+  await trackStyleSheets(client, session.sheets).catch((error) => {
+    debugLog('bench', `CSS.enable failed, so captures will record no css: ${error}`);
+  });
 
   const server = await startBenchServer({
     // Everything but `primary`: only the route knows which copy is asking.
-    getState: async (): Promise<Omit<BenchView, 'primary'>> => ({
-      connection,
-      pageUrl: page.url(),
-      frozen: session.frozen,
-      pickerArmed: session.pickerArmed,
-      tickMs: session.tickMs,
-      totalSteps: session.totalSteps,
-      lastTick: session.lastTick,
-      callbacks: session.callbacks.slice(-50),
-      sequence: await getSequenceState(connection),
-      pending: session.pending,
-      noteTarget: await noteTargetFor(connection),
-      ...(session.pendingShot ? { shot: session.pendingShot } : {}),
-    }),
+    getState: async (): Promise<Omit<BenchView, 'primary'>> => {
+      const sequence = await getSequenceState(connection);
+      const series = await seriesOfNotes(sequence);
+      return {
+        connection,
+        pageUrl: page.url(),
+        frozen: session.frozen,
+        pickerArmed: session.pickerArmed,
+        tickMs: session.tickMs,
+        totalSteps: session.totalSteps,
+        lastTick: session.lastTick,
+        callbacks: session.callbacks.slice(-50),
+        sequence,
+        pending: session.pending,
+        noteTarget: await noteTargetFor(connection),
+        ...(session.pendingShot ? { shot: session.pendingShot } : {}),
+        ...(session.shotArmed ? { shotArmed: session.shotArmed } : {}),
+        factChoice: session.factChoice,
+        ...(series ? { series } : {}),
+      };
+    },
     save: async (comment: string) => { await saveAnnotation(connection, comment); },
     discard: async () => { await discardPick(connection); },
     tick: async (request: { steps?: number; budgetMs?: number }) => { await tickBench(connection, request); },
@@ -2577,7 +4077,10 @@ export async function startBench(params: {
     cancelSequence: async () => { await cancelSequence(connection); },
     removeSequence: async (name: string) => { await removeSequence(connection, name); },
     dismissFailure: async () => { await dismissSequenceFailure(connection); },
-    proxyBody: async (id: string) => getProxy(connection)?.bodyOf(id) ?? null,
+    // A write's value is held by the write watch, which no proxy carries.
+    proxyBody: async (id: string) => getProxy(connection)?.bodyOf(id)
+      ?? sessions.get(connection)?.writeWatch?.writes.find(write => write.id === id)?.value
+      ?? null,
 
     /**
      * Answer this from now on with what it answered here.
@@ -2683,14 +4186,17 @@ export async function startBench(params: {
       return live.unpin(pin) ? 'RELEASED' : 'ALREADY GONE';
     },
 
+    ruleCatalogue: async () => (await sessions.get(connection)?.sequences?.catalogueRules().catch(() => [])) ?? [],
     proxyEvents: async (sinceId: string | null): Promise<BoundaryState> => {
       const proxy = getProxy(connection);
       if (!proxy) {
         return {
           running: false, allowed: [], refused: 0, refusals: [],
           refusesWrites: false, refusedWrites: 0,
-          rules: rulesOf(connection), waits: waitsOf(connection),
-          events: [], totals: null, steps: openSteps(connection),
+          rules: rulesOf(connection), waits: waitsOf(connection), names: namesOf(connection),
+          events: writeEvents(connection), totals: null, steps: openSteps(connection),
+          ...(sessions.get(connection)?.site ? { site: sessions.get(connection)!.site } : {}),
+          hidden: hiddenOf(connection),
           ...(openSequence(connection) ? { forSequence: openSequence(connection) } : {}),
         };
       }
@@ -2707,20 +4213,26 @@ export async function startBench(params: {
         refusesWrites: proxy.refusesWrites,
         refusedWrites: proxy.refusedWrites,
         rules: rulesOf(connection),
+        ...(sessions.get(connection)?.site ? { site: sessions.get(connection)!.site } : {}),
+        waitOutcomes: waitOutcomesFor(connection),
+        hidden: hiddenOf(connection),
         waits: waitsOf(connection),
+        names: namesOf(connection),
         // The level and whether any step owns it are read here rather than
         // recomputed in the pane: both are policy over stored evidence, and a
         // second copy of that policy in the browser would drift from this one.
-        events: all.slice(at + 1).map(event => ({
+        events: [...all.slice(at + 1).map(event => ({
           ...event,
           level: levelOf(event),
           owned: causeOf(event) !== undefined,
+          ...recordedStepOf(connection, event),
           root: event.evidence?.initiator,
           // What a person decided this shape is. A verdict settles every frame
           // of that kind, so a row carries the one assigned to its shape even
           // when the decision was made on a different frame.
           verdict: event.evidence?.shape ? rules[event.evidence.shape] : undefined,
         })) as unknown as BoundaryEvent[],
+          ...writeEvents(connection, at >= 0 ? all[at].at : 0)].sort((a, b) => a.at - b.at),
         // Counted over everything the proxy holds, not over what this pane has
         // accumulated: a reader who opened the tab late would otherwise see a
         // summary of their own arrival time.
@@ -2731,6 +4243,13 @@ export async function startBench(params: {
       };
     },
     keepRecordedStep: async () => { await keepRecordedStep(connection); },
+    addRecordingTimer: async (ms: number) => { await addRecordingTimer(connection, ms); },
+    editRecordingVariable: async (name: string, value: string | null) => { await editRecordingVariable(connection, name, value); },
+    addRecordingVariable: async (name: string, value: string) => {
+      const session = sessions.get(connection);
+      const failure = await addRecordingVariable(connection, name, value);
+      if (session) session.sequenceFailure = failure;
+    },
     chooseStepSelector: async (index: number) => { await chooseStepSelector(connection, index); },
     flagRecordedStep: async (reason: string, options?: Array<{ selector: string; note: string }>, detail?: string) => {
       await flagRecordedStep(connection, reason, options, detail);
@@ -2739,60 +4258,149 @@ export async function startBench(params: {
     recordSequence: async (name: string, withAgent: boolean, startUrl: string) => {
       await recordSequence(connection, name, withAgent, startUrl);
     },
+    recordInto: async (after: number) => {
+      const open = sessions.get(connection)?.sequences?.active()?.name;
+      if (!open) return;
+      await recordSequence(connection, `${open}-insert-${Date.now().toString(36)}`, false, '', { name: open, after });
+    },
     stopRecordingSequence: async () => { await stopRecordingSequence(connection); },
     cancelRecordingSequence: async () => { await cancelRecordingSequence(connection); },
     removeSequenceStep: async (index: number) => { await removeSequenceStep(connection, index); },
+    insertSequenceTimer: async (after: number, ms: number) => { await insertSequenceTimer(connection, after, ms); },
+    editSequenceStep: async (index: number, params: unknown) => { await editSequenceStep(connection, index, params); },
     moveSequenceStep: async (from: number, to: number) => { await moveSequenceStep(connection, from, to); },
     setSequenceVariable: async (name: string, value: string) => { await setSequenceVariable(connection, name, value); },
     removeSequenceVariable: async (name: string) => { await removeSequenceVariable(connection, name); },
     noteAtStep: async (step: number) => { await noteAtStep(connection, step); },
-    moveAnnotation: async (id: string, step: number) => {
-      await moveAnnotation(connection, id, step);
+    moveAnnotation: async (id: string, step: number, after?: string) => {
+      await moveAnnotation(connection, id, step, after);
     },
+    rewordAnnotation: async (id: string, words: string) => { await rewordAnnotation(connection, id, words); },
+    savePayload: (name: string, content: string) => savePayloadFor(connection, name, content),
     removeAnnotation: async (id: string) => { await removeAnnotation(connection, id); },
     notifyAnnotation: async (id: string) => { await notifyAnnotation(connection, id); },
-    captureScreenshot: async (selector: string | undefined, widen: number, annotationId?: string) => {
+    captureScreenshot: async (ask) => {
       const held = sessions.get(connection);
       if (!held) return;
-      const taken = await captureBenchScreenshot(connection, selector, widen, annotationId);
+      if (ask.kind !== 'element') {
+        const armed = held.shotArmed;
+        held.shotArmed = undefined;
+        await setInspectMode(held, false).catch(() => {});
+        ask = {
+          ...ask,
+          ...(armed ? { heldBefore: armed.heldBefore } : {}),
+          ...(armed?.annotationId ? { annotationId: armed.annotationId } : {}),
+        };
+      }
+      const taken = await captureBenchScreenshot(connection, ask);
       held.sequenceFailure = 'failure' in taken ? taken.failure : undefined;
     },
-    saveScreenshot: async (marked?: string) => {
+    beginCapture: async (annotationId) => { await beginCapture(connection, annotationId); },
+    cancelCapture: async () => { await cancelCapture(connection); },
+    setFactChoice: async (kinds) => { setFactChoice(connection, kinds); },
+    readMoreFacts: async (kinds) => { await readMoreFacts(connection, kinds); },
+    saveScreenshot: async (marked, crop, facts) => {
       const held = sessions.get(connection);
       if (!held) return;
-      const saved = await saveBenchScreenshot(connection, marked);
+      const saved = await saveBenchScreenshot(connection, marked, crop, facts);
       held.sequenceFailure = 'failure' in saved ? saved.failure : undefined;
     },
-    discardScreenshot: async () => {
+    discardScreenshot: async () => { await discardBenchScreenshot(connection); },
+    retakeCapture: async (path, against) => {
       const held = sessions.get(connection);
-      if (held) held.pendingShot = null;
+      if (!held) return;
+      const taken = await retakeCapture(connection, path, against);
+      held.sequenceFailure = 'failure' in taken ? taken.failure : undefined;
     },
     highlightAnnotation: async (selector: string) => { await highlightAnnotation(connection, selector); },
     setBaseUrl: async (baseUrl: string) => { await setSequenceBaseUrl(connection, baseUrl); },
 
     setRule: async (rule: Record<string, unknown>) => {
-      setBoundaryRule(connection, {
-        key: String(rule.key ?? ''),
-        verb: (rule.verb === 'block' || rule.verb === 'hide') ? rule.verb : 'answer',
-        ...(rule.frame ? { frame: true } : {}),
-        ...(typeof rule.method === 'string' && rule.method ? { method: rule.method } : {}),
-        ...(typeof rule.step === 'number' ? { step: rule.step } : {}),
-        ...(typeof rule.body === 'string' ? { body: rule.body } : {}),
-        ...(rule.status !== undefined ? { status: String(rule.status) } : {}),
-        ...(typeof rule.recorded === 'string' ? { recorded: rule.recorded } : {}),
-        ...(typeof rule.label === 'string' ? { label: rule.label } : {}),
-        ...(typeof rule.url === 'string' ? { url: rule.url } : {}),
-        ...(rule.direction === 'out' || rule.direction === 'in' ? { direction: rule.direction } : {}),
-        ...(rule.staged !== null && typeof rule.staged === 'object'
-          ? { staged: rule.staged as BoundaryRule['staged'] } : {}),
-      });
+      const parsed = ruleFrom(rule);
+      if (!parsed) return;
+      // Hiding keeps a kind out of the list and answers nothing: it has a
+      // list of its own, so it cannot stand where a response to it stands.
+      if (parsed.verb === 'hide') {
+        hideKind(connection, rule);
+        await persistRules(connection, false, `${parsed.key} hidden from the list`);
+        return;
+      }
+      const made = !sessions.get(connection)?.boundaryRules?.has(parsed.key);
+      setBoundaryRule(connection, parsed);
+      // The steps it answers at in the open sequence, as the editor chose
+      // them; one made from a row is used where it was made.
+      const use = useFrom(rule.use)
+        ?? (parsed.step !== undefined ? [parsed.step] : made ? 'all' as const : undefined);
+      if (use) setResponseUse(connection, parsed.key, use);
+      await persistRules(connection, false, rule.verb === 'block' ? `${rule.key} blocked` : rule.verb === 'hide' ? `${rule.key} hidden from the list` : `response to ${rule.key} replaced`);
     },
-    clearRule: async (key: string) => { clearBoundaryRule(connection, key); },
-    setWait: async (step: number, count: number) => { setBoundaryWait(connection, step, count); },
+    clearRule: async (key: string) => {
+      clearBoundaryRule(connection, key);
+      await persistRules(connection, false, `${key} let through again`);
+    },
+    ignoreTraffic: async (rule: Record<string, unknown>) => {
+      hideKind(connection, rule);
+      await persistRules(connection, false, `${rule.any ? `everything on ${String(rule.url ?? 'a socket')}` : String(rule.key ?? '')} ignored`);
+    },
+    unhideKind: async (key: string) => {
+      unhideKind(connection, key);
+      await persistRules(connection, false, `${key} listed again`);
+    },
+    setHiddenUse: async (key: string, on: boolean) => {
+      setHiddenUse(connection, key, on);
+      await persistRules(connection, false, `${key} ${on ? 'hidden' : 'listed'} in this sequence`);
+    },
+    setHiddenMode: async (key: string, mode: HiddenKind['mode']) => {
+      setHiddenMode(connection, key, mode);
+      await persistRules(connection, false, `${key} hidden ${mode === 'local' ? 'in this sequence only' : mode === 'optIn' ? 'where a sequence opts in' : 'unless a sequence opts out'}`);
+    },
+    setResponseUse: async (key: string, use: unknown) => {
+      const parsed = useFrom(use);
+      if (!parsed) return;
+      setResponseUse(connection, key, parsed);
+      const said = parsed === 'none' ? 'not used here'
+        : parsed === 'all' ? 'used at every step' : `used at step ${parsed.map(n => n + 1).join(', ')}`;
+      await persistRules(connection, false, `${key} ${said}`);
+    },
+    setResponseMode: async (key: string, mode: 'local' | 'optIn' | 'optOut') => {
+      setResponseMode(connection, key, mode);
+      const said = mode === 'local' ? 'answers in this sequence only'
+        : mode === 'optIn' ? 'answers where a sequence opts in' : 'answers unless a sequence opts out';
+      await persistRules(connection, false, `${key} ${said}`);
+    },
+    setWait: async (step: number, count: number, key?: string, details?: { seconds?: number; onFail?: 'fail' | 'continue' }) => {
+      setBoundaryWait(connection, step, count, key, details);
+      await persistRules(connection, false, count > 0
+        ? `step ${step + 1} waits for ${key ?? 'what crosses'}`
+        : `step ${step + 1} no longer waits${key ? ` for ${key}` : ''}`);
+    },
+    setName: async (key: string, name: string) => {
+      setBoundaryName(connection, key, name);
+      await persistRules(connection, false, name.trim() ? `${nameTarget(key)} named "${name.trim()}"` : `name taken off ${nameTarget(key)}`);
+    },
+    moveActivity: async (move: ActivityMove) => {
+      const session = sessions.get(connection);
+      if (!session?.sequences || session.recordingSequence) return;
+      const failure = await session.sequences.saveMove(move);
+      if (failure) session.sequenceFailure = failure;
+    },
+    setRecorded: async (step: number, kind: string, recorded: KindCount | undefined) => {
+      const session = sessions.get(connection);
+      if (!session?.sequences || session.recordingSequence) return;
+      const failure = await session.sequences.saveRecorded(step, kind, recorded);
+      if (failure) session.sequenceFailure = failure;
+    },
+    setExpected: async (step: number, kind: string, expected: ExpectedValue | undefined) => {
+      const session = sessions.get(connection);
+      if (!session?.sequences || session.recordingSequence) return;
+      const failure = await session.sequences.saveExpected(step, kind, expected);
+      if (failure) session.sequenceFailure = failure;
+    },
     setRefuseWrites: async (on: boolean) => {
       const live = getProxy(connection);
       if (!live) return 'no proxy';
       live.refuseUnmatchedWrites(on);
+      await persistRules(connection, false, on ? 'unmatched writes refused' : 'unmatched writes forwarded');
       return on
         ? 'unmatched writes are answered 403 and recorded as refused'
         : 'unmatched writes reach the server';
@@ -2805,21 +4413,7 @@ export async function startBench(params: {
      * and a pass tomorrow reads differently. What a later run needs is the
      * decision, which is small and does not go stale.
      */
-    saveRules: async () => {
-      const session = sessions.get(connection);
-      if (!session?.sequences) return 'no bench here';
-      const rules = rulesOf(connection).map(({ hits: _hits, matchedAs: _how, ...rule }) => rule);
-      const waits = waitsOf(connection);
-      const refuseWrites = getProxy(connection)?.refusesWrites ?? false;
-      const failure = await session.sequences.saveBoundaryRules(rules, waits, refuseWrites);
-      if (failure) {
-        session.sequenceFailure = failure;
-        return failure;
-      }
-      return `${rules.length} rule${rules.length === 1 ? '' : 's'}`
-        + ` and ${waits.length} wait${waits.length === 1 ? '' : 's'}`
-        + `${refuseWrites ? ', refusing unmatched writes,' : ''} written onto the sequence`;
-    },
+    saveRules: async () => (await persistRules(connection, true)) ?? 'no sequence is open',
   });
   session.server = server;
   session.benchUrl = server.url;
@@ -2946,6 +4540,7 @@ export async function tickBench(
 export async function stopBench(connection: string): Promise<BenchReport | undefined> {
   const session = sessions.get(connection);
   if (!session) return undefined;
+  session.writeWatch?.stop();
   sessions.delete(connection);
 
   const state = getStateOf(session);
@@ -2974,14 +4569,33 @@ export async function stopBench(connection: string): Promise<BenchReport | undef
   return state;
 }
 
+/**
+ * The session as a report, named field by field. Everything else on it is
+ * live state - CDP sessions, the page, the write watch holding both - and a
+ * copy of it in a tool's result was serialised with the page's whole object
+ * graph, which left bench start never returning.
+ */
 function getStateOf(session: BenchSession): BenchReport {
-  const { client: _c, page: _p, server: _s, benchPage: _bp, pending: _pending, ...state } = session;
-  return state;
+  return {
+    connection: session.connection,
+    session: session.session,
+    startedAt: session.startedAt,
+    tickMs: session.tickMs,
+    totalSteps: session.totalSteps,
+    callbacks: session.callbacks,
+    ...(session.lastTick ? { lastTick: session.lastTick } : {}),
+    picks: session.picks,
+    annotations: session.annotations,
+    pickerArmed: session.pickerArmed,
+    frozen: session.frozen,
+    benchUrl: session.benchUrl,
+  };
 }
 
 /** Drop state for a connection that has gone away, without touching CDP. */
 export function forgetBenchSession(connection: string): void {
   const session = sessions.get(connection);
+  session?.writeWatch?.stop();
   sessions.delete(connection);
   void session?.server?.close().catch(() => {});
 }

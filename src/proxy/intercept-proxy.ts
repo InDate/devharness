@@ -35,6 +35,12 @@ export interface Pin {
    * below, and fails where the recording did not.
    */
   step?: number;
+  /**
+   * Only under one of these replay steps, when given. One response serves
+   * several positions in a run without a pin per position, and its hits are
+   * counted in one place.
+   */
+  steps?: number[];
   status: number;
   headers: Record<string, string>;
   body: string;
@@ -606,6 +612,9 @@ const MAX_ALLOWANCES = 64;
 const JOIN_WINDOW_MS = 4000;
 /** Events scanned back for a request a late report belongs to. */
 const JOIN_SCAN = 200;
+/** The blank line an event-stream message ends with, in any of the protocol's line endings. */
+const MESSAGE_END = /\r\n\r\n|\n\n|\r\r/;
+
 /** Reports held for a request that has not crossed yet. */
 const MAX_REPORTED_INITIATORS = 200;
 /** How far apart a send and the page's report of it may be and still be one. */
@@ -771,6 +780,8 @@ export interface FramePin {
   field?: FrameField;
   /** Only under this replay step, when given; see `Pin.step`. */
   step?: number;
+  /** Only under one of these replay steps, when given; see `Pin.steps`. */
+  steps?: number[];
   /** Sent in its place. Absent drops the frame, and nothing arrives at all. */
   replaceWith?: string;
   hits: number;
@@ -1201,6 +1212,22 @@ export class InterceptProxy {
   }
 
   /** What the proxy saw in a window, oldest first. */
+  /**
+   * Resolve met once `count` crossings of a kind have landed under one step
+   * of one pass, or unmet at `timeoutMs`, with how many had landed. A kind is matched as a rule matches
+   * it: its key in the payload text or the URL; with no key, anything counts.
+   */
+  async awaitCrossings(want: { runId: string; step: number; key?: string; count: number; timeoutMs: number }): Promise<{ met: boolean; arrived: number }> {
+    const until = Date.now() + want.timeoutMs;
+    const landed = () => this.events.filter(e => e.runId === want.runId && e.step === want.step
+      && (!want.key || (e.preview ?? '').includes(want.key) || e.url.includes(want.key))).length;
+    while (landed() < want.count) {
+      if (Date.now() >= until) return { met: false, arrived: landed() };
+      await new Promise(done => setTimeout(done, 100));
+    }
+    return { met: true, arrived: landed() };
+  }
+
   eventsIn(since?: number, until?: number): ProxyEvent[] {
     return this.events.filter(e =>
       (since === undefined || e.at >= since) && (until === undefined || e.at < until));
@@ -1315,6 +1342,7 @@ export class InterceptProxy {
       urlIncludes: spec.urlIncludes,
       ...(spec.method ? { method: spec.method.toUpperCase() } : {}),
       ...(spec.step !== undefined ? { step: spec.step } : {}),
+      ...(spec.steps?.length ? { steps: spec.steps } : {}),
       status: spec.status ?? 200,
       headers: spec.headers ?? { 'content-type': 'application/json' },
       body: spec.body,
@@ -1372,12 +1400,13 @@ export class InterceptProxy {
       if (pin.urlIncludes && !url.includes(pin.urlIncludes)) continue;
       if (pin.direction && pin.direction !== direction) continue;
       if (pin.step !== undefined && !this.underStep(pin.step)) continue;
+      if (pin.steps && !pin.steps.some(step => this.underStep(step))) continue;
       if (pin.field && object === null) object = objectOf(text);
       const byField = pin.field !== undefined && object !== undefined && object !== null;
       const matched = byField ? carries(object!, pin.field!) : text.includes(pin.textIncludes);
       if (!matched) continue;
       const narrowness = (pin.urlIncludes ? 1 : 0) + (pin.direction ? 1 : 0)
-        + (pin.step !== undefined ? 1 : 0) + (byField ? 1 : 0);
+        + (pin.step !== undefined || pin.steps ? 1 : 0) + (byField ? 1 : 0);
       if (narrowness < narrowest) continue;
       if (narrowness === narrowest
         && held !== undefined
@@ -1420,8 +1449,9 @@ export class InterceptProxy {
     for (const pin of this.pins.values()) {
       if (pin.method && pin.method !== method.toUpperCase()) continue;
       if (pin.step !== undefined && !this.underStep(pin.step)) continue;
+      if (pin.steps && !pin.steps.some(step => this.underStep(step))) continue;
       if (!url.includes(pin.urlIncludes)) continue;
-      const narrowness = (pin.method ? 1 : 0) + (pin.step !== undefined ? 1 : 0);
+      const narrowness = (pin.method ? 1 : 0) + (pin.step !== undefined || pin.steps ? 1 : 0);
       if (narrowness < narrowest) continue;
       if (narrowness === narrowest
         && held !== undefined
@@ -1540,32 +1570,56 @@ export class InterceptProxy {
         : undefined;
 
       // Each message of an event stream is a push the server made, which is
-      // the same fact a socket frame carries. Split on the blank line the
-      // protocol ends a message with, so a message spanning two chunks is one
-      // event rather than two halves.
+      // the same fact a socket frame carries, so the frame pins answer it: a
+      // message is passed on whole, replaced, or dropped. Split on the blank
+      // line the protocol ends a message with, so a message spanning two
+      // chunks is one event rather than two halves, and is held until its
+      // end arrives - the page reads nothing of a message before its end.
+      // A compressed stream is passed through as bytes: its messages cannot be read to be answered.
+      const events = contentType === 'text/event-stream' && !answer.headers['content-encoding'];
       let pending = '';
-      const takeMessages = (chunk: string) => {
+      const takeMessages = (chunk: string): string => {
         pending += chunk;
-        let cut = pending.indexOf('\n\n');
+        let out = '';
+        let cut = pending.search(MESSAGE_END);
         while (cut !== -1) {
+          const end = pending.slice(cut).match(MESSAGE_END)![0];
           const block = pending.slice(0, cut);
-          pending = pending.slice(cut + 2);
-          const data = block.split('\n')
+          pending = pending.slice(cut + end.length);
+          const lines = block.split(/\r\n|\r|\n/);
+          const data = lines
             .filter(line => line.startsWith('data:'))
             .map(line => line.slice(5).trim())
             .join('\n');
+          const held = data ? this.matchFramePin(url, 'received', data) : undefined;
+          if (held) held.hits += 1;
           if (data) {
             this.record({
               at: Date.now(), kind: 'frame', direction: 'in', url,
               size: Buffer.byteLength(data),
               evidence: { shape: payloadShape(data, false, Buffer.byteLength(data)) },
               preview: data.slice(0, PREVIEW_CHARS),
+              ...(held ? { heldAs: held.replaceWith === undefined ? 'dropped' as const : 'replaced' as const } : {}),
             }, data);
           }
-          cut = pending.indexOf('\n\n');
+          if (!held) {
+            out += block + end;
+          } else if (held.replaceWith !== undefined) {
+            // The event name and id stay, so the page's listener for that
+            // event still receives it; only what it carries is replaced.
+            const kept = lines.filter(line => !line.startsWith('data:'));
+            const served = held.replaceWith.split(/\r\n|\r|\n/).map(line => `data: ${line}`);
+            out += [...kept, ...served].join('\n') + '\n\n';
+          }
+          cut = pending.search(MESSAGE_END);
         }
-        // A stream that never blank-lines would grow this forever.
-        if (pending.length > BODY_CAP) pending = pending.slice(-BODY_CAP);
+        // A stream that never blank-lines would grow this forever; what is cut
+        // off is passed on rather than lost.
+        if (pending.length > BODY_CAP) {
+          out += pending;
+          pending = '';
+        }
+        return out;
       };
 
       answer.on('data', (chunk: Buffer) => {
@@ -1574,15 +1628,20 @@ export class InterceptProxy {
         if (opened) {
           opened.size = size;
           opened.durationMs = Date.now() - startedAt;
-          if (contentType === 'text/event-stream') takeMessages(chunk.toString('utf8'));
+          if (events) {
+            const out = takeMessages(chunk.toString('utf8'));
+            if (out) res.write(out);
+          }
         }
       });
       answer.on('end', () => {
+        if (events) res.end(pending);
         if (opened) {
           opened.size = size;
           opened.durationMs = Date.now() - startedAt;
           opened.preview = kept.slice(0, PREVIEW_CHARS);
           opened.open = undefined;
+          this.bodies.set(opened.id, kept);
           return;
         }
         this.record({
@@ -1594,7 +1653,7 @@ export class InterceptProxy {
           ...(contentType ? { contentType } : {}),
         }, kept, issuedUnder);
       });
-      answer.pipe(res);
+      if (!events) answer.pipe(res);
     });
     upstream.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end(); });
     req.pipe(upstream);
@@ -1604,6 +1663,10 @@ export class InterceptProxy {
   private handleUpgrade(secure: boolean, req: IncomingMessage, socket: Socket, head: Buffer): void {
     const host = req.headers.host ?? '';
     const url = `${secure ? 'wss' : 'ws'}://${host}${req.url}`;
+    // What was running when the page asked for the socket, which is what the
+    // opening belongs to however long the handshake takes.
+    const issuedUnder = this.cursor;
+    const requestedAt = Date.now();
 
     this.upgrades.handleUpgrade(req, socket, head, (client) => {
       client.on('error', () => { /* handled by the close pairing below */ });
@@ -1786,7 +1849,19 @@ export class InterceptProxy {
       forward(client, upstream, 'sent');
       forward(upstream, client, 'received');
 
+      // The opening is recorded as the request it is - a GET answered 101 - so
+      // a socket that never carries a frame still shows under the step that
+      // opened it, and one refused shows as a failure.
+      let opened = false;
+      const recordOpening = (status: number) => this.record({
+        at: Date.now(), kind: 'request', direction: 'out', url, method: 'GET', status,
+        evidence: { protocolPaired: true }, size: 0,
+        preview: status === 101 ? 'socket opened' : 'socket refused',
+        durationMs: Date.now() - requestedAt, startedAt: requestedAt,
+      }, undefined, issuedUnder);
       upstream.on('open', () => {
+        opened = true;
+        recordOpening(101);
         for (const [data, binary] of pending.splice(0)) upstream.send(data, { binary });
       });
       const close = (a: WebSocket, b: WebSocket) => a.on('close', (code, reason) => {
@@ -1801,7 +1876,10 @@ export class InterceptProxy {
       });
       close(client, upstream);
       close(upstream, client);
-      upstream.on('error', () => { try { client.close(1011); } catch { /* already gone */ } });
+      upstream.on('error', () => {
+        if (!opened) recordOpening(0);
+        try { client.close(1011); } catch { /* already gone */ }
+      });
       client.on('error', () => { try { upstream.close(1011); } catch { /* already gone */ } });
     });
   }

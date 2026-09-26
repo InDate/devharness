@@ -13,6 +13,8 @@ import { debugLog, isHistoryLogEnabled, logToHistoryFile } from './debug-logger.
 import { sanitizeReference } from './reference-validator.js';
 import { getOutputPath, registerRootBound } from './helpers/paths.js';
 import { atomicWriteFile } from './atomic-write.js';
+import type { ExpectedValue } from './bench/kinds.js';
+import { mergeActivity, readActivity, splitActivity, writeActivity } from './sequence-activity.js';
 import { getIssueSequencesDir, getIssuesBySequenceFile } from './issue-tracker.js';
 import { captureVariable } from './tools/replay-executor.js';
 import type { Annotation, StepTraffic } from './annotation.js';
@@ -36,6 +38,8 @@ export interface RecordedCommand {
   annotations?: Annotation[];
   /** What crossed the boundary while this step ran, when it was recorded. */
   traffic?: StepTraffic;
+  /** Payloads marked on this step's kinds as having to hold on replay, by kind. */
+  expected?: Record<string, ExpectedValue>;
   /**
    * The history index this step was built from.
    *
@@ -81,10 +85,24 @@ export interface CommandSequence {
     body?: string;
     status?: string;
     recorded?: string;
+    edited?: boolean;
     label?: string;
   }>;
   /** Steps that hold open until a number of things have crossed under them. */
-  boundaryWaits?: Array<{ step: number; count: number }>;
+  boundaryWaits?: Array<{ step: number; count: number; key?: string; seconds?: number; onFail?: 'fail' | 'continue' }>;
+  /**
+   * A person's name for a kind of traffic, by the key a rule would match it
+   * on, shown in place of the payload it is otherwise recognised by.
+   */
+  boundaryNames?: Record<string, string>;
+  /**
+   * Where a kind of traffic is listed and compared, by where it crossed:
+   * `"3|← \"tag\":\"small\""` → 2 lists that kind, stamped on step 4,
+   * under step 3. `after` in the key is traffic stamped with no step because
+   * it crossed after the last step ended; a value of the step count is the
+   * gutter after the last step.
+   */
+  boundaryPlacements?: Record<string, number>;
   /**
    * What an unmatched write meets on this sequence's proxy.
    *
@@ -94,6 +112,13 @@ export interface CommandSequence {
    * field did.
    */
   boundaryRefuse?: 'writes';
+  /** Keys of the site's rules this sequence does not arm; see `SiteActivity`. */
+  boundaryRulesOff?: string[];
+  /** The site's rules this sequence arms, and at which of its steps; see `SiteActivity`. */
+  boundaryRulesOn?: Array<{ key: string; steps?: number[] }>;
+  /** Hidden kinds of the site this sequence opts into and out of; see `SiteActivity.hidden`. */
+  boundaryHiddenOn?: string[];
+  boundaryHiddenOff?: string[];
   createdAt: number;
   /**
    * The connection every step was recorded against, when `create` hoisted a
@@ -832,12 +857,14 @@ export class CommandRecorder {
         // File doesn't exist, proceed
       }
 
-      // Add usage comment to exported file
+      // The actions go here; what the app did goes to the activity file.
+      const { actions, activity } = splitActivity(sequence);
       const exportData = {
-        _comment: 'CDP Tools replay sequence. Load with: replay({ action: "load", filename: "<this-file>" }), then run with: replay({ action: "run", name: "<this-file>" })',
-        ...sequence
+        _comment: 'CDP Tools replay sequence. Load with: replay({ action: "load", filename: "<this-file>" }), then run with: replay({ action: "run", name: "<this-file>" }). What the app did under each step, and the responses that answer it on replay, are in the file of the same name under activity/.',
+        ...actions
       };
       await atomicWriteFile(filepath, JSON.stringify(exportData, null, 2));
+      await writeActivity(filepath, activity);
       // Now disk-backed: watch it, and record THIS write's mtime so the save
       // does not read back as an external edit.
       await this.trackSequenceSource(sequence, filepath);
@@ -921,7 +948,9 @@ export class CommandRecorder {
    */
   private async parseSequenceFile(filepath: string): Promise<CommandSequence> {
     const content = await fs.readFile(filepath, 'utf-8');
-    return JSON.parse(content) as CommandSequence;
+    // What the app did is kept in its own file; read back in here, so every
+    // reader of a sequence has its traffic and responses with it.
+    return mergeActivity(JSON.parse(content) as CommandSequence, await readActivity(filepath));
   }
 
   /**

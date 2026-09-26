@@ -5,6 +5,132 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Waits hold a replay step open.** Wait on a row makes its step wait for
+  that kind of crossing. The response on the kind says how many, for how many
+  seconds, and whether a miss fails the step or carries on; with no response,
+  one within 10 seconds, failing on a miss. The step's list shows
+  `waiting for <name> (N left)` under its rows until they have all crossed.
+
+- **Saved responses belong to the site.** Each is kept once per host and port
+  in `activity/_site/<host>-<port>.json`, with a response type: **Local**
+  answers only in the sequence that made it, **Opt In** only in the sequences
+  that opt in, **Opt Out** in every sequence except those that opt out. A sequence records its opt-ins (`responsesOn`, at every step or at
+  a set of steps) and opt-outs (`responsesOff`) in its activity file. The proxy
+  panel lists every response on disk by site; expanding one shows the response
+  and its mode, and under it the sequences that opted in or out.
+- **A pin can answer under several steps** (`steps`), so one response serves
+  steps 2, 4 and 7 of a run with one hit count.
+- **Captures are taken again and compared.** CAPTURE holds the page and opens
+  a dialog: click an element, or take the window (Screen), the whole document
+  (Page), or the document with the window's place marked (Page w/ VP). Each
+  PNG carries its record - page, window size and pixel ratio, the element or
+  the element around a crop, the crop, where the page's JS was stopped - and
+  a clean copy. `bench({ action: 'retake' })` or the note's retake button
+  writes the next version: before, after and the difference side by side,
+  and a `comparison` event with the share changed and its box.
+  `bench({ action: 'capture' })` reads a file's record.
+- **An element capture can record what the element is**: the handlers on it
+  and its ancestors, the CSS that applies with each rule's source, computed
+  values, box, what covers it and the font drawn, its markup and its
+  accessibility role, name and states. A retake names each that changed.
+
+- **Steps move, fold and go on the UI tab.** A step marker drags to a new
+  place, or moves one place with ↑ and ↓; the bin takes it out on a second
+  click. A click on the marker folds its rows to a count per colour. The
+  `steps` divider carries the last replay's differences and the passes held.
+- **Consecutive moves of one step are one `sequence` event.** Moves of the
+  same step within 2 seconds of each other are announced once, from where it
+  started to where it ended.
+
+### Fixed
+
+- **Moving, removing or adding a timer renumbers the armed waits.** The file's
+  waits were renumbered and the session's armed copy kept the old step
+  numbers, so a wait showed under the step now at its old place, and the next
+  rules write put the old numbers back. Names given to kinds at a step are
+  renumbered with them.
+
+- **A step wait is honoured by a replay.** Waits were saved on the sequence
+  and shown on screen, and nothing in a replay read them, so a step released
+  on its settle time whatever it was waiting for.
+
+- **A replacement for an event-stream (SSE) message answers it.** The proxy
+  recorded each message of a `text/event-stream` response and passed the
+  stream through unread, so a frame rule made from an SSE row never fired. Each
+  message is now matched against the frame rules and passed on, replaced
+  (keeping its `event:` and `id:` lines) or dropped. A compressed stream is
+  still passed through untouched.
+
+- **A new recording no longer inherits the open sequence's rules.** Starting a
+  recording left the previously open sequence's rules armed, and saving it
+  wrote them onto the new sequence. It now starts with the site's rules only.
+
+- **An element capture in headless Chrome shows the page at its own width.**
+  Taken from the bench's CDP session, a clipped capture dropped the size a
+  headless launch set, and the element was drawn laid out at the bare window.
+
+### Changed
+
+- **A retake runs at the recorded window size and pixel ratio**, letting a
+  held page run while it resizes so its handlers lay it out, then puts the
+  size, scroll and freeze back. A tab in the background, where Chrome runs
+  no resize handlers, and two captures at different scales are reported
+  rather than counted as change.
+- **`sweep` keeps every version of a capture a note cites**, and reports
+  the versions of an uncited one with it.
+- **One place for rules, saved as they are made.** A rule is made and
+  edited in full on the traffic row it answers, and the proxy panel lists
+  every rule as saved responses, a line opening its row. ON REPLAY and its
+  save button are gone: each change is written onto the open sequence, and
+  rules made while recording are written when it stops. A rule bound to a
+  step reads that it answers during a replay rather than `never fired`.
+- **The proxy button lights as traffic lands** - aqua for a step's, orange
+  for the app's own, red for a failure - carries the count of rules in force,
+  and opens what crossed in words, since a recording began while one runs.
+  The crossing bar on STEPS is gone.
+- **While recording, traffic lands under the step that caused it,** placed
+  by time since no command stamps a person's click; the floating bar carries
+  the recording's name and its stop and throw-away controls, and the steps
+  are listed once, as a replay lists them.
+- **Buttons read in sentence case.**
+- **A sequence's activity lives in its own file.** `sequences/<name>.json`
+  holds the actions; what the app did under each step, the saved responses,
+  waits, refuse setting and traffic names go to `activity/<name>.json`,
+  keyed to the sequence's id, and are read back with it. A sequence saved
+  before this moves its activity out on its next save.
+- **A rule made from a row answers at any step.** Bound to the row's step,
+  it left the same call earlier in the run to the server; the step is kept
+  for the editor to narrow back to.
+- **A replay does not stop on a failure the recording had.** A click
+  followed only by failed-request console errors, no more than that step
+  failed when recorded, passes as recorded; a script error or a new failure
+  still stops it.
+- **Storage writes show under their steps.** localStorage, sessionStorage,
+  cookies set by script and IndexedDB appear as rows beside the traffic, while
+  recording and on replay, and are kept in each step's saved traffic.
+- **`bench start` returns.** Its result carried the bench session whole,
+  live page handle included, and serialising that never finished.
+- **Saving a recording leaves the record form.** It came back with the old
+  name in it.
+- **A replay drives the app when the bench tab is in front.** Chrome drops
+  synthesised clicks on a hidden tab, so a sequence played from the bench tab
+  ran its navigate and reported every click done. The app's tab is brought
+  forward for the length of a step or a play, and the bench put back after.
+- **A replay drives the app after a note was saved.** Chrome's picker
+  stays on after a pick, so a note left it swallowing every later click -
+  a replayed sequence ran its navigate and nothing else - while the bench
+  showed it off. A pick now switches it off, and a replay or recording
+  switches it off before driving.
+- **A kind of traffic can be named,** from its open row; the name replaces
+  the payload on its rows and saved responses and is kept on the sequence.
+- **A large frame is matched by its leading field** (`"tag":"big"`) though
+  its preview is cut short, and a body past 16 kB is shown in part until
+  asked for; a row's head stays one line.
+
 ## [0.10.1] - 2026-09-25
 
 ### Fixed

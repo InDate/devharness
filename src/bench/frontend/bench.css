@@ -13,9 +13,15 @@
   --panel: #f5f6f8;
   --accent: #1a73e8;
   --caused: #2f6f5e;
-  --own: #a8632c;
+  --own: var(--caused);
   --alert: #b8443a;
   --frost: #2f7fb8;
+  --store: #7a55c7;
+  --note: #a88419;
+  --intercept: #b4407e;
+  --sequence: #5a5fd1;
+  --wait: #0f8a98;
+  --variable: #6f8f1f;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -27,9 +33,15 @@
     --panel: #1b1f24;
     --accent: #8ab4f8;
     --caused: #63c2a4;
-    --own: #d99a58;
+    --own: var(--caused);
     --alert: #e8776c;
     --frost: #7fc7ef;
+    --store: #b69cf0;
+    --note: #e2c15a;
+    --intercept: #e57fb6;
+    --sequence: #a3a7f5;
+    --wait: #5fd3de;
+    --variable: #b6d65c;
   }
 }
 
@@ -50,7 +62,7 @@ h1 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: 0.08em; color
 nav { display: flex; gap: 2px; }
 nav button {
   padding: 4px 10px; border: 0; border-radius: 6px; background: none; cursor: pointer;
-  color: var(--muted); font: 600 11px/1.4 inherit; letter-spacing: 0.06em;
+  color: var(--muted); font: 500 12px/1.4 inherit;
 }
 nav button:hover { color: var(--fg); }
 nav button.on { background: var(--panel); color: var(--fg); }
@@ -139,9 +151,9 @@ nav button.on { background: var(--panel); color: var(--fg); }
 .bodyrow { display: flex; gap: 10px; align-items: center; margin-top: 8px; }
 
 button.save {
-  padding: 6px 12px; border: 1px solid var(--line); border-radius: 6px;
+  padding: 5px 11px; border: 1px solid var(--line); border-radius: 6px;
   background: var(--bg); color: var(--fg); cursor: pointer;
-  font: 600 11px/1.4 -apple-system, sans-serif; letter-spacing: 0.04em;
+  font: 500 12px/1.4 -apple-system, sans-serif;
 }
 button.save:hover { border-color: var(--accent); }
 button.save.chosen { background: var(--own); border-color: var(--own); color: #fff; }
@@ -232,7 +244,7 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
   display: inline-flex; align-items: center; gap: 6px;
   padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px;
   background: var(--bg); color: var(--muted); cursor: pointer;
-  font: 600 11px/1.4 -apple-system, sans-serif; letter-spacing: 0.04em;
+  font: 500 12px/1.4 -apple-system, sans-serif;
 }
 .chip-toggle:hover:not(:disabled) { border-color: var(--accent); color: var(--fg); }
 .chip-toggle.on { border-color: var(--accent); color: var(--accent); }
@@ -418,9 +430,148 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
 }
 .mark:hover .marktext { opacity: 1; color: var(--fg); }
 .mark:first-child { margin-top: 8px; }
-.mark.here .marktext { color: var(--accent); opacity: 1; }
-.mark.here::before, .mark.here::after { background: var(--accent); opacity: 0.35; }
+.mark.here .marktext { color: var(--sequence); opacity: 1; }
+.mark.here::before, .mark.here::after { background: var(--sequence); opacity: 0.45; }
 .mark.failed .marktext { color: var(--alert); opacity: 1; }
+
+/* One line in a step's list - a crossing, a missing kind, a note - with
+   every column at the same place on every row: where it went, which way, what
+   it was, and at the right end what came of it. The head is one line tall and
+   its items are centred rather than set on a shared baseline, so the buttons
+   that appear on pointing pull no word up or down. */
+.listrow > .rowhead {
+  display: grid; grid-template-columns: 14ch 10px minmax(0, 1fr) auto;
+  column-gap: 8px; align-items: center; height: 1.7em;
+}
+.listrow > .rowhead > .dir { min-width: 0; max-width: none; }
+.rowlabel { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.rowlabel > .what { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rowlabel > .tag, .rowlabel > .stale { flex: 0 0 auto; }
+/* The reading and the actions share the right end. The actions sit over it,
+   right-aligned, in five fixed slots - an action a row lacks leaves its slot
+   empty - so each is at the same place on every row; pointing swaps which of
+   the two is visible and changes no size. */
+.rowright { position: relative; display: flex; justify-content: flex-end; }
+.rowreading { display: flex; gap: 8px; align-items: center; white-space: nowrap; }
+.rowactions {
+  position: absolute; right: 0; top: 50%; transform: translateY(-50%);
+  display: grid; visibility: hidden;
+}
+.rowactions .tool, .rowactions .slot {
+  width: 22px; height: 18px; padding: 0; border: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.rowactions .tool:hover:not(:disabled) { color: var(--accent); }
+.rowactions .tool svg { display: block; }
+.listrow:hover > .rowhead .rowactions { visibility: visible; }
+.listrow:hover > .rowhead .rowreading { visibility: hidden; }
+.rowhead input.rename {
+  min-width: 0; width: 100%; height: 1.5em; padding: 0;
+  border: 0; outline: none; background: transparent; color: var(--fg);
+  font: inherit;
+}
+.rowhead input.rename::placeholder { color: var(--muted); }
+/* An opened row: what it carried, in a box whose top edge says what it is,
+   and under it one line - how it compares on the left, what can be done with
+   it on the right. The box runs the row's width. */
+.listrow > .body { margin: 6px 0 4px; padding: 0; }
+.pbox { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.pboxhead {
+  display: flex; gap: 8px; align-items: center; padding: 3px 10px;
+  border-bottom: 1px solid var(--line); background: var(--panel);
+  color: var(--muted); font: 10px/1.8 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.pboxhead .tool { padding: 0 4px; font-size: 10px; }
+.pbox .pboxbody, .pbox .diff {
+  margin: 0; padding: 8px 10px; max-height: 320px; overflow: auto;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.pbox .diff { border: 0; border-radius: 0; padding: 6px 0; }
+.bodyfoot {
+  display: flex; gap: 10px; align-items: center; margin-top: 6px;
+  font: 11px/1.7 -apple-system, sans-serif; color: var(--muted);
+}
+.footsummary { display: flex; gap: 8px; align-items: center; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.footactions { flex: 0 0 auto; display: flex; gap: 2px; align-items: center; white-space: nowrap; }
+.bodyfoot .tool { padding: 1px 7px; font-size: 11px; }
+.bodyfoot .tool:focus { outline: none; }
+.bodyfoot .tool:focus-visible { outline: 1px solid var(--accent); }
+
+/* In the UI tab each row is a card with the note's border. The left rule
+   keeps the colour it carries everywhere - caused, the app's own, a storage
+   write, a note - so the card changes the frame and not the reading. */
+.activitycards {
+  list-style: none; margin: 0 0 14px; padding: 0;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.activitycards > .crossed {
+  border-top: 1px solid var(--line); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line);
+  border-radius: 10px; padding: 5px 12px;
+}
+.activitycards > .crossed .body { margin: 6px 0 4px; padding: 0; }
+/* A note in a colour of its own: it is what someone said, not what crossed. */
+.crossed.noterow { border-left: 2px solid var(--note); }
+.noterow .rowhead .dir { color: var(--note); }
+.noterow .rowhead .what { font-family: -apple-system, sans-serif; }
+/* A note opened: each capture with its takes against each other, and the
+   element it points at. The takes sit in a box like a payload's, whose top
+   edge picks the two and how they are laid out. */
+.notebody { margin: 6px 0 4px; display: flex; flex-direction: column; gap: 8px; }
+.notebody .findingwhere { margin: 0; overflow: hidden; text-overflow: ellipsis; }
+.notebody > .bodyfoot { margin: 0; }
+.composing .composeactions { position: static; min-width: 0; gap: 2px; }
+.composing .composeactions .tool { padding: 0 7px; font: 11px/1.6 -apple-system, sans-serif; }
+/* A note's words as they are written, and as they read once opened: their
+   own full-width row under the line, every line kept. */
+textarea.notewords {
+  display: block; width: 100%; margin: 4px 0 2px; padding: 0; resize: none; overflow: hidden;
+  border: 0; outline: none; background: transparent; color: var(--fg);
+  font: 12px/1.55 -apple-system, sans-serif;
+}
+textarea.notewords::placeholder { color: var(--muted); }
+.notefull { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.55 -apple-system, sans-serif; color: var(--fg); }
+.notefull { cursor: text; }
+.noteedit > .bodyfoot { margin: 0; }
+.composing .rowlabel .what.quiet { color: var(--muted); }
+.capture { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.capture > .bodyfoot { margin: 0; padding: 3px 10px; border-top: 1px solid var(--line); }
+.capture .pboxhead select {
+  appearance: none; -webkit-appearance: none;
+  padding: 0 16px 0 6px; border: 1px solid var(--line); border-radius: 4px;
+  background: var(--bg) no-repeat right 5px center / 7px 4px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-size: 4px 4px, 4px 4px;
+  background-position: right 8px center, right 4px center;
+  color: var(--fg); font: 10px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; cursor: pointer;
+}
+.capture .pboxhead select:hover, .capture .pboxhead select:focus-visible { border-color: var(--accent); outline: none; }
+.takes.changes img { cursor: default; }
+/* The strip is three equal panels with a gap, so its labels sit over thirds. */
+.strip .striplabels {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 3px;
+  color: var(--muted); font: 10px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.strip img { display: block; width: 100%; height: auto; border-radius: 4px; }
+.notebody .footsummary .figure { color: var(--muted); }
+.notebody .footsummary .figure.changed { color: var(--alert); }
+.takes { padding: 8px 10px; }
+.takes img { display: block; max-width: 100%; height: auto; cursor: zoom-in; border-radius: 4px; background: var(--panel); }
+.takes figure { margin: 0; min-width: 0; }
+.takes figcaption { margin-top: 3px; color: var(--muted); font: 10px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.takes.side { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: start; }
+.takes.stack { display: flex; flex-direction: column; gap: 10px; }
+.takes.overlay .overlaid { position: relative; display: inline-block; max-width: 100%; }
+.takes.overlay .over { position: absolute; inset: 0; }
+.takes.overlay .over img { width: 100%; height: 100%; }
+.wipe {
+  display: flex; gap: 8px; align-items: center; margin-top: 6px;
+  color: var(--muted); font: 10px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.wipe input { flex: 1 1 auto; }
+.capture .comparison { margin: 0; padding: 4px 10px 6px; border-top: 1px solid var(--line); }
+@media (max-width: 599px) { .takes.side { grid-template-columns: 1fr; } }
+.mark.tail { cursor: default; }
 
 .findingshead { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; }
 .nothing { max-width: 42ch; }
@@ -431,7 +582,8 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
   padding: 12px 14px; margin-bottom: 14px;
   border: 1px solid var(--line); border-radius: 10px;
 }
-.draft { border-color: var(--accent); }
+.draft { border-color: var(--note); }
+.draftslot { list-style: none; }
 .drafthead, .findinghead { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; }
 .draftlabel, .findingat {
   color: var(--muted); font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -544,7 +696,7 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
 .startbox .cancel {
   display: block; width: 100%; margin-top: 8px; padding: 8px 12px;
   border: 0; background: none; color: var(--muted); cursor: pointer;
-  font: 600 11px/1.4 -apple-system, sans-serif; letter-spacing: 0.04em;
+  font: 500 12px/1.4 -apple-system, sans-serif;
 }
 .startbox .cancel:hover { color: var(--fg); }
 .lede { margin: 6px 0 20px; font-size: 12px; line-height: 1.6; color: var(--muted); }
@@ -554,6 +706,8 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
   font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .namebox:focus { outline: none; border-color: var(--accent); }
+.startbox textarea.why { margin-bottom: 20px; }
+.startbox textarea.why:focus { outline: none; border-color: var(--accent); }
 
 .whowatches { margin: 0 0 18px; padding: 0; border: 0; }
 .whowatches .asklabel { padding: 0; }
@@ -587,7 +741,8 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
 }
 
 .purpose { margin: 14px 0 18px; }
-.purpose textarea.why {
+.purpose textarea.why,
+.startbox textarea.why {
   width: 100%; margin-bottom: 12px; padding: 9px 11px; resize: vertical;
   border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg);
   font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -601,23 +756,6 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
   font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .pendinglabel { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-.taken { list-style: none; margin: 0; padding: 0; }
-.took { border-top: 1px solid var(--line); padding: 2px 0; }
-.took:last-child { border-bottom: 1px solid var(--line); }
-.tookhead {
-  display: flex; gap: 10px; align-items: baseline; padding: 7px 8px;
-  font: 11px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-.took .num { flex: 0 0 24px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
-.took .label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tookwhat { margin: 0 8px 7px 42px; font-size: 12px; }
-.tookedit { display: flex; gap: 8px; align-items: flex-start; padding: 0 8px 10px 42px; }
-.tookedit textarea.why {
-  flex: 1; padding: 8px 10px; resize: vertical;
-  border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--fg);
-  font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
-}
 
 /* A step held while the agent reads it. Alert rather than accent once it is
    flagged, because the two states ask different things: one waits, one wants
@@ -652,7 +790,7 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
 .watching {
   padding: 2px 7px; border-radius: 999px;
   border: 1px solid var(--accent); color: var(--accent);
-  font: 10px/1.6 system-ui, sans-serif; letter-spacing: 0.04em; text-transform: uppercase;
+  font: 11px/1.6 system-ui, sans-serif;
 }
 
 /* What the picked element reads, where its selector says little on its own. */
@@ -687,12 +825,21 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
 /* Writing against a step the run has already passed. Quiet until the marker
    is reached for, because the marker's own job is to say where you are. */
 .mark { position: relative; }
-.marknote {
-  opacity: 0; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px;
-  background: var(--bg); color: var(--muted); cursor: pointer; font: 10px/1.6 inherit;
+/* A marker's tools take its text's place on pointing: out of the line's
+   flow, centred where the text sits, and the text gives way to them. */
+.mark .marktools {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  display: inline-flex; gap: 6px; padding: 0 8px; background: var(--bg);
+  visibility: hidden;
 }
-.mark:hover .marknote, .marknote:focus-visible { opacity: 1; }
-.marknote:hover { border-color: var(--accent); color: var(--accent); }
+.mark:hover .marktools, .mark .marktools:focus-within { visibility: visible; }
+.mark:has(.marktools):hover .marktext { visibility: hidden; }
+.marknote {
+  padding: 2px 4px; border: 0; background: none;
+  color: var(--muted); cursor: pointer; display: inline-flex; align-items: center;
+}
+.marknote:hover { color: var(--fg); }
+.marknote svg { width: 16.25px; height: 16.25px; }
 .failure { display: flex; gap: 10px; align-items: center; }
 
 /* What the sequence is for, above the steps that carry it out. */
@@ -774,17 +921,14 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
 }
 .noproxy .asked { color: var(--caused); font: 11px/1.6 ui-monospace, Menlo, monospace; }
 
-.crossbar {
-  display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap;
-  margin: 10px 0 0; padding: 8px 12px;
-  border: 1px solid var(--line); border-radius: 9px;
+.scopecounts {
+  display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; margin: 4px 0;
   font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
 }
-.crossbar .count { font-size: 15px; font-weight: 600; color: var(--caused); }
-.crossbar .key { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }
-.crossbar .key i { width: 12px; height: 0; border-top: 2px solid; }
-.crossbar .key i.caused { border-color: var(--caused); }
-.crossbar .key i.unowned { border-color: var(--own); border-top-style: dashed; }
+.scopecounts .key { display: inline-flex; align-items: center; gap: 5px; color: var(--fg); }
+.scopecounts .key i { width: 12px; height: 0; border-top: 2px solid; }
+.scopecounts .key i.caused { border-color: var(--caused); }
+.scopecounts .key i.unowned { border-color: var(--own); border-top-style: dashed; }
 
 .crossedlist { list-style: none; margin: 6px 0 2px; padding: 0 0 0 26px; }
 .crossed {
@@ -805,10 +949,19 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
 .crossedhead .way { flex: 0 0 10px; color: var(--muted); }
 .crossedhead .what { flex: 1 1 auto; min-width: 0;
                      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.crossed.open .crossedhead .what { white-space: normal; word-break: break-all; }
+/* One line open or closed: the head names the row, and the payload is in the
+   editor below and in the head's tooltip. */
+.crossedhead .what.named { color: var(--fg); font-family: -apple-system, sans-serif; }
+.crossed .body.naming { padding-bottom: 0; }
+.largebody .payload {
+  max-height: 7.5em; overflow: hidden; margin: 0; padding: 7px 9px;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--bg);
+  white-space: pre-wrap; word-break: break-all;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted);
+}
 .crossedhead .meta { flex: 0 0 auto; color: var(--muted); font-variant-numeric: tabular-nums; }
 .crossedhead .meta.bad { color: var(--alert); }
-.crossedhead .meta.held { color: var(--own); }
+.crossedhead .meta.served { color: var(--intercept); }
 /* Read after the payload: a row is found by its URL and judged by this. */
 .crossedhead .reading { flex: 0 1 auto; min-width: 0; max-width: 26%; color: var(--muted);
                         white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -823,14 +976,9 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
  * `display: contents` at full width, so the group is not a box and every child
  * lays out against the head exactly as it did before the group existed.
  *
- * Hover puts them back as a strip positioned over the row beneath, which holds
- * the row's own height. A row that grew on hover would push the rows under it
- * down, out from under the pointer, and the row being read would change while
- * it was being read.
- *
- * A pointer is what reveals the strip. Without one the values are reached by
- * opening the row, which carries them in full - putting them back into a line
- * this narrow overflows it, and the row loses the payload instead.
+ * Nothing reveals them on hover: the rows redraw as traffic arrives, and a
+ * strip laid over the row below flickered with every redraw. The row head's
+ * tooltip states how the crossing was attributed, in words.
  * ------------------------------------------------------------------------- */
 /* What the rule is recognised by, one constraint to a row.
  *
@@ -842,8 +990,8 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
  */
 .binds { display: flex; flex-direction: column; gap: 4px; margin: 2px 0 1px; }
 .bound { display: flex; gap: 8px; align-items: center; }
-.bound .boundlabel {
-  flex: 0 0 68px; color: var(--muted);
+.bound .boundlabel, .edit .fieldlabel {
+  flex: 0 0 64px; color: var(--muted);
   font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .boundpick {
@@ -852,7 +1000,7 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
   font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .boundpick:hover { color: var(--fg); }
-.boundpick.on { border-color: var(--own); color: var(--own); }
+.boundpick.on { border-color: var(--intercept); color: var(--intercept); }
 
 /* The value takes the room left over: a socket URL and a step's own call are
    both longer than the line, and truncating them is what keeps the wildcard
@@ -865,8 +1013,8 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
   background: var(--panel); color: var(--muted); cursor: pointer;
   font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
 }
-.boundvalue.on .boundin { border-color: var(--own); color: var(--own); }
-.boundin:focus { outline: none; border-color: var(--own); color: var(--fg); }
+.boundvalue.on .boundin { border-color: var(--intercept); color: var(--intercept); }
+.boundin:focus { outline: none; border-color: var(--intercept); color: var(--fg); }
 
 /* The constraint is dropped, so the value it holds is not part of what the
    rule matches on. Dimmed to the point of reading as inert while staying
@@ -878,9 +1026,12 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
 .boundvalue.off.whole { opacity: 1; }
 .boundvalue.off .boundin { border-style: dashed; }
 
-@media (max-width: 599px) {
-  .bound { flex-wrap: wrap; }
-  .bound .boundlabel { flex: 0 0 100%; }
+/* Labels keep their column at every width: stacked above their controls on a
+   narrow pane, the rows alternated between two layouts and read as a zigzag. */
+.edit .fieldlabel { font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.recordedline {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted);
 }
 
 .shaved { display: contents; }
@@ -908,18 +1059,6 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
   .runbar .seqpick, .topbar .seqpick { flex: 1 1 0; min-width: 0; max-width: none; }
   .runbar .rule { display: none; }
 
-  /* The colour key is a reference read once, not a reading taken each pass, so
-     it goes before any count does. Left in, the bar broke into a line per item
-     and the counts it exists to carry were the hardest thing on it to find. */
-  .crossbar .key, .crossbar .rule { display: none; }
-  .crossbar { gap: 8px; }
-  /* The spacer that pushes the right-hand group right at full width becomes
-     the break that starts a second line here: zero height, full basis, so the
-     bar goes from one line to two at one width. Left to wrap on their own the
-     items leave one at a time, and which line each sits on is set by how many
-     digits a count happens to be carrying. */
-  .crossbar .grow { flex: 1 0 100%; height: 0; margin: 0; }
-  .crossbar { row-gap: 4px; }
 }
 
 @media (max-width: 599px) {
@@ -927,27 +1066,13 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
      screen cannot spare, and the controls are easier to reach spread out. */
   .footbar { width: 100%; justify-content: space-between; }
 
-  .crossedhead, .onreplay .rulehead { position: relative; }
+  /* Out of the line at this width. A hover strip that put them back over the
+     row below flickered as rows redrew under arriving traffic; the row head's
+     tooltip carries what they said, and opening the row carries the rest. */
   .shaved { display: none; }
 
-  .crossed:hover .shaved,
-  .crossed:focus-within .shaved,
-  .onreplay .rules li:hover .shaved,
-  .onreplay .rules li:focus-within .shaved {
-    display: flex; gap: 10px; align-items: baseline;
-    position: absolute; z-index: 30; top: 100%; left: 0; right: 0;
-    padding: 3px 8px; border: 1px solid var(--line); border-radius: 0 0 6px 6px;
-    border-top: 0; background: var(--panel);
-  }
-  /* Flat inside the strip: the widths that held a column in the line would
-     leave gaps in a strip that has no columns to align to. */
-  .crossed:hover .shaved > *,
-  .crossed:focus-within .shaved > *,
-  .onreplay .rules li:hover .shaved > *,
-  .onreplay .rules li:focus-within .shaved > * { flex: 0 0 auto; text-align: left; }
-
   /* The verb is a word, and at this width the target needs the room. */
-  .onreplay .verb { flex: 0 0 auto; }
+  .saved .verb { flex: 0 0 auto; }
 }
 
 
@@ -1001,9 +1126,9 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
 
 /* A row a rule answers is no longer a reading of the run, so it takes the hue
    that means the app is not the thing deciding it any more. */
-.crossed.answers { border-left-color: var(--own) !important; border-left-style: solid !important; }
+.crossed.answers { border-left-color: var(--intercept) !important; border-left-style: solid !important; }
 .crossed.ruled { opacity: .55; }
-.crossedhead .tag { flex: 0 0 auto; color: var(--own); }
+.crossedhead .tag { flex: 0 0 auto; color: var(--fg); }
 .crossedhead .repeat { flex: 0 0 auto; color: var(--muted); }
 .crossedhead .kill {
   flex: 0 0 auto; border: 0; background: none; cursor: pointer; padding: 0 2px;
@@ -1014,83 +1139,89 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
 
 /* The payload, as it will be served rather than as it crossed. */
 .crossed .body { margin: 4px 0 6px 56px; }
-.crossed .edit, .onreplay .rules li .edit { display: flex; flex-direction: column; gap: 5px; }
-.crossed .editrow, .onreplay .rules li .editrow {
+.crossed .edit, .saved .rules li .edit { display: flex; flex-direction: column; gap: 5px; }
+.crossed .editrow, .saved .rules li .editrow {
   display: flex; gap: 8px; align-items: center;
   font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted);
 }
 .crossed .edit input:not(.boundin), .crossed .edit textarea,
-.onreplay .rules li .edit input:not(.boundin), .onreplay .rules li .edit textarea {
+.saved .rules li .edit input:not(.boundin), .saved .rules li .edit textarea {
   padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px;
   background: var(--bg); color: var(--fg);
   font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
 }
-.crossed .edit input.status, .onreplay .rules li .edit input.status { width: 58px; }
-.crossed .edit textarea, .onreplay .rules li .edit textarea {
+.crossed .edit input.status, .saved .rules li .edit input.status { width: 58px; }
+.crossed .edit textarea, .saved .rules li .edit textarea {
   width: 100%; resize: vertical; min-height: 58px;
 }
 .crossed .edit input:not(.boundin):focus, .crossed .edit textarea:focus,
-.onreplay .rules li .edit input:not(.boundin):focus, .onreplay .rules li .edit textarea:focus {
+.saved .rules li .edit input:not(.boundin):focus, .saved .rules li .edit textarea:focus {
   outline: 2px solid var(--accent); outline-offset: 1px;
 }
 /* An edited box is work not yet committed, so it carries the colour of the
    button that would commit it. */
 .crossed .edit textarea.dirty, .crossed .edit input.dirty,
-.onreplay .rules li .edit textarea.dirty, .onreplay .rules li .edit input.dirty {
+.saved .rules li .edit textarea.dirty, .saved .rules li .edit input.dirty {
   border-color: var(--accent);
 }
-.crossed .state, .onreplay .rules li .state {
+.crossed .state, .saved .rules li .state {
   display: flex; gap: 8px; align-items: center;
   font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
 }
-.crossed .state .pend, .onreplay .rules li .state .pend { color: var(--accent); }
-.crossed .state .ok, .onreplay .rules li .state .ok { color: var(--muted); }
-.crossed .bodyrow, .onreplay .rules li .bodyrow {
+.crossed .state .pend, .saved .rules li .state .pend { color: var(--accent); }
+.crossed .state .ok, .saved .rules li .state .ok { color: var(--muted); }
+.crossed .bodyrow, .saved .rules li .bodyrow {
   display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 7px;
 }
+.crossed .expect { margin-top: 7px; }
+.crossed .expect .ok { color: var(--muted); }
+.crossed .expect.picking {
+  display: flex; flex-direction: column; gap: 4px;
+  font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.expectfields { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow-y: auto; }
+.expectfields label { display: flex; gap: 8px; align-items: baseline; cursor: pointer; }
+.expectfields .path { color: var(--fg); }
+.expectfields .quiet { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 /* One loud button: the one that commits what is in the box. */
-.crossed .bodyrow .tool.done, .onreplay .rules li .bodyrow .tool.done {
+.crossed .bodyrow .tool.done, .saved .rules li .bodyrow .tool.done {
   border-style: dashed; color: var(--muted); cursor: default;
 }
-.crossed .bodyrow .tool.plain { border-color: transparent; color: var(--muted); }
-.crossed .bodyrow .tool.plain:hover { border-color: var(--line); color: var(--fg); }
+/* Secondary actions as outlined buttons in one wrapping row, so none reads as
+   loose text and the status above is not mistaken for one of them. */
+.crossed .bodyrow .tool, .saved .rules li .bodyrow .tool {
+  border-color: var(--line); color: var(--muted); padding: 3px 9px;
+}
+.crossed .bodyrow .tool:hover, .saved .rules li .bodyrow .tool:hover { color: var(--fg); border-color: var(--accent); }
 
 /* What this sequence will do next time it runs. */
-.onreplay {
-  margin-top: 20px; padding: 12px 14px;
-  border: 1px solid var(--line); border-radius: 9px;
-}
-.onreplayhead { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
-.onreplay h2 {
-  margin: 0; font: 600 11px/1.4 inherit; letter-spacing: .08em; color: var(--muted);
-}
-.onreplay .rules { list-style: none; margin: 10px 0 0; padding: 0; }
-.onreplay .rules li {
+.saved .rules { list-style: none; margin: 4px 0 6px; padding: 0; }
+.saved .rules li {
   border-top: 1px solid var(--line);
   font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
 }
-.onreplay .rules li:first-child { border-top: 0; }
-.onreplay .rulehead { display: flex; gap: 10px; align-items: baseline; padding: 4px 0; }
+.saved .rules li:first-child { border-top: 0; }
+.saved .rulehead { display: flex; gap: 10px; align-items: baseline; padding: 4px 0; }
 /* Only an answer opens: a block and a hide carry no value to read. */
-.onreplay .rulehead.opens { cursor: pointer; }
-.onreplay .rulehead.opens:hover .target { color: var(--fg); }
-.onreplay .rules li.open .rulehead .target { color: var(--fg); }
-.onreplay .rules li .body { margin: 2px 0 10px 76px; }
-.onreplay .verb { flex: 0 0 66px; color: var(--own); }
-.onreplay .verb.keep { color: var(--caused); }
-.onreplay .verb.quiet { color: var(--muted); }
-.onreplay .target {
+.saved .rulehead.opens { cursor: pointer; }
+.saved .rulehead.opens:hover .target { color: var(--fg); }
+.saved .rules li.open .rulehead .target { color: var(--fg); }
+
+.saved .rules li .body { margin: 2px 0 10px 0; }
+.saved .rulehead .hint { flex: 0 1 auto; white-space: nowrap; }
+.saved .verb { flex: 0 0 66px; color: var(--intercept); }
+.saved .verb.keep { color: var(--caused); }
+.saved .verb.quiet { color: var(--muted); }
+.saved .target {
   flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.onreplay .hits { flex: 0 0 auto; color: var(--caused); }
+.saved .hits { flex: 0 0 auto; color: var(--caused); }
 /* A rule that never fired is one whose matcher has stopped matching. */
-.onreplay .hits.cold { color: var(--alert); }
-.onreplay .rules .drop {
+.saved .hits.cold { color: var(--alert); }
+.saved .rules .drop {
   flex: 0 0 auto; border: 0; background: none; color: var(--muted); cursor: pointer; padding: 0 2px;
 }
-.onreplay .rules .drop:hover { color: var(--alert); }
-.onreplayfoot { display: flex; gap: 10px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
-.onreplay .saved { color: var(--caused); font: 11px/1.6 ui-monospace, Menlo, monospace; }
+.saved .rules .drop:hover { color: var(--alert); }
 
 /* Stability is a count, never a colour: the two hues answer the ownership
    question and nothing else takes them. A kind that trails the pass count is
@@ -1184,7 +1315,7 @@ ol.steps.running > li.step.now > .stephead { animation: driving 1.4s ease-in-out
    sequence answered in the server's place. Same colours as the rows they
    count, so the bar and the list read as one thing. */
 .footing .crossings { color: var(--caused); }
-.footing .answered { color: var(--own); }
+.footing .answered { color: var(--intercept); }
 .footing .at.running { color: var(--accent); }
 /* Stopped because someone asked, not because it finished. Frost, the hue
    already carrying "held", so the two kinds of stillness read as one family. */
@@ -1201,18 +1332,27 @@ ol.steps.running > li.step.now > .stephead { animation: driving 1.4s ease-in-out
 .footing .chip-toggle { padding: 5px 7px; }
 
 /* Whether anything is recording what crosses the boundary. Red states that
-   nothing is, which is the reading that costs a session's evidence; green
-   states that it is, and the control then does nothing when pressed. */
+   nothing is, which is the reading that costs a session's evidence; the
+   intercept pink states that it is, the colour of what the proxy answers. */
 .footing .chip-toggle.blind,
 .footing .chip-toggle.blind:hover:not(:disabled) {
   border-color: var(--alert); color: var(--alert);
 }
 .footing .chip-toggle.recording,
 .footing .chip-toggle.recording:hover:not(:disabled) {
-  border-color: var(--caused); color: var(--caused);
+  border-color: var(--intercept); color: var(--intercept);
 }
 /* Recording, and nothing to record: the page it watches is held. Frost, the
    hue every other stopped thing on this bar already carries. */
+/* Lit for a moment as traffic lands, by the worst of what arrived. The steady
+   pink between is quiet, so a flicker is a crossing and not a state. */
+.footing .chip-toggle.recording { transition: color .6s, border-color .6s; }
+/* Lit in its lines, not its fill: the border and the mark take the hue, which
+   reads as a flicker against the steady outline without the button turning
+   into a block of colour. */
+.footing .chip-toggle.recording.lit-caused { border-color: var(--caused); color: var(--caused); transition: none; }
+.footing .chip-toggle.recording.lit-own { border-color: var(--own); color: var(--own); transition: none; }
+.footing .chip-toggle.recording.lit-failed { border-color: var(--alert); color: var(--alert); transition: none; }
 .footing .chip-toggle.stilled,
 .footing .chip-toggle.stilled:hover:not(:disabled) {
   border-color: var(--frost); color: var(--frost);
@@ -1232,13 +1372,13 @@ ol.steps.running > li.step.now > .stephead { animation: driving 1.4s ease-in-out
 
 /* What a later crossing is recognised by. Derived, and editable because a
    payload names itself in a different place in every app. */
-.crossed .edit input.match, .onreplay .rules li .edit input.match {
+.crossed .edit input.match, .saved .rules li .edit input.match {
   flex: 1 1 auto; min-width: 0;
   padding: 4px 7px; border: 1px solid var(--line); border-radius: 5px;
   background: var(--bg); color: var(--fg);
   font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
 }
-.crossed .edit input.match.dirty, .onreplay .rules li .edit input.match.dirty {
+.crossed .edit input.match.dirty, .saved .rules li .edit input.match.dirty {
   border-color: var(--accent);
 }
 
@@ -1246,3 +1386,623 @@ ol.steps.running > li.step.now > .stephead { animation: driving 1.4s ease-in-out
    firing, and dimmed so it is not read as something that just crossed. */
 .crossed.stale { opacity: .55; }
 .crossedhead .stale { flex: 0 0 auto; color: var(--muted); }
+
+/* The capture dialog. Grouped by what each control applies to: the element
+   panel with its facts, the three whole-view captures in one row, Cancel apart
+   in the corner so it is not read as a fourth kind of capture. */
+.capturedialog { width: min(520px, 100%); text-align: center; }
+.capturetitle { margin: 4px 0 2px; font: 600 14px/1.4 -apple-system, sans-serif; }
+.capturestate { margin: 0 0 16px; }
+.capturenote {
+  margin: -8px 0 16px; padding: 6px 10px; border-left: 2px solid var(--note); text-align: left;
+  white-space: pre-wrap; max-height: 6em; overflow: auto;
+}
+.capturepick {
+  padding: 14px 16px; border: 1px solid var(--accent); border-radius: 8px; text-align: left;
+}
+.capturepick p { margin: 0 0 10px; }
+.capturefacts { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
+.capturefacts label {
+  display: inline-flex; gap: 5px; align-items: center; cursor: pointer;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.capturerule {
+  display: flex; gap: 10px; align-items: center; margin: 16px 0 12px;
+  color: var(--muted); font-size: 11px; letter-spacing: 0.06em;
+}
+.capturerule::before, .capturerule::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+.capturewhole { display: flex; gap: 10px; justify-content: center; }
+.capturewhole button.save { min-width: 96px; }
+.capturefoot { display: flex; justify-content: flex-end; margin-top: 14px; }
+@media (max-width: 420px) {
+  .capturewhole { flex-direction: column; }
+}
+
+/* The page's stop and the facts read, above the capture being marked up. */
+.draftpause { margin: 0 0 8px; font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--own); }
+.draftfacts { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; margin-top: 10px; }
+.draftfacts label {
+  display: inline-flex; gap: 5px; align-items: center; cursor: pointer;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* A capture's versions under its thumbnail, and how the newest differs. */
+.versions { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; width: 132px; }
+.versions .tool { padding: 1px 6px; font: 10px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.versions select {
+  padding: 1px 2px; border: 1px solid var(--line); border-radius: 4px;
+  background: var(--bg); color: var(--muted); font: 10px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.comparison { margin: 6px 0 0; font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
+.comparison li { list-style: none; }
+.comparison { padding: 0; }
+
+/* Stated on the UI screen while a recording runs, with the way back to it. */
+.recordingbar {
+  display: flex; gap: 10px; align-items: center; margin: 0 0 12px; padding: 8px 12px;
+  border: 1px solid var(--alert); border-radius: 8px;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* The rules in force, counted on the proxy button that opens them. */
+.footing .chip-toggle .badge {
+  margin-left: 4px; padding: 0;
+  background: none; color: var(--intercept);
+  font: 600 10px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* The proxy panel.
+ *
+ * Opens on the state the button showed, in the button's colour, so the colour
+ * that prompted the click is answered before anything else is read. Below it,
+ * sections with headings in the text colour and hints in small muted type:
+ * a panel set all in one grey read as one block. */
+.panelstatus {
+  --tone: var(--caused);
+  margin: -6px -8px 14px; padding: 12px 14px 10px;
+  border: 1px solid color-mix(in srgb, var(--tone) 45%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--tone) 10%, var(--bg));
+}
+.panelstatus.stilled { --tone: var(--frost); }
+.panelstatus.blind { --tone: var(--alert); }
+.panelstatushead { display: flex; gap: 9px; align-items: center; }
+.statusdot {
+  width: 10px; height: 10px; border-radius: 50%; background: var(--tone);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone) 25%, transparent);
+}
+.statustitle { font: 600 15px/1.3 -apple-system, sans-serif; color: var(--tone); }
+.panelstatus .close {
+  padding: 0 4px; border: 0; background: none; cursor: pointer; color: var(--muted); font: 18px/1 inherit;
+}
+.panelstatus .close:hover { color: var(--fg); }
+.statussub { margin: 4px 0 0 19px; font-size: 12px; color: var(--muted); }
+.statuscounts {
+  display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 10px 0 0 19px;
+  font: 12px/1.5 -apple-system, sans-serif; color: var(--muted);
+}
+.statuscounts b { font: 600 16px/1 ui-monospace, SFMono-Regular, Menlo, monospace; margin-right: 4px; }
+.statuscounts .caused b { color: var(--caused); }
+.statuscounts .own b { color: var(--own); }
+.statuscounts .intercepted b { color: var(--intercept); }
+.statuscounts .failed b { color: var(--alert); }
+.statuscounts .quiet b { color: var(--fg); }
+.statuslatest {
+  display: flex; gap: 8px; align-items: center; margin: 8px 0 0 19px;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.latestdot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.latestdot.caused { background: var(--caused); }
+.latestdot.own { background: var(--own); }
+.latestdot.failed { background: var(--alert); }
+.latestwhat { color: var(--fg); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.panelsec { padding: 12px 0; border-top: 1px solid var(--line); }
+/* Ruled between sections, not under the status: that has its own box. */
+.panelstatus + .panelsec { border-top: 0; }
+.panelsec h3 {
+  display: flex; gap: 8px; align-items: baseline; margin: 0 0 6px;
+  font: 600 13px/1.4 -apple-system, sans-serif; color: var(--fg);
+}
+.panelsec h3.opens { cursor: pointer; }
+.panelsec h3 .fold { width: 10px; color: var(--muted); font-size: 11px; }
+.panelsec h3 .grow { flex: 1; }
+.secsummary { font: 400 12px/1.4 -apple-system, sans-serif; color: var(--muted); }
+.secsummary .bad { color: var(--alert); }
+.seccount {
+  padding: 0 6px; border-radius: 8px; background: var(--own); color: var(--bg);
+  font: 600 10px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.sechint { margin: 6px 0 0; font-size: 11px; line-height: 1.5; color: var(--muted); }
+
+/* Two choices, one lit. Refusing is the one that changes what the app sees,
+   so it takes the alert hue when it is on. */
+.segmented { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.segmented button {
+  padding: 4px 12px; border: 0; background: var(--bg); color: var(--muted); cursor: pointer;
+  font: 500 12px/1.4 -apple-system, sans-serif;
+}
+.segmented button + button { border-left: 1px solid var(--line); }
+.segmented button.on { background: color-mix(in srgb, var(--caused) 18%, var(--bg)); color: var(--fg); }
+.segmented button.on.refuse { background: color-mix(in srgb, var(--alert) 20%, var(--bg)); }
+.hosts.blocked .times { color: var(--alert); }
+@media (max-width: 599px) {
+  .crossed .body { margin-left: 10px; }
+}
+
+.largebody .tool { border: 1px solid var(--line); padding: 3px 9px; color: var(--muted); }
+.largebody .tool:hover { border-color: var(--accent); color: var(--fg); }
+
+/* A write the page kept to itself: storage, cookie, IndexedDB. Its own hue,
+   since it crossed no network and is neither a step's call nor the app's. */
+.crossed.storewrite { border-left-color: var(--store); border-left-style: solid; }
+.crossed.storewrite .dir { color: var(--store); }
+.crossedhead .tag.nexttime { color: var(--muted); font-style: italic; }
+
+/* A replayed step against its recording: quiet when it matched, the alert hue
+   where it did not, one line per difference. */
+.crossedhead .verdict { flex: 0 0 auto; font: 11px/1.6 -apple-system, sans-serif; }
+.crossedhead .verdict.match { color: var(--muted); }
+.crossedhead .verdict.mismatch, .crossedhead .verdict.missing { color: var(--alert); font-weight: 600; }
+.crossedhead .verdict.unexpected { color: var(--own); font-weight: 600; }
+.gutter { margin: 14px 0 0; padding-top: 8px; border-top: 1px dashed var(--line); }
+.gutterhead { margin: 0 0 4px; font: 12px/1.5 -apple-system, sans-serif; color: var(--muted); }
+.crossed.missing .crossedhead { opacity: 0.6; }
+.crossed.missing .crossedhead .verdict { opacity: 1; }
+.delta { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.pbox button.chosen, .capture button.chosen { color: var(--fg); font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+.delta .reasons { list-style: none; margin: 0; padding: 0; font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--alert); }
+.pbox .diff {
+  margin: 0; padding: 6px 0; border: 1px solid var(--line); border-radius: 6px;
+  max-height: 320px; overflow: auto;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.pbox .diff > div, .pbox .diff pre { padding: 0 8px; white-space: pre-wrap; word-break: break-all; }
+.pbox .diff .gone { background: color-mix(in srgb, var(--alert) 14%, transparent); }
+.pbox .diff .new { background: color-mix(in srgb, var(--caused) 16%, transparent); }
+.pbox .diff.side .pair { display: grid; grid-template-columns: 1fr 1fr; }
+.pbox .diff.side pre { margin: 0; min-width: 0; }
+.pbox .diff.side pre:first-child { border-right: 1px solid var(--line); }
+.comparesummary { margin: 8px 0; font: 12px/1.5 -apple-system, sans-serif; color: var(--muted); }
+.comparesummary.differs { color: var(--own); }
+/* Each column headed with what it holds, so the two read as two panes. */
+.pbox .diff.side .pair.head > span {
+  padding: 0 8px 4px; margin-bottom: 4px; border-bottom: 1px solid var(--line); color: var(--muted);
+  font: 10px/1.5 -apple-system, sans-serif;
+}
+.pbox .diff.side .pair.head > span:first-child { border-right: 1px solid var(--line); }
+
+/* The field list in the payload box's place, one field a line. */
+.pbox .expectfields { margin: 0; padding: 6px 10px; max-height: 320px; }
+.pbox .expectfields label { font: 11px/1.8 ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+/* A replacement being made: where it applies, one row a constraint, what it
+   is on the left and the choices on the right; then what is served, in a
+   box that grows to what it holds; then the line that saves it. */
+.replace { margin-top: 8px; display: flex; flex-direction: column; gap: 2px; }
+.replrow {
+  display: flex; gap: 8px; align-items: center; min-height: 1.9em;
+  font: 11px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.repllabel { flex: 0 0 14ch; color: var(--muted); }
+.replchoices { display: flex; gap: 2px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+.replchoices .tool { padding: 0 7px; border: 0; font: 11px/1.7 -apple-system, sans-serif; }
+.replchoices .tool:hover:not(:disabled), .replchoices .tool.chosen { color: var(--accent); }
+.replchoices select {
+  appearance: none; -webkit-appearance: none; border: 0; background: transparent; color: inherit;
+  font: inherit; text-decoration: inherit; cursor: pointer; padding: 0; outline: none;
+}
+.replvalue { color: var(--fg); }
+.replinput {
+  width: 6ch; padding: 0 6px; border: 1px solid var(--line); border-radius: 4px;
+  background: var(--bg); color: var(--fg); font: inherit; text-align: right;
+}
+textarea.growbox {
+  display: block; width: 100%; margin: 6px 0 2px; padding: 8px 10px; resize: none;
+  max-height: 400px; overflow: auto;
+  border: 1px solid var(--line); border-radius: 8px; outline: none;
+  background: var(--panel); color: var(--fg);
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+textarea.growbox:focus { border-color: var(--muted); }
+.replace > .bodyfoot { margin-top: 2px; }
+.bodyfoot .tool { border: 0; }
+.bodyfoot .tool:hover:not(:disabled), .bodyfoot .tool.chosen { color: var(--accent); }
+/* A field a replay is compared on, tagged on its line in the payload. */
+.fieldtag { margin-left: 10px; color: var(--accent); font: 10px/1 -apple-system, sans-serif; }
+/* A saved payload shown where the typed one would be: read, not edited here. */
+pre.growbox.saved { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); }
+.replinput.naming { width: 22ch; text-align: left; }
+
+/* Recording, in the column its steps land in: a card for naming a new one,
+   a card for the one under way. Each row is a question or a fact on the left
+   and its answer on the right, as a replacement's rows are. */
+.reccard {
+  margin: 8px 0 14px; padding: 8px 12px;
+  border: 1px solid var(--line); border-radius: 10px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.recinput {
+  flex: 1 1 auto; min-width: 0; padding: 2px 0; border: 0; border-bottom: 1px solid var(--line);
+  outline: none; background: transparent; color: var(--fg);
+  font: 12px/1.6 -apple-system, sans-serif;
+}
+.recinput:focus { border-bottom-color: var(--muted); }
+.recinput::placeholder { color: var(--muted); }
+.recvalue { flex: 1 1 auto; min-width: 0; color: var(--fg); font: 12px/1.6 -apple-system, sans-serif; }
+
+/* What the session is doing, shown the same way wherever the eye is: a disc
+   in the top right corner, and the whole screen framed in its colour. Idle
+   draws no frame, so a frame is always a state worth noticing. */
+.stateframe {
+  position: fixed; inset: 4px; z-index: 50; pointer-events: none;
+  border: 2px solid transparent;
+}
+.statedisc {
+  display: block;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--line); transition: background-color .3s, box-shadow .3s;
+}
+.statedisc.on { box-shadow: 0 0 0 3px color-mix(in srgb, var(--fg) 12%, transparent); }
+/* In the header, centred on the tabs' line rather than their baseline, and
+   in from the right edge past the frame's lines. */
+.statedisc-slot { align-self: center; display: flex; margin-right: 4px; }
+/* Ending a recording: quiet like the bar's other icons, and in the colour of
+   what it does under the pointer - saving in the accent, discarding in red. */
+.footbar .chip-toggle.keep:hover:not(:disabled),
+.draftfoot .chip-toggle.keep:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+.footbar .chip-toggle.bin:hover:not(:disabled),
+.draftfoot .chip-toggle.bin:hover:not(:disabled) { color: var(--alert); border-color: var(--alert); }
+/* The disc stands apart from the counts it heads. */
+.footbar .recdot { margin-right: 6px; }
+/* The recording's own bar, edged in the recording's colour. */
+.footbar.recbar { border-color: var(--alert); }
+/* The recording's counts in the colours their rows carry in the step list. */
+.footbar .at b.n-boundary { color: var(--caused); }
+.footbar .at b.n-local { color: var(--store); }
+.footbar .at b.n-note { color: var(--note); }
+.rowactions .tool.done { color: var(--caused); }
+
+/* A panel section that folds to its heading, and a group folded inside one. */
+.panelsec.fold h3 { margin-bottom: 8px; }
+.foldgroup { margin: 4px 0 8px; }
+.foldgroup h3 {
+  display: flex; gap: 8px; align-items: baseline; margin: 6px 0 4px; cursor: pointer;
+  font: 600 10px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.04em; color: var(--muted);
+}
+.foldgroup h3 .fold { width: 10px; font-size: 10px; }
+.foldgroup h3 .grow { flex: 1; }
+.foldgroup h3:hover .foldtitle { color: var(--fg); }
+/* A count, quiet as the step list's tally: a number to read, not an alarm. */
+.foldcount {
+  min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--panel); color: var(--muted);
+  text-align: center; font: 500 10px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.panelsec .activitycards { margin: 0; }
+.panelsec .sechint + .activitycards { margin-top: 6px; }
+
+/* A rule's line: its answer and how it is firing at the right end, and on
+   pointing, where it answers and its removal. */
+.rulerow .rowactions { display: flex; gap: 2px; justify-content: flex-end; }
+.rulerow .rowactions .slot { display: none; }
+.rulerow .rowactions .tool.plain { width: auto; padding: 0 5px; font: 11px/1.6 -apple-system, sans-serif; color: var(--muted); }
+.rulerow .rowactions .tool.plain.chosen, .rulerow .rowactions .tool.plain:hover { color: var(--accent); }
+.rulerow .hits { color: var(--caused); }
+.rulerow .hits.cold { color: var(--alert); margin-left: 8px; }
+.rulerow .stepbadge { color: var(--muted); font-size: 10px; }
+/* Turned off in this sequence: still listed, so it can be turned back on. */
+.rulerow.off .what, .rulerow.off .meta { opacity: 0.55; text-decoration: line-through; }
+.rulerow.off .meta:last-child { text-decoration: none; }
+
+.siterow.blocked .dir, .siterow.blocked .meta { color: var(--alert); }
+.addhost .tool.plain { border: 0; padding: 2px 6px; }
+
+/* The choice beside its label, on the heading's line. */
+.panelsec h3 .segmented button { font: 500 11px/1.4 -apple-system, sans-serif; padding: 3px 10px; }
+
+/* Where a response is used: rows of the list under it, a column in, in the
+   row's own style, so the site and each sequence read like the Sites rows. */
+.activitycards > .usedrow { margin-left: 22px; }
+.usedrow .dir { color: var(--muted); }
+.usedrow .what { color: var(--muted); }
+.usedrow:hover .what { color: var(--fg); }
+/* A response's mode, above its body: which sequences it answers in. */
+.responsemode { margin-bottom: 6px; }
+
+/* The saved responses that would answer a crossing, under its payload: one
+   line each, used here or not, with the one control that changes that. */
+.savedhere { list-style: none; margin: 6px 0 0; padding: 0; }
+.savedhere li {
+  display: flex; gap: 10px; align-items: baseline; padding: 3px 0;
+  font: 11px/1.6 -apple-system, sans-serif; color: var(--muted);
+}
+.savedhere .savedwhat { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.savedhere .tool.plain { border: 0; padding: 0 4px; font: inherit; }
+.savedhere .tool.plain:hover { color: var(--accent); }
+/* A response a traffic row asked to see. */
+.rulerow.revealed { box-shadow: inset 2px 0 0 var(--accent); }
+
+/* In the proxy panel: a saved response in the intercept colour, as the rows
+   it answers are; a saved payload in a paler, dotted pink - what a response
+   serves, not something that answers on its own. */
+.crossed.rulerow:not(.usedrow) { border-left: 2px solid var(--intercept); }
+.crossed.rulerow:not(.usedrow) .dir { color: var(--intercept); }
+.crossed.payloadrow { border-left: 2px dotted color-mix(in srgb, var(--intercept) 60%, transparent); }
+.crossed.payloadrow .dir { color: color-mix(in srgb, var(--intercept) 75%, var(--muted)); }
+
+/* A sequence using a response: the sequence's own colour, apart from the
+   traffic green and the intercept pink either side of it. */
+.crossed.usedrow { border-left: 2px solid var(--sequence); }
+.crossed.usedrow .dir { color: var(--sequence); }
+.crossed.usedrow.off { border-left-style: dashed; }
+
+/* A sequence's steps, to choose which a response answers at: each numbered
+   and named, a scroll past a screenful. */
+.steppick { padding: 4px 8px 8px; font: 11px/1.6 -apple-system, sans-serif; color: var(--muted); }
+.steppick > label { margin-right: 14px; cursor: pointer; }
+.steppick ol { list-style: none; margin: 6px 0 0; padding: 0; max-height: 220px; overflow: auto; }
+.steppick li label { display: flex; gap: 8px; align-items: baseline; cursor: pointer; padding: 1px 0; }
+.steppick .stepnum { flex: 0 0 20px; text-align: right; font-variant-numeric: tabular-nums; }
+.steppick .steplabel {
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--fg); font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.steppick input { accent-color: var(--sequence); }
+
+/* What a step still waits for, as a row in its list in the wait colour:
+   quiet while nothing waits on it, lit while its step is the one running. */
+.crossed.waitrow { border-left: 2px solid var(--wait); opacity: 0.6; }
+.crossed.waitrow.active, .crossed.waitrow.open { opacity: 1; }
+.crossed.waitrow .dir { color: var(--wait); }
+
+/* Under the last recorded action: a line across the list with what can be
+   put there - a timer in the wait colour, a variable in the variable colour. */
+.timerline {
+  display: flex; align-items: center; gap: 8px; width: 100%; margin: 8px 0;
+  color: var(--muted); font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.timerline:not(.open)::before, .timerline:not(.open)::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+.timerline .timeradd { border: 0; background: none; padding: 0 4px; cursor: pointer; color: var(--muted); font: inherit; }
+.timerline .timeradd:hover { color: var(--wait); }
+.timerline .timeradd.variable:hover { color: var(--variable); }
+.timerline.open.timer { color: var(--wait); }
+.timerline.open.variable { color: var(--variable); }
+.timerline.open .replinput { width: 6ch; }
+.timerline.open .replinput.vname { width: 14ch; }
+.timerline.open .replinput.vvalue { width: 22ch; }
+/* A step's wait, set in the row's own body: a label, a slider taking the
+   width, and the value it stands at, one line each. */
+.waitset { display: flex; flex-direction: column; gap: 4px; padding: 6px 4px; }
+.waitslider {
+  display: grid; grid-template-columns: 11ch 1fr 10ch; gap: 10px; align-items: center;
+  font: 11px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.waitslider .waitlabel { color: var(--muted); }
+.waitslider .waitvalue { color: var(--fg); text-align: right; }
+/* A thin line with a small round handle in the wait colour, drawn by hand:
+   the browser's own slider is a thick bar. */
+.waitslider input[type="range"] {
+  -webkit-appearance: none; appearance: none; width: 100%; height: 14px; margin: 0;
+  background: transparent; cursor: pointer;
+}
+.waitslider input[type="range"]::-webkit-slider-runnable-track { height: 1px; background: var(--line); }
+.waitslider input[type="range"]::-moz-range-track { height: 1px; background: var(--line); }
+.waitslider input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 9px; height: 9px; margin-top: -4px; border-radius: 50%;
+  background: var(--wait); border: 0;
+}
+.waitslider input[type="range"]::-moz-range-thumb { width: 9px; height: 9px; border-radius: 50%; background: var(--wait); border: 0; }
+.waitslider input[type="range"]:focus { outline: none; }
+.waitslider .waitchoices { grid-column: 2 / 4; display: flex; gap: 2px; justify-content: flex-end; }
+.waitslider .waitchoices .tool { padding: 0 7px; border: 0; font: 11px/1.7 -apple-system, sans-serif; }
+.waitslider .waitchoices .tool.chosen, .waitslider .waitchoices .tool:hover { color: var(--accent); }
+/* A wait's outcome: a miss that failed its step in the alert colour, full
+   strength; one the run carried on past, dashed. */
+.crossed.waitrow.wait-failed { opacity: 1; border-left-color: var(--alert); }
+.crossed.waitrow.wait-failed .dir, .crossed.waitrow.wait-failed .meta { color: var(--alert); }
+.crossed.waitrow.wait-carried { opacity: 1; border-left-style: dashed; }
+.crossed.waitrow.wait-met { opacity: 1; }
+.crossed.waitrow.wait-met .meta { color: var(--wait); }
+/* A hidden kind: muted, as what it keeps out of the list is. */
+.crossed.hiddenrow { border-left: 2px dotted var(--muted); }
+.crossed.hiddenrow.off .what { text-decoration: line-through; opacity: 0.6; }
+
+/* Hidden traffic shown on request: the traffic green, dimmed, so it reads as
+   traffic kept aside rather than traffic that crossed unnoticed. */
+.crossed.hiddentraffic {
+  border-left: 2px solid color-mix(in srgb, var(--caused) 45%, transparent) !important;
+  opacity: 0.5;
+}
+.crossed.hiddentraffic:hover, .crossed.hiddentraffic.open { opacity: 0.85; }
+.footing .chip-toggle.showhidden.on { color: color-mix(in srgb, var(--caused) 70%, var(--muted)); border-color: color-mix(in srgb, var(--caused) 50%, transparent); }
+/* A sequence loaded: its name in the sequence colour; the list it opens stays plain. */
+.seqpick.loaded { color: var(--sequence); }
+.seqpick.loaded option { color: var(--fg); }
+
+/* A variable a step captures, in its own colour: dim until the step has run
+   and given it a value. */
+.crossed.varrow { border-left: 2px solid var(--variable); }
+/* A row with no source column: its label runs from the start of the line. */
+.listrow > .rowhead.bare { grid-template-columns: minmax(0, 1fr) auto; }
+/* A variable reads as it is written - name = value - sized by what it holds,
+   and where the value comes from muted at the right end. */
+.crossed.varrow .varline { display: inline-flex; gap: 8px; align-items: baseline; }
+.crossed.varrow .varname { color: var(--variable); }
+.crossed.varrow .vareq { color: var(--muted); }
+.crossed.varrow .varvalue { color: var(--fg); }
+.crossed.varrow .meta { color: var(--muted); }
+.crossed.varrow.waiting { border-left-style: dashed; opacity: 0.6; }
+.varbody { padding: 4px 8px; font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
+/* The recording timer's slider, laid out as the wait sliders are, taking the line. */
+.timerline.open .timerslider { flex: 1; grid-template-columns: 5ch 1fr 7ch; }
+/* The recording line's name and value boxes, in the bench's own box style. */
+.timerline.open .replinput {
+  padding: 2px 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg);
+  color: var(--fg); font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; text-align: left;
+}
+.timerline.open .replinput:focus { outline: none; border-color: var(--variable); }
+.timerline.open .tool.plain { border: 0; padding: 0 6px; color: var(--muted); }
+.timerline.open .tool.plain:hover { color: var(--fg); }
+
+.mark.varsmark .marktext { color: var(--variable); opacity: 1; }
+.mark.stepsmark .marktext { color: var(--muted); }
+.mark.stepsmark .tally.mismatch, .mark.stepsmark .tally.missing { color: var(--alert); font-weight: 600; }
+.mark.stepsmark .tally.unexpected { color: var(--own); font-weight: 600; }
+.marknote:disabled { opacity: 0.3; cursor: default; }
+.marknote.markremove:hover, .marknote.markremove.sure { color: var(--alert); }
+
+/* A step's instructions open to change, under its marker. */
+.stepeditor { margin: 0 0 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; }
+.stepeditorhead { margin-bottom: 4px; font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.stepedittext {
+  width: 100%; box-sizing: border-box; padding: 6px 8px; resize: vertical;
+  border: 1px solid var(--line); border-radius: 4px; background: var(--bg); color: var(--fg);
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.stepedittext:focus { outline: none; border-color: var(--accent); }
+.stepeditorfoot { display: flex; gap: 8px; align-items: center; margin-top: 6px; font: 11px/1.5 -apple-system, sans-serif; }
+.stepeditorfoot .grow { flex: 1; }
+.stepeditorfoot .tool.plain { border: 0; padding: 0 6px; }
+.stepeditorvars { display: inline-flex; gap: 2px; align-items: center; flex-wrap: wrap; }
+.stepeditorvars .tool.plain { color: var(--variable); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+/* A variable named in a step's label: the variable colour, dimmed. */
+.vartoken { color: color-mix(in srgb, var(--variable) 70%, var(--muted)); }
+
+/* What an assert step checks: a neutral edge, since a check is neither
+   traffic nor a note, and a failure in the alert colour. */
+.crossed.assertrow { border-left: 2px solid var(--muted); }
+.crossed.assertrow .what { color: var(--fg); }
+.crossed.assertrow.assert-pending { opacity: 0.7; border-left-style: dashed; }
+.crossed.assertrow.assert-failed { border-left-color: var(--alert); }
+.crossed.assertrow.assert-failed .meta { color: var(--alert); }
+.crossed.assertrow.assert-held .meta { color: var(--caused); }
+/* Recording from where the run stands: the recording colour. */
+.marknote.markrecord { color: var(--alert); }
+.marknote.markrecord:hover { color: var(--alert); filter: brightness(1.2); }
+/* The sequence a recording goes into, around it: its steps, quiet, with
+   nothing to do on them until the recording is done. */
+.mark.context { cursor: default; opacity: 0.45; }
+.mark.context .marktext { opacity: 1; }
+.mark .newtag { color: var(--alert); }
+
+/* Recording into a sequence: its steps fold down to their markers as the
+   recording starts, and a bright line opens where the next action lands. */
+/* A step's rows fold under its marker on a click on the marker, at the same
+   pace as the recording's fold. The grid track carries the height, so the
+   rows fold from whatever height they hold. */
+.stepbody {
+  display: grid; grid-template-rows: 1fr; opacity: 1;
+  transition: grid-template-rows 380ms ease-in-out, opacity 380ms ease-in-out;
+}
+.stepbody > .stepbodyinner { overflow: hidden; min-height: 0; }
+.stepbody.folded { grid-template-rows: 0fr; opacity: 0; }
+.mark.folded .marktext { opacity: 0.45; }
+.foldtally { flex: 0 0 auto; display: inline-flex; gap: 8px; font-weight: 600; }
+.mark:has(.marktools):hover .foldtally { visibility: hidden; }
+.mark.quiet .marktools, .mark.quiet:hover .marktools { visibility: hidden; }
+/* Dragging a step: the step held dims, and a line in the sequence colour
+   stands halfway across the gap it lands in. */
+.mark[draggable="true"] { cursor: grab; }
+.mark.dragged { opacity: 0.35; }
+/* A drop parts the markers either side of its gap, then the step lands in
+   it: it opens out where it lands, and the step numbers the move changed
+   pulse with it. */
+.mark { transition: transform 220ms ease-out; }
+.mark.splitabove { transform: translateY(-10px); }
+.mark.splitbelow { transform: translateY(10px); }
+@keyframes step-arrive {
+  from { opacity: 0; transform: scaleX(0.4); }
+  to { opacity: 1; transform: none; }
+}
+.mark.moved { animation: step-arrive 280ms ease-out; }
+.mark.renumbered .marknum {
+  animation: step-renumbered var(--ripple-pulse) ease-in-out both;
+  animation-delay: var(--ripple-delay);
+}
+/* A renumbered step stands out from the drop until its number has swapped,
+   then settles to the marker's ordinary colour. */
+.mark.renumbered .marktext {
+  animation: step-settle var(--ripple-pulse) ease-in-out both;
+  animation-delay: var(--ripple-delay);
+}
+@keyframes step-settle {
+  0%, 60% { opacity: 1; color: var(--fg); }
+  100% { opacity: 0.75; color: var(--muted); }
+}
+/* The old number rolls up and out as the new one rolls up into its place,
+   at the middle of that step's pulse. */
+.numswap { display: inline-grid; overflow: hidden; vertical-align: bottom; }
+.numswap > span { grid-area: 1 / 1; }
+.numswap .was { animation: num-out var(--ripple-pulse) ease-in-out both; animation-delay: var(--ripple-delay); }
+.numswap .now { animation: num-in var(--ripple-pulse) ease-in-out both; animation-delay: var(--ripple-delay); }
+@keyframes num-out {
+  0%, 35% { transform: none; opacity: 1; }
+  60%, 100% { transform: translateY(-100%); opacity: 0; }
+}
+@keyframes num-in {
+  0%, 35% { transform: translateY(100%); opacity: 0; }
+  60%, 100% { transform: none; opacity: 1; }
+}
+@keyframes step-renumbered {
+  0%, 100% { color: inherit; }
+  45% { color: var(--sequence); font-weight: 600; }
+}
+.dropline {
+  position: fixed; height: 2px; margin-top: -1px; border-radius: 1px;
+  background: var(--sequence); pointer-events: none; z-index: 10;
+}
+.mark.quiet:hover .marktext, .mark.quiet:hover .foldtally { visibility: visible; }
+.foldcount.traffic { color: var(--caused); }
+.foldcount.intercepted { color: var(--intercept); }
+.foldcount.missing { color: var(--alert); }
+.foldcount.waits { color: var(--wait); }
+.foldcount.notes { color: var(--note); }
+.foldcount.variables { color: var(--variable); }
+
+/* A step moved up or down pulses where it lands. */
+@keyframes step-moved {
+  0%, 100% { color: inherit; }
+  25%, 75% { color: var(--sequence); }
+}
+@keyframes step-moved-line {
+  0%, 100% { opacity: inherit; }
+  25%, 75% { background: var(--sequence); opacity: 0.9; }
+}
+.mark.moved .marktext { animation: step-moved 1.4s ease-in-out; opacity: 1; }
+.mark.moved::before, .mark.moved::after { animation: step-moved-line 1.4s ease-in-out; }
+@media (prefers-reduced-motion: reduce) {
+  .stepbody { transition: none; }
+  .mark.moved, .mark.moved .marktext, .mark.moved::before, .mark.moved::after,
+  .mark.renumbered .marknum, .mark.renumbered .marktext, .numswap .was, .numswap .now { animation: none; }
+  .numswap .was { display: none; }
+  .mark { transition: none; }
+}
+
+@keyframes fold-to-marker {
+  from { max-height: 120px; opacity: 1; margin-top: 26px; margin-bottom: 14px; }
+  to { max-height: 20px; opacity: 0.45; margin-top: 6px; margin-bottom: 6px; }
+}
+.mark.context {
+  overflow: hidden; margin: 6px 0; max-height: 20px;
+  animation: fold-to-marker 380ms ease-in-out both;
+}
+@keyframes awaiting-open {
+  from { transform: scaleX(0.2); opacity: 0; }
+  to { transform: scaleX(1); opacity: 1; }
+}
+@keyframes awaiting-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+.mark.awaiting {
+  cursor: default; margin: 14px 0;
+  animation: awaiting-open 320ms ease-out both, awaiting-pulse 1.6s ease-in-out 320ms infinite;
+}
+.mark.awaiting::before, .mark.awaiting::after { background: var(--alert); height: 1px; opacity: 1; }
+.mark.awaiting .marktext {
+  color: var(--alert); opacity: 1; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+}
+/* The ignore editor's save and cancel, as the draft's: quiet until pointed at. */
+.ignoreeditor .footactions { display: inline-flex; gap: 6px; }
+.ignoreeditor .chip-toggle.keep:hover { color: var(--accent); border-color: var(--accent); }
+.ignoreeditor .chip-toggle.bin:hover { color: var(--alert); border-color: var(--alert); }

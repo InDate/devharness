@@ -24,14 +24,15 @@ record for the identity function is `docs/landscapes/match-identity.md`.
 | Request pin | `Pin`, `intercept-proxy.ts:22` | `urlIncludes` substring, optional `method` and `step`; answers with status, headers, body; counts `hits` (`:42`) |
 | Frame pin | `FramePin`, `:750` | `textIncludes` read as one `"key":value` field or as characters (`fieldOf`, `:249`); optional socket url, direction, `step`; `replaceWith` or drop |
 | Request match | `matchPin`, `:1417` | narrowest accepted pin: constraints (method, step) first, then substring length |
+| Event-stream messages | `takeMessages` in the HTTP answer path, `src/proxy/intercept-proxy.ts` | each `text/event-stream` message is matched as a received frame and passed, replaced (its `event:`/`id:` lines kept) or dropped; a message is held until its blank line arrives; a compressed stream is piped unread |
 | Frame match | `matchFramePin`, `:1362` | narrowest accepted pin: constraints (url, direction, step, field-on-a-parsed-frame) first, then text length; parses the frame once (`objectOf`, `:266`; `carries`, `:278`) |
-| Step binding | `underStep`, `:1403` | a pin with `step` answers only while that replay step is the cursor (`src/tools/replay-executor.ts:2359`) |
+| Step binding | `underStep`, `src/proxy/intercept-proxy.ts` | a pin with `step`, or with `steps`, answers only while that replay step (or one of those) is the cursor (`src/tools/replay-executor.ts:2359`) |
 | Refuse mode | `refuseUnmatchedWrites`, `:880`; branch at `:1474` | an unmatched request outside `GET`/`HEAD`/`OPTIONS` (`SAFE_METHODS`, `:46`) is answered 403, recorded `heldAs: 'refused'`, counted |
 | Host scope | `allowOnly`, `:858`; `BROWSER_SERVICE_HOSTS`, `:532` | hosts outside the list are destroyed and counted; the app's host is on the list by construction (`src/tools/bench-tools.ts:423`) |
 | Tool surface | `src/tools/proxy-tools.ts:41` | `hold`, `holdFrame` (with `step`, `:50`), `release`, `holds`, `refuse` (`unmatchedWrites`, `:51`), `status`, `events`, `sockets`, `body` |
 | Bench rules | `setBoundaryRule`, `src/bench-mode.ts:1079` | a row's `answer` / `block` / `hide` becomes a pin; `block` is a 204 pin or a dropped frame; `hide` arms nothing |
-| Rules on the file | `boundaryRules`, `src/command-recorder.ts:73`; `boundaryRefuse`, `:96` | key, verb, method, step, url, direction, body, status; the refuse setting |
-| Arming from the file | `armSavedRules`, `src/bench-mode.ts:1322` | opening a sequence in the bench arms its rules and its refuse setting; closing clears them |
+| Responses on the file | `responses` in `activity/_site/<host>-<port>.json` (`SiteActivity`, `src/sequence-activity.ts`), each with `mode` `optIn` / `optOut`; `responsesOn` (`{key, steps?}`) and `responsesOff` in `activity/<name>.json`; `boundaryRefuse` on the sequence | key, verb, method, url, direction, body, status, mode; a sequence's opt-ins with their steps, and its opt-outs |
+| Arming from the file | `armSavedRules`, `armSiteRules`, `setResponseUse`, `setResponseMode` in `src/bench-mode.ts` | opening a sequence arms each site response its use covers: `optOut` unless the sequence opts out, `optIn` only where it opts in; a use of a set of steps arms one pin with `steps` |
 | Key derivation | `keyOf`, `src/bench/frontend/crossing.tsx:57`; `frameMatch`, `:93` | pathname for a request; for a frame, a naming key (`:72`) holding a value that does not move (`:79`), then the first such value, then the first non-digit string, then the first key |
 
 ## Identity, and its bounds
@@ -52,8 +53,8 @@ cannot do.
 - A step-bound pin answers only under a replay cursor. During a live drive
   the cursor is a command index, so the pin answers nothing; a request that
   starts after its step released carries the next step or none.
-- The bench holds one rule per key (`boundaryRules` is a `Map` keyed by
-  `key`), so two bodies at two positions of one path is expressible from the
+- The bench holds one armed rule per key (`boundaryRules` is a `Map` keyed by
+  `key`; a sequence rule on a key replaces the site rule on it), so two bodies at two positions of one path is expressible from the
   `proxy` tool (two holds with two steps) and not from the bench.
 - The refuse mode bounds the browser's HTTP. A `request` step with
   `destination: "node"` runs `fetch` from the server process

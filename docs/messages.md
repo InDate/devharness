@@ -1283,6 +1283,16 @@ Failed to spawn Chrome process: {{error}}
 
 ---
 
+## NO_AUTHENTICATOR
+
+**Type:** error
+**Code:** NO_AUTHENTICATOR
+
+This page holds no virtual authenticator.
+
+**Suggestions:**
+1. Add one with `storage({ action: "authenticatorAdd", connectionReason })` before the page asks for a passkey
+
 ## PUPPETEER_NOT_CONNECTED
 
 **Type:** error
@@ -1915,6 +1925,42 @@ Run id: `{{runId}}`
 - Stop it: `replay({ action: 'cancel', runId: '{{runId}}' })`
 
 Results are kept in memory for 30 minutes after the run settles. Pass `wait: true` to `run` to block until completion instead.
+
+---
+
+## REPLAY_RUN_STILL_RUNNING
+
+**Type:** success
+**Summary:** Still running: {{name}}
+
+**Still running after {{seconds}}s:** {{name}}, at step {{currentStep}} of {{totalSteps}}{{#tool}} ({{tool}}){{/tool}}.
+
+A waiting run answers within {{seconds}}s, so a step that never finishes cannot hold the call. The run goes on in the background:
+
+- Progress / results: `replay({ action: 'status', runId: '{{runId}}' })`
+- Stop it: `replay({ action: 'cancel', runId: '{{runId}}' })`
+
+---
+
+## REPLAY_RUN_ERRORED
+
+**Type:** error
+**Summary:** Run failed: {{name}}
+
+**The run of {{name}} failed before it finished:** {{error}}
+
+---
+
+## PAGE_HELD_BY_BENCH
+
+**Type:** error
+**Summary:** The bench holds this page
+
+**The bench holds `{{connection}}`:** {{why}}.
+
+{{toolName}} would drive a page that cannot move, and wait on it until its timeout. Release it first:
+
+- {{release}}
 
 ---
 
@@ -4290,6 +4336,52 @@ Stored in the sequences under `{{path}}`:
 Read {{sequencesRead}} sequence file(s); {{stillCited}} capture(s) are still cited, {{heldByOpenDrafts}} held by a draft not yet saved.
 
 {{list}}
+
+---
+
+## BENCH_RETAKEN
+
+**Type:** success
+**Summary:** v{{version}} against v{{against}}: {{share}}% changed
+
+{{changed}} pixel(s) changed, box {{box}}; {{edges}} more over the threshold set apart as anti-aliased edges. Size {{size}}. Region placed by {{placedBy}}. {{window}}{{scales}}
+
+{{factChanges}}
+
+The picture at {{path}} is before, after and the difference side by side: changed pixels red, anti-aliased edges amber. Read it to see the change; `bench({ action: 'capture', capture })` returns its record and element facts.
+
+---
+
+## BENCH_RETAKE_FAILED
+
+**Type:** error
+**Code:** BENCH_RETAKE_FAILED
+
+Could not take the capture again: {{reason}}
+
+---
+
+## BENCH_CAPTURE_READ
+
+**Type:** success
+**Summary:** {{series}} v{{version}} of {{versions}}
+
+{{path}}
+
+{{record}}
+
+Element facts:
+
+{{facts}}
+
+---
+
+## BENCH_CAPTURE_UNREAD
+
+**Type:** error
+**Code:** BENCH_CAPTURE_UNREAD
+
+Could not read {{path}}: {{reason}}
 
 ---
 

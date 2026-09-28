@@ -35,10 +35,10 @@ describe('a template with a once-per-session part', () => {
     expect(later).toContain('http://127.0.0.1:2/u/');
   });
 
-  it('carries the Monitor call on every start that finds no watch, once part or not', () => {
+  it('carries the watch call on every start that finds no watch, once part or not', () => {
     const call = 'Monitor({ command: "tail -f -n0 /tmp/e.jsonl" })';
     const unwatched = textOf(createSuccessResponse('BENCH_STARTED', {
-      connection: 'app', benchUrl: 'http://127.0.0.1:3/v/', eventStreamPath: '/tmp/e.jsonl', monitorCall: call,
+      connection: 'app', benchUrl: 'http://127.0.0.1:3/v/', eventStreamPath: '/tmp/e.jsonl', watchCall: call,
     }));
     const watched = textOf(createSuccessResponse('BENCH_STARTED', {
       connection: 'app', benchUrl: 'http://127.0.0.1:3/v/', eventStreamPath: '/tmp/e.jsonl',

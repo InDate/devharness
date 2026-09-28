@@ -20,6 +20,7 @@ import { fileURLToPath } from 'url';
 import { initializePaths } from '../helpers/paths.js';
 import { listSessionRecords, type SessionRecord, type EndpointReply } from '../session-endpoint.js';
 import { readParentMap } from './process-tree.js';
+import { runWatch } from './watch.js';
 import { matchByAncestry, findSessionByName, filterToListedProcesses, filterToProjectRoot, shareOneRoot } from './session-match.js';
 
 const DEFAULT_TIMEOUT_MS = 120000;
@@ -30,7 +31,7 @@ const MESSAGE_VERBS = new Set(['sessions', 'send', 'read', 'reply']);
 /** Commands that are shorthand for `issues` create, one per issue type. */
 const ISSUE_VERBS = new Set(['bug', 'feature']);
 
-export const CLI_COMMANDS = ['call', 'which', 'bench', ...MESSAGE_VERBS, ...ISSUE_VERBS] as const;
+export const CLI_COMMANDS = ['call', 'which', 'bench', 'watch', ...MESSAGE_VERBS, ...ISSUE_VERBS] as const;
 
 export function isCliCommand(word: string | undefined): boolean {
   return word !== undefined && (CLI_COMMANDS as readonly string[]).includes(word);
@@ -267,6 +268,9 @@ export async function runCli(argv: string[]): Promise<number> {
   initializePaths();
 
   const parsed = parseArgs(argv);
+  // The stream is a file, so reading it reaches no server.
+  if (parsed.command === 'watch') return runWatch(parsed.positional.includes('--follow'), parsed.session);
+
   const records = listSessionRecords();
 
   if (records.length === 0) {

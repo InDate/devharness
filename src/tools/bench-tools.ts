@@ -27,7 +27,7 @@ import { createSuccessResponse, createErrorResponse } from '../messages.js';
 import { checkBrowserAutomation } from '../error-helpers.js';
 import { resolveSessionName } from '../session-identity.js';
 import { getSessionInfo } from './dashboard-tools.js';
-import { getEventStreamPath, getEventsDir, appendEvent, streamReaders, currentOrigin, runAs } from '../session-events.js';
+import { getEventStreamPath, appendEvent, streamReaders, watchCall, currentOrigin, runAs } from '../session-events.js';
 import { announceSequenceSaved } from '../sequence-events.js';
 import { activityPathFor, readActivity, readSiteActivity, renumberSteps, siteActivityPath, stepMap, writeSiteActivity } from '../sequence-activity.js';
 import type { ToolResponseMeta, BenchToolMeta } from '../tool-response.js';
@@ -1635,7 +1635,7 @@ export function createBenchTools(
               benchUrl: state.benchUrl,
               eventStreamPath: streamPath,
               ...(await streamReaders(sessionName) === 0
-                ? { monitorCall: `Monitor({ command: "mkdir -p ${getEventsDir()} && touch ${streamPath} && tail -f -n0 ${streamPath}", description: "devharness events", persistent: true, timeout_ms: 3600000 })` }
+                ? { watchCall: watchCall() }
                 : {}),
             });
             return {

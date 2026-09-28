@@ -127,18 +127,13 @@ Chrome DevTools Protocol debugging for JavaScript/TypeScript in Chrome, Node.js,
 
 Everything devharness pushes - a guard block, a message from another session, an annotation picked in the browser - appends one JSON line to `~/.devharness/events/<sessionId>.jsonl`. One file per session, so one watch covers every kind, including kinds added later.
 
-Installed as a plugin, a `SessionStart` hook (`plugin/hooks/session-start.mjs`) creates that file and prints the `Monitor` call as session context before the first turn. In Claude Code, arm it as the session's first tool call:
+Installed as a plugin, a `SessionStart` hook (`plugin/hooks/session-start.mjs`) creates that file and prints the watch call as session context before the first turn. In Claude Code, arm it as the session's first tool call:
 
 ```
-Monitor({
-  command: "mkdir -p ~/.devharness/events && touch <streamPath> && tail -f -n0 <streamPath>",
-  description: "devharness events",
-  persistent: true,
-  timeout_ms: 3600000
-})
+Bash({ command: "devharness watch", run_in_background: true, description: "devharness events" })
 ```
 
-With no watch, each event reaches the session only on its next devharness call, after the moment it was about. A Monitor expires at its timeout, so the expiry notice is the cue to arm it again. Each renewal with no event and no message from the person since the last one costs a turn, so the third such expiry in a row, with the session's last reply waiting on the person's input, ends the renewals; the person's next message re-arms the watch. `bench({ action: 'start' })` counts the processes reading the stream and prints the call at the head of its response when the count is zero.
+A background task holds no deadline, so a quiet stream costs no turns. It exits on the first burst of new lines and prints them with the next call: itself again for a lone event, or a Monitor running `devharness watch --follow` while a person works in the bench. Both forms advance one cursor file beside the stream, so a line appended between one watch and the next is read by the next. A Monitor expires every 30 minutes; an expiry with events in it re-arms the Monitor, one with none returns to the one-off. With no watch, each event reaches the session only on its next devharness call. `bench({ action: 'start' })` counts the processes holding the stream open and prints the call at the head of its response when the count is zero.
 
 Line kinds:
 

@@ -96,15 +96,13 @@ describe('session-start hook', () => {
     expect(existsSync(getEventStreamPath('2e9119bf'))).toBe(true);
   });
 
-  it('prints a Monitor call carrying every field the tool requires', () => {
+  it('prints a background Bash call running devharness watch', () => {
     const output = runHook(JSON.stringify({ session_id: SESSION_ID }));
-    expect(output).toContain('tail -f -n0');
-    // command, description, persistent and timeout_ms are all required by the
-    // Monitor schema; a call missing one is rejected, not merely suboptimal.
-    expect(output).toMatch(/Monitor\(\{[^}]*command:/);
+    // A background task holds no deadline, so the call must carry
+    // run_in_background; without it the watch blocks the turn.
+    expect(output).toMatch(/Bash\(\{ command: "[^"]*devharness[^"]* watch"/);
+    expect(output).toContain('run_in_background: true');
     expect(output).toContain('description: "devharness events"');
-    expect(output).toContain('persistent: true');
-    expect(output).toContain('timeout_ms:');
   });
 
   it('honours DEVHARNESS_DIR, so a relocated state root is still found', () => {

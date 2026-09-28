@@ -101,7 +101,7 @@ function pinnedVersion() {
  * call is bounded so such a build starts a server, finds no client and exits
  * instead of holding up the session.
  */
-function installedVersion() {
+function readInstalledVersion() {
   try {
     execFileSync('/bin/sh', ['-c', 'command -v devharness'], { stdio: 'ignore', timeout: 2000 });
   } catch {
@@ -118,6 +118,24 @@ function installedVersion() {
   } catch {
     return 'unreported';
   }
+}
+
+/**
+ * The command that watches the stream. `devharness watch` needs a CLI new
+ * enough to have it; any other install runs the pinned version through npx.
+ */
+function watchCommand() {
+  const pinned = pinnedVersion();
+  const installed = installedVersion();
+  if (pinned && installed !== pinned) return `npx -y devharness@${pinned} watch`;
+  return 'devharness watch';
+}
+
+/** Read once: each read spawns the CLI, bounded at seconds. */
+let installedCache;
+function installedVersion() {
+  if (installedCache === undefined) installedCache = readInstalledVersion();
+  return installedCache;
 }
 
 /** One line about the CLI, or nothing when it is present and matches. */
@@ -164,9 +182,8 @@ try {
 }
 
 const lines = [
-  `devharness event stream for this session: ${streamPath}`,
-  `Guard blocks - a dev server that died, a paused breakpoint, a pending bug - messages from other devharness sessions, and the notes, screenshots and sequence writes a person makes in the bench are appended there as they happen. With no watch each one reaches you only on your next devharness call, after the moment it was about. Arm this watch as your first tool call of the session, before answering, and re-arm it on its expiry notice. Each renewal with nothing between it and the last one - no event, no message from the person - costs a turn. The third such expiry in a row, with your last reply waiting on the person's input, ends the renewals: the watch stays down, and the person's next message re-arms it:`,
-  `Monitor({ command: "mkdir -p ${eventsDir} && touch ${streamPath} && tail -f -n0 ${streamPath}", description: "devharness events", persistent: true, timeout_ms: 3600000 })`,
+  `devharness event stream: ${streamPath}. Guard blocks, messages from other sessions, and bench notes, screenshots and sequence writes land there as they happen; with no watch each reaches you only on your next devharness call. Arm this as your first tool call, before answering; its output holds the next watch call:`,
+  `Bash({ command: "${watchCommand()}", run_in_background: true, description: "devharness events" })`,
 ];
 
 const cli = cliLine();

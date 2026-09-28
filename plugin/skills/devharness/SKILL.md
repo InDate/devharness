@@ -68,18 +68,13 @@ Server merges and re-validates. Same token, repeat until it passes. Expires in 5
 
 Everything devharness pushes at you - a guard block, a message from another session, an annotation someone picked in the browser - appends one JSON line to `~/.devharness/events/<sessionId>.jsonl`. One file, one watch, and any kind added later arrives on the same watch.
 
-Installed as a plugin, a `SessionStart` hook prints that path and the `Monitor` call at the top of every session. Arm it as the session's first tool call:
+Installed as a plugin, a `SessionStart` hook prints that path and the watch call at the top of every session. Arm it as the session's first tool call:
 
 ```
-Monitor({
-  command: "mkdir -p ~/.devharness/events && touch <streamPath> && tail -f -n0 <streamPath>",
-  description: "devharness events",
-  persistent: true,
-  timeout_ms: 3600000
-})
+Bash({ command: "devharness watch", run_in_background: true, description: "devharness events" })
 ```
 
-With no watch, each event reaches you only on your next devharness call. A dev server that died an hour ago is reported an hour late, and a note the person wrote in the bench sits unread while they wait for an answer. A Monitor expires at its timeout, so the expiry notice is the cue to arm it again. `bench({ action: 'start' })` counts the processes reading the stream and prints this call at the head of its response when the count is zero.
+It exits on the first burst of new lines and prints them with the next call: itself again for a lone event, `devharness watch --follow` under a Monitor while a person works in the bench. A Monitor expires every 30 minutes; an expiry with events in it re-arms the Monitor, one with none returns to the one-off. With no watch, each event reaches you only on your next devharness call. `bench({ action: 'start' })` prints the call when no process reads the stream.
 
 Each line carries `kind` and, where there is one, `resolve` - the call that clears it. `kind: "block"` also carries `guard`, one of `port`, `breakpoint`, `pendingStartup`, `bug`, `duplicateSession`; blocks are deduplicated, one line per *new* block rather than one per blocked call. `kind: "message"` carries `from` and the message id; `kind: "annotation"` carries the selector, component and comment for an element someone picked.
 

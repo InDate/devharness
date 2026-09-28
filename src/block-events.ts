@@ -3,7 +3,7 @@
  *
  * Guards only surface on the *next* tool call, so a session doing unrelated
  * work never learns its dev server died until it happens to call a devharness
- * tool again. This is the push side of that: a Monitor tailing the stream is
+ * tool again. This is the push side of that: a watch reading the stream is
  * notified the moment a block appears.
  *
  * Deduplicated by key - a block that keeps firing on every subsequent tool call

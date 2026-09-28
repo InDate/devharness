@@ -16,7 +16,7 @@
  * more than the nudge is worth.
  */
 
-import { existsSync, mkdirSync, appendFileSync, readFileSync, writeFileSync, renameSync } from 'fs';
+import { existsSync, mkdirSync, appendFileSync, readFileSync, writeFileSync, renameSync, statSync } from 'fs';
 import { execFileSync } from 'child_process';
 import { homedir } from 'os';
 import { join, basename } from 'path';
@@ -120,15 +120,35 @@ function readInstalledVersion() {
   }
 }
 
+/** The first release carrying `devharness watch`. */
+const WATCH_SINCE = [0, 10, 2];
+
 /**
- * The command that watches the stream. `devharness watch` needs a CLI new
- * enough to have it; any other install runs the pinned version through npx.
+ * Whether `version` carries `devharness watch`. An older CLI takes `watch` for
+ * no command and, with stdin not a terminal, starts a server in its place, so
+ * no watch runs. An unknown version reads as new: a checkout run without a pin.
  */
-function watchCommand() {
+function hasWatch(version) {
+  const parts = version?.match(/^(\d+)\.(\d+)\.(\d+)/)?.slice(1).map(Number);
+  if (!parts) return true;
+  for (let i = 0; i < 3; i++) {
+    if (parts[i] !== WATCH_SINCE[i]) return parts[i] > WATCH_SINCE[i];
+  }
+  return true;
+}
+
+/**
+ * The call that watches the stream. The pinned version is the one that runs,
+ * directly when it is the one on PATH and through npx otherwise; a pin older
+ * than `watch` gets the Monitor it shipped with.
+ */
+function watchCall(shortId, streamPath) {
   const pinned = pinnedVersion();
-  const installed = installedVersion();
-  if (pinned && installed !== pinned) return `npx -y devharness@${pinned} watch`;
-  return 'devharness watch';
+  if (!hasWatch(pinned)) {
+    return `Monitor({ command: "tail -f -n0 ${streamPath}", description: "devharness events", persistent: true, timeout_ms: 3600000 }). Re-arm it on its expiry notice.`;
+  }
+  const cli = pinned && installedVersion() !== pinned ? `npx -y devharness@${pinned}` : 'devharness';
+  return `Bash({ command: "${cli} watch --session=${shortId}", run_in_background: true, description: "devharness events" })`;
 }
 
 /** Read once: each read spawns the CLI, bounded at seconds. */
@@ -170,20 +190,27 @@ if (typeof sessionId !== 'string' || !SESSION_ID_PATTERN.test(sessionId)) proces
 
 recordCurrentSession(sessionId);
 
+const shortId = sessionId.slice(0, 8);
 const eventsDir = join(globalBase(), 'events');
-const streamPath = join(eventsDir, `${sessionId.slice(0, 8)}.jsonl`);
+const streamPath = join(eventsDir, `${shortId}.jsonl`);
+// The same rule as getEventCursorPath in src/session-events.ts.
+const cursorPath = join(eventsDir, `${shortId}.cursor`);
 
-// Created now so the watch has a file to tail before the server writes to it.
+// Created now so the watch has a file to read before the server writes to it.
+// The cursor starts where the session does: a watch with no cursor starts at
+// the end of the file, and a line the server appends before the first watch
+// runs would sit behind it.
 try {
   mkdirSync(eventsDir, { recursive: true });
   appendFileSync(streamPath, '');
+  if (!existsSync(cursorPath)) writeFileSync(cursorPath, String(statSync(streamPath).size));
 } catch {
   process.exit(0);
 }
 
 const lines = [
-  `devharness event stream: ${streamPath}. Guard blocks, messages from other sessions, and bench notes, screenshots and sequence writes land there as they happen; with no watch each reaches you only on your next devharness call. Arm this as your first tool call, before answering; its output holds the next watch call:`,
-  `Bash({ command: "${watchCommand()}", run_in_background: true, description: "devharness events" })`,
+  `devharness event stream: ${streamPath}. Guard blocks, messages from other sessions, and bench notes, screenshots and sequence writes land there as they happen; with no watch each reaches you only on your next devharness call. Arm this as your first tool call, before answering:`,
+  watchCall(shortId, streamPath),
 ];
 
 const cli = cliLine();

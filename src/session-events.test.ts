@@ -76,7 +76,7 @@ describe.skipIf(!hasLsof)('streamReaders', () => {
     expect(await streamReaders(SESSION)).toBe(0);
   });
 
-  it('counts a tail holding the stream open, which is what a Monitor runs', async () => {
+  it('counts a process holding the stream open, which is what a watch is', async () => {
     await appendEvent(SESSION, 'block', {});
     const tail = spawn('tail', ['-f', '-n0', getEventStreamPath(SESSION)]);
     try {

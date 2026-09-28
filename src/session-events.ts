@@ -46,8 +46,8 @@ export function getEventCursorPath(sessionName: string): string {
 const CLI_ENTRY = join(dirname(fileURLToPath(import.meta.url)), 'mcp-supervisor.js');
 
 /** The call that arms a one-off watch on the stream; its output holds the next one. */
-export function watchCall(): string {
-  return `Bash({ command: "node ${CLI_ENTRY} watch", run_in_background: true, description: "devharness events" })`;
+export function watchCall(sessionName: string): string {
+  return `Bash({ command: "node ${CLI_ENTRY} watch --session=${sessionName}", run_in_background: true, description: "devharness events" })`;
 }
 
 /**

@@ -153,6 +153,7 @@ to practise on.
 devharness which                                  # which session this shell belongs to
 devharness call config '{"action":"status"}'      # any tool, arguments as one JSON object
 devharness sessions                               # who else is reachable
+devharness watch                                  # wait for this session's next events
 devharness send a1b2c3d4 "check this" --wait=60000
 devharness bug "Title" Body words here            # files an issue; feature does the same
 devharness bench [sequence] [url]                 # opens the bench against this session

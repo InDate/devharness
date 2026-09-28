@@ -3992,7 +3992,7 @@ This session is `{{self}}`. Its mailbox: `{{mailboxPath}}`
 
 {{sessionList}}
 
-**Note:** An arriving message announces itself on this session's event stream, `{{eventStreamPath}}`, which is also where guard blocks land - one watch covers both. The plugin's SessionStart hook prints that path and the `Monitor` call at the start of every session. Without a watch, messages surface only when `message({ action: 'read' })` runs. Nothing watches the mailbox file; it holds the conversation and the read cursor.
+**Note:** An arriving message announces itself on this session's event stream, `{{eventStreamPath}}`, which is also where guard blocks land - one watch covers both. The plugin's SessionStart hook prints that path and the watch call at the start of every session. Without a watch, messages surface only when `message({ action: 'read' })` runs. Nothing watches the mailbox file; it holds the conversation and the read cursor.
 
 ---
 
@@ -4001,7 +4001,7 @@ This session is `{{self}}`. Its mailbox: `{{mailboxPath}}`
 **Type:** success
 **Summary:** Sent to {{to}}
 
-Message `{{shortId}}` appended to `{{mailboxPath}}`. The recipient sees it on `message({ action: 'read' })`, or immediately if it has a Monitor armed on its event stream.{{deliveryNote}}
+Message `{{shortId}}` appended to `{{mailboxPath}}`. The recipient sees it on `message({ action: 'read' })`, or immediately if a watch reads its event stream.{{deliveryNote}}
 
 **Suggestions:**
 - To hold this call open until the other session answers: `message({ action: 'send', to: '{{to}}', text: '...', waitForReplyMs: 120000 })`
@@ -4042,7 +4042,6 @@ Message `{{id}}` reached {{to}}, and nothing arrived in `{{self}}`'s mailbox wit
 - The other session is alive but was not calling devharness - it sees the message on its next `message({ action: 'read' })`
 - Check it is running: `message({ action: 'sessions' })`
 - Wait again without resending: `message({ action: 'read' })`, or send a follow-up with a longer `waitForReplyMs` (max 300000)
-- Its mailbox is `{{mailboxPath}}` - a Monitor on that file removes the need to poll
 
 ---
 

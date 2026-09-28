@@ -1653,7 +1653,7 @@ export function createBenchTools(
               benchUrl: state.benchUrl,
               eventStreamPath: streamPath,
               ...(await streamReaders(sessionName) === 0
-                ? { watchCall: watchCall() }
+                ? { watchCall: watchCall(sessionName) }
                 : {}),
             });
             return {

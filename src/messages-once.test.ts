@@ -36,7 +36,7 @@ describe('a template with a once-per-session part', () => {
   });
 
   it('carries the watch call on every start that finds no watch, once part or not', () => {
-    const call = 'Monitor({ command: "tail -f -n0 /tmp/e.jsonl" })';
+    const call = 'Bash({ command: "devharness watch --session=e", run_in_background: true })';
     const unwatched = textOf(createSuccessResponse('BENCH_STARTED', {
       connection: 'app', benchUrl: 'http://127.0.0.1:3/v/', eventStreamPath: '/tmp/e.jsonl', watchCall: call,
     }));

@@ -100,9 +100,33 @@ describe('session-start hook', () => {
     const output = runHook(JSON.stringify({ session_id: SESSION_ID }));
     // A background task holds no deadline, so the call must carry
     // run_in_background; without it the watch blocks the turn.
-    expect(output).toMatch(/Bash\(\{ command: "[^"]*devharness[^"]* watch"/);
+    expect(output).toMatch(/Bash\(\{ command: "[^"]*devharness[^"]* watch --session=/);
     expect(output).toContain('run_in_background: true');
     expect(output).toContain('description: "devharness events"');
+  });
+
+  it('names the session on the watch, so it reads this stream with no session in its environment', () => {
+    const output = runHook(JSON.stringify({ session_id: SESSION_ID }));
+    expect(output).toContain('watch --session=2e9119bf"');
+  });
+
+  it('prints the Monitor to a pin older than devharness watch, whose CLI would start a server instead', () => {
+    const output = runHook(JSON.stringify({ session_id: SESSION_ID }), pluginRootPinning('0.10.1'));
+    expect(output).toContain('Monitor({ command: "tail -f -n0');
+    expect(output).not.toContain('devharness watch');
+  });
+
+  it('runs the pinned version through npx when PATH holds another', () => {
+    const output = runHook(JSON.stringify({ session_id: SESSION_ID }), { ...pluginRootPinning('0.11.0'), ...fakeCliOnPath('0.10.1') });
+    expect(output).toContain('npx -y devharness@0.11.0 watch --session=2e9119bf');
+  });
+
+  it('starts the cursor at the stream\'s end, so the first watch reads what lands after the session starts', () => {
+    const stream = getEventStreamPath('2e9119bf');
+    mkdirSync(dirname(stream), { recursive: true });
+    writeFileSync(stream, '{"old":1}\n');
+    runHook(JSON.stringify({ session_id: SESSION_ID }));
+    expect(readFileSync(join(dirname(stream), '2e9119bf.cursor'), 'utf-8')).toBe(String('{"old":1}\n'.length));
   });
 
   it('honours DEVHARNESS_DIR, so a relocated state root is still found', () => {
@@ -136,9 +160,9 @@ describe('session-start hook - inputs it must not act on', () => {
 });
 
 describe('session-start hook - what it leaves behind', () => {
-  it('creates exactly one file, named for the session', () => {
+  it('creates the stream and its cursor, both named for the session', () => {
     runHook(JSON.stringify({ session_id: SESSION_ID }));
-    expect(readdirSync(join(dir, 'events'))).toEqual(['2e9119bf.jsonl']);
+    expect(readdirSync(join(dir, 'events')).sort()).toEqual(['2e9119bf.cursor', '2e9119bf.jsonl']);
   });
 });
 

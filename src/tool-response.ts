@@ -205,6 +205,20 @@ export interface AssertToolMeta {
 }
 
 /**
+ * Check tool metadata: the answer, and what the last read found.
+ */
+export interface CheckToolMeta {
+  outcome: 'held' | 'failed' | 'error';
+  form: string;
+  subject: string;
+  found?: string;
+  detail?: string;
+  lastError?: string;
+  elapsedMs: number;
+  polls: number;
+}
+
+/**
  * Wait tool metadata
  */
 export interface WaitToolMeta {
@@ -272,6 +286,7 @@ export interface ToolResponseMeta {
   request?: RequestToolMeta;
   inspect?: InspectToolMeta;
   assert?: AssertToolMeta;
+  check?: CheckToolMeta;
   wait?: WaitToolMeta;
   storage?: StorageToolMeta;
   replay?: ReplayRunMeta;

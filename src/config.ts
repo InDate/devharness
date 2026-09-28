@@ -184,6 +184,7 @@ export const TOGGLEABLE_TOOLS = [
   'request',     // HTTP requests (node or browser) as sequence steps
   'assert',      // Inline assertions as sequence steps (compare {{var:...}} values)
   'wait',        // Wait primitive for sequences (selector/expression polling, sleep)
+  'check',       // One reading held or failed, with what a sequence does on each
   'replay',      // Sequence recording/playback
   'server',      // Dev server management
   'issues',      // Issue tracking

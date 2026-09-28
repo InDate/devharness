@@ -17,6 +17,7 @@ import type { ExpectedValue } from './bench/kinds.js';
 import { mergeActivity, readActivity, splitActivity, writeActivity } from './sequence-activity.js';
 import { getIssueSequencesDir, getIssuesBySequenceFile } from './issue-tracker.js';
 import { captureVariable } from './tools/replay-executor.js';
+import { asCheckStep } from './tools/check-tools.js';
 import type { Annotation, StepTraffic } from './annotation.js';
 import { substituteCapturedValues, type CaptureEntry } from './tools/interpolation-reverse.js';
 
@@ -614,9 +615,11 @@ export class CommandRecorder {
       // uniform connectionReason off the steps, rebasing URLs), and sharing the
       // object with the history entry made those edits silently rewrite history.
       const paramsClone = JSON.parse(JSON.stringify(cmd.params));
+      // Written as the check it is: assert and wait are faces of it.
+      const step = asCheckStep({ tool: cmd.tool, params: paramsClone });
       commands.push({
-        tool: cmd.tool,
-        params: substituteCapturedValues(paramsClone, captures),
+        tool: step.tool,
+        params: substituteCapturedValues(step.params, captures),
         ...(cmd.delay !== undefined && { delay: cmd.delay }),
         ...(cmd.comment && { comment: cmd.comment }),
         recordedAt: idx,

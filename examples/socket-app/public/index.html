@@ -17,9 +17,20 @@
   #log { font: 12px/1.6 ui-monospace, Menlo, monospace; background: #f6f6f6; border-radius: 6px;
          padding: 10px; height: 260px; overflow: auto; white-space: pre-wrap; }
   #count { font-weight: 600; }
+  #whatsNew { display: flex; align-items: center; gap: 12px; margin: 0 0 14px; padding: 10px 14px;
+              border: 1px solid #1a73e8; border-radius: 8px; background: #eef4fd; }
+  #whatsNew span { flex: 1; }
 </style>
 
 <h1>socket-app</h1>
+
+<!-- Shown until dismissed once in this browser, so a sequence meets it on a
+     fresh profile and not on the run after: a state that is there only some
+     of the time, which a guard step exists to deal with. -->
+<div id="whatsNew" data-testid="whats-new">
+  <span>What's new: the connection lifecycle controls now unlock as its state allows.</span>
+  <button data-testid="whats-new-dismiss">dismiss</button>
+</div>
 <p>Open sockets, then read them with
   <code>network({ action: 'sockets', frames: true, socketUrl: '7788' })</code>.</p>
 
@@ -103,6 +114,15 @@ const log = (line) => {
   el.textContent += line + '\n';
   el.scrollTop = el.scrollHeight;
 };
+// Removed rather than hidden: a selector check asks whether the element exists.
+const SEEN_WHATS_NEW = 'socket-app:seen-whats-new';
+if (localStorage.getItem(SEEN_WHATS_NEW)) $('#whatsNew').remove();
+else $('[data-testid=whats-new-dismiss]').addEventListener('click', () => {
+  localStorage.setItem(SEEN_WHATS_NEW, String(Date.now()));
+  $('#whatsNew').remove();
+  log('dismissed what\'s new');
+});
+
 const refresh = () => {
   $('#count').textContent = sockets.filter(s => s.readyState === WebSocket.OPEN).length;
 };

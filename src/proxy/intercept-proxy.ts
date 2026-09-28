@@ -128,6 +128,13 @@ export interface ProxyEvent {
   runId?: string;
   step?: number;
   /**
+   * Where inside `step` it crossed, when that step ran another sequence: the
+   * position in that sequence, then in any it ran in turn. Absent on the
+   * step's own traffic. Without it a branch's first step stamped step 0 of the
+   * run, and its traffic was counted as the parent's first step.
+   */
+  within?: number[];
+  /**
    * How much the stamp above claims about cause.
    *
    * Computed from `evidence` by `levelOf`, not stored. Kept on the event only
@@ -341,7 +348,9 @@ export function causeOf(event: ProxyEvent): ProxyCursor | undefined {
   // stopped pushing is visible at all, and a person ruling the shape
   // `background` is the control for a push whose count moves with pacing.
   if (event.evidence?.initiator === 'timer') return undefined;
-  if (event.runId !== undefined) return { kind: 'replay', runId: event.runId, step: event.step ?? 0 };
+  if (event.runId !== undefined) {
+    return { kind: 'replay', runId: event.runId, step: event.step ?? 0, ...(event.within ? { within: event.within } : {}) };
+  }
   if (event.commandIndex !== undefined) return { kind: 'command', index: event.commandIndex };
   return undefined;
 }
@@ -520,7 +529,7 @@ function shapeKey(event: ProxyEvent): string {
 /** What a later event carries: one live command, or one step of one replay. */
 export type ProxyCursor =
   | { kind: 'command'; index: number }
-  | { kind: 'replay'; runId: string; step: number };
+  | { kind: 'replay'; runId: string; step: number; within?: number[] };
 
 /**
  * Hosts the browser talks to on its own account, refused outright.
@@ -1055,6 +1064,7 @@ export class InterceptProxy {
       if (marked.cursor.kind === 'replay') {
         event.runId = marked.cursor.runId;
         event.step = marked.cursor.step;
+        if (marked.cursor.within) event.within = marked.cursor.within;
       }
       return;
     }
@@ -1068,6 +1078,7 @@ export class InterceptProxy {
       if (carrier.runId !== undefined) {
         event.runId = carrier.runId;
         event.step = carrier.step;
+        if (carrier.within) event.within = carrier.within;
       }
       return;
     }
@@ -1304,7 +1315,7 @@ export class InterceptProxy {
       id: `ev-${++this.eventSeq}`,
       ...event,
       ...(cursor?.kind === 'command' && { commandIndex: cursor.index }),
-      ...(cursor?.kind === 'replay' && { runId: cursor.runId, step: cursor.step }),
+      ...(cursor?.kind === 'replay' && { runId: cursor.runId, step: cursor.step, ...(cursor.within ? { within: cursor.within } : {}) }),
     };
     this.attributeFromPage(stored);
     this.events.push(stored);

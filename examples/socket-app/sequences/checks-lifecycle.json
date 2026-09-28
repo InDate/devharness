@@ -1,0 +1,144 @@
+{
+  "_comment": "CDP Tools replay sequence. Load with: replay({ action: \"load\", filename: \"<this-file>\" }), then run with: replay({ action: \"run\", name: \"<this-file>\" }). What the app did under each step, and the responses that answer it on replay, are in the file of the same name under activity/.",
+  "id": "seq-1790500000000-1",
+  "name": "checks-lifecycle",
+  "description": "Every kind of check the bench shows, against the /live connection",
+  "startUrl": "http://localhost:7788/",
+  "commands": [
+    {
+      "tool": "navigate",
+      "params": {
+        "action": "goto",
+        "url": "http://localhost:7788/"
+      }
+    },
+    {
+      "tool": "check",
+      "params": {
+        "selector": "[data-testid=\"whats-new\"]",
+        "condition": "present",
+        "holds": {
+          "run": "dismiss-whats-new"
+        },
+        "fails": "continue"
+      },
+      "comment": "a fresh browser shows the banner; a second run in the same browser does not"
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"conn-connect\"]"
+      }
+    },
+    {
+      "tool": "wait",
+      "params": {
+        "selector": "[data-testid=\"conn-state\"]:has-text(\"open\")",
+        "timeoutMs": 15000
+      }
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"conn-pull3\"]"
+      }
+    },
+    {
+      "tool": "assert",
+      "params": {
+        "selector": "[data-testid=\"conn-state\"]",
+        "condition": "text",
+        "operator": "equals",
+        "right": "open",
+        "message": "asking for pushes left the connection open"
+      }
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"get-session\"]"
+      }
+    },
+    {
+      "tool": "wait",
+      "params": {
+        "selector": "[data-testid=\"session-state\"]:has-text(\"s-\")",
+        "timeoutMs": 15000
+      }
+    },
+    {
+      "tool": "inspect",
+      "params": {
+        "action": "evaluateExpression",
+        "expression": "document.querySelector('[data-testid=\"session-state\"]')?.textContent?.trim()",
+        "saveAs": "token"
+      }
+    },
+    {
+      "tool": "assert",
+      "params": {
+        "left": "{{var:token}}",
+        "operator": "matches",
+        "right": "^s-",
+        "message": "POST /session answered with a token of the server's shape"
+      }
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"conn-drop\"]"
+      }
+    },
+    {
+      "tool": "assert",
+      "params": {
+        "selector": "[data-testid=\"conn-state\"]",
+        "condition": "text",
+        "operator": "equals",
+        "right": "failed",
+        "timeoutMs": 5000,
+        "message": "a dropped transport reads as failed, not disconnected"
+      }
+    },
+    {
+      "tool": "check",
+      "params": {
+        "selector": "button[data-testid=\"conn-retry\"]:not([disabled])",
+        "condition": "present",
+        "holds": {
+          "run": "socket-reconnect"
+        },
+        "fails": "continue"
+      },
+      "comment": "retry is offered after a drop, so this runs every time"
+    },
+    {
+      "tool": "check",
+      "params": {
+        "afterMs": 1000
+      }
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"conn-bye\"]"
+      }
+    },
+    {
+      "tool": "assert",
+      "params": {
+        "selector": "[data-testid=\"conn-state\"]",
+        "condition": "text",
+        "operator": "equals",
+        "right": "disconnected",
+        "message": "a hang-up the page asked for ends disconnected"
+      }
+    }
+  ],
+  "createdAt": 1790500000000
+}

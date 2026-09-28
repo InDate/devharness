@@ -50,6 +50,16 @@ export interface TickResult {
   ran: CallbackEntry[];
 }
 
+/** One step a check's sequence ran, and the sequence it ran in turn. */
+export interface RanStep {
+  tool: string;
+  line: string;
+  success: boolean;
+  error?: string;
+  check?: { outcome: 'held' | 'failed'; action: 'continue' | 'stop' | 'run'; subject?: string; found?: string };
+  branch?: { name: string; ranSteps: RanStep[] };
+}
+
 /** A sequence step as the bench shows it. */
 export interface SequenceStep {
   index: number;
@@ -129,6 +139,11 @@ export interface SequenceState {
   total: number;
   /** Set while a step or a play is mid-flight, so the page can disable itself. */
   busy: boolean;
+  /**
+   * The step running now, and the position inside it when it runs another
+   * sequence, read from the replay's cursor. Absent between steps.
+   */
+  runningAt?: { step: number; within?: number[] };
   /**
    * Set while a play is walking the steps, and not for a single step.
    *
@@ -364,6 +379,8 @@ export interface BoundaryEvent {
   commandIndex?: number;
   runId?: string;
   step?: number;
+  /** The position inside `step` it crossed at, when that step ran another sequence. */
+  within?: number[];
   level: 'observed' | 'likely' | 'positional' | 'unprompted';
   owned: boolean;
   root?: string;
@@ -560,6 +577,12 @@ export interface BoundaryState {
   /** Every decision standing against this connection's traffic. */
   rules: BoundaryRule[];
   /** How each wait went in the latest pass: waiting, met, failed or carried on, and how many came. */
+  /** How each check step went in the latest pass: the answer, what the step did on it, and any sequence it ran. */
+  checkOutcomes?: Array<{
+    runId: string; step: number; outcome: 'held' | 'failed'; subject: string; found?: string;
+    action: 'continue' | 'stop' | 'run'; ran?: string; steps?: number; error?: string;
+    ranSteps?: RanStep[];
+  }>;
   waitOutcomes?: Array<{
     runId: string; step: number; key?: string; state: 'waiting' | 'met' | 'failed' | 'carried';
     arrived: number; count: number; seconds: number; startedAt: number;

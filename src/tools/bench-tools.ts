@@ -8,6 +8,8 @@
  * this call's response.
  */
 
+import { subjectOf as subjectOfCheck } from './check-engine.js';
+import { checkSpecOf } from './check-tools.js';
 import { z } from 'zod';
 import { promises as fs } from 'fs';
 import { basename, dirname, join, resolve } from 'path';
@@ -312,6 +314,9 @@ function labelFor(command: { tool: string; params: Record<string, any> }): strin
       : '';
     return `conditional when ${params?.if ?? '?'} run ${params?.then ?? '?'}${rejoin}`;
   }
+  // A check reads as what it checks, the same words its row and the run's
+  // report use.
+  if (tool === 'check') return `check ${subjectOfCheck(checkSpecOf(params ?? {}))}`;
   const head = params?.action ? `${tool}.${params.action}` : tool;
   const subject = subjectOf(params);
   return `${head}${subject ? ' ' + subject.slice(0, 80) : ''}`;
@@ -1375,7 +1380,7 @@ export function createSequenceDriver(
       if (!sequence) return 'no sequence is open';
       const commands = [...(sequence.commands ?? [])];
       if (after < 0 || after >= commands.length) return `step ${after + 1} is not in "${sequence.name}"`;
-      commands.splice(after + 1, 0, { tool: 'wait', params: { ms } } as any);
+      commands.splice(after + 1, 0, { tool: 'check', params: { afterMs: ms } } as any);
       renumberSteps(sequence, stepMap(sequence.commands ?? [], commands));
       sequence.commands = commands;
       return persist(sequence, `a ${ms / 1000}s pause after step ${after + 1}`);

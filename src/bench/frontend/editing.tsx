@@ -9,13 +9,10 @@ import { Recording } from './recording.js';
 import { LabelInput, Row } from './row.js';
 import { Glyph } from './glyph.js';
 import type {
-  Annotation, BenchView, CaptureRect, CaptureVersion, FactKind, SequenceCard, SequenceStep, SequenceVariable,
+  Annotation, BenchView, CaptureRect, CaptureVersion, FactKind, RanStep, SequenceCard, SequenceStep, SequenceVariable,
 } from '../wire.js';
 import { useEscape } from './escape.js';
-
-/** How long one step number pulses after a move, and how far behind the one before it each starts. */
-const RIPPLE_PULSE_MS = 1050;
-const RIPPLE_STEP_MS = 240;
+import { moveShift, spliceIn, spliceShift, useStepMotion } from './step-motion.js';
 
 const CLIENT_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
 
@@ -53,40 +50,32 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
   const [removingAt, setRemovingAt] = useState<number | null>(null);
   // Steps whose rows are folded under their marker, by position.
   const [folded, setFolded] = useState<ReadonlySet<number>>(new Set());
-  // The position a step was just moved to, lit until its pulse ends.
-  const [movedTo, setMovedTo] = useState<number | null>(null);
-  // The move whose step numbers are being swapped over, top to bottom.
-  const [renumbered, setRenumbered] = useState<{ from: number; to: number } | null>(null);
-  useEffect(() => {
-    if (movedTo === null) return;
-    const span = renumbered ? Math.abs(renumbered.to - renumbered.from) : 0;
-    const timer = setTimeout(() => { setMovedTo(null); setRenumbered(null); setSettling(false); },
-      Math.max(1400, RIPPLE_PULSE_MS + span * RIPPLE_STEP_MS));
-    return () => clearTimeout(timer);
-  }, [movedTo]);
-  // A drop opens the gap it lands in before the step moves: the markers either
-  // side of it part, and the step held fades where it was.
-  const [split, setSplit] = useState<{ above?: number; below?: number; from: number } | null>(null);
-  // After a drop the steps stay folded while their numbers swap over, and
-  // open back out once the last one has.
-  const [settling, setSettling] = useState(false);
-  // The row under the pointer after a move holds another step; its tools stay
-  // down until the pointer leaves it.
-  const [quietAt, setQuietAt] = useState<number | null>(null);
-  // A move folds both steps it swaps, so the two markers pass each other
+  const motion = useStepMotion(setFolded);
+  // The list a poll brought while a change plays, shown once it lands.
+  const held = useRef<BenchView | null>(null);
+  const shown = useRef<BenchView | null>(null);
+  const dragFree = useRef(true);
+  // The list read at once after a change, so it lands while the gap is still
+  // open rather than on the next poll, after it has closed on the old order.
+  const refresh = async () => {
+    const next = await fetch(`${base}/state?client=${CLIENT_ID}`).then(res => res.json()).catch(() => null);
+    if (next) setState(next);
+  };
+  // An arrow folds both steps it swaps, so the two markers pass each other
   // without their rows between them.
   const moveStep = (from: number, to: number) => {
-    setQuietAt(from);
     // Focus left on the clicked arrow would hold the tools up through :focus-within.
     (document.activeElement as HTMLElement | null)?.blur();
     setFolded(was => new Set([...was, from, to]));
-    setMovedTo(to);
-    setRenumbered({ from, to });
-    void post('/sequence/step/move', { from, to });
+    void motion.play({
+      shift: moveShift(from, to), fold: 'none',
+      apply: async () => { await post('/sequence/step/move', { from, to }); await refresh(); },
+    });
   };
   // A step being dragged, and the marker and side it would land on. Every
   // step folds while one is dragged, so the drop targets are the markers alone.
   const [dragging, setDragging] = useState<number | null>(null);
+  dragFree.current = dragging === null;
   // Where the drop line is drawn: halfway across the gap it stands for.
   const [dropAt, setDropAt] = useState<{
     step: number; side: 'before' | 'after'; top: number; left: number; width: number;
@@ -134,22 +123,10 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
     setDragging(null);
     setDropAt(null);
     if (to === from) return;
-    setSettling(true);
-    setSplit({ from, ...(above !== undefined ? { above } : {}), ...(below !== undefined ? { below } : {}) });
-    await new Promise(resolve => setTimeout(resolve, 240));
-    await post('/sequence/step/move', { from, to });
-    // Read at once rather than on the next poll, so the step lands in the gap
-    // while it is still open rather than after it has closed on the old order.
-    const moved = await fetch(`${base}/state?client=${CLIENT_ID}`).then(res => res.json()).catch(() => null);
-    if (moved) setState(moved);
-    setSplit(null);
-    // The folds held before the drag follow the steps they were set on.
-    setFolded(was => new Set([...was].map(at => at === from ? to
-      : from < to && at > from && at <= to ? at - 1
-      : from > to && at >= to && at < from ? at + 1 : at)));
-    setQuietAt(to);
-    setMovedTo(to);
-    setRenumbered({ from, to });
+    await motion.play({
+      shift: moveShift(from, to), fold: 'hold', part: { from, above, below },
+      apply: async () => { await post('/sequence/step/move', { from, to }); await refresh(); },
+    });
   };
   // On the whole page while a drag runs, so anywhere the pointer is, including
   // below the last step, reads as a place to drop.
@@ -164,7 +141,7 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
     };
   });
   const removeStep = (index: number) => {
-    setFolded(was => new Set([...was].filter(at => at !== index).map(at => at > index ? at - 1 : at)));
+    (document.activeElement as HTMLElement | null)?.blur();
     void post('/sequence/step/remove', { index });
   };
   const toggleFold = (index: number) => setFolded(was => {
@@ -197,7 +174,21 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
       try {
         const res = await fetch(`${base}/state?client=${CLIENT_ID}`);
         if (!res.ok) throw new Error(String(res.status));
-        if (live) setState(await res.json());
+        const next: BenchView = await res.json();
+        if (!live) return;
+        if (held.current) { held.current = next; return; }
+        const was = shown.current?.sequence;
+        const now = next.sequence;
+        const change = was && now && was.name === now.name && !was.recording && !now.recording
+          && dragFree.current && !motion.playing.current ? spliceIn(was.steps, now.steps) : undefined;
+        if (!change) { setState(next); return; }
+        held.current = next;
+        void motion.play({
+          shift: spliceShift(change.at, change.count, now!.steps.length),
+          fold: 'fold',
+          ...(change.count > 0 ? { part: { ...(change.at > 0 ? { above: change.at - 1 } : {}), below: change.at } } : {}),
+          apply: () => { setState(held.current); held.current = null; },
+        });
       } catch {
         if (live) setEnded(true);
       }
@@ -220,6 +211,7 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
   if (ended) return <p class="hint">the bench has been closed on this connection</p>;
   if (!state) return <p class="hint">reading the session…</p>;
 
+  shown.current = state;
   const sequence = state.sequence;
   const steps = sequence?.steps ?? [];
   const findings = steps.flatMap(step => step.annotations ?? []);
@@ -232,20 +224,80 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
   }
   const defined = [...firstStore.entries()].map(([name, step]) => ({ name, step }));
   const definesAt = new Set(defined.map(one => one.step.index));
+  // The step the run is on: the one running now during a run, the one it
+  // stands on when paused.
+  const runningNow = sequence?.busy ? sequence.runningAt?.step : undefined;
+  const onIt = (step: SequenceStep) => (runningNow !== undefined ? step.index === runningNow : !!step.current && !into);
+  const outcomeOf = (index: number) => (activity.boundary?.checkOutcomes ?? []).find(one => one.step === index);
+  // A check that ran a sequence in the last run, with the steps it ran.
+  const ranBy = (step: SequenceStep) => {
+    const outcome = outcomeOf(step.index);
+    return outcome?.action === 'run' && outcome.ranSteps && (step.done || step.failed) ? outcome : undefined;
+  };
+  const checkRow = (step: SequenceStep) => (
+    <ol class="activitycards">
+      <CheckRow step={step} valueOf={valueOf} number={number(step.index)}
+        outcome={outcomeOf(step.index)}
+        variables={defined.map(one => one.name)}
+        onRemove={() => removeStep(step.index)}
+        onSave={async (params, why) => {
+          if (JSON.stringify(params) !== JSON.stringify(step.params ?? {})) {
+            await post('/sequence/step/edit', { index: step.index, params });
+          }
+          if (why !== (step.comment ?? '')) await post('/sequence/step/comment', { step: step.index, words: why });
+        }} />
+    </ol>
+  );
+  /**
+   * The steps a check's sequence ran, put into the list where they ran,
+   * between a marker where the run moved to that sequence and one where it
+   * moved back. Each is a step marker numbered in its own sequence: a check
+   * with its row, anything else with the traffic it caused. A check among
+   * them that ran a sequence of its own opens that one the same way, as deep
+   * as the run went. `path` is where in the run's branches these steps are,
+   * which is what their traffic is stamped with.
+   */
+  const branchSteps = (
+    owner: number, held: boolean, name: string, from: string, ranSteps: RanStep[], path: number[],
+  ): preact.ComponentChildren => {
+    const completed = ranSteps.every(one => one.success);
+    return (
+      <>
+        <RunMark classes="mark switch">
+          check {held ? 'passed' : 'failed'} · moved to: <span class="seqname">{name}</span>
+        </RunMark>
+        {ranSteps.map((one, k) => (
+          <Fragment key={[...path, k].join('.')}>
+            <RunMark classes={['mark', 'injected', one.success ? '' : 'failed'].filter(Boolean).join(' ')} title={one.error}>
+              step {k + 1} · {one.check?.subject ? `check ${one.check.subject}` : one.line}
+            </RunMark>
+            {isCheckTool(one.tool)
+              ? (
+                <ol class="activitycards">
+                  <Row classes={['waitrow', 'checkrow', one.check?.outcome === 'held' ? 'wait-met' : one.success ? 'wait-carried' : 'wait-failed']}
+                    columns={[]} source="check" title={one.error}
+                    label={<span class="what">{conditionOf(one.check?.subject ?? one.line.replace(/^(check|assert|wait)\S*\s*/, ''), selectorIn(one.line))}</span>}
+                    reading={<span class="meta">{one.check
+                      ? verdictOf(conditionOf(one.check.subject ?? '', selectorIn(one.line)), one.check.outcome, one.check.action, one.check.found)
+                      : one.success ? '✓ pass' : '✗ fail · stopped'}</span>}
+                    slots={{}} open={false} onOpen={() => {}} />
+                </ol>
+              )
+              : <ActivityRows activity={activity} step={owner} base={base} recording={false} within={[...path, k]} />}
+            {one.branch && branchSteps(owner, one.check?.outcome === 'held', one.branch.name, name, one.branch.ranSteps, [...path, k])}
+          </Fragment>
+        ))}
+        <RunMark classes={completed ? 'mark switch' : 'mark switch failed'}>
+          {completed ? 'completed' : 'failed'} · moved to: <span class="seqname">{from}</span>
+        </RunMark>
+      </>
+    );
+  };
   // A recording going into another sequence is shown in its place: that
   // sequence's steps around it, and its own numbered where they will land.
   const into = sequence?.recording ? sequence.into : undefined;
   const number = (index: number) => (into ? into.after + 2 + index : index + 1);
-  // The position a step stood at before the move being swapped over, for the
-  // steps that move shifted; undefined for the rest.
-  const wasAt = (index: number): number | undefined => {
-    if (!renumbered) return undefined;
-    const { from, to } = renumbered;
-    if (index === to) return from;
-    if (from < to && index >= from && index < to) return index + 1;
-    if (from > to && index > to && index <= from) return index - 1;
-    return undefined;
-  };
+  const wasAt = motion.wasAt;
   // A variable's value as the list knows it: stored in the sequence, or
   // captured by the run.
   const valueOf = (name: string) => firstStore.get(name)?.stores
@@ -418,20 +470,12 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
         {steps.filter(step => !definesAt.has(step.index)).map(step => (
           <Fragment key={step.index}>
             <div
-              class={['mark', step.current ? 'here' : '', step.failed ? 'failed' : '',
-                folded.has(step.index) || dragging !== null ? 'folded' : '', movedTo === step.index ? 'moved' : '',
-                quietAt === step.index ? 'quiet' : '', dragging === step.index || split?.from === step.index ? 'dragged' : '',
-                split?.above === step.index ? 'splitabove' : '', split?.below === step.index ? 'splitbelow' : '',
-                wasAt(step.index) !== undefined ? 'renumbered' : '']
+              class={['mark', step.current ? 'here' : '', step.failed ? 'failed' : '', onIt(step) ? 'onit' : '',
+                folded.has(step.index) || dragging !== null ? 'folded' : '',
+                dragging === step.index ? 'dragged' : '', ...motion.classesOf(step.index)]
                 .filter(Boolean).join(' ')}
-              // Each renumbered step swaps its number in turn, from the top of
-              // the moved range down, so the numbers read as shifting one by one.
-              style={renumbered && wasAt(step.index) !== undefined
-                ? {
-                  '--ripple-delay': `${(step.index - Math.min(renumbered.from, renumbered.to)) * RIPPLE_STEP_MS}ms`,
-                  '--ripple-pulse': `${RIPPLE_PULSE_MS}ms`,
-                }
-                : undefined}
+              // Each renumbered step swaps its number in turn, from the lowest.
+              style={motion.styleOf(step.index)}
               draggable={!sequence?.recording}
               onDragStart={(e: DragEvent) => {
                 e.dataTransfer?.setData('text/plain', String(step.index));
@@ -443,14 +487,15 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
               onClick={() => toggleFold(step.index)}
               onMouseLeave={() => {
                 if (removingAt === step.index) setRemovingAt(null);
-                if (quietAt === step.index) setQuietAt(null);
+                motion.release(step.index);
               }}
-              title={folded.has(step.index) ? 'show the rows under this step' : 'fold the rows under this step'}
+              // Why the step is there is read on pointing, so the list stays the run.
+              title={step.comment ?? (folded.has(step.index) ? 'show the rows under this step' : 'fold the rows under this step')}
             >
               <span class="marktext">
                 <span class="marknum">step {wasAt(step.index) === undefined
                   ? number(step.index)
-                  : <span class="numswap"><span class="was">{number(wasAt(step.index)!)}</span><span class="now">{number(step.index)}</span></span>}
+                  : <span class={step.index < wasAt(step.index)! ? 'numswap down' : 'numswap up'}><span class="was">{number(wasAt(step.index)!)}</span><span class="now">{number(step.index)}</span></span>}
                 </span> · <span>{withVariables(step.label, valueOf)}</span>
                 {into && <span class="newtag"> · new</span>}
                 {step.current ? ' · standing here' : ''}
@@ -543,12 +588,19 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
               </span>
             </div>
 
-            <div class={folded.has(step.index) || dragging !== null || split || settling ? 'stepbody folded' : 'stepbody'}><div class="stepbodyinner">
+            <div class={[folded.has(step.index) || dragging !== null || motion.split || motion.settling ? 'stepbody folded' : 'stepbody',
+              onIt(step) ? 'onit' : ''].filter(Boolean).join(' ')}><div class="stepbodyinner">
             {editAt === step.index && step.params && (
               <StepEditor step={step} variables={defined.map(one => one.name)
                 .concat(steps.map(one => one.captures).filter((one): one is string => !!one && !firstStore.has(one)))}
                 onCancel={() => setEditAt(null)}
-                onSave={(params) => { void post('/sequence/step/edit', { index: step.index, params }); setEditAt(null); }} />
+                onSave={async (params, why) => {
+                  setEditAt(null);
+                  if (JSON.stringify(params) !== JSON.stringify(step.params ?? {})) {
+                    await post('/sequence/step/edit', { index: step.index, params });
+                  }
+                  if (why !== (step.comment ?? '')) await post('/sequence/step/comment', { step: step.index, words: why });
+                }} />
             )}
             {timerAt === step.index && (
               <TimerForm onCancel={() => setTimerAt(null)}
@@ -557,11 +609,7 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
             <ActivityRows activity={activity} step={step.index} base={base} recording={!!sequence?.recording}
               running={step.current && !!sequence?.busy}
               notesAt={notesAt(step)} />
-            {step.tool === 'assert' && step.params && (
-              <ol class="activitycards">
-                <AssertRow step={step} valueOf={valueOf} />
-              </ol>
-            )}
+            {isCheck(step) && checkRow(step)}
             {step.captures && (
               <ol class="activitycards">
                 <VariableRow name={step.captures} step={step.index} stores={step.stores}
@@ -570,6 +618,9 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
               </ol>
             )}
             </div></div>
+
+            {isCheck(step) && ranBy(step) && branchSteps(step.index, ranBy(step)!.outcome === 'held',
+              ranBy(step)!.ran ?? '', sequence?.name ?? '', ranBy(step)!.ranSteps!, [])}
 
             {!joins && step.current && draft}
 
@@ -678,34 +729,120 @@ function VariableRow({ name, step, variable, stores, onSave, onRemove, usedBy = 
   );
 }
 
+/** A marker a run puts into the list: a switch to or from a sequence, or a step it ran. */
+function RunMark({ classes, title, children }: {
+  classes: string; title?: string; children: preact.ComponentChildren;
+}) {
+  return (
+    <div class={classes} title={title}>
+      <span class="marktext">{children}</span>
+    </div>
+  );
+}
+
+/** Steps read as checks: the check step, and the older steps it stands for. */
+function isCheck(step: SequenceStep): boolean {
+  return isCheckTool(step.tool ?? '');
+}
+
+function isCheckTool(tool: string): boolean {
+  return tool === 'check' || tool === 'assert' || tool === 'wait' || tool === 'conditional';
+}
+
 /**
- * What an assert step checks, as a row of its list: the element and the
- * comparison, with any variable shown as its value, and whether the last run
- * found it held. A check that failed stops the run there, which the step
- * marks as failed.
+ * A check's answer in its own terms: what it found against what it asks, and
+ * what the run did on it. `✓ equals "open"`, `✗ text is "failed" · stopped`,
+ * `○ absent · carried on`. A sequence it ran is read off the markers either
+ * side of the sequence's steps, so a run adds nothing here.
  */
-function AssertRow({ step, valueOf }: {
+function verdictOf(phrase: string, outcome: 'held' | 'failed', action: 'continue' | 'stop' | 'run', found?: string): string {
+  const then = action === 'stop' ? ' · stopped' : action === 'continue' && outcome === 'failed' ? ' · carried on' : '';
+  if (outcome === 'held') return `✓ ${phrase}${then}`;
+  const mark = action === 'stop' ? '✗' : '○';
+  const opposite: Record<string, string> = {
+    present: 'absent', absent: 'present', visible: 'not visible', hittable: 'covered', enabled: 'disabled',
+  };
+  if (opposite[phrase]) return `${mark} ${opposite[phrase]}${then}`;
+  // What the element read as, where the check compared something on it.
+  const text = found?.match(/text=("(?:[^"\\]|\\.)*")/)?.[1];
+  const count = found?.match(/^matched (\d+)/)?.[1];
+  const [what] = phrase.split(' ');
+  const saw = what === 'text' && text !== undefined ? `text is ${text}`
+    : what === 'count' && count !== undefined ? `count is ${count}`
+    : found && found !== 'absent' && found !== 'present' ? `found ${found}` : `not ${phrase}`;
+  return `${mark} ${saw}${then}`;
+}
+
+/** The selector a step line names, where it names one: the part after its tool. */
+function selectorIn(line: string): string | undefined {
+  return line.match(/^\S+\s+(.+)$/)?.[1];
+}
+
+/**
+ * A check's words without the element it reads, which its marker already
+ * names: `present`, `text equals "open"`. A check on no element reads whole.
+ */
+function conditionOf(subject: string, selector: string | undefined): string {
+  return selector && subject.startsWith(`${selector} `) ? subject.slice(selector.length + 1) : subject;
+}
+
+type CheckAnswer = { outcome: 'held' | 'failed'; found?: string; action: 'continue' | 'stop' | 'run'; ran?: string; steps?: number; error?: string };
+
+/**
+ * A check as a row inside its step's marker: the condition it reads, what it
+ * does on each answer, and how the last run went. Opened, it is edited as the
+ * step it is. Older assert, wait and conditional steps read here the same way.
+ */
+function CheckRow({ step, valueOf, outcome, number, variables, onRemove, onSave }: {
   step: SequenceStep;
   valueOf: (name: string) => string | undefined;
+  /** How the last run went, where replay recorded it: check and conditional steps. */
+  outcome?: CheckAnswer;
+  number: number;
+  variables: string[];
+  onRemove: () => void;
+  onSave: (params: Record<string, unknown>, why: string) => void;
 }) {
-  const params = step.params as Record<string, unknown>;
-  const said = (value: unknown) => (value === undefined ? '' : typeof value === 'string' ? value : JSON.stringify(value));
-  const subject = params.selector !== undefined
-    ? `${said(params.selector)} ${said(params.condition)}${params.attribute ? ` ${said(params.attribute)}` : ''}`
-    : said(params.left);
-  const compared = params.operator !== undefined ? ` ${said(params.operator)} ${said(params.right)}` : '';
-  const outcome = step.failed ? 'failed' : step.done ? 'held' : 'pending';
+  const [open, setOpen] = useState(false);
+  // The first click on the cross arms it, as a step's bin does; leaving the row disarms it.
+  const [sure, setSure] = useState(false);
+  const params = (step.params ?? {}) as Record<string, any>;
+  const target = (action: any) => typeof action === 'object' && action?.run
+    ? `run ${action.run}${typeof action.resumeAt === 'number' ? `, then step ${action.resumeAt + 1}` : ''}`
+    : action;
+  const does = step.tool === 'check'
+    ? [params.holds && params.holds !== 'continue' ? `pass → ${target(params.holds)}` : '',
+       params.fails && params.fails !== 'stop' ? `fail → ${target(params.fails)}` : ''].filter(Boolean).join(' · ')
+    : step.tool === 'conditional' ? `pass → run ${params.then}` : '';
+  const reads = conditionOf(step.label.replace(/^(check|assert|wait|conditional)\s*/, ''), params.selector);
+  // An older assert or wait records no answer of its own: its step ran, or stopped the run.
+  const answer: CheckAnswer | undefined = outcome && (step.done || step.failed) ? outcome
+    : step.failed ? { outcome: 'failed', action: 'stop' }
+    : step.done && (step.tool === 'assert' || step.tool === 'wait') ? { outcome: 'held', action: 'continue' }
+    : undefined;
+  const state = !answer ? 'pending'
+    : answer.outcome === 'held' ? 'met'
+    : answer.action === 'stop' ? 'failed' : 'carried';
+  // A sequence it ran is read off the markers either side of it, so the row keeps the answer alone.
+  const reading = !answer ? 'not run yet' : verdictOf(reads, answer.outcome, answer.action, answer.found);
   return (
     <Row
-      classes={['assertrow', `assert-${outcome}`]}
-      columns={[]}
-      title={said(params.message) || undefined}
-      label={<span class="what">{withVariables(`${subject}${compared}`.trim(), valueOf)}</span>}
-      reading={<span class="meta">{outcome === 'failed' ? '✗ failed' : outcome === 'held' ? '✓ pass' : 'not run yet'}</span>}
-      slots={{}}
-      open={false}
-      onOpen={() => {}}
-    />
+      classes={['waitrow', 'checkrow', `wait-${state}`, step.current ? 'here' : '', sure ? 'removing' : '']}
+      columns={['remove']}
+      source="check"
+      title={`step ${number}${answer?.found ? ` · found ${answer.found}` : ''}${answer?.error ? ` · ${answer.error}` : ''}`}
+      label={<span class="what">{withVariables(reads, valueOf)}{does && <span class="checkdoes"> · {does}</span>}</span>}
+      reading={<span class="meta">{reading}</span>}
+      slots={{ remove: () => { if (sure) { setSure(false); onRemove(); } else setSure(true); } }}
+      titles={{ remove: sure ? 'click again to take this check out of the run' : 'take this check out of the run' }}
+      onLeave={() => setSure(false)}
+      open={open}
+      onOpen={() => setOpen(!open)}
+    >
+      <StepEditor step={step} variables={variables}
+        onCancel={() => setOpen(false)}
+        onSave={(next, why) => { setOpen(false); onSave(next, why); }} />
+    </Row>
   );
 }
 
@@ -826,17 +963,18 @@ function withVariables(label: string, valueOf: (name: string) => string | undefi
 }
 
 /**
- * What a step is given, as JSON to change. The variables the sequence has are
- * offered under it, each putting `{{var:name}}` where the cursor is, since
- * that token is what a step reads a variable by.
+ * What a step is given, as JSON to change, and why the step is there. The
+ * variables the sequence has are offered under it, each putting `{{var:name}}`
+ * where the cursor is, since that token is what a step reads a variable by.
  */
 function StepEditor({ step, variables, onSave, onCancel }: {
   step: SequenceStep;
   variables: string[];
-  onSave: (params: Record<string, unknown>) => void;
+  onSave: (params: Record<string, unknown>, why: string) => void;
   onCancel: () => void;
 }) {
   const [text, setText] = useState(() => JSON.stringify(step.params ?? {}, null, 2));
+  const [why, setWhy] = useState(step.comment ?? '');
   const [failure, setFailure] = useState<string | undefined>(undefined);
   const box = useRef<HTMLTextAreaElement>(null);
   useEffect(() => { box.current?.focus(); }, []);
@@ -856,7 +994,7 @@ function StepEditor({ step, variables, onSave, onCancel }: {
         setFailure('what a step is given has to be a JSON object');
         return;
       }
-      onSave(parsed);
+      onSave(parsed, why.trim());
     } catch (error) {
       setFailure(`not JSON: ${String((error as Error).message ?? error)}`);
     }
@@ -864,6 +1002,12 @@ function StepEditor({ step, variables, onSave, onCancel }: {
   return (
     <div class="stepeditor" onClick={(e: MouseEvent) => e.stopPropagation()}>
       <div class="stepeditorhead"><span class="quiet">{step.tool}</span></div>
+      <input class="stepeditwhy" value={why} placeholder="why is this step here?"
+        onInput={(e: Event) => setWhy((e.target as HTMLInputElement).value)}
+        onKeyDown={(e: KeyboardEvent) => {
+          if (e.key === 'Enter') save();
+          if (e.key === 'Escape') onCancel();
+        }} />
       <textarea ref={box} class="stepedittext" spellcheck={false} value={text}
         rows={Math.min(14, text.split('\n').length + 1)}
         onInput={(e: Event) => { setText((e.target as HTMLTextAreaElement).value); setFailure(undefined); }}

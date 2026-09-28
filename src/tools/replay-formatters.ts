@@ -63,9 +63,10 @@ export function formatExecutionResults(
   if (failed > 0) {
     response += `\n\n**Failed Commands**\n`;
     results.filter(r => !r.success).forEach((r) => {
-      if ((r.tool === 'conditional' || r.tool === 'forEach') && r.substeps) {
+      if ((r.tool === 'conditional' || r.tool === 'forEach' || r.tool === 'check') && r.substeps) {
         const scope = r.tool === 'forEach'
           ? `${r.sequenceName}, item ${r.iterations} of ${r.itemsFound}`
+          : r.tool === 'check' ? `${r.check?.outcome} \`${r.check?.subject}\`, ran ${r.sequenceName}`
           : r.sequenceName;
         response += `${r.step}. **${r.tool}** (${scope})\n`;
         response += `   **Error:** ${r.error}\n`;
@@ -80,6 +81,9 @@ export function formatExecutionResults(
           response += `\n`;
         });
         response += `\n`;
+      } else if (r.tool === 'check' && r.check) {
+        response += `${r.step}. **check** ${r.check.outcome} \`${r.check.subject}\`${r.check.found ? ` - found ${r.check.found}` : ''}\n`;
+        response += `   **Error:** ${r.error}\n\n`;
       } else {
         response += `${r.step}. **${r.tool}**\n`;
         response += `   **Error:** ${r.error}\n\n`;
@@ -108,6 +112,13 @@ export function formatExecutionResults(
           // Skipped because condition not met (not an error, just false)
           response += `${r.step}. **${r.tool}** (${r.sequenceName}) ○ - skipped (condition not met)\n`;
         }
+      } else if (r.tool === 'check' && r.check) {
+        const answered = r.check.outcome === 'held' ? '✓ held' : '○ failed';
+        const did = r.check.action === 'run' ? ` - ran ${r.sequenceName} (${r.substeps?.length ?? 0} steps)` : '';
+        response += `${r.step}. **check** ${answered} \`${r.check.subject}\`${did}\n`;
+        (r.substeps ?? []).forEach((sub) => {
+          response += `   ${r.step}.${sub.step}. ${sub.tool} ${sub.success ? '✓' : '✗'}\n`;
+        });
       } else if (r.tool === 'forEach') {
         // An empty source is a legitimate outcome, not a silent nothing: a
         // converge loop with nothing left to clean up looks identical to a

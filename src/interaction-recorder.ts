@@ -1591,7 +1591,7 @@ export function eventsToCommands(
     const event = processedEvents[i];
 
     if (isTimerEvent(event)) {
-      addCommand({ tool: 'wait', params: { ms: event.ms } }, event.timestamp);
+      addCommand({ tool: 'check', params: { afterMs: event.ms } }, event.timestamp);
       i++;
       continue;
     }

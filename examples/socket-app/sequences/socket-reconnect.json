@@ -1,0 +1,46 @@
+{
+  "_comment": "CDP Tools replay sequence. Load with: replay({ action: \"load\", filename: \"<this-file>\" }), then run with: replay({ action: \"run\", name: \"<this-file>\" }). What the app did under each step, and the responses that answer it on replay, are in the file of the same name under activity/.",
+  "id": "seq-1790500000000-2",
+  "name": "socket-reconnect",
+  "description": "Retry until the connection is back: each refused retry runs this sequence again, one level deeper",
+  "startUrl": "http://localhost:7788/",
+  "commands": [
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"conn-retry\"]"
+      }
+    },
+    {
+      "tool": "check",
+      "params": {
+        "afterMs": 500
+      },
+      "comment": "a refused retry opens and is closed again within a few ms"
+    },
+    {
+      "tool": "check",
+      "params": {
+        "selector": "button[data-testid=\"conn-retry\"]:not([disabled])",
+        "condition": "present",
+        "holds": {
+          "run": "socket-reconnect"
+        },
+        "fails": "continue"
+      },
+      "comment": "still offered means this retry was refused, so try again"
+    },
+    {
+      "tool": "check",
+      "params": {
+        "selector": "[data-testid=\"conn-state\"]",
+        "condition": "text",
+        "operator": "equals",
+        "right": "open",
+        "withinMs": 5000
+      }
+    }
+  ],
+  "createdAt": 1790500000000
+}

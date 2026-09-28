@@ -1,0 +1,14 @@
+{
+  "_comment": "What the app did under each step of the sequence of the same name, and what answers it on replay. Read and written with that sequence.",
+  "sequence": "seq-1790500000000-1",
+  "name": "checks-lifecycle",
+  "waits": [
+    {
+      "step": 4,
+      "count": 3,
+      "key": "\"tag\":\"push\"",
+      "seconds": 5,
+      "onFail": "fail"
+    }
+  ]
+}

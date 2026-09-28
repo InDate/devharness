@@ -55,6 +55,7 @@ import { createDownloadTools } from './tools/download-tools.js';
 import { createRequestTools } from './tools/request-tools.js';
 import { createAssertTools } from './tools/assert-tools.js';
 import { createWaitTools } from './tools/wait-tools.js';
+import { createCheckTools } from './tools/check-tools.js';
 import { createModalTools } from './tools/modal-tools.js';
 import { createBenchTools } from './tools/bench-tools.js';
 import { createReplayTools } from './tools/replay-tools.js';
@@ -89,7 +90,7 @@ import { startProxyFor, markOnProxies, markNextCommand, releaseCommand } from '.
  */
 const OBSERVING_TOOLS = new Set([
   'screenshot', 'content', 'inspect', 'proxy', 'network', 'console',
-  'wait', 'assert', 'dashboard', 'issues', 'message', 'listConnections',
+  'wait', 'assert', 'check', 'dashboard', 'issues', 'message', 'listConnections',
   'getChromeStatus', 'getDebuggerStatus', 'getDebugLoggingStatus',
   'getSourceCode', 'detectModals', 'config',
 ]);
@@ -1611,6 +1612,8 @@ const allTools = {
   ...(configManager.isToolEnabled('assert') ? createAssertTools(resolveConnectionFromReason) : {}),
   // Wait tool (wait primitive for sequences - MCP-side condition polling / sleep)
   ...(configManager.isToolEnabled('wait') ? createWaitTools(resolveConnectionFromReason) : {}),
+  // Check tool (one reading, held or failed; assert and wait are faces of it)
+  ...(configManager.isToolEnabled('check') ? createCheckTools(resolveConnectionFromReason, executeToolCall) : {}),
   // Replay tools
   ...(configManager.isToolEnabled('replay') ? createReplayTools(commandRecorder, executeToolCall, async (connectionReason: string) => {
     const resolved = await resolveConnectionFromReason(connectionReason);
@@ -1701,7 +1704,10 @@ function registerToolHandlers(server: Server) {
     // A tool that drives a page the bench holds - frozen, running, recording -
     // would wait on a page that cannot move until its timeout, and hold the
     // call with it. Refused at once instead, naming what holds it.
+    // A check read once answers from the page as it is; one read again until
+    // it holds waits on the page moving, as a wait does.
     const drives = DRIVING_TOOLS.has(toolName)
+      || (toolName === 'check' && Number((request.params.arguments as any)?.withinMs) > 0)
       || (toolName === 'replay' && DRIVING_REPLAY.has(String((request.params.arguments as any)?.action)));
     if (drives) {
       const hold = benchHold((request.params.arguments as any)?.connectionReason);

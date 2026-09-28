@@ -4,7 +4,7 @@
 
 import type { StepTraffic } from '../annotation.js';
 import type { CommandRecorder, RecordedCommand, CommandSequence, ActiveSequenceState } from '../command-recorder.js';
-import { markOnProxies, markNextCommand, releaseCommand, boundarySettled, getProxy, takeWaitFailure } from '../proxy/registry.js';
+import { markOnProxies, markNextCommand, releaseCommand, boundarySettled, getProxy, recordCheckOutcome, takeWaitFailure } from '../proxy/registry.js';
 import { tallyShapes, type ShapeRules } from '../proxy/intercept-proxy.js';
 import type { ExecuteToolCall } from '../types.js';
 import { abortableDelayResult } from '../utils/abort.js';
@@ -15,6 +15,8 @@ import { configManager, ClickValidationConfig } from '../config.js';
 import type { ClickActionMeta, ConsoleToolMeta, NetworkToolMeta } from '../tool-response.js';
 import { interpolateParams } from './interpolation.js';
 import { getMessage, isElementNotFoundFailure } from '../messages.js';
+import type { CheckOutcome as CheckAction } from './check-tools.js';
+import type { CheckOutcome as CheckOutcomeRecord, RanStep } from '../proxy/registry.js';
 
 // Re-export replay cursor functions
 export { injectReplayCursor, showClickEffect, showKeyPress, removeReplayCursor } from '../replay-cursor.js';
@@ -98,6 +100,12 @@ export interface ExecutionContext {
    * the other.
    */
   runEnv?: Record<string, string>;
+  /**
+   * The position this run's steps stamp their traffic under, when it runs
+   * inside a step of another: that step's number, and the path of positions
+   * down to this run. Absent on a top-level run, whose steps stamp their own.
+   */
+  stampUnder?: { step: number; within: number[] };
 }
 
 export interface StepResult {
@@ -109,6 +117,10 @@ export interface StepResult {
   substeps?: StepResult[];
   sequenceName?: string;
   conditionMet?: boolean;
+  /** check: how the reading went, and what the step did on it. */
+  check?: { outcome: 'held' | 'failed'; subject: string; found?: string; action: 'continue' | 'stop' | 'run' };
+  /** check that ran a sequence: that sequence's steps, so its results can be named by what each did. */
+  ranCommands?: RecordedCommand[];
   /** forEach: how many items the source yielded, before `where` filtering. */
   itemsFound?: number;
   /** forEach: how many items actually ran `do` (post-filter, post-maxItems). */
@@ -287,7 +299,7 @@ export const TOOLS_NEEDING_CONNECTION = [
 export const TOOLS_ACCEPTING_CONNECTION = [
   ...TOOLS_NEEDING_CONNECTION,
   'inspect', 'execution', 'breakpoint', 'getSourceCode', 'detectModals', 'dismissModal', 'assert',
-  'wait'
+  'wait', 'check'
 ];
 
 /**
@@ -300,6 +312,11 @@ export const TOOLS_ACCEPTING_CONNECTION = [
  *   forces a browser launch on its own.
  */
 export function commandNeedsBrowserConnection(cmd: { tool: string; params?: Record<string, any> }): boolean {
+  // A check on time, a value or an expression reads no page of its own.
+  if (cmd.tool === 'check') {
+    const p = cmd.params || {};
+    return ['selector', 'url', 'cookie', 'localStorage', 'indexedDB'].some(key => p[key] !== undefined);
+  }
   if (cmd.tool === 'wait') {
     const p = cmd.params || {};
     return p.selector !== undefined || p.selectorGone !== undefined;
@@ -322,6 +339,10 @@ export function commandNeedsBrowserConnection(cmd: { tool: string; params?: Reco
 export function commandTakesInjectedConnection(cmd: { tool: string; params?: Record<string, any> }): boolean {
   // wait({ ms }) is a plain sleep - no connection is injected, nothing ambiguous.
   if (cmd.tool === 'wait') return (cmd.params || {}).ms === undefined;
+  if (cmd.tool === 'check') {
+    const p = cmd.params || {};
+    return ['selector', 'expression', 'url', 'cookie', 'localStorage', 'indexedDB'].some(key => p[key] !== undefined);
+  }
   return TOOLS_ACCEPTING_CONNECTION.includes(cmd.tool);
 }
 
@@ -670,6 +691,8 @@ export interface ConditionalFlowResult {
   executed: boolean;
   sequenceName: string;
   substeps?: StepResult[];
+  /** The steps of the sequence that ran, as it ran them, so a result can be named by what each step did. */
+  ranCommands?: RecordedCommand[];
   error?: string;
   durationMs?: number;
 }
@@ -811,6 +834,34 @@ export async function executeConditionalFlow(
   }
 
   await debugLog(logPrefix, `Condition ${condition} met, loading sequence: ${sequenceName}`);
+  return runBranch(sequenceName, ctx, recorder, budget, abortSignal);
+}
+
+/**
+ * Run a named sequence inside a step of another: a conditional's `then`, or a
+ * check's `{ run }`. Shares the run's variables, remaining time and cancel;
+ * bounded by the conditional depth, as any sequence one run reaches is.
+ */
+export async function runBranch(
+  sequenceName: string,
+  ctx: ExecutionContext,
+  recorder: CommandRecorder,
+  budget?: { stepTimeout?: number; totalTimeout?: number },
+  abortSignal?: AbortSignal
+): Promise<ConditionalFlowResult> {
+  const { logPrefix = 'executor' } = ctx;
+  const replayConfig = configManager.getReplayConfig();
+  const currentDepth = ctx.conditionalDepth ?? 0;
+  const callStack = ctx.conditionalCallStack ?? [];
+  if (currentDepth >= replayConfig.maxConditionalDepth) {
+    const chain = [...callStack, sequenceName].join(' → ');
+    return {
+      success: false,
+      executed: false,
+      sequenceName,
+      error: `Conditional depth limit (${replayConfig.maxConditionalDepth}) reached: ${chain}. Increase maxConditionalDepth in config if this is intentional.`
+    };
+  }
 
   // Load the sequence
   const loadResult = await loadSequence({ name: sequenceName }, recorder);
@@ -857,6 +908,7 @@ export async function executeConditionalFlow(
       executed: true,
       sequenceName,
       substeps: execResult.results,
+      ranCommands: filteredCommands,
       error,
       durationMs: execResult.durationMs
     };
@@ -868,8 +920,39 @@ export async function executeConditionalFlow(
     executed: true,
     sequenceName,
     substeps: execResult.results,
+    ranCommands: filteredCommands,
     durationMs: execResult.durationMs
   };
+}
+
+/**
+ * A branch's results as the steps it ran, each named by what it did, and a
+ * step that was a check running a sequence of its own carrying that sequence
+ * the same way - as deep as the run went.
+ */
+export function ranStepsOf(results: StepResult[], commands?: RecordedCommand[]): RanStep[] {
+  return results.map(result => ({
+    tool: result.tool,
+    line: stepLine(commands?.[result.step - 1]),
+    success: result.success,
+    ...(result.error ? { error: result.error } : {}),
+    ...(result.check ? { check: {
+      outcome: result.check.outcome, action: result.check.action, subject: result.check.subject,
+      ...(result.check.found !== undefined ? { found: result.check.found } : {}),
+    } } : {}),
+    ...(result.check?.action === 'run' && result.substeps
+      ? { branch: { name: result.sequenceName ?? '', ranSteps: ranStepsOf(result.substeps, result.ranCommands) } }
+      : {}),
+  }));
+}
+
+/** One step in a line, by what it calls and on what, for naming a branch's steps where they are shown. */
+function stepLine(command: RecordedCommand | undefined): string {
+  if (!command) return '';
+  const p = command.params ?? {};
+  const head = p.action ? `${command.tool}.${p.action}` : command.tool;
+  const subject = p.selector ?? p.url ?? p.text ?? p.key ?? p.expression ?? '';
+  return `${head}${subject ? ` ${String(subject).slice(0, 80)}` : ''}`;
 }
 
 // =============================================================================
@@ -2340,7 +2423,7 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
 
   // When each step began, for windowing the traffic it caused against the
   // baseline the recording stored on it. Only filled when there is a baseline.
-  const comparesBehaviour = commands.some(c => (c as any).traffic);
+  const comparesBehaviour = !ctx.stampUnder && commands.some(c => (c as any).traffic);
   const stepStartedAt = new Map<number, number>();
   // When each step's boundary was released, which closes that step's span the
   // same way a recorded command's return closes its own. Without it a replayed
@@ -2372,6 +2455,19 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
   // iteration and for teardown, and an id minted per entry would split the
   // pass into several that no comparison could join.
   const proxyRun = `run-${runTimestamp.toString(36)}`;
+  // The browser a check's outcome is kept against, for the bench to read.
+  const checked = overrideConnectionReason ?? ctx.connectionReason;
+  // A run inside another step stamps that step, with its own position beside
+  // it, so what it causes is kept apart from the parent's steps of the same
+  // number and still lands under the step that ran it.
+  const positionOf = (i: number): { step: number; within?: number[] } => ctx.stampUnder
+    ? { step: ctx.stampUnder.step, within: [...ctx.stampUnder.within, i] }
+    : { step: i };
+  const cursorAt = (i: number) => ({ kind: 'replay' as const, runId: proxyRun, ...positionOf(i) });
+  const nestedUnder = (i: number) => {
+    const at = positionOf(i);
+    return { step: at.step, within: at.within ?? [] };
+  };
 
   for (let i = startStep; i < targetEnd; i++) {
     const cmd = commands[i];
@@ -2381,7 +2477,7 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
     if (boundaryStep !== undefined) await releaseStep(boundaryStep);
     if (waitFailed) break;
     if (comparesBehaviour) stepStartedAt.set(i, Date.now());
-    await markNextCommand({ kind: 'replay', runId: proxyRun, step: i });
+    await markNextCommand(cursorAt(i));
     boundaryStep = i;
 
     // Check if aborted
@@ -2629,7 +2725,7 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
         const condResult = await executeConditionalFlow(
           params.if,
           params.then,
-          stepCtx,
+          { ...stepCtx, variableStore, stampUnder: nestedUnder(i) },
           commandRecorder,
           // Remaining, not the original: nesting must not extend the total.
           { stepTimeout, totalTimeout: Math.max(0, totalTimeout - (Date.now() - startTime)) },
@@ -2649,6 +2745,19 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
         };
 
         results.push(stepResult);
+        // Read by the bench, which shows each guard's outcome on its row; the
+        // run's own report carries it only as text.
+        if (!ctx.stampUnder && checked) {
+          recordCheckOutcome(checked, {
+            runId: proxyRun, step: i, outcome: condResult.executed ? 'held' : 'failed', subject: String(params.if),
+            action: condResult.executed ? 'run' : 'continue',
+            ...(condResult.executed ? { ran: condResult.sequenceName, steps: condResult.substeps?.length ?? 0 } : {}),
+            ...(condResult.error ? { error: condResult.error } : {}),
+          });
+        }
+        // The branch's last release cleared the cursor; what crosses before the
+        // next step is still this step's doing.
+        if (condResult.executed) await markNextCommand(cursorAt(i));
 
         if (!condResult.success) {
           break;
@@ -2682,6 +2791,78 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
         continue; // Skip the regular execution path
       }
 
+      // A check reads through the check tool; what it does on the answer is
+      // the executor's, because stopping, carrying on and running another
+      // sequence are all moves through the run.
+      if (cmd.tool === 'check') {
+        const { holds, fails } = params as { holds?: CheckAction; fails?: CheckAction };
+        // Exempt from stepTimeout, as a wait is: its own withinMs bounds it,
+        // and the run's remaining total bounds that.
+        const remaining = Math.max(1, totalTimeout - (Date.now() - startTime));
+        const read = await executeWithTimeout(
+          executeCommandWithRetry(executeToolCall, 'check', params, logPrefix, abortSignal),
+          remaining,
+          getMessage('REPLAY_STEP_TIMEOUT', { step: i + 1, tool: cmd.tool, timeoutMs: remaining, limitSource: 'remaining totalTimeout' })
+        );
+        await markNextCommand(cursorAt(i));
+        if (!read.success) {
+          results.push({ step: i + 1, tool: cmd.tool, success: false, error: abortSignal?.aborted ? 'Replay aborted by user' : read.error });
+          break;
+        }
+        const reading = read.result?._meta?.check ?? {};
+        const held = reading.outcome === 'held';
+        const action: CheckAction = held ? (holds ?? 'continue') : (fails ?? 'stop');
+        const kind: 'continue' | 'stop' | 'run' = typeof action === 'string' ? action : 'run';
+        const check = {
+          outcome: held ? 'held' as const : 'failed' as const, subject: String(reading.subject ?? ''),
+          ...(reading.found !== undefined ? { found: String(reading.found) } : {}), action: kind,
+        };
+        const outcomeFor = (extra: Partial<CheckOutcomeRecord> = {}) => {
+          if (!ctx.stampUnder && checked) recordCheckOutcome(checked, { runId: proxyRun, step: i, ...check, ...extra });
+        };
+
+        if (action === 'stop') {
+          const error = params.message
+            ?? `check ${held ? 'held' : 'failed'}: ${check.subject}${check.found ? ` - found ${check.found}` : ''}`;
+          outcomeFor();
+          results.push({ step: i + 1, tool: cmd.tool, success: false, check, error });
+          break;
+        }
+        if (action === 'continue') {
+          outcomeFor();
+          results.push({ step: i + 1, tool: cmd.tool, success: true, check });
+          continue;
+        }
+        const branch = await runBranch(
+          action.run, { ...stepCtx, variableStore, stampUnder: nestedUnder(i) }, commandRecorder,
+          { stepTimeout, totalTimeout: Math.max(0, totalTimeout - (Date.now() - startTime)) }, abortSignal);
+        await markNextCommand(cursorAt(i));
+        outcomeFor({
+          ran: action.run, steps: branch.substeps?.length ?? 0,
+          ranSteps: ranStepsOf(branch.substeps ?? [], branch.ranCommands),
+          ...(branch.error ? { error: branch.error } : {}),
+        });
+        results.push({
+          step: i + 1, tool: cmd.tool, success: branch.success, check,
+          sequenceName: action.run, substeps: branch.substeps, ranCommands: branch.ranCommands,
+          ...(branch.error ? { error: branch.error } : {}),
+        });
+        if (!branch.success) break;
+        if (action.resumeAt !== undefined) {
+          const resume = Number(action.resumeAt);
+          // Forward only: resuming at or before this step runs it again, forever.
+          if (!Number.isInteger(resume) || resume <= i || resume > targetEnd) {
+            results.push({
+              step: i + 1, tool: cmd.tool, success: false,
+              error: `Check at step ${i + 1} cannot resume at step ${resume + 1}: expected a step between ${i + 2} and ${targetEnd}, counting from 1.`,
+            });
+            break;
+          }
+          i = resume - 1;
+        }
+        continue;
+      }
+
       // Handle forEach the same way - a virtual step the executor runs itself.
       if (cmd.tool === 'forEach') {
         // `in` is checked for presence only, not for being a string: whole-string
@@ -2701,7 +2882,7 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
 
         const loopResult = await executeForEachFlow(
           { in: params.in, as: params.as, do: params.do, where: params.where, maxItems: params.maxItems },
-          stepCtx,
+          { ...stepCtx, variableStore, stampUnder: nestedUnder(i) },
           commandRecorder,
           // Remaining, not the original: looping must not extend the total.
           { stepTimeout, totalTimeout: Math.max(0, totalTimeout - (Date.now() - startTime)) },
@@ -2718,6 +2899,8 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
           substeps: loopResult.substeps,
           error: loopResult.error
         });
+
+        if (loopResult.iterations > 0) await markNextCommand(cursorAt(i));
 
         if (!loopResult.success) {
           break;
@@ -2768,7 +2951,7 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
       // Restored after the step: a step that ran a nested sequence left the
       // cursor cleared by that run's last release, and the traffic this step
       // causes after that call returns belongs to this step.
-      await markNextCommand({ kind: 'replay', runId: proxyRun, step: i });
+      await markNextCommand(cursorAt(i));
 
       if (!execResult.success) {
         // A step that failed while the run signal is aborted is the CANCEL

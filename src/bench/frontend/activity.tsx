@@ -297,8 +297,11 @@ function crossedUnder(
     if (origin === 'after' || event.runId === pass) ran.set(step, [...(ran.get(step) ?? []), event]);
     const held = byStep.get(step) ?? new Map<string, BoundaryEvent>();
     // A request is its own row - two calls to one endpoint are two facts -
-    // where two frames of one shape are the same fact twice.
-    const key = event.kind === 'request' ? `${event.method} ${keyOf(event)}` : keyOf(event);
+    // where two frames of one shape are the same fact twice. Traffic of a
+    // sequence the step ran is kept apart by where in it it crossed, or the
+    // newest step's crossing stands for every step's.
+    const where = event.within?.length ? `@${event.within.join('.')} ` : '';
+    const key = where + (event.kind === 'request' ? `${event.method} ${keyOf(event)}` : keyOf(event));
     const standing = held.get(key);
     if (!standing || event.at >= standing.at) held.set(key, event);
     byStep.set(step, held);
@@ -356,9 +359,15 @@ export function stepTally(activity: Activity, step: number) {
   };
 }
 
-export function ActivityRows({ activity, step, base, recording, notesAt, running }: {
+export function ActivityRows({ activity, step, base, recording, notesAt, running, within }: {
   /** The step a replay is on now, whose waits are being waited on. */
   running?: boolean;
+  /**
+   * A step of a sequence this step ran, by its path of positions down the
+   * branches: only the traffic stamped with that path is listed. Absent, the
+   * step's own traffic is listed and a sequence it ran is left to its own rows.
+   */
+  within?: number[];
   activity: Activity;
   step: number;
   base: string;
@@ -371,14 +380,16 @@ export function ActivityRows({ activity, step, base, recording, notesAt, running
   notesAt?: (after: string | null) => preact.ComponentChildren;
 }) {
   const { crossed, ruleFor, verdicts, missing, move, reading, setReading, actions, stability, pass, stepCount } = activity;
-  const rows = (crossed.get(step) ?? []).filter(event => !activity.isHidden(event));
-  const absent = step < stepCount ? missing.get(step) ?? [] : [];
+  const rows = (crossed.get(step) ?? []).filter(event => !activity.isHidden(event)
+    && (within === undefined ? !event.within?.length : (event.within ?? []).join('.') === within.join('.')));
+  const branch = within !== undefined;
+  const absent = !branch && step < stepCount ? missing.get(step) ?? [] : [];
   const top = notesAt?.('');
   const bottom = notesAt?.(null);
   // What this step waits for, and how many of it this pass has brought: a row
   // under its rows that each arrival pushes down, and that says so once all
   // have come.
-  const waiting = (activity.boundary?.waits ?? []).filter(wait => wait.step === step).map(wait => {
+  const waiting = (branch ? [] : activity.boundary?.waits ?? []).filter(wait => wait.step === step).map(wait => {
     const came = rows
       .filter(event => event.runId === pass
         && (!wait.key || keyOf(event) === wait.key || (event.preview ?? '').includes(wait.key)))
@@ -398,7 +409,7 @@ export function ActivityRows({ activity, step, base, recording, notesAt, running
   // Named kinds a response intercepts at this step, before this pass has
   // produced them: what the step is expected to be answered with, on opening
   // the sequence, replaced by the row itself once it crosses.
-  const expected = Object.entries(actions.names ?? {})
+  const expected = Object.entries(branch ? {} : actions.names ?? {})
     .filter(([id]) => id.startsWith(`${step}|`))
     .map(([id, name]) => ({ key: id.slice(`${step}|`.length), name }))
     .map(one => ({ ...one, response: (actions.responses ?? []).find(rule => rule.key === one.key && !rule.off

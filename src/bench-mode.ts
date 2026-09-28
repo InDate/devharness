@@ -107,7 +107,7 @@ import { CANCELLED } from './tools/bench-tools.js';
 import { parseExtendedSelector } from './utils/selector-resolver.js';
 import { debugLog } from './debug-logger.js';
 import { startBenchServer, type BenchServer } from './bench-control.js';
-import { getProxy, setStepWaits, waitOutcomesFor, type StepWait } from './proxy/registry.js';
+import { currentCursor, getProxy, checkOutcomesFor, setStepWaits, waitOutcomesFor, type StepWait } from './proxy/registry.js';
 import { levelOf, causeOf, type ProxyEvent } from './proxy/intercept-proxy.js';
 import type { Annotation, AnnotationTarget, StepTraffic } from './annotation.js';
 import type {
@@ -1482,7 +1482,11 @@ function writeEvents(connection: string, after = 0): BoundaryEvent[] {
       size: write.value?.length ?? 0, level: 'unprompted' as const, owned: false,
     };
     if (write.cursor?.kind === 'replay') {
-      return { ...row, step: write.cursor.step, runId: write.cursor.runId, owned: true, level: 'positional' as const };
+      return {
+        ...row, step: write.cursor.step, runId: write.cursor.runId,
+        ...(write.cursor.within ? { within: write.cursor.within } : {}),
+        owned: true, level: 'positional' as const,
+      };
     }
     return { ...row, ...recordedStepOf(connection, { at: write.at } as ProxyEvent) } as BoundaryEvent;
   });
@@ -1947,6 +1951,12 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
     currentStep: active.currentStep,
     total: active.total,
     busy: session.sequenceBusy,
+    ...(() => {
+      const cursor = session.sequenceBusy ? currentCursor() : undefined;
+      return cursor?.kind === 'replay'
+        ? { runningAt: { step: cursor.step, ...(cursor.within ? { within: cursor.within } : {}) } }
+        : {};
+    })(),
     ...(session.sequencePlaying ? { playing: true } : {}),
     ...(session.sequencePaused ? { paused: true } : {}),
     ...(session.recordingSequence ? { recording: true } : {}),
@@ -4194,6 +4204,7 @@ export async function startBench(params: {
           running: false, allowed: [], refused: 0, refusals: [],
           refusesWrites: false, refusedWrites: 0,
           rules: rulesOf(connection), waits: waitsOf(connection), names: namesOf(connection),
+          checkOutcomes: checkOutcomesFor(connection),
           events: writeEvents(connection), totals: null, steps: openSteps(connection),
           ...(sessions.get(connection)?.site ? { site: sessions.get(connection)!.site } : {}),
           hidden: hiddenOf(connection),
@@ -4215,6 +4226,7 @@ export async function startBench(params: {
         rules: rulesOf(connection),
         ...(sessions.get(connection)?.site ? { site: sessions.get(connection)!.site } : {}),
         waitOutcomes: waitOutcomesFor(connection),
+        checkOutcomes: checkOutcomesFor(connection),
         hidden: hiddenOf(connection),
         waits: waitsOf(connection),
         names: namesOf(connection),

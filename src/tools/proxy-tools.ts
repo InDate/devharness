@@ -15,7 +15,7 @@ import { levelOf, type ProxyEvent, type ProxyCursor } from '../proxy/intercept-p
 function cursorText(cursor: ProxyCursor | undefined): string {
   if (!cursor) return '';
   if (cursor.kind === 'command') return `cmd ${cursor.index}`;
-  if (cursor.kind === 'replay') return `${cursor.runId}/${cursor.step}`;
+  if (cursor.kind === 'replay') return `${cursor.runId}/${[cursor.step, ...(cursor.within ?? [])].join('.')}`;
   return 'idle';
 }
 
@@ -30,7 +30,7 @@ function stampOf(e: ProxyEvent): string {
   const where = sent && (level === 'observed' || level === 'likely')
     ? cursorText(sent)
     : cursorText(e.runId !== undefined
-        ? { kind: 'replay', runId: e.runId, step: e.step ?? 0 }
+        ? { kind: 'replay', runId: e.runId, step: e.step ?? 0, ...(e.within ? { within: e.within } : {}) }
         : e.commandIndex !== undefined
           ? { kind: 'command', index: e.commandIndex }
           : undefined);

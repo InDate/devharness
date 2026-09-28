@@ -97,3 +97,25 @@ comparison is reached. Boundary drift covers the class that logs nothing.
 - **navigate with sockets open** — sockets closed by their document going away.
 - **send a text / binary frame**, **close from the page** — the `sent` paths,
   including the opcode-8 frame that sets `clientClosed`.
+- **what's new** — a banner shown until it is dismissed once in the browser
+  (`localStorage` `socket-app:seen-whats-new`). A fresh profile meets it and the
+  run after does not, which is the state a guard step exists for.
+
+## Sequences
+
+`sequences/` holds three that exercise every kind of check a sequence carries.
+Copy them, with `activity/`, into the project's `.devharness/` to run them.
+
+- **checks-lifecycle** — the /live connection end to end: a guard that runs
+  `dismiss-whats-new` when the banner is there, element waits, a wait on three
+  `"tag":"push"` frames under the `ask for 3` click (in `activity/`, armed when
+  the bench runs the sequence), page asserts with and without a time limit, a
+  value assert on a captured session token, a guard that runs
+  `socket-reconnect` after the drop, and a fixed pause.
+- **socket-reconnect** — retries, and while retry is still offered runs itself
+  again, one level deeper, then checks the state reads `open`. The server
+  refuses the first reconnect after a drop, so a run goes two levels deep;
+  the replay's nesting limit bounds a server that never lets it back in.
+- **dismiss-whats-new** — closes the banner.
+
+The first run in a browser runs `dismiss-whats-new`; the second skips it.

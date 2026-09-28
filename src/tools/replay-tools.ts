@@ -1030,6 +1030,20 @@ async function connectionsSharingPort(
   }
 }
 
+/** The sequences a run can reach by name: a conditional's `then`, a check's `{ run }` on either answer. */
+function branchTargets(commands: RecordedCommand[]): string[] {
+  const names: string[] = [];
+  for (const cmd of commands) {
+    if (cmd.tool === 'conditional' && typeof cmd.params?.then === 'string') names.push(cmd.params.then);
+    if (cmd.tool === 'check') {
+      for (const answer of [cmd.params?.holds, cmd.params?.fails]) {
+        if (typeof answer?.run === 'string') names.push(answer.run);
+      }
+    }
+  }
+  return names;
+}
+
 /**
  * References that sequences reached through `conditional` steps name, for
  * validating `connections`. Resolution is memory-only and best-effort: a
@@ -1054,10 +1068,8 @@ function collectNestedRebindableReferences(
   const references: string[] = [];
   let complete = true;
 
-  for (const cmd of commands) {
-    if (cmd.tool !== 'conditional') continue;
-    const then = typeof cmd.params?.then === 'string' ? cmd.params.then : undefined;
-    if (!then || seen.has(then)) continue;
+  for (const then of branchTargets(commands)) {
+    if (seen.has(then)) continue;
     seen.add(then);
 
     const nested = recorder.listSequences().find(s => s.name === then);
@@ -1134,14 +1146,14 @@ function collectVariableKeys(
   }
 
   let complete = true;
-  for (const cmd of commands) {
-    const named = cmd.tool === 'conditional' ? cmd.params?.then
-      : cmd.tool === 'forEach' ? cmd.params?.do
-      : undefined;
-    if (typeof named !== 'string' || !named || seen.has(named)) continue;
-    seen.add(named);
-
-    const nested = recorder.listSequences().find(sq => sq.name === named);
+  const named = [
+    ...branchTargets(commands),
+    ...commands.filter(cmd => cmd.tool === 'forEach' && typeof cmd.params?.do === 'string').map(cmd => cmd.params.do as string),
+  ];
+  for (const name of named) {
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    const nested = recorder.listSequences().find(sq => sq.name === name);
     if (!nested) { complete = false; continue; }
 
     const deeper = collectVariableKeys(nested.commands, recorder, depth + 1, seen);

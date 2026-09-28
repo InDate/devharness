@@ -48,6 +48,47 @@ export interface WaitOutcome {
 
 const waitOutcomes = new Map<string, WaitOutcome[]>();
 
+/**
+ * How one check - or conditional - step went in one pass: the answer, what
+ * the step did on it, and the sequence it ran with how many steps that took.
+ * Kept for the newest pass only, as a pass reads its own.
+ */
+export interface CheckOutcome {
+  runId: string;
+  step: number;
+  outcome: 'held' | 'failed';
+  subject: string;
+  found?: string;
+  action: 'continue' | 'stop' | 'run';
+  ran?: string;
+  steps?: number;
+  /** The steps the sequence ran, in order: what each did, and whether it succeeded. */
+  ranSteps?: RanStep[];
+  error?: string;
+}
+
+/** One step a check's sequence ran, and the sequence it ran in turn when it was a check that ran one. */
+export interface RanStep {
+  tool: string;
+  line: string;
+  success: boolean;
+  error?: string;
+  check?: { outcome: 'held' | 'failed'; action: 'continue' | 'stop' | 'run'; subject?: string; found?: string };
+  branch?: { name: string; ranSteps: RanStep[] };
+}
+
+const checkOutcomes = new Map<string, CheckOutcome[]>();
+
+export function checkOutcomesFor(reference: string): CheckOutcome[] {
+  return checkOutcomes.get(reference) ?? [];
+}
+
+export function recordCheckOutcome(reference: string, outcome: CheckOutcome): void {
+  const kept = (checkOutcomes.get(reference) ?? [])
+    .filter(one => one.runId === outcome.runId && one.step !== outcome.step);
+  checkOutcomes.set(reference, [...kept, outcome]);
+}
+
 /** How this browser's waits went, newest pass last. */
 export function waitOutcomesFor(reference: string): WaitOutcome[] {
   return waitOutcomes.get(reference) ?? [];
@@ -187,7 +228,9 @@ export function releaseCommand(
     // released on time alone, what arrives after is stamped with no step.
     const cursor = current;
     const proxy = reference === undefined ? undefined : proxies.get(reference);
-    if (proxy && cursor?.kind === 'replay') {
+    // A branch's own steps share the parent step's number; the parent's waits
+    // are the parent's, held once at its own release.
+    if (proxy && cursor?.kind === 'replay' && !cursor.within?.length) {
       for (const wait of stepWaits.get(reference!) ?? []) {
         if (wait.step !== cursor.step) continue;
         // Kept per browser for the pass's rows; a pass replaces the one before.

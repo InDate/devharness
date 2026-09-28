@@ -275,6 +275,15 @@ export function renumberSteps<T extends WithActivity & { commands?: Array<{ tool
       if (to === undefined) delete command.params.rejoinAt;
       else command.params.rejoinAt = to;
     }
+    if (command.tool === 'check') {
+      for (const answer of ['holds', 'fails'] as const) {
+        const action = command.params?.[answer];
+        if (typeof action?.resumeAt !== 'number') continue;
+        const to = map(action.resumeAt);
+        if (to === undefined) delete action.resumeAt;
+        else action.resumeAt = to;
+      }
+    }
   }
 }
 

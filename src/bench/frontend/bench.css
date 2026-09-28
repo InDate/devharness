@@ -57,7 +57,15 @@ body {
   font: 13px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 
-header { display: flex; align-items: baseline; gap: 18px; margin-bottom: 14px; }
+/* Held at the top while the list scrolls under it, so the tabs and the state
+   disc stay in reach through a long run. It spans the body's padding so rows
+   pass under it rather than showing at its sides. */
+header {
+  display: flex; align-items: baseline; gap: 18px;
+  position: sticky; top: 0; z-index: 20;
+  margin: -18px -20px 14px; padding: 18px 20px 10px;
+  background: var(--bg); border-bottom: 1px solid var(--line);
+}
 h1 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: 0.08em; color: var(--muted); }
 nav { display: flex; gap: 2px; }
 nav button {
@@ -412,7 +420,9 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
 }
 .topbar .seqpick { max-width: 240px; }
 
-.reel { padding-top: 6px; }
+/* Half a screen of room after the last step, so a run followed down the list
+   can bring its closing steps to the middle rather than stopping at the foot. */
+.reel { padding-top: 6px; padding-bottom: 50vh; }
 .nothing { max-width: 46ch; margin: 24px auto; text-align: center; }
 
 /* The marker is the quietest thing on the page: it says where, and the finding
@@ -1803,6 +1813,14 @@ pre.growbox.saved { white-space: pre-wrap; overflow-wrap: anywhere; color: var(-
 .crossed.waitrow.wait-carried { opacity: 1; border-left-style: dashed; }
 .crossed.waitrow.wait-met { opacity: 1; }
 .crossed.waitrow.wait-met .meta { color: var(--wait); }
+.crossed.checkrow.wait-pending { opacity: 0.6; border-left-style: dashed; }
+.crossed.checkrow .checkdoes { color: var(--muted); }
+.mark.switch .seqname { color: var(--sequence); }
+.mark.switch .marktext { opacity: 1; }
+.mark.switch::before, .mark.switch::after { background: var(--sequence); opacity: 0.45; }
+.mark.switch.failed .marktext { color: var(--alert); }
+.crossed.checkrow.removing .rowactions .tool { color: var(--alert); }
+.crossed.checkrow.here { opacity: 1; box-shadow: inset 2px 0 0 var(--sequence); }
 /* A hidden kind: muted, as what it keeps out of the list is. */
 .crossed.hiddenrow { border-left: 2px dotted var(--muted); }
 .crossed.hiddenrow.off .what { text-decoration: line-through; opacity: 0.6; }
@@ -1860,6 +1878,12 @@ pre.growbox.saved { white-space: pre-wrap; overflow-wrap: anywhere; color: var(-
   font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .stepedittext:focus { outline: none; border-color: var(--accent); }
+.stepeditwhy {
+  width: 100%; box-sizing: border-box; margin-bottom: 6px; padding: 5px 8px;
+  border: 1px solid var(--line); border-radius: 4px; background: var(--bg); color: var(--fg);
+  font: 12px/1.5 -apple-system, sans-serif;
+}
+.stepeditwhy:focus { outline: none; border-color: var(--accent); }
 .stepeditorfoot { display: flex; gap: 8px; align-items: center; margin-top: 6px; font: 11px/1.5 -apple-system, sans-serif; }
 .stepeditorfoot .grow { flex: 1; }
 .stepeditorfoot .tool.plain { border: 0; padding: 0 6px; }
@@ -1892,7 +1916,7 @@ pre.growbox.saved { white-space: pre-wrap; overflow-wrap: anywhere; color: var(-
    rows fold from whatever height they hold. */
 .stepbody {
   display: grid; grid-template-rows: 1fr; opacity: 1;
-  transition: grid-template-rows 380ms ease-in-out, opacity 380ms ease-in-out;
+  transition: grid-template-rows calc(380ms * var(--motion, 1)) ease-in-out, opacity calc(380ms * var(--motion, 1)) ease-in-out;
 }
 .stepbody > .stepbodyinner { overflow: hidden; min-height: 0; }
 .stepbody.folded { grid-template-rows: 0fr; opacity: 0; }
@@ -1907,14 +1931,27 @@ pre.growbox.saved { white-space: pre-wrap; overflow-wrap: anywhere; color: var(-
 /* A drop parts the markers either side of its gap, then the step lands in
    it: it opens out where it lands, and the step numbers the move changed
    pulse with it. */
-.mark { transition: transform 220ms ease-out; }
+.mark { transition: transform calc(220ms * var(--motion, 1)) ease-out; }
 .mark.splitabove { transform: translateY(-10px); }
 .mark.splitbelow { transform: translateY(10px); }
 @keyframes step-arrive {
   from { opacity: 0; transform: scaleX(0.4); }
   to { opacity: 1; transform: none; }
 }
-.mark.moved { animation: step-arrive 280ms ease-out; }
+.mark.moved { animation: step-arrive calc(280ms * var(--motion, 1)) ease-out; }
+/* A step put in from anywhere opens out in its gap and pulses there; a step
+   taken out narrows and fades before the list closes over it. */
+@keyframes step-enter {
+  from { opacity: 0; transform: scaleX(0.2); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes step-leave {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: scaleX(0.2); }
+}
+.mark.entering { animation: step-enter calc(420ms * var(--motion, 1)) ease-out both; }
+.mark.entering .marktext { animation: step-moved calc(1.4s * var(--motion, 1)) ease-in-out; opacity: 1; }
+.mark.leaving { animation: step-leave calc(420ms * var(--motion, 1)) ease-in both; }
 .mark.renumbered .marknum {
   animation: step-renumbered var(--ripple-pulse) ease-in-out both;
   animation-delay: var(--ripple-delay);
@@ -1943,6 +1980,18 @@ pre.growbox.saved { white-space: pre-wrap; overflow-wrap: anywhere; color: var(-
   0%, 35% { transform: translateY(100%); opacity: 0; }
   60%, 100% { transform: none; opacity: 1; }
 }
+/* A number that falls rolls down: the old one drops out and the new one comes
+   in from above. A number that grows rolls up, as above. */
+.numswap.down .was { animation-name: num-out-down; }
+.numswap.down .now { animation-name: num-in-down; }
+@keyframes num-out-down {
+  0%, 35% { transform: none; opacity: 1; }
+  60%, 100% { transform: translateY(100%); opacity: 0; }
+}
+@keyframes num-in-down {
+  0%, 35% { transform: translateY(-100%); opacity: 0; }
+  60%, 100% { transform: none; opacity: 1; }
+}
 @keyframes step-renumbered {
   0%, 100% { color: inherit; }
   45% { color: var(--sequence); font-weight: 600; }
@@ -1968,10 +2017,16 @@ pre.growbox.saved { white-space: pre-wrap; overflow-wrap: anywhere; color: var(-
   0%, 100% { opacity: inherit; }
   25%, 75% { background: var(--sequence); opacity: 0.9; }
 }
-.mark.moved .marktext { animation: step-moved 1.4s ease-in-out; opacity: 1; }
-.mark.moved::before, .mark.moved::after { animation: step-moved-line 1.4s ease-in-out; }
+.mark.moved .marktext { animation: step-moved calc(1.4s * var(--motion, 1)) ease-in-out; opacity: 1; }
+.mark.moved::before, .mark.moved::after { animation: step-moved-line calc(1.4s * var(--motion, 1)) ease-in-out; }
+/* The step the run is on sits on a lighter band, marker and rows together.
+   Drawn by a shadow beyond each box rather than by padding, so the band
+   moving from step to step changes no height and moves nothing. */
+.mark.onit { background: var(--panel); box-shadow: 0 0 0 8px var(--panel); border-radius: 2px; }
+.stepbody.onit { background: var(--panel); box-shadow: 0 0 0 8px var(--panel); }
 @media (prefers-reduced-motion: reduce) {
   .stepbody { transition: none; }
+  .mark.entering, .mark.entering .marktext, .mark.leaving,
   .mark.moved, .mark.moved .marktext, .mark.moved::before, .mark.moved::after,
   .mark.renumbered .marknum, .mark.renumbered .marktext, .numswap .was, .numswap .now { animation: none; }
   .numswap .was { display: none; }

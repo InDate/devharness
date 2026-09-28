@@ -165,7 +165,7 @@ try {
 
 const lines = [
   `devharness event stream for this session: ${streamPath}`,
-  `Guard blocks - a dev server that died, a paused breakpoint, a pending bug - messages from other devharness sessions, and the notes, screenshots and sequence writes a person makes in the bench are appended there as they happen. With no watch each one reaches you only on your next devharness call, after the moment it was about. Arm this watch as your first tool call of the session, before answering, and re-arm it on its expiry notice:`,
+  `Guard blocks - a dev server that died, a paused breakpoint, a pending bug - messages from other devharness sessions, and the notes, screenshots and sequence writes a person makes in the bench are appended there as they happen. With no watch each one reaches you only on your next devharness call, after the moment it was about. Arm this watch as your first tool call of the session, before answering, and re-arm it on its expiry notice. Each renewal with nothing between it and the last one - no event, no message from the person - costs a turn. The third such expiry in a row, with your last reply waiting on the person's input, ends the renewals: the watch stays down, and the person's next message re-arms it:`,
   `Monitor({ command: "mkdir -p ${eventsDir} && touch ${streamPath} && tail -f -n0 ${streamPath}", description: "devharness events", persistent: true, timeout_ms: 3600000 })`,
 ];
 

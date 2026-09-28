@@ -138,7 +138,7 @@ Monitor({
 })
 ```
 
-With no watch, each event reaches the session only on its next devharness call, after the moment it was about. A Monitor expires at its timeout, so the expiry notice is the cue to arm it again. `bench({ action: 'start' })` counts the processes reading the stream and prints the call at the head of its response when the count is zero.
+With no watch, each event reaches the session only on its next devharness call, after the moment it was about. A Monitor expires at its timeout, so the expiry notice is the cue to arm it again. Each renewal with no event and no message from the person since the last one costs a turn, so the third such expiry in a row, with the session's last reply waiting on the person's input, ends the renewals; the person's next message re-arms the watch. `bench({ action: 'start' })` counts the processes reading the stream and prints the call at the head of its response when the count is zero.
 
 Line kinds:
 

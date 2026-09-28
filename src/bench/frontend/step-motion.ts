@@ -48,12 +48,16 @@ export interface Shift {
   place: (old: number) => number | undefined;
 }
 
-export function moveShift(from: number, to: number): Shift {
-  const place = (old: number) => old === from ? to
-    : from < to && old > from && old <= to ? old - 1
-    : from > to && old >= to && old < from ? old + 1 : old;
+/** `count` steps from `from` on moved together, the first landing at `to`. */
+export function moveShift(from: number, to: number, count = 1): Shift {
+  const place = (old: number) => {
+    if (old >= from && old < from + count) return to + (old - from);
+    // Where it stands among the steps that did not move, then past the run where it lands.
+    const among = old < from ? old : old - count;
+    return among < to ? among : among + count;
+  };
   const was = new Map<number, number>();
-  for (let old = Math.min(from, to); old <= Math.max(from, to); old++) was.set(place(old), old);
+  for (let old = Math.min(from, to); old < Math.max(from, to) + count; old++) was.set(place(old), old);
   return { was, entering: [], leaving: [], landed: to, place };
 }
 

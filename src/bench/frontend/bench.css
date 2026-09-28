@@ -1819,8 +1819,24 @@ pre.growbox.saved { white-space: pre-wrap; overflow-wrap: anywhere; color: var(-
 .mark.switch .marktext { opacity: 1; }
 .mark.switch::before, .mark.switch::after { background: var(--sequence); opacity: 0.45; }
 .mark.switch.failed .marktext { color: var(--alert); }
+.mark.switch.runfold { cursor: pointer; }
+.mark.switch.runfold:hover::before, .mark.switch.runfold:hover::after, .mark.switch.runfold.open::before, .mark.switch.runfold.open::after { opacity: 0.8; }
+.mark.switch.runfold.running { cursor: default; }
+/* A check the run is reading: three dots that fill in one at a time, in a
+   box three dots wide, so the words beside them hold still. */
+.dots { display: inline-block; width: 3ch; vertical-align: bottom; overflow: hidden; }
+.dots::after { content: '...'; display: inline-block; width: 0; overflow: hidden; vertical-align: bottom;
+  animation: dots calc(1.2s * var(--motion, 1)) steps(4, jump-none) infinite; }
+@keyframes dots { from { width: 0; } to { width: 3ch; } }
+@media (prefers-reduced-motion: reduce) { .dots::after { animation: none; width: 3ch; } }
+/* A folded run sits between two rules; opened, the rules move out to bracket
+   the whole run, one above its first marker and one below its last. */
+.mark.switch.runfold { --run-rule: 1px solid color-mix(in srgb, var(--sequence) 45%, transparent); padding: 8px 0; }
+.mark.switch.runfold:not(.open) { border-top: var(--run-rule); border-bottom: var(--run-rule); }
+.mark.switch.runfold.runstart { border-top: var(--run-rule); }
+.mark.switch.runfold.runend { border-bottom: var(--run-rule); }
 .crossed.checkrow.removing .rowactions .tool { color: var(--alert); }
-.crossed.checkrow.here { opacity: 1; box-shadow: inset 2px 0 0 var(--sequence); }
+.crossed.checkrow.here { opacity: 1; }
 /* A hidden kind: muted, as what it keeps out of the list is. */
 .crossed.hiddenrow { border-left: 2px dotted var(--muted); }
 .crossed.hiddenrow.off .what { text-decoration: line-through; opacity: 0.6; }
@@ -1927,7 +1943,15 @@ pre.growbox.saved { white-space: pre-wrap; overflow-wrap: anywhere; color: var(-
 /* Dragging a step: the step held dims, and a line in the sequence colour
    stands halfway across the gap it lands in. */
 .mark[draggable="true"] { cursor: grab; }
-.mark.dragged { opacity: 0.35; }
+/* Steps selected to move together: their words in the foreground colour and
+   their lines a step brighter, apart from the rest and from the one dragged. */
+.mark.selected .marktext { color: var(--fg); opacity: 1; }
+.mark.selected::before, .mark.selected::after { background: var(--muted); }
+/* The step being dragged stands out bright, its line and words in the
+   foreground colour, with its tools put away so the words stay in view. */
+.mark.dragged::before, .mark.dragged::after { background: var(--fg); }
+.mark.dragged .marktext, .mark.dragged:has(.marktools):hover .marktext { visibility: visible; color: var(--fg); opacity: 1; }
+.mark.dragged .marktools, .mark.dragged:hover .marktools { visibility: hidden; }
 /* A drop parts the markers either side of its gap, then the step lands in
    it: it opens out where it lands, and the step numbers the move changed
    pulse with it. */
@@ -1997,8 +2021,8 @@ pre.growbox.saved { white-space: pre-wrap; overflow-wrap: anywhere; color: var(-
   45% { color: var(--sequence); font-weight: 600; }
 }
 .dropline {
-  position: fixed; height: 2px; margin-top: -1px; border-radius: 1px;
-  background: var(--sequence); pointer-events: none; z-index: 10;
+  position: fixed; height: 0; margin-top: -1px;
+  border-top: 2px dotted var(--muted); pointer-events: none; z-index: 10;
 }
 .mark.quiet:hover .marktext, .mark.quiet:hover .foldtally { visibility: visible; }
 .foldcount.traffic { color: var(--caused); }

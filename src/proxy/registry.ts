@@ -60,6 +60,9 @@ export interface CheckOutcome {
   subject: string;
   found?: string;
   action: 'continue' | 'stop' | 'run';
+  /** How long the check read for, and the most it could; absent for a check read once. */
+  waitedMs?: number;
+  limitMs?: number;
   ran?: string;
   steps?: number;
   /** The steps the sequence ran, in order: what each did, and whether it succeeded. */
@@ -73,7 +76,10 @@ export interface RanStep {
   line: string;
   success: boolean;
   error?: string;
-  check?: { outcome: 'held' | 'failed'; action: 'continue' | 'stop' | 'run'; subject?: string; found?: string };
+  check?: {
+    outcome: 'held' | 'failed'; action: 'continue' | 'stop' | 'run'; subject?: string; found?: string;
+    waitedMs?: number; limitMs?: number;
+  };
   branch?: { name: string; ranSteps: RanStep[] };
 }
 

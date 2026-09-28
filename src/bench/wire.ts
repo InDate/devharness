@@ -56,7 +56,10 @@ export interface RanStep {
   line: string;
   success: boolean;
   error?: string;
-  check?: { outcome: 'held' | 'failed'; action: 'continue' | 'stop' | 'run'; subject?: string; found?: string };
+  check?: {
+    outcome: 'held' | 'failed'; action: 'continue' | 'stop' | 'run'; subject?: string; found?: string;
+    waitedMs?: number; limitMs?: number;
+  };
   branch?: { name: string; ranSteps: RanStep[] };
 }
 
@@ -581,6 +584,7 @@ export interface BoundaryState {
   checkOutcomes?: Array<{
     runId: string; step: number; outcome: 'held' | 'failed'; subject: string; found?: string;
     action: 'continue' | 'stop' | 'run'; ran?: string; steps?: number; error?: string;
+    waitedMs?: number; limitMs?: number;
     ranSteps?: RanStep[];
   }>;
   waitOutcomes?: Array<{

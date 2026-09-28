@@ -12,9 +12,7 @@ import { z } from 'zod';
 import { createTool } from '../validation-helpers.js';
 import type { ToolResponseMeta } from '../tool-response.js';
 import type { ExecuteToolCall } from '../types.js';
-import { CHECK_OPERATORS, ELEMENT_CONDITIONS, formOf, runCheck, type CheckSpec } from './check-engine.js';
-import { waitAsCheck } from './wait-tools.js';
-import { assertAsCheck } from './assert-tools.js';
+import { CHECK_OPERATORS, ELEMENT_CONDITIONS, assertAsCheck, formOf, runCheck, waitAsCheck, type CheckSpec } from './check-engine.js';
 
 /** What a sequence step does on one answer. */
 export const checkOutcomeSchema = z.union([

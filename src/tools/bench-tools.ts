@@ -8,7 +8,7 @@
  * this call's response.
  */
 
-import { subjectOf as subjectOfCheck } from './check-engine.js';
+import { assertAsCheck, formOf, subjectOf as subjectOfCheck } from './check-engine.js';
 import { checkSpecOf } from './check-tools.js';
 import { z } from 'zod';
 import { promises as fs } from 'fs';
@@ -316,7 +316,15 @@ function labelFor(command: { tool: string; params: Record<string, any> }): strin
   }
   // A check reads as what it checks, the same words its row and the run's
   // report use.
+  // A check that reads nothing is a timer, and reads as the wait it is.
+  if (tool === 'check' && formOf(checkSpecOf(params ?? {})) === 'time') return `wait for ${params?.afterMs ?? 0}ms`;
   if (tool === 'check') return `check ${subjectOfCheck(checkSpecOf(params ?? {}))}`;
+  // An assert's selector alone leaves out what it compares, and a timed wait
+  // has no subject at all; both read in the check's words instead, which is
+  // what the step's marker needs once its row carries only the answer.
+  if (tool === 'assert') return `assert ${subjectOfCheck(assertAsCheck(params ?? {}))}`;
+  if (tool === 'wait' && params?.ms !== undefined) return `wait for ${params.ms}ms`;
+  if (tool === 'wait' && params?.selectorGone !== undefined) return `wait ${params.selectorGone} absent`;
   const head = params?.action ? `${tool}.${params.action}` : tool;
   const subject = subjectOf(params);
   return `${head}${subject ? ' ' + subject.slice(0, 80) : ''}`;
@@ -603,16 +611,21 @@ export function createSequenceDriver(
   const MOVE_QUIET_MS = 2000;
   let pendingMove: {
     sequence: { name: string; commands?: unknown[] }; command: unknown; from: number;
+    /** How many steps moved together, the command being the first of them. */
+    count: number;
     filepath: string; timer: ReturnType<typeof setTimeout>; by?: 'agent' | 'person';
   } | undefined;
   const flushMove = async (): Promise<void> => {
     if (!pendingMove) return;
-    const { sequence, command, from, filepath, timer, by } = pendingMove;
+    const { sequence, command, from, count, filepath, timer, by } = pendingMove;
     clearTimeout(timer);
     pendingMove = undefined;
     const to = (sequence.commands ?? []).indexOf(command);
     if (to < 0 || to === from) return;
-    const announce = () => announceSequenceSaved(sequence as any, filepath, `step ${from + 1} moved to step ${to + 1}`);
+    const said = count > 1
+      ? `steps ${from + 1}–${from + count} moved to steps ${to + 1}–${to + count}`
+      : `step ${from + 1} moved to step ${to + 1}`;
+    const announce = () => announceSequenceSaved(sequence as any, filepath, said);
     // Announced from a timer, outside the request that moved it, so the
     // origin taken at the move is set again for the event.
     await (by ? runAs(by, announce) : announce());
@@ -1397,24 +1410,29 @@ export function createSequenceDriver(
       return persist(sequence, `step ${index + 1} removed`);
     },
 
-    moveStep: async (from: number, to: number) => {
+    moveStep: async (from: number, to: number, count = 1) => {
       const sequence = openSequence();
       if (!sequence) return 'no sequence is open';
       const commands = [...(sequence.commands ?? [])];
-      if (from < 0 || from >= commands.length) return `step ${from + 1} is not in "${sequence.name}"`;
-      const target = Math.min(Math.max(to, 0), commands.length - 1);
+      if (from < 0 || from + count > commands.length) {
+        return `steps ${from + 1}–${from + count} are not all in "${sequence.name}"`;
+      }
+      const target = Math.min(Math.max(to, 0), commands.length - count);
       if (target === from) return undefined;
-      const [moved] = commands.splice(from, 1);
-      commands.splice(target, 0, moved);
+      const run = commands.splice(from, count);
+      const [moved] = run;
+      commands.splice(target, 0, ...run);
       renumberSteps(sequence, stepMap(sequence.commands ?? [], commands));
       sequence.commands = commands;
       const saved = await commandRecorder.saveSequenceToDisk(sequence.id, false, true);
       if (!saved) return `"${sequence.name}" is no longer loaded`;
       if (!saved.success) return saved.error;
-      if (pendingMove && (pendingMove.command !== moved || pendingMove.sequence !== sequence)) await flushMove();
+      if (pendingMove && (pendingMove.command !== moved || pendingMove.count !== count || pendingMove.sequence !== sequence)) {
+        await flushMove();
+      }
       if (pendingMove) clearTimeout(pendingMove.timer);
       pendingMove = {
-        sequence, command: moved, from: pendingMove?.from ?? from, filepath: saved.filepath,
+        sequence, command: moved, count, from: pendingMove?.from ?? from, filepath: saved.filepath,
         timer: setTimeout(() => void flushMove(), MOVE_QUIET_MS), by: currentOrigin(),
       };
       return undefined;

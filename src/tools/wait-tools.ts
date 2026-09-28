@@ -27,7 +27,7 @@ import { z } from 'zod';
 import { createTool } from '../validation-helpers.js';
 import { createErrorResponse, createSuccessResponse } from '../messages.js';
 import type { ToolResponseMeta } from '../tool-response.js';
-import { presenceExpression, runCheck, type CheckSpec } from './check-engine.js';
+import { WAIT_TIMEOUT_MS, presenceExpression, runCheck, waitAsCheck } from './check-engine.js';
 
 const waitSchema = z.object({
   selector: z.string().optional().describe('Wait until an element matching this CSS selector exists. Supports extended selectors: :has-text("text") partial match, :text("text") exact match. Survives navigations that happen mid-wait.'),
@@ -41,26 +41,12 @@ const waitSchema = z.object({
 
 type WaitArgs = z.infer<typeof waitSchema>;
 
-const DEFAULT_TIMEOUT_MS = 15000;
-const DEFAULT_POLL_INTERVAL_MS = 100;
 
 /** The in-page predicate a selector wait reads, for its tests. */
 export function buildPresencePredicate(selector: string): string | { error: string } {
   return presenceExpression(selector);
 }
 
-/** The check a wait is. */
-export function waitAsCheck(args: Partial<WaitArgs>): CheckSpec {
-  const withinMs = args.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const pollMs = args.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
-  if (args.ms !== undefined) return { afterMs: args.ms };
-  if (args.expression !== undefined) return { expression: args.expression, withinMs, pollMs };
-  return {
-    selector: (args.selector ?? args.selectorGone)!,
-    condition: args.selector !== undefined ? 'present' : 'absent',
-    withinMs, pollMs,
-  };
-}
 
 export function createWaitTools(
   resolveConnectionFromReason: (connectionReason: string) => Promise<{
@@ -127,7 +113,7 @@ export function createWaitTools(
           return {
             ...createErrorResponse('WAIT_TIMEOUT', {
               condition: conditionLabel,
-              timeoutMs: args.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+              timeoutMs: args.timeoutMs ?? WAIT_TIMEOUT_MS,
               polls: reading.polls,
               lastError: reading.lastError ? `\n**Last evaluation error:** ${reading.lastError}` : '',
             }),

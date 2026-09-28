@@ -525,7 +525,8 @@ export interface SequenceDriver {
   /** Put a fixed pause of `ms` straight after one step, and write the file back. */
   insertTimer: (after: number, ms: number) => Promise<string | undefined>;
   /** Move one step to another position and write the file back. */
-  moveStep: (from: number, to: number) => Promise<string | undefined>;
+  /** Moves `count` steps from `from` on, together, so the first lands at `to`. */
+  moveStep: (from: number, to: number, count?: number) => Promise<string | undefined>;
   /**
    * Define a variable the sequence carries, as a step that sets it. A run has
    * no way to be handed a literal from outside, so the value lives in the
@@ -1950,7 +1951,9 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
     ...(active.expectedOutcome ? { expectedOutcome: active.expectedOutcome } : {}),
     currentStep: active.currentStep,
     total: active.total,
-    busy: session.sequenceBusy,
+    // A play drives each step as a drive of its own, and sequenceBusy clears
+    // at the end of each one; the play flag holds busy across the gaps.
+    busy: session.sequenceBusy || !!session.sequencePlaying,
     ...(() => {
       const cursor = session.sequenceBusy ? currentCursor() : undefined;
       return cursor?.kind === 'replay'
@@ -2916,7 +2919,8 @@ export async function insertSequenceTimer(connection: string, after: number, ms:
 }
 
 /**
- * Move a step to another position in the open sequence.
+ * Move a step, or a run of steps selected together, to another position in
+ * the open sequence.
  *
  * The file's waits, names and uses are renumbered by the move; the copies armed
  * in memory still carry the old step numbers, and the next rules write would
@@ -2925,11 +2929,12 @@ export async function insertSequenceTimer(connection: string, after: number, ms:
 export async function moveSequenceStep(
   connection: string,
   from: number,
-  to: number
+  to: number,
+  count = 1,
 ): Promise<SequenceState | undefined> {
   const session = sessions.get(connection);
   if (!session?.sequences) return undefined;
-  session.sequenceFailure = await session.sequences.moveStep(from, to).catch(error => String(error));
+  session.sequenceFailure = await session.sequences.moveStep(from, to, count).catch(error => String(error));
   if (!session.sequenceFailure) await armSavedRules(connection);
   return getSequenceState(connection);
 }
@@ -4280,7 +4285,7 @@ export async function startBench(params: {
     removeSequenceStep: async (index: number) => { await removeSequenceStep(connection, index); },
     insertSequenceTimer: async (after: number, ms: number) => { await insertSequenceTimer(connection, after, ms); },
     editSequenceStep: async (index: number, params: unknown) => { await editSequenceStep(connection, index, params); },
-    moveSequenceStep: async (from: number, to: number) => { await moveSequenceStep(connection, from, to); },
+    moveSequenceStep: async (from: number, to: number, count: number) => { await moveSequenceStep(connection, from, to, count); },
     setSequenceVariable: async (name: string, value: string) => { await setSequenceVariable(connection, name, value); },
     removeSequenceVariable: async (name: string) => { await removeSequenceVariable(connection, name); },
     noteAtStep: async (step: number) => { await noteAtStep(connection, step); },

@@ -123,7 +123,7 @@ export interface BenchHandlers {
   editSequenceStep: (index: number, params: unknown) => Promise<void>;
   /** Put a fixed pause of `ms` after a step. */
   insertSequenceTimer: (after: number, ms: number) => Promise<void>;
-  moveSequenceStep: (from: number, to: number) => Promise<void>;
+  moveSequenceStep: (from: number, to: number, count: number) => Promise<void>;
   setSequenceVariable: (name: string, value: string) => Promise<void>;
   removeSequenceVariable: (name: string) => Promise<void>;
   /** Store a named value after the last recorded action, for later steps to read. */
@@ -476,7 +476,8 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
             case '/sequence/step/move':
               await handlers.moveSequenceStep(
                 Math.max(0, Number(body.from) || 0),
-                Math.max(0, Number(body.to) || 0)
+                Math.max(0, Number(body.to) || 0),
+                Math.max(1, Number(body.count) || 1)
               );
               break;
             case '/sequence/record/keep': await handlers.keepRecordedStep(); break;

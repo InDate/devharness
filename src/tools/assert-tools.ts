@@ -10,7 +10,7 @@ import { z } from 'zod';
 import { createTool } from '../validation-helpers.js';
 import { getErrorMessage, getFormattedResponse } from '../messages.js';
 import type { ToolResponseMeta } from '../tool-response.js';
-import { CHECK_OPERATORS, ELEMENT_CONDITIONS, runCheck, type CheckSpec } from './check-engine.js';
+import { CHECK_OPERATORS, ELEMENT_CONDITIONS, assertAsCheck, runCheck } from './check-engine.js';
 
 const assertSchema = z.object({
   left: z.any().optional().describe('Value to check (typically a {{var:name.path}} template, resolved before this tool runs). Omit when asserting on `selector`'),
@@ -29,20 +29,6 @@ const assertSchema = z.object({
 }).strict();
 
 type AssertArgs = z.infer<typeof assertSchema>;
-
-/** The check an assert is: its DOM form read until it holds or `timeoutMs` passes, its value form once. */
-export function assertAsCheck(args: AssertArgs): CheckSpec {
-  if (args.selector && args.condition) {
-    return {
-      selector: args.selector, condition: args.condition,
-      ...(args.attribute ? { attribute: args.attribute } : {}),
-      ...(args.operator ? { operator: args.operator } : {}),
-      right: args.right,
-      withinMs: args.timeoutMs ?? 5000, pollMs: 250,
-    };
-  }
-  return { value: args.left, hasValue: true, ...(args.operator ? { operator: args.operator } : {}), right: args.right };
-}
 
 export function createAssertTools(
   resolveConnectionFromReason?: (connectionReason: string) => Promise<any>

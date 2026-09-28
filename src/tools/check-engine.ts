@@ -31,6 +31,48 @@ export const ELEMENT_CONDITIONS = [
 export type ElementCondition = typeof ELEMENT_CONDITIONS[number];
 
 /** What one check reads. At most one subject; none is a check on time alone. */
+/** A wait's time limit and read interval when its call names none. */
+export const WAIT_TIMEOUT_MS = 15000;
+const WAIT_POLL_MS = 100;
+
+/**
+ * The check an assert is: its DOM form read until it holds or `timeoutMs`
+ * passes, its value form once. Kept beside the engine rather than in the
+ * assert tool, because the replay executor reads it too, and the executor
+ * importing a tool module that builds its schema from this module's constants
+ * leaves those constants unset while the schema is built.
+ */
+export function assertAsCheck(args: {
+  selector?: string; condition?: ElementCondition; attribute?: string;
+  left?: unknown; operator?: CheckOperator; right?: unknown; timeoutMs?: number;
+}): CheckSpec {
+  if (args.selector && args.condition) {
+    return {
+      selector: args.selector, condition: args.condition,
+      ...(args.attribute ? { attribute: args.attribute } : {}),
+      ...(args.operator ? { operator: args.operator } : {}),
+      right: args.right,
+      withinMs: args.timeoutMs ?? 5000, pollMs: 250,
+    };
+  }
+  return { value: args.left, hasValue: true, ...(args.operator ? { operator: args.operator } : {}), right: args.right };
+}
+
+/** The check a wait is. */
+export function waitAsCheck(args: {
+  selector?: string; selectorGone?: string; expression?: string; ms?: number; timeoutMs?: number; pollIntervalMs?: number;
+}): CheckSpec {
+  const withinMs = args.timeoutMs ?? WAIT_TIMEOUT_MS;
+  const pollMs = args.pollIntervalMs ?? WAIT_POLL_MS;
+  if (args.ms !== undefined) return { afterMs: args.ms };
+  if (args.expression !== undefined) return { expression: args.expression, withinMs, pollMs };
+  return {
+    selector: (args.selector ?? args.selectorGone)!,
+    condition: args.selector !== undefined ? 'present' : 'absent',
+    withinMs, pollMs,
+  };
+}
+
 export interface CheckSpec {
   /** An element, and what is required of it. */
   selector?: string;

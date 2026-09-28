@@ -50,6 +50,13 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
   const [removingAt, setRemovingAt] = useState<number | null>(null);
   // Steps whose rows are folded under their marker, by position.
   const [folded, setFolded] = useState<ReadonlySet<number>>(new Set());
+  // Sequences a check ran, opened by hand, by where they ran: the check's step and the path inside it.
+  const [openRuns, setOpenRuns] = useState<ReadonlySet<string>>(new Set());
+  const toggleRun = (key: string) => setOpenRuns(was => {
+    const next = new Set(was);
+    if (!next.delete(key)) next.add(key);
+    return next;
+  });
   const motion = useStepMotion(setFolded);
   // The list a poll brought while a change plays, shown once it lands.
   const held = useRef<BenchView | null>(null);
@@ -61,15 +68,36 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
     const next = await fetch(`${base}/state?client=${CLIENT_ID}`).then(res => res.json()).catch(() => null);
     if (next) setState(next);
   };
-  // An arrow folds both steps it swaps, so the two markers pass each other
-  // without their rows between them.
-  const moveStep = (from: number, to: number) => {
+  // A run of steps selected to move together: a click marks where it starts, a
+  // shift-click where it ends, and a drag or an arrow on any of them moves
+  // them all. A step outside it moves on its own.
+  const [selection, setSelection] = useState<{ start: number; count: number } | null>(null);
+  const anchor = useRef<number | null>(null);
+  const reachedAt = useRef<{ step: number; at: number } | null>(null);
+  const within = (run: { start: number; count: number } | null, index: number) =>
+    !!run && index >= run.start && index < run.start + run.count;
+  const runOf = (index: number) => (selection && within(selection, index) ? selection : { start: index, count: 1 });
+  const pick = (index: number, extend: boolean) => {
+    if (extend && anchor.current !== null) {
+      setSelection({ start: Math.min(anchor.current, index), count: Math.abs(index - anchor.current) + 1 });
+      return;
+    }
+    anchor.current = index;
+    setSelection(extend ? { start: index, count: 1 } : null);
+  };
+  // An arrow folds the steps it moves and the one they pass, so the markers
+  // pass each other without their rows between them.
+  const moveStep = (index: number, by: -1 | 1) => {
     // Focus left on the clicked arrow would hold the tools up through :focus-within.
     (document.activeElement as HTMLElement | null)?.blur();
-    setFolded(was => new Set([...was, from, to]));
+    const run = runOf(index);
+    const to = run.start + by;
+    const passed = by < 0 ? run.start - 1 : run.start + run.count;
+    setFolded(was => new Set([...was, passed, ...Array.from({ length: run.count }, (_, k) => run.start + k)]));
+    if (selection === run) setSelection({ start: to, count: run.count });
     void motion.play({
-      shift: moveShift(from, to), fold: 'none',
-      apply: async () => { await post('/sequence/step/move', { from, to }); await refresh(); },
+      shift: moveShift(run.start, to, run.count), fold: 'none',
+      apply: async () => { await post('/sequence/step/move', { from: run.start, to, count: run.count }); await refresh(); },
     });
   };
   // A step being dragged, and the marker and side it would land on. Every
@@ -82,8 +110,10 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
     /** The steps either side of the gap; one is absent at either end of the list. */
     above?: number; below?: number;
   } | null>(null);
-  const landing = (from: number, { step: at, side }: { step: number; side: 'before' | 'after' }) =>
-    side === 'before' ? (at > from ? at - 1 : at) : (at >= from ? at : at + 1);
+  // Where the first of the moved steps lands, the run taken out of the list first.
+  const landing = ({ start, count }: { start: number; count: number }, { step: at, side }: { step: number; side: 'before' | 'after' }) =>
+    side === 'before' ? (at > start ? at - count : at) : (at > start ? at - count + 1 : at + 1);
+  const dragged = dragging === null ? null : runOf(dragging);
   // Read from the pointer against every marker, not from the marker under it:
   // the gaps between markers and the space below the last one are drop places
   // too, and a marker's own box is a few pixels high.
@@ -91,9 +121,9 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
     if (dragging === null) return;
     e.preventDefault();
     if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-    // The step held is no place to drop: either side of it is where it already is.
+    // The steps held are no place to drop: either side of them is where they already are.
     const marks = [...document.querySelectorAll<HTMLElement>('.mark[data-step]')]
-      .filter(mark => Number(mark.dataset.step) !== dragging);
+      .filter(mark => !within(dragged, Number(mark.dataset.step)));
     if (!marks.length) return;
     const at = marks.findIndex(mark => {
       const box = mark.getBoundingClientRect();
@@ -116,16 +146,17 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
     }
   };
   const dropStep = async () => {
-    if (dragging === null || !dropAt) return;
-    const from = dragging;
-    const to = landing(from, dropAt);
+    if (dragging === null || !dropAt || !dragged) return;
+    const run = dragged;
+    const to = landing(run, dropAt);
     const { above, below } = dropAt;
     setDragging(null);
     setDropAt(null);
-    if (to === from) return;
+    if (to === run.start) return;
+    if (selection === run) setSelection({ start: to, count: run.count });
     await motion.play({
-      shift: moveShift(from, to), fold: 'hold', part: { from, above, below },
-      apply: async () => { await post('/sequence/step/move', { from, to }); await refresh(); },
+      shift: moveShift(run.start, to, run.count), fold: 'hold', part: { from: dragging, above, below },
+      apply: async () => { await post('/sequence/step/move', { from: run.start, to, count: run.count }); await refresh(); },
     });
   };
   // On the whole page while a drag runs, so anywhere the pointer is, including
@@ -159,6 +190,7 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
     wasRecording.current = recordingNow;
   }, [recordingNow]);
   useEscape(activity.reading !== null, () => activity.setReading(null));
+  useEscape(selection !== null, () => setSelection(null));
 
   const post = async (path: string, body?: Record<string, unknown>) => {
     await fetch(`${base}${path}`, {
@@ -227,6 +259,9 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
   // The step the run is on: the one running now during a run, the one it
   // stands on when paused.
   const runningNow = sequence?.busy ? sequence.runningAt?.step : undefined;
+  // When the run reached the step it is on, as this list first saw it: a
+  // timer's marker counts down from there.
+  if (runningNow !== reachedAt.current?.step) reachedAt.current = runningNow === undefined ? null : { step: runningNow, at: Date.now() };
   const onIt = (step: SequenceStep) => (runningNow !== undefined ? step.index === runningNow : !!step.current && !into);
   const outcomeOf = (index: number) => (activity.boundary?.checkOutcomes ?? []).find(one => one.step === index);
   // A check that ran a sequence in the last run, with the steps it ran.
@@ -236,7 +271,8 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
   };
   const checkRow = (step: SequenceStep) => (
     <ol class="activitycards">
-      <CheckRow step={step} valueOf={valueOf} number={number(step.index)}
+      <CheckRow step={step} number={number(step.index)}
+        waiting={!!sequence?.busy && sequence.runningAt?.step === step.index && !sequence.runningAt.within?.length}
         outcome={outcomeOf(step.index)}
         variables={defined.map(one => one.name)}
         onRemove={() => removeStep(step.index)}
@@ -249,36 +285,58 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
     </ol>
   );
   /**
-   * The steps a check's sequence ran, put into the list where they ran,
-   * between a marker where the run moved to that sequence and one where it
-   * moved back. Each is a step marker numbered in its own sequence: a check
-   * with its row, anything else with the traffic it caused. A check among
-   * them that ran a sequence of its own opens that one the same way, as deep
-   * as the run went. `path` is where in the run's branches these steps are,
-   * which is what their traffic is stamped with.
+   * The steps a check's sequence ran, as one marker naming how many and from
+   * where. Opened, that marker becomes the switch into the sequence, the steps
+   * follow, and a marker where the run moved back closes them; either marker
+   * folds them again. Each is a step marker numbered in its own sequence: a
+   * check with its row, anything else with the traffic it caused. A check
+   * among them that ran a sequence of its own shows as a marker of its own,
+   * opening the same way, as deep as the run went. `path` is where in the
+   * run's branches these steps are, which is what their traffic is stamped with.
    */
   const branchSteps = (
     owner: number, held: boolean, name: string, from: string, ranSteps: RanStep[], path: number[],
   ): preact.ComponentChildren => {
-    const completed = ranSteps.every(one => one.success);
+    const key = [owner, ...path].join('.');
+    const open = openRuns.has(key);
+    const failedAt = ranSteps.findIndex(one => !one.success);
+    const span = ranSteps.length === 1 ? 'step 1' : `steps 1–${ranSteps.length}`;
     return (
       <>
-        <RunMark classes="mark switch">
-          check {held ? 'passed' : 'failed'} · moved to: <span class="seqname">{name}</span>
-        </RunMark>
-        {ranSteps.map((one, k) => (
+        {open
+          ? (
+            <RunMark classes="mark switch runfold open runstart" title="fold the steps it ran" onClick={() => toggleRun(key)}>
+              check {held ? 'passed' : 'failed'} · moved to: <span class="seqname">{name}</span>
+            </RunMark>
+          )
+          : (
+            <RunMark classes={['mark', 'switch', 'runfold', failedAt >= 0 ? 'failed' : ''].filter(Boolean).join(' ')}
+              title="open the steps it ran" onClick={() => toggleRun(key)}>
+              ran {span} from <span class="seqname">{name}</span>
+              {failedAt >= 0 && ` · failed at step ${failedAt + 1}`}
+            </RunMark>
+          )}
+        {open && ranSteps.map((one, k) => (
           <Fragment key={[...path, k].join('.')}>
             <RunMark classes={['mark', 'injected', one.success ? '' : 'failed'].filter(Boolean).join(' ')} title={one.error}>
-              step {k + 1} · {one.check?.subject ? `check ${one.check.subject}` : one.line}
+              step {k + 1} · {one.check?.subject
+                ? /^\d+ms passed$/.test(one.check.subject) ? `wait for ${one.check.subject.replace(' passed', '')}` : `check ${one.check.subject}`
+                : one.line}
             </RunMark>
             {isCheckTool(one.tool)
               ? (
                 <ol class="activitycards">
                   <Row classes={['waitrow', 'checkrow', one.check?.outcome === 'held' ? 'wait-met' : one.success ? 'wait-carried' : 'wait-failed']}
                     columns={[]} source="check" title={one.error}
-                    label={<span class="what">{conditionOf(one.check?.subject ?? one.line.replace(/^(check|assert|wait)\S*\s*/, ''), selectorIn(one.line))}</span>}
+                    label={<span class="what checkdoes">{one.check?.limitMs
+                      ? /^\d+ms passed$/.test(one.check.subject ?? '')
+                        ? `waited ${one.check.limitMs}ms`
+                        : `waited ${one.check.waitedMs ?? 0}ms/${one.check.limitMs}ms`
+                      : one.check
+                        ? doneOf(one.check.action === 'run' ? { run: one.branch?.name } : one.check.action)
+                        : one.success ? 'continued' : 'stopped sequence'}</span>}
                     reading={<span class="meta">{one.check
-                      ? verdictOf(conditionOf(one.check.subject ?? '', selectorIn(one.line)), one.check.outcome, one.check.action, one.check.found)
+                      ? verdictOf(one.check.subject ?? one.line, one.check.outcome, one.check.action)
                       : one.success ? '✓ pass' : '✗ fail · stopped'}</span>}
                     slots={{}} open={false} onOpen={() => {}} />
                 </ol>
@@ -287,10 +345,30 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
             {one.branch && branchSteps(owner, one.check?.outcome === 'held', one.branch.name, name, one.branch.ranSteps, [...path, k])}
           </Fragment>
         ))}
-        <RunMark classes={completed ? 'mark switch' : 'mark switch failed'}>
-          {completed ? 'completed' : 'failed'} · moved to: <span class="seqname">{from}</span>
-        </RunMark>
+        {open && (
+          <RunMark classes={failedAt >= 0 ? 'mark switch runfold open runend failed' : 'mark switch runfold open runend'}
+            title="fold the steps it ran" onClick={() => toggleRun(key)}>
+            {failedAt >= 0 ? 'failed' : 'completed'} · moved to: <span class="seqname">{from}</span>
+          </RunMark>
+        )}
       </>
+    );
+  };
+  /**
+   * While a check's sequence runs: which of its steps is running, as one
+   * marker. The path counts down through nested sequences, so `step 3 › 1`
+   * is the first step of a sequence run by the third.
+   */
+  const runningIn = (step: SequenceStep): preact.ComponentChildren => {
+    const within = sequence?.busy && sequence.runningAt?.step === step.index ? sequence.runningAt.within : undefined;
+    if (!within?.length) return null;
+    const params = (step.params ?? {}) as Record<string, any>;
+    const name = [params.holds, params.fails].find(one => typeof one === 'object' && one?.run)?.run
+      ?? (typeof params.then === 'string' ? params.then : undefined);
+    return (
+      <RunMark classes="mark switch runfold running">
+        running step {within.map(at => at + 1).join(' › ')}{name ? <> from <span class="seqname">{name}</span></> : ''}
+      </RunMark>
     );
   };
   // A recording going into another sequence is shown in its place: that
@@ -380,7 +458,7 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
 
   return (
     <div class="editing">
-      {dragging !== null && dropAt && landing(dragging, dropAt) !== dragging && (
+      {dragged && dropAt && landing(dragged, dropAt) !== dragged.start && (
         <div class="dropline" style={{ top: `${dropAt.top}px`, left: `${dropAt.left}px`, width: `${dropAt.width}px` }} />
       )}
 
@@ -472,7 +550,8 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
             <div
               class={['mark', step.current ? 'here' : '', step.failed ? 'failed' : '', onIt(step) ? 'onit' : '',
                 folded.has(step.index) || dragging !== null ? 'folded' : '',
-                dragging === step.index ? 'dragged' : '', ...motion.classesOf(step.index)]
+                within(dragged, step.index) ? 'dragged' : '', within(selection, step.index) ? 'selected' : '',
+                ...motion.classesOf(step.index)]
                 .filter(Boolean).join(' ')}
               // Each renumbered step swaps its number in turn, from the lowest.
               style={motion.styleOf(step.index)}
@@ -484,7 +563,12 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
               }}
               data-step={step.index}
               onDragEnd={() => { setDragging(null); setDropAt(null); }}
-              onClick={() => toggleFold(step.index)}
+              // Shift with a click would select the marker's words as text.
+              onMouseDown={(e: MouseEvent) => { if (e.shiftKey) e.preventDefault(); }}
+              onClick={(e: MouseEvent) => {
+                pick(step.index, e.shiftKey);
+                if (!e.shiftKey) toggleFold(step.index);
+              }}
               onMouseLeave={() => {
                 if (removingAt === step.index) setRemovingAt(null);
                 motion.release(step.index);
@@ -496,7 +580,9 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
                 <span class="marknum">step {wasAt(step.index) === undefined
                   ? number(step.index)
                   : <span class={step.index < wasAt(step.index)! ? 'numswap down' : 'numswap up'}><span class="was">{number(wasAt(step.index)!)}</span><span class="now">{number(step.index)}</span></span>}
-                </span> · <span>{withVariables(step.label, valueOf)}</span>
+                </span> · <span>{reachedAt.current?.step === step.index && timerLength(step) !== undefined
+                  ? <Countdown ms={timerLength(step)!} from={reachedAt.current.at} />
+                  : withVariables(step.label, valueOf)}</span>
                 {into && <span class="newtag"> · new</span>}
                 {step.current ? ' · standing here' : ''}
               </span>
@@ -566,12 +652,12 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
               {!sequence?.recording && (
                 <>
                   <button class="marknote" title="run this step sooner" aria-label="move this step up"
-                    disabled={step.index === 0}
-                    onClick={(e: Event) => { e.stopPropagation(); moveStep(step.index, step.index - 1); }}
+                    disabled={runOf(step.index).start === 0}
+                    onClick={(e: Event) => { e.stopPropagation(); moveStep(step.index, -1); }}
                   ><Glyph of="up" /></button>
                   <button class="marknote" title="run this step later" aria-label="move this step down"
-                    disabled={step.index === steps.length - 1}
-                    onClick={(e: Event) => { e.stopPropagation(); moveStep(step.index, step.index + 1); }}
+                    disabled={runOf(step.index).start + runOf(step.index).count >= steps.length}
+                    onClick={(e: Event) => { e.stopPropagation(); moveStep(step.index, 1); }}
                   ><Glyph of="down" /></button>
                   <button class={removingAt === step.index ? 'marknote markremove sure' : 'marknote markremove'}
                     title={removingAt === step.index ? 'click again to take this step out of the run' : 'take this step out of the run'}
@@ -617,10 +703,12 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
                   variable={(sequence?.variables ?? []).find(one => one.name === step.captures)} />
               </ol>
             )}
+            {/* Inside the step's rows, so it folds with them: by hand, during a drag, and as the list changes. */}
+            {isCheck(step) && (ranBy(step)
+              ? branchSteps(step.index, ranBy(step)!.outcome === 'held', ranBy(step)!.ran ?? '', sequence?.name ?? '', ranBy(step)!.ranSteps!, [])
+              : runningIn(step))}
             </div></div>
 
-            {isCheck(step) && ranBy(step) && branchSteps(step.index, ranBy(step)!.outcome === 'held',
-              ranBy(step)!.ran ?? '', sequence?.name ?? '', ranBy(step)!.ranSteps!, [])}
 
             {!joins && step.current && draft}
 
@@ -730,11 +818,11 @@ function VariableRow({ name, step, variable, stores, onSave, onRemove, usedBy = 
 }
 
 /** A marker a run puts into the list: a switch to or from a sequence, or a step it ran. */
-function RunMark({ classes, title, children }: {
-  classes: string; title?: string; children: preact.ComponentChildren;
+function RunMark({ classes, title, onClick, children }: {
+  classes: string; title?: string; onClick?: () => void; children: preact.ComponentChildren;
 }) {
   return (
-    <div class={classes} title={title}>
+    <div class={classes} title={title} onClick={onClick}>
       <span class="marktext">{children}</span>
     </div>
   );
@@ -750,52 +838,110 @@ function isCheckTool(tool: string): boolean {
 }
 
 /**
- * A check's answer in its own terms: what it found against what it asks, and
- * what the run did on it. `✓ equals "open"`, `✗ text is "failed" · stopped`,
- * `○ absent · carried on`. A sequence it ran is read off the markers either
- * side of the sequence's steps, so a run adds nothing here.
+ * A check's answer as the comparison it made: `✓ equals`, `✓ present`,
+ * `✓ found`, `✓ waited`, and on a fail its opposite, `✗ not equal`, `○ absent`.
+ * The marker above names what was read and against what, so a longer answer
+ * repeats it. ✗ is a fail that stopped the run, ○ one it carried on past.
  */
-function verdictOf(phrase: string, outcome: 'held' | 'failed', action: 'continue' | 'stop' | 'run', found?: string): string {
-  const then = action === 'stop' ? ' · stopped' : action === 'continue' && outcome === 'failed' ? ' · carried on' : '';
-  if (outcome === 'held') return `✓ ${phrase}${then}`;
-  const mark = action === 'stop' ? '✗' : '○';
-  const opposite: Record<string, string> = {
-    present: 'absent', absent: 'present', visible: 'not visible', hittable: 'covered', enabled: 'disabled',
-  };
-  if (opposite[phrase]) return `${mark} ${opposite[phrase]}${then}`;
-  // What the element read as, where the check compared something on it.
-  const text = found?.match(/text=("(?:[^"\\]|\\.)*")/)?.[1];
-  const count = found?.match(/^matched (\d+)/)?.[1];
-  const [what] = phrase.split(' ');
-  const saw = what === 'text' && text !== undefined ? `text is ${text}`
-    : what === 'count' && count !== undefined ? `count is ${count}`
-    : found && found !== 'absent' && found !== 'present' ? `found ${found}` : `not ${phrase}`;
-  return `${mark} ${saw}${then}`;
+function verdictOf(phrase: string, outcome: 'held' | 'failed', action: 'continue' | 'stop' | 'run'): string {
+  const [held, failed] = comparisonIn(phrase);
+  if (outcome === 'held') return `✓ ${held}`;
+  return `${action === 'stop' ? '✗' : '○'} ${failed}`;
 }
 
-/** The selector a step line names, where it names one: the part after its tool. */
-function selectorIn(line: string): string | undefined {
-  return line.match(/^\S+\s+(.+)$/)?.[1];
+/** Each comparison as its answer reads on a pass, and on a fail. */
+const COMPARISONS: Record<string, [string, string]> = {
+  notEquals: ['not equal', 'equal'], equals: ['equals', 'not equal'],
+  contains: ['contains', 'missing'], matches: ['matches', 'no match'],
+  notExists: ['missing', 'exists'], exists: ['exists', 'missing'],
+  gte: ['at least', 'below'], gt: ['greater', 'not greater'],
+  lte: ['at most', 'above'], lt: ['less', 'not less'],
+  present: ['present', 'absent'], absent: ['absent', 'present'],
+  visible: ['visible', 'hidden'], hittable: ['hittable', 'covered'], enabled: ['enabled', 'disabled'],
+};
+
+/**
+ * The comparison a check's words make. Quoted values and attribute
+ * selectors are dropped first, so a selector such as `[data-testid="visible"]`
+ * or a value such as `"present"` is not read as the comparison itself.
+ */
+function comparisonIn(phrase: string): [string, string] {
+  const bare = phrase.replace(/"(?:[^"\\]|\\.)*"/g, '').replace(/\[[^\]]*\]/g, '');
+  const word = bare.match(new RegExp(`\\b(${Object.keys(COMPARISONS).join('|')})\\b`))?.[1];
+  if (word) return COMPARISONS[word];
+  if (/:has-text\(/.test(phrase)) return ['found', 'not found'];
+  if (/\d+ms passed|wait for \d+ms|\bms\b/.test(bare)) return ['waited', 'waited'];
+  return ['passed', 'failed'];
+}
+
+/** How long a timer step pauses: a check that reads nothing, or a wait with a length. */
+function timerLength(step: SequenceStep): number | undefined {
+  const params = (step.params ?? {}) as Record<string, any>;
+  if (step.tool === 'check' && !checkSubject(params)) return Number(params.afterMs) || 0;
+  if (step.tool === 'wait' && params.ms !== undefined) return Number(params.ms);
+  return undefined;
+}
+
+/** A timer's marker while the run is on it: the time it has left, down to 0. */
+function Countdown({ ms, from }: { ms: number; from: number }) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => tick(n => n + 1), 100);
+    return () => clearInterval(timer);
+  }, []);
+  const left = Math.max(0, Math.ceil((ms - (Date.now() - from)) / 100) * 100);
+  return <>wait for {left}ms</>;
+}
+
+/** A check's outcome setting: carry on, stop the run, or run a sequence and resume. */
+type NextAction = 'continue' | 'stop' | { run?: string; resumeAt?: number };
+
+/** An outcome the run can take, as an option before it runs. */
+function nextOf(action: NextAction): string {
+  if (action === 'continue') return 'continue';
+  if (action === 'stop') return 'stop sequence';
+  return `run ${action.run ?? '?'}${typeof action.resumeAt === 'number' ? `, then step ${action.resumeAt + 1}` : ''}`;
+}
+
+/** The outcome the run took, once it has run. */
+function doneOf(action: NextAction): string {
+  if (action === 'continue') return 'continued';
+  if (action === 'stop') return 'stopped sequence';
+  return `ran ${action.run ?? '?'}${typeof action.resumeAt === 'number' ? `, resumed at step ${action.resumeAt + 1}` : ''}`;
 }
 
 /**
- * A check's words without the element it reads, which its marker already
- * names: `present`, `text equals "open"`. A check on no element reads whole.
+ * The most a check may read for, from its settings: a check's afterMs and
+ * withinMs, a wait's length or time limit, and an assert's time limit on an
+ * element. 0 for a check read once. The defaults are the tools' own.
  */
-function conditionOf(subject: string, selector: string | undefined): string {
-  return selector && subject.startsWith(`${selector} `) ? subject.slice(selector.length + 1) : subject;
+function limitOf(tool: string, params: Record<string, any>): number {
+  if (tool === 'check') return (Number(params.afterMs) || 0) + (Number(params.withinMs) || 0);
+  if (tool === 'wait') return params.ms !== undefined ? Number(params.ms) : Number(params.timeoutMs ?? 15000);
+  if (tool === 'assert') return params.selector && params.condition ? Number(params.timeoutMs ?? 5000) : 0;
+  return 0;
 }
 
-type CheckAnswer = { outcome: 'held' | 'failed'; found?: string; action: 'continue' | 'stop' | 'run'; ran?: string; steps?: number; error?: string };
+/** Whether a check's settings read anything; a check that reads nothing is a timer. */
+function checkSubject(params: Record<string, any>): boolean {
+  return ['selector', 'value', 'expression', 'url', 'cookie', 'localStorage', 'indexedDB'].some(key => params[key] !== undefined);
+}
+
+type CheckAnswer = {
+  outcome: 'held' | 'failed'; found?: string; action: 'continue' | 'stop' | 'run'; ran?: string; steps?: number; error?: string;
+  waitedMs?: number; limitMs?: number;
+};
 
 /**
- * A check as a row inside its step's marker: the condition it reads, what it
- * does on each answer, and how the last run went. Opened, it is edited as the
+ * A check as a row inside its step's marker, which names what it reads: the
+ * row carries what it does on an answer where that differs from carrying on
+ * on a pass and stopping on a fail, and how the last run went. Opened, it is edited as the
  * step it is. Older assert, wait and conditional steps read here the same way.
  */
-function CheckRow({ step, valueOf, outcome, number, variables, onRemove, onSave }: {
+function CheckRow({ step, outcome, number, variables, waiting, onRemove, onSave }: {
   step: SequenceStep;
-  valueOf: (name: string) => string | undefined;
+  /** The run is on this check now, reading it until it holds or its time runs out. */
+  waiting: boolean;
   /** How the last run went, where replay recorded it: check and conditional steps. */
   outcome?: CheckAnswer;
   number: number;
@@ -807,31 +953,41 @@ function CheckRow({ step, valueOf, outcome, number, variables, onRemove, onSave 
   // The first click on the cross arms it, as a step's bin does; leaving the row disarms it.
   const [sure, setSure] = useState(false);
   const params = (step.params ?? {}) as Record<string, any>;
-  const target = (action: any) => typeof action === 'object' && action?.run
-    ? `run ${action.run}${typeof action.resumeAt === 'number' ? `, then step ${action.resumeAt + 1}` : ''}`
-    : action;
-  const does = step.tool === 'check'
-    ? [params.holds && params.holds !== 'continue' ? `pass → ${target(params.holds)}` : '',
-       params.fails && params.fails !== 'stop' ? `fail → ${target(params.fails)}` : ''].filter(Boolean).join(' · ')
-    : step.tool === 'conditional' ? `pass → run ${params.then}` : '';
-  const reads = conditionOf(step.label.replace(/^(check|assert|wait|conditional)\s*/, ''), params.selector);
-  // An older assert or wait records no answer of its own: its step ran, or stopped the run.
+  // What the run does next on each answer, pass first: a check's own
+  // settings, a conditional's sequence, and carry on or stop for the rest.
+  // A timer only ever passes, so it has the one.
+  const timer = (step.tool === 'check' && !checkSubject(params)) || (step.tool === 'wait' && params.ms !== undefined);
+  const onPass = step.tool === 'check' ? params.holds ?? 'continue'
+    : step.tool === 'conditional' ? { run: params.then, resumeAt: params.rejoinAt } : 'continue';
+  const onFail = step.tool === 'check' ? params.fails ?? 'stop' : step.tool === 'conditional' ? 'continue' : 'stop';
+  const options = timer ? nextOf(onPass) : `${nextOf(onPass)} or ${nextOf(onFail)}`;
+  // A pass from before assert and wait recorded answers: the step ran, or stopped the run.
   const answer: CheckAnswer | undefined = outcome && (step.done || step.failed) ? outcome
     : step.failed ? { outcome: 'failed', action: 'stop' }
     : step.done && (step.tool === 'assert' || step.tool === 'wait') ? { outcome: 'held', action: 'continue' }
     : undefined;
+  // A check that reads again until it holds is a wait: before a run it says
+  // how long it may take, after it how long it took of that. A timer's limit
+  // is its whole length, so it says that alone.
+  const limitMs = answer?.limitMs ?? limitOf(step.tool ?? '', params);
+  const ran = answer && answer.action === 'run' ? ` · ${doneOf(answer.outcome === 'held' ? onPass : onFail)}` : '';
+  const middle = !limitMs ? (answer ? doneOf(answer.outcome === 'held' ? onPass : onFail) : options)
+    : timer ? (answer ? `waited ${limitMs}ms` : `wait ${limitMs}ms`)
+    : answer?.waitedMs !== undefined ? `waited ${answer.waitedMs}ms/${limitMs}ms${ran}`
+    : answer ? doneOf(answer.outcome === 'held' ? onPass : onFail)
+    : `wait up to ${limitMs}ms`;
   const state = !answer ? 'pending'
     : answer.outcome === 'held' ? 'met'
     : answer.action === 'stop' ? 'failed' : 'carried';
   // A sequence it ran is read off the markers either side of it, so the row keeps the answer alone.
-  const reading = !answer ? 'not run yet' : verdictOf(reads, answer.outcome, answer.action, answer.found);
+  const reading = !answer ? 'not run yet' : verdictOf([step.label, params.condition ?? (step.tool === 'wait' && params.selector && !params.selector.includes(':has-text(') ? 'present' : undefined), params.operator].filter(Boolean).join(' '), answer.outcome, answer.action);
   return (
     <Row
       classes={['waitrow', 'checkrow', `wait-${state}`, step.current ? 'here' : '', sure ? 'removing' : '']}
       columns={['remove']}
       source="check"
       title={`step ${number}${answer?.found ? ` · found ${answer.found}` : ''}${answer?.error ? ` · ${answer.error}` : ''}`}
-      label={<span class="what">{withVariables(reads, valueOf)}{does && <span class="checkdoes"> · {does}</span>}</span>}
+      label={<span class="what checkdoes">{waiting && limitMs ? <>waiting<span class="dots" aria-hidden="true" /></> : middle}</span>}
       reading={<span class="meta">{reading}</span>}
       slots={{ remove: () => { if (sure) { setSure(false); onRemove(); } else setSure(true); } }}
       titles={{ remove: sure ? 'click again to take this check out of the run' : 'take this check out of the run' }}

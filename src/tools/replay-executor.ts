@@ -16,6 +16,7 @@ import type { ClickActionMeta, ConsoleToolMeta, NetworkToolMeta } from '../tool-
 import { interpolateParams } from './interpolation.js';
 import { getMessage, isElementNotFoundFailure } from '../messages.js';
 import type { CheckOutcome as CheckAction } from './check-tools.js';
+import { assertAsCheck, subjectOf as subjectOfCheck, waitAsCheck } from './check-engine.js';
 import type { CheckOutcome as CheckOutcomeRecord, RanStep } from '../proxy/registry.js';
 
 // Re-export replay cursor functions
@@ -118,7 +119,11 @@ export interface StepResult {
   sequenceName?: string;
   conditionMet?: boolean;
   /** check: how the reading went, and what the step did on it. */
-  check?: { outcome: 'held' | 'failed'; subject: string; found?: string; action: 'continue' | 'stop' | 'run' };
+  check?: {
+    outcome: 'held' | 'failed'; subject: string; found?: string; action: 'continue' | 'stop' | 'run';
+    /** How long the check read for, and the most it could; absent for a check read once. */
+    waitedMs?: number; limitMs?: number;
+  };
   /** check that ran a sequence: that sequence's steps, so its results can be named by what each did. */
   ranCommands?: RecordedCommand[];
   /** forEach: how many items the source yielded, before `where` filtering. */
@@ -939,6 +944,7 @@ export function ranStepsOf(results: StepResult[], commands?: RecordedCommand[]):
     ...(result.check ? { check: {
       outcome: result.check.outcome, action: result.check.action, subject: result.check.subject,
       ...(result.check.found !== undefined ? { found: result.check.found } : {}),
+      ...(result.check.limitMs ? { waitedMs: result.check.waitedMs, limitMs: result.check.limitMs } : {}),
     } } : {}),
     ...(result.check?.action === 'run' && result.substeps
       ? { branch: { name: result.sequenceName ?? '', ranSteps: ranStepsOf(result.substeps, result.ranCommands) } }
@@ -2813,9 +2819,11 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
         const held = reading.outcome === 'held';
         const action: CheckAction = held ? (holds ?? 'continue') : (fails ?? 'stop');
         const kind: 'continue' | 'stop' | 'run' = typeof action === 'string' ? action : 'run';
+        const limitMs = (Number(params.afterMs) || 0) + (Number(params.withinMs) || 0);
         const check = {
           outcome: held ? 'held' as const : 'failed' as const, subject: String(reading.subject ?? ''),
           ...(reading.found !== undefined ? { found: String(reading.found) } : {}), action: kind,
+          ...(limitMs ? { waitedMs: Number(reading.elapsedMs) || 0, limitMs } : {}),
         };
         const outcomeFor = (extra: Partial<CheckOutcomeRecord> = {}) => {
           if (!ctx.stampUnder && checked) recordCheckOutcome(checked, { runId: proxyRun, step: i, ...check, ...extra });
@@ -2937,6 +2945,7 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
       const remainingTotal = Math.max(1, totalTimeout - (Date.now() - startTime));
       const boundedByTotal = cmd.tool === 'wait' || remainingTotal < stepTimeout;
       const stepBound = cmd.tool === 'wait' ? remainingTotal : Math.min(stepTimeout, remainingTotal);
+      const stepStarted = Date.now();
       const execResult = await executeWithTimeout(
         executeCommandWithRetry(executeToolCall, cmd.tool, params, logPrefix, abortSignal),
         stepBound,
@@ -2952,6 +2961,23 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
       // cursor cleared by that run's last release, and the traffic this step
       // causes after that call returns belongs to this step.
       await markNextCommand(cursorAt(i));
+
+      // assert and wait are faces of a check: their answer, how long they read
+      // for and the most they could, recorded as a check step's are, so the
+      // bench reads every check the same way.
+      const waitedMs = Date.now() - stepStarted;
+      const faceOf = (held: boolean) => {
+        if (cmd.tool !== 'assert' && cmd.tool !== 'wait') return undefined;
+        const spec = cmd.tool === 'assert' ? assertAsCheck(params as any) : waitAsCheck(params);
+        const limitMs = (spec.afterMs ?? 0) + (spec.withinMs ?? 0);
+        const check = {
+          outcome: held ? 'held' as const : 'failed' as const, subject: subjectOfCheck(spec),
+          action: held ? 'continue' as const : 'stop' as const,
+          ...(limitMs ? { waitedMs, limitMs } : {}),
+        };
+        if (!ctx.stampUnder && checked) recordCheckOutcome(checked, { runId: proxyRun, step: i, ...check });
+        return check;
+      };
 
       if (!execResult.success) {
         // A step that failed while the run signal is aborted is the CANCEL
@@ -2970,11 +2996,13 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
           break;
         }
         const diagnostics = await gatherDiagnostics(stepCtx);
+        const failedCheck = faceOf(false);
         results.push({
           step: i + 1,
           tool: cmd.tool,
           success: false,
-          error: `${execResult.error}${diagnostics}`
+          error: `${execResult.error}${diagnostics}`,
+          ...(failedCheck ? { check: failedCheck } : {}),
         });
         break;
       }
@@ -3101,7 +3129,8 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
         });
       }
 
-      results.push({ step: i + 1, tool: cmd.tool, success: true });
+      const heldCheck = faceOf(true);
+      results.push({ step: i + 1, tool: cmd.tool, success: true, ...(heldCheck ? { check: heldCheck } : {}) });
       debugLog(logPrefix, `Step ${i + 1} completed successfully`);
 
       // Check if we hit a breakpoint after this step (on the step's own connection)

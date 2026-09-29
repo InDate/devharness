@@ -13,6 +13,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createInspectionTools } from './inspection-tools.js';
 import { createNetworkTools } from './network-tools.js';
 import { createModalTools } from './modal-tools.js';
+import { validateParams } from '../validation-helpers.js';
 
 // ---------------------------------------------------------------------------
 // inspect: searchCode / searchFunctions
@@ -115,6 +116,8 @@ function makeFakeNetworkMonitor() {
     getRequests: vi.fn(() => []),
     getRequest: vi.fn(() => undefined),
     getCount: vi.fn(() => 0),
+    getSockets: vi.fn(() => []),
+    getStreams: vi.fn(() => []),
   } as any;
 }
 
@@ -134,7 +137,9 @@ describe('network enable/disable honour connectionReason', () => {
     const tools = createNetworkTools(defaultPuppeteer, defaultMonitor, async (reason: string) =>
       reason === 'other-tab'
         ? { connection: {}, cdpManager: {}, puppeteerManager: otherPuppeteer, consoleMonitor: null, networkMonitor: otherMonitor }
-        : null
+        : reason === 'node-target'
+          ? { connection: {}, cdpManager: {}, puppeteerManager: null, consoleMonitor: null, networkMonitor: null }
+          : null
     );
     network = tools.network;
   });
@@ -163,11 +168,30 @@ describe('network enable/disable honour connectionReason', () => {
     expect(otherMonitor.startMonitoring).not.toHaveBeenCalled();
   });
 
-  it('enable still falls back to the default managers when no reference is given', async () => {
-    const result = await network.handler({ action: 'enable' });
+  it.each(['list', 'get', 'search', 'enable', 'disable', 'setConditions', 'sockets', 'streams'])(
+    '%s without a reference fails validation naming connectionReason',
+    (action) => {
+      const result = validateParams({ action }, network.zodSchema, 'network');
 
-    expect(result.isError).toBeFalsy();
-    expect(defaultMonitor.startMonitoring).toHaveBeenCalledWith(defaultPuppeteer.__page);
+      expect(result.success).toBe(false);
+      expect((result as any).error.missingParameters.map((p: any) => p.name)).toContain('connectionReason');
+    }
+  );
+
+  it.each([
+    { action: 'list' },
+    { action: 'search', pattern: '.' },
+    { action: 'sockets' },
+    { action: 'streams' },
+    { action: 'setConditions', preset: 'offline' },
+  ])('$action on a connection with no page refuses rather than reading the default connection', async (args) => {
+    const result = await network.handler({ ...args, connectionReason: 'node-target' });
+
+    expect(result.isError).toBe(true);
+    expect(defaultPuppeteer.getPage).not.toHaveBeenCalled();
+    expect(defaultMonitor.getRequests).not.toHaveBeenCalled();
+    expect(defaultMonitor.getSockets).not.toHaveBeenCalled();
+    expect(defaultMonitor.getStreams).not.toHaveBeenCalled();
   });
 });
 

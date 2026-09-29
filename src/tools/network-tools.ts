@@ -17,7 +17,7 @@ import type { ToolResponseMeta, NetworkToolMeta } from '../tool-response.js';
 const networkToolSchema = z.object({
   action: z.enum(['list', 'get', 'search', 'enable', 'disable', 'setConditions', 'sockets', 'streams'])
     .describe('Network action: list (list network requests), get (get specific request details), search (search requests by pattern), enable (enable network monitoring), disable (disable network monitoring), setConditions (set network conditions), sockets (WebSocket lifecycle: what opened, what closed, what errored - puppeteer surfaces no page event for these, so they come from the CDP Network domain), streams (EventSource messages: an SSE response body never completes, so the HTTP record holds headers and nothing else)'),
-  connectionReason: z.string().optional().describe('Connection reference (use the reference from launchChrome output, e.g., "unnamed-connection-default" or your renamed tab)'),
+  connectionReason: z.string().describe('Connection reference (use the reference from launchChrome output, e.g., "unnamed-connection-default" or your renamed tab)'),
 
   // list action parameters
   resourceType: z.string().optional().describe('Filter by resource type (for list and search actions)'),
@@ -141,6 +141,13 @@ export function createNetworkTools(
   networkMonitor: NetworkMonitor,
   resolveConnectionFromReason: (connectionReason: string) => Promise<any>
 ) {
+  // A Node.js connectDebugger target resolves with no page. Falling back to the
+  // default managers there reads or changes another connection while reporting
+  // it as the named one.
+  const noPage = (connectionReason: string) => createErrorResponse('CONNECTION_NOT_FOUND', {
+    message: `Connection "${connectionReason}" has no browser page to monitor (a Node.js debugger target has no page). Network monitoring requires a browser connection.`
+  });
+
   return {
     network: createTool(
       'Monitor and manage network requests. Actions: list (list requests with optional type filter and pagination), get (get specific request by ID), search (search requests by regex pattern), enable (enable network monitoring), disable (disable network monitoring), setConditions (set network throttling conditions)',
@@ -161,8 +168,9 @@ export function createNetworkTools(
                 message: 'No Chrome browser available. Use `launchChrome` first to start a browser.'
               });
             }
-            const targetPuppeteerManager = resolved.puppeteerManager || puppeteerManager;
-            const targetNetworkMonitor = resolved.networkMonitor || networkMonitor;
+            if (!resolved.puppeteerManager || !resolved.networkMonitor) return noPage(connectionReason);
+            const targetPuppeteerManager = resolved.puppeteerManager;
+            const targetNetworkMonitor = resolved.networkMonitor;
             if (!targetNetworkMonitor.isActive() && targetPuppeteerManager.isConnected()) {
               targetNetworkMonitor.startMonitoring(targetPuppeteerManager.getPage());
             }
@@ -212,8 +220,9 @@ export function createNetworkTools(
                 message: 'No Chrome browser available. Use `launchChrome` first to start a browser.'
               });
             }
-            const targetPuppeteerManager = resolved.puppeteerManager || puppeteerManager;
-            const targetNetworkMonitor = resolved.networkMonitor || networkMonitor;
+            if (!resolved.puppeteerManager || !resolved.networkMonitor) return noPage(connectionReason);
+            const targetPuppeteerManager = resolved.puppeteerManager;
+            const targetNetworkMonitor = resolved.networkMonitor;
             if (!targetNetworkMonitor.isActive() && targetPuppeteerManager.isConnected()) {
               targetNetworkMonitor.startMonitoring(targetPuppeteerManager.getPage());
             }
@@ -296,8 +305,9 @@ export function createNetworkTools(
               });
             }
 
-            const targetPuppeteerManager = resolved.puppeteerManager || puppeteerManager;
-            const targetNetworkMonitor = resolved.networkMonitor || networkMonitor;
+            if (!resolved.puppeteerManager || !resolved.networkMonitor) return noPage(connectionReason);
+            const targetPuppeteerManager = resolved.puppeteerManager;
+            const targetNetworkMonitor = resolved.networkMonitor;
 
             // Start monitoring if not already active
             if (!targetNetworkMonitor.isActive() && targetPuppeteerManager.isConnected()) {
@@ -380,19 +390,15 @@ export function createNetworkTools(
               };
             }
 
-            // If connectionReason is provided, resolve connection
-            let targetNetworkMonitor = networkMonitor;
-            if (connectionReason) {
-              const resolved = await resolveConnectionFromReason(connectionReason);
-              if (!resolved) {
-                return createErrorResponse('CONNECTION_NOT_FOUND', {
-                  message: 'No Chrome browser available. Use `launchChrome` first to start a browser.'
-                });
-              }
-              targetNetworkMonitor = resolved.networkMonitor || networkMonitor;
+            const resolved = await resolveConnectionFromReason(connectionReason);
+            if (!resolved) {
+              return createErrorResponse('CONNECTION_NOT_FOUND', {
+                message: 'No Chrome browser available. Use `launchChrome` first to start a browser.'
+              });
             }
+            if (!resolved.networkMonitor) return noPage(connectionReason);
 
-            const request = targetNetworkMonitor.getRequest(id);
+            const request = resolved.networkMonitor.getRequest(id);
 
             if (!request) {
               return createErrorResponse('NETWORK_REQUEST_NOT_FOUND', { id });
@@ -473,31 +479,15 @@ export function createNetworkTools(
 
           case 'enable':
           case 'disable': {
-            // connectionReason is part of this tool's schema, so it has to
-            // steer which connection gets (un)monitored - not just the
-            // default/active one the proxy managers point at.
-            let targetPuppeteerManager = puppeteerManager;
-            let targetNetworkMonitor = networkMonitor;
-            if (connectionReason) {
-              const resolved = await resolveConnectionFromReason(connectionReason);
-              if (!resolved) {
-                return createErrorResponse('CONNECTION_NOT_FOUND', {
-                  message: 'No Chrome browser available. Use `launchChrome` first to start a browser.'
-                });
-              }
-              // No silent fallback to the default managers. A connection can
-              // resolve without a puppeteerManager - a Node.js connectDebugger
-              // target has no page - and falling back would start monitoring
-              // the DEFAULT connection while reporting success for the named
-              // one, which is the misrouting this whole change set out to fix.
-              if (!resolved.puppeteerManager || !resolved.networkMonitor) {
-                return createErrorResponse('CONNECTION_NOT_FOUND', {
-                  message: `Connection "${args.connectionReason}" has no browser page to monitor (a Node.js debugger target has no page). Network monitoring requires a browser connection.`
-                });
-              }
-              targetPuppeteerManager = resolved.puppeteerManager;
-              targetNetworkMonitor = resolved.networkMonitor;
+            const resolved = await resolveConnectionFromReason(connectionReason);
+            if (!resolved) {
+              return createErrorResponse('CONNECTION_NOT_FOUND', {
+                message: 'No Chrome browser available. Use `launchChrome` first to start a browser.'
+              });
             }
+            if (!resolved.puppeteerManager || !resolved.networkMonitor) return noPage(connectionReason);
+            const targetPuppeteerManager = resolved.puppeteerManager;
+            const targetNetworkMonitor = resolved.networkMonitor;
 
             if (!targetPuppeteerManager.isConnected()) {
               return createErrorResponse('PUPPETEER_NOT_CONNECTED');
@@ -543,8 +533,9 @@ export function createNetworkTools(
               });
             }
 
-            const targetPuppeteerManager = resolved.puppeteerManager || puppeteerManager;
-            const targetNetworkMonitor = resolved.networkMonitor || networkMonitor;
+            if (!resolved.puppeteerManager || !resolved.networkMonitor) return noPage(connectionReason);
+            const targetPuppeteerManager = resolved.puppeteerManager;
+            const targetNetworkMonitor = resolved.networkMonitor;
 
             // Start monitoring if not already active
             if (!targetNetworkMonitor.isActive() && targetPuppeteerManager.isConnected()) {
@@ -661,7 +652,8 @@ export function createNetworkTools(
               });
             }
 
-            const targetPuppeteerManager = resolved.puppeteerManager || puppeteerManager;
+            if (!resolved.puppeteerManager) return noPage(connectionReason);
+            const targetPuppeteerManager = resolved.puppeteerManager;
 
             if (!targetPuppeteerManager.isConnected()) {
               return createErrorResponse('PUPPETEER_NOT_CONNECTED');

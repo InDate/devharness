@@ -44,10 +44,13 @@ function makeReplay(
     calls.push({ tool, params });
     if (tool === 'listConnections' && opts.connections) {
       return {
-        content: [{
-          type: 'text',
-          text: `Active debugger connections\n\n\`\`\`json\n${JSON.stringify({ connections: opts.connections }, null, 2)}\n\`\`\``,
-        }],
+        content: [{ type: 'text', text: 'Active debugger connections' }],
+        _meta: {
+          tool: 'listConnections', timestamp: 0,
+          connections: opts.connections.map(c => ({
+            ...c, type: 'chrome', host: 'localhost', active: false, connected: true, paused: false,
+          })),
+        },
       };
     }
     if (tool === 'network' && params.action === 'sockets') {

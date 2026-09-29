@@ -46,12 +46,13 @@ function makeReplay(commands: RecordedCommand[]) {
     calls.push({ tool, params });
     if (tool === 'listConnections') {
       return {
-        content: [{
-          type: 'text',
-          text: `Active debugger connections\n\n\`\`\`json\n${JSON.stringify({
-            connections: Object.entries(PORTS).map(([reference, port]) => ({ reference, port })),
-          }, null, 2)}\n\`\`\``,
-        }],
+        content: [{ type: 'text', text: 'Active debugger connections' }],
+        _meta: {
+          tool: 'listConnections', timestamp: 0,
+          connections: Object.entries(PORTS).map(([reference, port]) => ({
+            reference, port, type: 'chrome', host: 'localhost', active: false, connected: true, paused: false,
+          })),
+        },
       };
     }
     return { content: [{ type: 'text', text: '' }] };

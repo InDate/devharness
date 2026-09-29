@@ -19,7 +19,7 @@ import type { CheckOutcome as CheckAction } from './check-tools.js';
 import { assertAsCheck, subjectOf as subjectOfCheck, waitAsCheck } from './check-engine.js';
 import type { CheckOutcome as CheckOutcomeRecord, RanStep } from '../proxy/registry.js';
 import { asStep, withinRun } from '../call-origin.js';
-import type { DebuggerStatusMeta } from '../tool-response.js';
+import type { ConnectionMeta, DebuggerStatusMeta } from '../tool-response.js';
 
 // Re-export replay cursor functions
 export { injectReplayCursor, showClickEffect, showKeyPress, removeReplayCursor } from '../replay-cursor.js';
@@ -1370,9 +1370,7 @@ export async function probeLiveConnectionReferences(
   executeToolCall: ExecuteToolCall
 ): Promise<Set<string> | null> {
   try {
-    const result = await executeToolCall('listConnections', {});
-    const text = result?.content?.[0]?.text || '';
-    const parsed = parseConnectionList(text);
+    const parsed = connectionsOf(await executeToolCall('listConnections', {}));
     if (!parsed) return null;
     // A connection whose socket has already dropped is not somewhere a step can
     // run, so it must not count as live - otherwise a healing sequence skips the
@@ -1388,23 +1386,13 @@ export async function probeLiveConnectionReferences(
 }
 
 /**
- * The `connections` array out of a `listConnections` response, or null when the
- * response carries no parseable JSON block (a stub, or a future format) - null
- * means "unknown", never "empty".
+ * The connections a `listConnections` response carries in `_meta`, or null when
+ * it carries none (a stub) - null means "unknown", never "empty".
  */
-export function parseConnectionList(
-  text: string
-): Array<{ reference: string; port?: number; connected?: boolean }> | null {
-  const block = text.match(/```json\s*([\s\S]*?)```/);
-  if (!block) return null;
-  try {
-    const parsed = JSON.parse(block[1]);
-    const list = parsed?.connections;
-    if (!Array.isArray(list)) return null;
-    return list.filter((c: any) => typeof c?.reference === 'string');
-  } catch {
-    return null;
-  }
+export function connectionsOf(response: any): ConnectionMeta[] | null {
+  const list = response?._meta?.connections;
+  if (!Array.isArray(list)) return null;
+  return list.filter((c: any) => typeof c?.reference === 'string');
 }
 
 /**

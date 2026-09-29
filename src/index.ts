@@ -1441,12 +1441,18 @@ const connectionTools = {
         createdAt: new Date(conn.createdAt).toISOString(),
       }));
 
-      return createSuccessResponse('CONNECTIONS_LIST', {
+      const response: any = createSuccessResponse('CONNECTIONS_LIST', {
         totalConnections: connections.length.toString()
       }, {
         activeReference,
         connections: connectionList,
       });
+      response._meta = {
+        tool: 'listConnections',
+        timestamp: Date.now(),
+        connections: connectionList.map(({ createdAt: _createdAt, ...connection }) => connection),
+      } satisfies ToolResponseMeta;
+      return response;
     }
   ),
 

@@ -68,9 +68,16 @@ const idbRecords = (t: string, count: number) => ({
   content: [{ type: 'text', text: t }],
   _meta: { tool: 'storage', action: 'idbGetAll', timestamp: 0, storage: { database: 'identity', store: 'keys', count } },
 });
-/** listConnections renders its data as a fenced json block; that is what gets parsed. */
-const connectionsList = (connections: any[]) =>
-  text('Active debugger connections\n\n```json\n' + JSON.stringify({ connections }, null, 2) + '\n```');
+/** listConnections as the real tool answers it: the connections in `_meta`. */
+const connectionsList = (connections: Array<{ reference: string; connected?: boolean }>) => ({
+  ...text('Active debugger connections'),
+  _meta: {
+    tool: 'listConnections', timestamp: 0,
+    connections: connections.map((c, i) => ({
+      type: 'chrome', host: 'localhost', port: 9222 + i, active: i === 0, connected: true, paused: false, ...c,
+    })),
+  },
+});
 const errorText = (t: string) => ({ isError: true, content: [{ type: 'text', text: t }] });
 
 beforeEach(() => {
@@ -422,12 +429,10 @@ describe('launchChrome inside a nested sequence', () => {
         _meta: { tool: 'navigate', action: 'info', timestamp: 0, navigate: { url: 'https://example.com/', title: 't', action: 'info' } },
       },
       launchChrome: text('Chrome launched and connected'),
-      listConnections: text('Active debugger connections\n\n```json\n' + JSON.stringify({
-        connections: [
-          { reference: 'device-a', connected: true },
-          { reference: 'member-two', connected: false },
-        ],
-      }, null, 2) + '\n```'),
+      listConnections: connectionsList([
+        { reference: 'device-a', connected: true },
+        { reference: 'member-two', connected: false },
+      ]),
     };
     const { ctx, calls } = makeHarness(responses, seq('setup', [
       { tool: 'launchChrome', params: { reference: 'member-two' } },

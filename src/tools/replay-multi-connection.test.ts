@@ -26,17 +26,16 @@ import {
 const OWNER = 'duo-owner-console';
 const MEMBER = 'duo-member-two';
 
-/** listConnections as the real tool renders it: prose + a JSON block. */
+/** listConnections as the real tool answers it: the connections in `_meta`. */
 function connectionsResponse(refs: string[]) {
-  const data = {
-    activeReference: refs[0] ?? 'unnamed-connection-default',
-    connections: refs.map(reference => ({ reference, type: 'chrome', active: reference === refs[0] })),
-  };
   return {
-    content: [{
-      type: 'text',
-      text: `Active debugger connections (${refs.length} total)\n\n\`\`\`json\n${JSON.stringify(data, null, 2)}\n\`\`\``,
-    }],
+    content: [{ type: 'text', text: `Active debugger connections (${refs.length} total)` }],
+    _meta: {
+      tool: 'listConnections', timestamp: 0,
+      connections: refs.map((reference, i) => ({
+        reference, type: 'chrome', host: 'localhost', port: 9222 + i, active: i === 0, connected: true, paused: false,
+      })),
+    },
   };
 }
 

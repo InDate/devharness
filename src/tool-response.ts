@@ -291,10 +291,23 @@ export interface WorkerTargetMeta {
   attached: boolean;
 }
 
+/** One connection as listConnections reports it. */
+export interface ConnectionMeta {
+  reference: string;
+  type: string;
+  host: string;
+  port: number;
+  active: boolean;
+  connected: boolean;
+  paused: boolean;
+}
+
 export interface ToolResponseMeta {
   tool: string;
   action?: string;
   timestamp: number;
+  /** listConnections: every connection in this session. */
+  connections?: ConnectionMeta[];
   /** Worker targets on this browser, from inspect({ action: 'listTargets' }). */
   workerTargets?: WorkerTargetMeta[];
   // Action-specific structured data

@@ -9,6 +9,7 @@ import { autoLaunchChrome, getDebugState, probeLiveConnectionReferences } from '
 import type { ExecutionContext } from './replay-executor.js';
 import { createErrorResponse, createSuccessResponse } from '../messages.js';
 import { productionShaped } from '../test-support/fake-execute-tool-call.js';
+import type { ToolResponseMeta } from '../tool-response.js';
 
 const harness = (responses: Record<string, any>) =>
   vi.fn(productionShaped(async (tool: string, params: Record<string, any> = {}) => {
@@ -91,11 +92,13 @@ describe('debug state', () => {
 });
 
 describe('live connection probing', () => {
-  const connectionsResponse = (connections: any[]) => {
-    const response: any = createSuccessResponse('CONNECTIONS_LIST', { count: connections.length });
-    response.content[0].text += `\n\n\`\`\`json\n${JSON.stringify({ connections }, null, 2)}\n\`\`\``;
-    return response;
-  };
+  const connectionsResponse = (connections: Array<{ reference: string; port: number; connected: boolean }>) => ({
+    ...createSuccessResponse('CONNECTIONS_LIST', { count: connections.length }),
+    _meta: {
+      tool: 'listConnections', timestamp: 0,
+      connections: connections.map(c => ({ ...c, type: 'chrome', host: 'localhost', active: false, paused: false })),
+    } satisfies ToolResponseMeta,
+  });
 
   // A reference whose socket has dropped is not somewhere a step can run: if it
   // counted as live, a healing sequence would skip the launch that replaces it.

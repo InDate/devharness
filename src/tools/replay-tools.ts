@@ -49,7 +49,7 @@ import {
   commandTakesInjectedConnection,
   normalizeStepConnections,
   sanitizeConnectionMap,
-  parseConnectionList,
+  connectionsOf,
   type ExecutionContext,
   type LoadSequenceResult,
 } from './replay-executor.js';
@@ -1021,8 +1021,7 @@ async function connectionsSharingPort(
   self: string
 ): Promise<string[]> {
   try {
-    const result: any = await executeToolCall('listConnections', {});
-    const parsed = parseConnectionList(result?.content?.[0]?.text || '');
+    const parsed = connectionsOf(await executeToolCall('listConnections', {}));
     if (!parsed) return [];
     return parsed
       .filter(c => c.port === port

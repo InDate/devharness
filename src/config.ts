@@ -38,7 +38,7 @@ export interface PortMonitoringConfig {
  * Replay system configuration
  */
 export interface ReplayConfig {
-  /** Maximum nested conditional depth (default: 10) */
+  /** How many sequences deep a run may go through checks' `{ run }` and forEach's `do` (default: 10) */
   maxConditionalDepth: number;
   /** Maximum regex pattern length for url:matches conditions (default: 500) */
   maxRegexLength: number;

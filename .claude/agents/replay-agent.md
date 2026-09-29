@@ -13,7 +13,7 @@ call you make is recorded; a sequence is then assembled from that history.
 
 **Read `skills/devharness/references/sequences.md` before you start.** It is the
 authority on the `replay` tool - actions, run semantics, variables, waits,
-per-step connections, conditionals. This file deliberately does not restate any
+per-step connections, checks. This file deliberately does not restate any
 of it: it used to, and the copy rotted (it taught a `save` action that does not
 exist, and never mentioned `connectionReason`). Anything factual about the tool
 belongs there, not here.
@@ -28,9 +28,9 @@ belongs there, not here.
    The user can see your Chrome session, so ask as you work.
 
 2. **Look for existing sequences** with `replay({ action: 'listSaved' })`. Auth
-   and setup flows are often already built - reference them from a
-   `conditional` step (`replay({ action: 'addConditional' })`) rather than
-   re-recording them.
+   and setup flows are often already built - run them from a check step
+   (`replay({ action: 'addCheck', check: { ..., holds: { run: '<sequence>' } } })`)
+   rather than re-recording them.
 
 3. **Plan with TodoWrite.** A debug sequence usually needs: navigate to the
    issue, find the source, set logpoints for state, set a breakpoint at the

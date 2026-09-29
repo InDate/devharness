@@ -39,10 +39,55 @@
       }
     },
     {
+      "tool": "check",
+      "params": {
+        "socket": "/live",
+        "withinMs": 5000
+      }
+    },
+    {
+      "tool": "check",
+      "params": {
+        "traffic": {
+          "urlIncludes": "/live",
+          "direction": "received",
+          "textIncludes": "\"tag\":\"ready\""
+        },
+        "count": 1,
+        "stepsBack": 3
+      }
+    },
+    {
       "tool": "input",
       "params": {
         "action": "click",
         "selector": "button[data-testid=\"conn-pull3\"]"
+      }
+    },
+    {
+      "tool": "check",
+      "params": {
+        "traffic": {
+          "urlIncludes": "/live",
+          "direction": "received",
+          "textIncludes": "\"tag\":\"push\""
+        },
+        "count": 3,
+        "withinMs": 5000
+      }
+    },
+    {
+      "tool": "check",
+      "params": {
+        "traffic": {
+          "urlIncludes": "/live",
+          "direction": "received",
+          "textIncludes": "\"tag\":\"push\""
+        },
+        "count": 3,
+        "operator": "equals",
+        "withinMs": 1000,
+        "stepsBack": 2
       }
     },
     {
@@ -60,6 +105,18 @@
       "params": {
         "action": "click",
         "selector": "button[data-testid=\"get-session\"]"
+      }
+    },
+    {
+      "tool": "check",
+      "params": {
+        "traffic": {
+          "urlIncludes": "/session",
+          "method": "POST"
+        },
+        "count": 1,
+        "operator": "equals",
+        "withinMs": 500
       }
     },
     {
@@ -87,6 +144,18 @@
       }
     },
     {
+      "tool": "check",
+      "params": {
+        "traffic": {
+          "urlIncludes": "/draft",
+          "method": "POST"
+        },
+        "count": 0,
+        "operator": "equals",
+        "stepsBack": 5
+      }
+    },
+    {
       "tool": "input",
       "params": {
         "action": "click",
@@ -102,6 +171,14 @@
         "right": "failed",
         "timeoutMs": 5000,
         "message": "a dropped transport reads as failed, not disconnected"
+      }
+    },
+    {
+      "tool": "check",
+      "params": {
+        "socket": "/live",
+        "condition": "closed",
+        "withinMs": 5000
       }
     },
     {
@@ -138,7 +215,18 @@
         "right": "disconnected",
         "message": "a hang-up the page asked for ends disconnected"
       }
+    },
+    {
+      "tool": "check",
+      "params": {
+        "socket": "/live",
+        "condition": "closed",
+        "withinMs": 5000
+      }
     }
   ],
-  "createdAt": 1790500000000
+  "createdAt": 1790500000000,
+  "tags": [
+    "socket-app"
+  ]
 }

@@ -20,6 +20,7 @@ import { captureVariable } from './tools/replay-executor.js';
 import { asCheckStep } from './tools/check-tools.js';
 import type { Annotation, StepTraffic } from './annotation.js';
 import { substituteCapturedValues, type CaptureEntry } from './tools/interpolation-reverse.js';
+import type { CallChannel } from './call-origin.js';
 
 /** JSON round-trip clone, tolerant of a result that isn't JSON-safe (drops it rather than throwing). */
 function safeClone(value: any): any {
@@ -39,6 +40,12 @@ export interface RecordedCommand {
   annotations?: Annotation[];
   /** What crossed the boundary while this step ran, when it was recorded. */
   traffic?: StepTraffic;
+  /**
+   * When this step was put into a sequence it was not recorded with. The step
+   * reads as new until a baseline takes it in: before that, nothing it crosses
+   * has a recording to be compared against.
+   */
+  addedAt?: number;
   /** Payloads marked on this step's kinds as having to hold on replay, by kind. */
   expected?: Record<string, ExpectedValue>;
   /**
@@ -89,8 +96,6 @@ export interface CommandSequence {
     edited?: boolean;
     label?: string;
   }>;
-  /** Steps that hold open until a number of things have crossed under them. */
-  boundaryWaits?: Array<{ step: number; count: number; key?: string; seconds?: number; onFail?: 'fail' | 'continue' }>;
   /**
    * A person's name for a kind of traffic, by the key a rule would match it
    * on, shown in place of the payload it is otherwise recognised by.
@@ -246,6 +251,10 @@ interface HistoryCommand extends RecordedCommand {
    * recorded command is the whole of the pause before `create` reads it.
    */
   releasedAt?: number;
+  /** The channel the call came in on. */
+  from: CallChannel;
+  /** The sequence whose run executed this call as a step. */
+  run?: string;
 }
 
 // Active sequence state for step-through debugging
@@ -503,10 +512,11 @@ export class CommandRecorder {
   /**
    * Record a command (always-on, automatic)
    */
-  async recordCommand(tool: string, params: Record<string, any>, options?: { delay?: number; comment?: string; result?: any }): Promise<void> {
-    // Reset history viewed flag when any command is recorded
-    // (user must view history again before inserting)
-    this.historyViewedWhilePaused = false;
+  async recordCommand(tool: string, params: Record<string, any>, options?: { delay?: number; comment?: string; result?: any; from?: CallChannel; run?: string }): Promise<void> {
+    // Reset history viewed flag when the agent records a command
+    // (it must view history again before inserting). A step the bench or a
+    // run adds is not the agent's, and leaves what it viewed standing.
+    if ((options?.from ?? 'mcp') === 'mcp' && options?.run === undefined) this.historyViewedWhilePaused = false;
 
     const paramsClone = JSON.parse(JSON.stringify(params));
 
@@ -545,6 +555,8 @@ export class CommandRecorder {
       ...(options?.delay !== undefined && { delay: options.delay }),
       ...(options?.comment && { comment: options.comment }),
       ...(options?.result !== undefined && { result: safeClone(options.result) }),
+      from: options?.from ?? 'mcp',
+      ...(options?.run !== undefined && { run: options.run }),
     };
 
     this.history.push(command);
@@ -1026,8 +1038,8 @@ export class CommandRecorder {
   /**
    * List saved sequences on disk from a specific directory
    */
-  private async listSequencesFromDir(dir: string, location: 'working-dir' | 'global' | 'issues'): Promise<Array<{ filename: string; name: string; id: string; commandCount: number; noteCount: number; description?: string; expectedOutcome?: string; startUrl?: string; location: string; fullPath: string }>> {
-    const sequences: Array<{ filename: string; name: string; id: string; commandCount: number; noteCount: number; description?: string; expectedOutcome?: string; startUrl?: string; location: string; fullPath: string }> = [];
+  private async listSequencesFromDir(dir: string, location: 'working-dir' | 'global' | 'issues'): Promise<Array<{ filename: string; name: string; id: string; commandCount: number; noteCount: number; description?: string; expectedOutcome?: string; startUrl?: string; tags?: string[]; location: string; fullPath: string }>> {
+    const sequences: Array<{ filename: string; name: string; id: string; commandCount: number; noteCount: number; description?: string; expectedOutcome?: string; startUrl?: string; tags?: string[]; location: string; fullPath: string }> = [];
 
     try {
       // Read directory - if it doesn't exist, return empty list (no side effects)
@@ -1062,6 +1074,7 @@ export class CommandRecorder {
             ...(sequence.description && { description: sequence.description }),
             ...(sequence.expectedOutcome && { expectedOutcome: sequence.expectedOutcome }),
             ...(sequence.startUrl && { startUrl: sequence.startUrl }),
+            ...(sequence.tags?.length && { tags: sequence.tags }),
           });
         } catch (error) {
           await debugLog('command-recorder', `Failed to parse ${file}: ${error}`);
@@ -1077,7 +1090,7 @@ export class CommandRecorder {
   /**
    * List saved sequences on disk (checks both working directory and global)
    */
-  async listSavedSequencesOnDisk(): Promise<Array<{ filename: string; name: string; id: string; commandCount: number; noteCount: number; description?: string; expectedOutcome?: string; startUrl?: string; location: string; fullPath: string }>> {
+  async listSavedSequencesOnDisk(): Promise<Array<{ filename: string; name: string; id: string; commandCount: number; noteCount: number; description?: string; expectedOutcome?: string; startUrl?: string; tags?: string[]; location: string; fullPath: string }>> {
     const workingDir = this.getSequencesDir(false);
     const globalDir = this.getSequencesDir(true);
 

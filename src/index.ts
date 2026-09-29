@@ -15,6 +15,7 @@ const STARTUP_TIME = performance.now();
  * MCP server providing Chrome DevTools Protocol debugging capabilities to AI assistants
  */
 
+import { enableRunLog } from './run-log.js';
 import { benchHold } from './bench-mode.js';
 import { runAs } from './session-events.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -44,6 +45,7 @@ import { createSourceTools } from './tools/source-tools.js';
 import { createConsoleTools } from './tools/console-tools.js';
 import { createNetworkTools } from './tools/network-tools.js';
 import { createProxyTools } from './tools/proxy-tools.js';
+import { createHoldTools } from './tools/hold-tools.js';
 import { createPageTools } from './tools/page-tools.js';
 import { createDOMTools } from './tools/dom-tools.js';
 import { createScreenshotTools } from './tools/screenshot-tools.js';
@@ -75,7 +77,9 @@ import { homedir } from 'os';
 import { ServerManager, detectAutoRestartCommand } from './server-manager.js';
 import { configManager } from './config.js';
 import { ToolError } from './tool-error.js';
-import { startProxyFor, markOnProxies, markNextCommand, releaseCommand } from './proxy/registry.js';
+import type { ToolGroup } from './bench/wire.js';
+import { arriveOn, unlisted, historyPlace, entryChannel } from './call-origin.js';
+import { startProxyFor, markOnProxies, markNextCommand, releaseCommand, noteCallStart } from './proxy/registry.js';
 
 /**
  * Tools that read the app without driving it.
@@ -94,7 +98,7 @@ const OBSERVING_TOOLS = new Set([
   'getChromeStatus', 'getDebuggerStatus', 'getDebugLoggingStatus',
   'getSourceCode', 'detectModals', 'config',
 ]);
-import { checkPortFailures, checkBreakpointPause, checkBugBlocking, checkPendingStartups, checkDuplicateSession, prependToResponse, appendToResponse, buildStatusSuffix, type StatusLineItem } from './tool-response.js';
+import { checkPortFailures, checkBreakpointPause, checkBugBlocking, checkPendingStartups, checkDuplicateSession, prependToResponse, appendToResponse, buildStatusSuffix, type StatusLineItem, type ToolResponseMeta, type PausedAtMeta } from './tool-response.js';
 import { recordBlockEvent, clearBlockEvents } from './block-events.js';
 import { createStartupGate } from './startup-gate.js';
 import { createSuccessResponse, createErrorResponse, formatCodeBlock, getMessage, getFormattedResponse } from './messages.js';
@@ -337,6 +341,26 @@ async function loadInstructions(): Promise<string | undefined> {
 
 // Initialize global managers
 const sourceMapHandler = new SourceMapHandler();
+
+/**
+ * The top frame of a paused debugger, mapped to its original source the way
+ * `inspect getCallStack` maps it, so a breakpoint a sequence set by source line
+ * matches the place it paused. Undefined when the pause carries no frames.
+ */
+async function pausedAtOf(cdpManager: CDPManager): Promise<PausedAtMeta | undefined> {
+  const top = cdpManager.getCallStack()?.[0];
+  if (!top) return undefined;
+  const original = await sourceMapHandler.mapToOriginal(top.url, top.location.lineNumber, top.location.columnNumber)
+    .catch(() => null);
+  return {
+    url: original?.source ?? top.url,
+    lineNumber: original?.line ?? top.location.lineNumber,
+    ...((original?.column ?? top.location.columnNumber) !== undefined
+      ? { columnNumber: original?.column ?? top.location.columnNumber } : {}),
+    functionName: top.functionName,
+    callFrameId: top.callFrameId,
+  };
+}
 const chromeLauncher = new ChromeLauncher({
   // Resolved lazily so a live config reload of chrome.persistentProfileRoot
   // (global ~/.devharness/profiles by default, or a project-local override)
@@ -1381,7 +1405,19 @@ const connectionTools = {
         totalConnections: connectionManager.getConnectionCount(),
       };
 
-      return createSuccessResponse('CONNECTION_STATUS', {}, statusData);
+      const response: any = createSuccessResponse('CONNECTION_STATUS', {}, statusData);
+      response._meta = {
+        tool: 'getDebuggerStatus',
+        timestamp: Date.now(),
+        debugger: {
+          reference: statusData.reference,
+          connected,
+          paused,
+          totalBreakpoints: breakpointCounts.total,
+          ...(paused ? { pausedAt: await pausedAtOf(cdpManager) } : {}),
+        },
+      } satisfies ToolResponseMeta;
+      return response;
     }
   ),
 
@@ -1558,11 +1594,33 @@ let statusLegendShown = false;
 /**
  * Execute a tool call - used by replay system
  */
+/**
+ * The refusal for a tool that would drive a page the bench holds - held,
+ * running a sequence, recording. The page cannot move, so the call would
+ * wait on it to its timeout and hold the caller with it; refused at once,
+ * naming what holds it. A check read once answers from the page as it is;
+ * one read again until it holds waits on the page moving, as a wait does.
+ */
+function pageHeldRefusal(toolName: string, args: Record<string, any>): any {
+  const drives = DRIVING_TOOLS.has(toolName)
+    || (toolName === 'check' && Number(args.withinMs) > 0)
+    || (toolName === 'replay' && DRIVING_REPLAY.has(String(args.action)));
+  if (!drives) return undefined;
+  const hold = benchHold(args.connectionReason);
+  return hold ? createErrorResponse('PAGE_HELD_BY_BENCH', { ...hold, toolName }) : undefined;
+}
+
 async function executeToolCall(toolName: string, params: Record<string, any>, abortSignal?: AbortSignal): Promise<any> {
   const tool = allTools[toolName as keyof typeof allTools];
 
   if (!tool) {
     throw new Error(`Unknown tool: ${toolName}`);
+  }
+
+  // The MCP handler refuses before it gets here; a CLI call arrives here first.
+  if (entryChannel() === 'cli') {
+    const held = pageHeldRefusal(toolName, params);
+    if (held) throw new ToolError(held);
   }
 
   const validation = validateParams(params, (tool as any).zodSchema, toolName);
@@ -1571,7 +1629,29 @@ async function executeToolCall(toolName: string, params: Record<string, any>, ab
     throw new Error(`Validation failed: ${JSON.stringify(validation.error)}`);
   }
 
-  const result = await tool.handler(validation.data, abortSignal);
+  // A call from the CLI, the bench or a run's step is a command as much as
+  // one over MCP, so history holds it with where it came in.
+  const place = toolName === 'replay' ? undefined : historyPlace();
+  let index: number | null = null;
+  if (place) {
+    await commandRecorder.recordCommand(toolName, validation.data, place);
+    index = commandRecorder.getCurrentHistoryIndex();
+  }
+
+  let result: any;
+  try {
+    result = index === null
+      ? await tool.handler(validation.data, abortSignal)
+      : await unlisted(() => tool.handler(validation.data, abortSignal));
+  } catch (error) {
+    if (index !== null) {
+      commandRecorder.attachResult(index, error instanceof ToolError || error instanceof InvalidReferenceError
+        ? error.response
+        : { content: [{ type: 'text', text: error instanceof Error ? error.message : `${error}` }], isError: true });
+    }
+    throw error;
+  }
+  if (index !== null) commandRecorder.attachResult(index, result);
 
   // If tool returned an error, throw it as a ToolError so it propagates correctly
   if (result?.isError) {
@@ -1581,41 +1661,50 @@ async function executeToolCall(toolName: string, params: Record<string, any>, ab
   return result;
 }
 
+/** The toolset that built each tool, keyed by tool name, in the order `allTools` lists them. */
+const toolsetOf = new Map<string, string>();
+
+function toolset<T extends object>(name: string, tools: T): T {
+  for (const tool of Object.keys(tools)) toolsetOf.set(tool, name);
+  return tools;
+}
+
 // Combine all tools (conditionally based on config)
 const allTools = {
   // Connection tools (Chrome/debugger)
-  ...(configManager.isToolEnabled('connection') ? connectionTools : {}),
+  ...(configManager.isToolEnabled('connection') ? toolset('connection', connectionTools) : {}),
   // Tab Management tools
-  ...(configManager.isToolEnabled('tab') ? createTabTools(connectionManager, sourceMapHandler, updateActiveManagers, logpointTracker, serverManager) : {}),
+  ...(configManager.isToolEnabled('tab') ? toolset('tab', createTabTools(connectionManager, sourceMapHandler, updateActiveManagers, logpointTracker, serverManager)) : {}),
   // CDP Debugging tools
-  ...(configManager.isToolEnabled('breakpoint') ? createBreakpointTools(proxyCdpManager, sourceMapHandler, logpointTracker, resolveConnectionFromReason) : {}),
-  ...(configManager.isToolEnabled('execution') ? createExecutionTools(proxyCdpManager, resolveConnectionFromReason, connectionManager, (port) => serverManager.retryPendingRestartByInspectorPort(port)) : {}),
-  ...(configManager.isToolEnabled('inspection') ? createInspectionTools(proxyCdpManager, sourceMapHandler, resolveConnectionFromReason) : {}),
-  ...(configManager.isToolEnabled('source') ? createSourceTools(proxyCdpManager, sourceMapHandler, resolveConnectionFromReason) : {}),
+  ...(configManager.isToolEnabled('breakpoint') ? toolset('breakpoint', createBreakpointTools(proxyCdpManager, sourceMapHandler, logpointTracker, resolveConnectionFromReason)) : {}),
+  ...(configManager.isToolEnabled('execution') ? toolset('execution', createExecutionTools(proxyCdpManager, resolveConnectionFromReason, connectionManager, (port) => serverManager.retryPendingRestartByInspectorPort(port))) : {}),
+  ...(configManager.isToolEnabled('inspection') ? toolset('inspection', createInspectionTools(proxyCdpManager, sourceMapHandler, resolveConnectionFromReason)) : {}),
+  ...(configManager.isToolEnabled('source') ? toolset('source', createSourceTools(proxyCdpManager, sourceMapHandler, resolveConnectionFromReason)) : {}),
   // Browser Automation tools
-  ...(configManager.isToolEnabled('console') ? createConsoleTools(proxyPuppeteerManager, proxyConsoleMonitor, resolveConnectionFromReason) : {}),
-  ...(configManager.isToolEnabled('network') ? createNetworkTools(proxyPuppeteerManager, proxyNetworkMonitor, resolveConnectionFromReason) : {}),
-  ...createProxyTools(),
-  ...(configManager.isToolEnabled('page') ? createPageTools(proxyPuppeteerManager, proxyCdpManager, proxyConsoleMonitor, proxyNetworkMonitor, connectionManager, resolveConnectionFromReason, clickableCache, executeToolCall) : {}),
-  ...(configManager.isToolEnabled('dom') ? createDOMTools(proxyPuppeteerManager, proxyCdpManager, connectionManager, resolveConnectionFromReason) : {}),
-  ...(configManager.isToolEnabled('screenshot') ? createScreenshotTools(proxyPuppeteerManager, proxyCdpManager, connectionManager, resolveConnectionFromReason) : {}),
-  ...(configManager.isToolEnabled('input') ? createInputTools(proxyPuppeteerManager, proxyCdpManager, connectionManager, resolveConnectionFromReason) : {}),
-  ...(configManager.isToolEnabled('content') ? createContentTools(proxyPuppeteerManager, proxyCdpManager, connectionManager, resolveConnectionFromReason, clickableCache) : {}),
-  ...(configManager.isToolEnabled('modal') ? createModalTools(resolveConnectionFromReason) : {}),
-  ...(configManager.isToolEnabled('bench') ? createBenchTools(proxyPuppeteerManager, sourceMapHandler, commandRecorder, executeToolCall, resolveConnectionFromReason) : {}),
-  ...(configManager.isToolEnabled('storage') ? createStorageTools(proxyPuppeteerManager, proxyCdpManager, resolveConnectionFromReason) : {}),
+  ...(configManager.isToolEnabled('console') ? toolset('console', createConsoleTools(proxyPuppeteerManager, proxyConsoleMonitor, resolveConnectionFromReason)) : {}),
+  ...(configManager.isToolEnabled('network') ? toolset('network', createNetworkTools(proxyPuppeteerManager, proxyNetworkMonitor, resolveConnectionFromReason)) : {}),
+  ...toolset('proxy', createProxyTools()),
+  ...toolset('hold', createHoldTools()),
+  ...(configManager.isToolEnabled('page') ? toolset('page', createPageTools(proxyPuppeteerManager, proxyCdpManager, proxyConsoleMonitor, proxyNetworkMonitor, connectionManager, resolveConnectionFromReason, clickableCache, executeToolCall)) : {}),
+  ...(configManager.isToolEnabled('dom') ? toolset('dom', createDOMTools(proxyPuppeteerManager, proxyCdpManager, connectionManager, resolveConnectionFromReason)) : {}),
+  ...(configManager.isToolEnabled('screenshot') ? toolset('screenshot', createScreenshotTools(proxyPuppeteerManager, proxyCdpManager, connectionManager, resolveConnectionFromReason)) : {}),
+  ...(configManager.isToolEnabled('input') ? toolset('input', createInputTools(proxyPuppeteerManager, proxyCdpManager, connectionManager, resolveConnectionFromReason)) : {}),
+  ...(configManager.isToolEnabled('content') ? toolset('content', createContentTools(proxyPuppeteerManager, proxyCdpManager, connectionManager, resolveConnectionFromReason, clickableCache)) : {}),
+  ...(configManager.isToolEnabled('modal') ? toolset('modal', createModalTools(resolveConnectionFromReason)) : {}),
+  ...(configManager.isToolEnabled('bench') ? toolset('bench', createBenchTools(proxyPuppeteerManager, sourceMapHandler, commandRecorder, executeToolCall, resolveConnectionFromReason, toolCatalogue)) : {}),
+  ...(configManager.isToolEnabled('storage') ? toolset('storage', createStorageTools(proxyPuppeteerManager, proxyCdpManager, resolveConnectionFromReason)) : {}),
   // Download tools
-  ...(configManager.isToolEnabled('download') ? createDownloadTools() : {}),
+  ...(configManager.isToolEnabled('download') ? toolset('download', createDownloadTools()) : {}),
   // Request tools (HTTP requests as sequence steps, node or browser destination)
-  ...(configManager.isToolEnabled('request') ? createRequestTools(resolveConnectionFromReason) : {}),
+  ...(configManager.isToolEnabled('request') ? toolset('request', createRequestTools(resolveConnectionFromReason)) : {}),
   // Assert tool (inline assertions as sequence steps)
-  ...(configManager.isToolEnabled('assert') ? createAssertTools(resolveConnectionFromReason) : {}),
+  ...(configManager.isToolEnabled('assert') ? toolset('assert', createAssertTools(resolveConnectionFromReason)) : {}),
   // Wait tool (wait primitive for sequences - MCP-side condition polling / sleep)
-  ...(configManager.isToolEnabled('wait') ? createWaitTools(resolveConnectionFromReason) : {}),
+  ...(configManager.isToolEnabled('wait') ? toolset('wait', createWaitTools(resolveConnectionFromReason)) : {}),
   // Check tool (one reading, held or failed; assert and wait are faces of it)
-  ...(configManager.isToolEnabled('check') ? createCheckTools(resolveConnectionFromReason, executeToolCall) : {}),
+  ...(configManager.isToolEnabled('check') ? toolset('check', createCheckTools(resolveConnectionFromReason, executeToolCall)) : {}),
   // Replay tools
-  ...(configManager.isToolEnabled('replay') ? createReplayTools(commandRecorder, executeToolCall, async (connectionReason: string) => {
+  ...(configManager.isToolEnabled('replay') ? toolset('replay', createReplayTools(commandRecorder, executeToolCall, async (connectionReason: string) => {
     const resolved = await resolveConnectionFromReason(connectionReason);
     if (!resolved?.puppeteerManager) return null;
     return resolved.puppeteerManager.getPage();
@@ -1626,15 +1715,15 @@ const allTools = {
     // tool names can only be read at call time (bug-010). The explicit return
     // type is required - without it, allTools appears in its own initializer
     // and TypeScript cannot infer it (TS7022).
-  }, (): string[] => Object.keys(allTools)) : {}),
+  }, (): string[] => Object.keys(allTools))) : {}),
   // Server management tools
-  ...(configManager.isToolEnabled('server') ? createServerTools(serverManager) : {}),
+  ...(configManager.isToolEnabled('server') ? toolset('server', createServerTools(serverManager)) : {}),
   // Config management tools (always enabled - not toggleable)
-  ...createConfigTools(chromeLauncher, { version: SERVER_VERSION, ...BUILD_IDENTITY }),
+  ...toolset('config', createConfigTools(chromeLauncher, { version: SERVER_VERSION, ...BUILD_IDENTITY })),
   // Plugin management tools (always enabled - not toggleable)
-  ...createPluginTools(() => orchestratorInstance),
+  ...toolset('plugin', createPluginTools(() => orchestratorInstance)),
   // Issues tracking tools
-  ...(configManager.isToolEnabled('issues') ? createIssuesTools(
+  ...(configManager.isToolEnabled('issues') ? toolset('issues', createIssuesTools(
     executeToolCall,
     async (name: string) => {
       // Helper to get sequence path by name
@@ -1658,12 +1747,24 @@ const allTools = {
     // Lazy: allTools is defined below. Lets a pulled sequence be checked
     // against the live tool list before it is written to disk.
     (): string[] => Object.keys(allTools)
-  ) : {}),
+  )) : {}),
   // Dashboard tools (lazy-initialized in main())
-  ...(configManager.isToolEnabled('dashboard') ? createDashboardTools() : {}),
+  ...(configManager.isToolEnabled('dashboard') ? toolset('dashboard', createDashboardTools()) : {}),
   // Cross-session message tools
-  ...(configManager.isToolEnabled('message') ? createMessageTools() : {}),
+  ...(configManager.isToolEnabled('message') ? toolset('message', createMessageTools()) : {}),
 };
+
+/** Every served tool, grouped by the toolset that built it, in the order `listTools` gives them. */
+function toolCatalogue(): ToolGroup[] {
+  const groups = new Map<string, ToolGroup>();
+  for (const [name, tool] of Object.entries(allTools)) {
+    const set = toolsetOf.get(name) ?? 'other';
+    const group = groups.get(set) ?? { name: set, tools: [] };
+    group.tools.push({ name, description: tool.description, inputSchema: tool.inputSchema as Record<string, unknown> });
+    groups.set(set, group);
+  }
+  return [...groups.values()];
+}
 
 /**
  * Register tool handlers on the server
@@ -1706,13 +1807,8 @@ function registerToolHandlers(server: Server) {
     // call with it. Refused at once instead, naming what holds it.
     // A check read once answers from the page as it is; one read again until
     // it holds waits on the page moving, as a wait does.
-    const drives = DRIVING_TOOLS.has(toolName)
-      || (toolName === 'check' && Number((request.params.arguments as any)?.withinMs) > 0)
-      || (toolName === 'replay' && DRIVING_REPLAY.has(String((request.params.arguments as any)?.action)));
-    if (drives) {
-      const hold = benchHold((request.params.arguments as any)?.connectionReason);
-      if (hold) return createErrorResponse('PAGE_HELD_BY_BENCH', { ...hold, toolName });
-    }
+    const held = pageHeldRefusal(toolName, (request.params.arguments ?? {}) as Record<string, any>);
+    if (held) return held;
 
     // The transport starts serving before serverManager.initialize() has
     // restored state, so a call landing in that window sees an empty world: a
@@ -1768,6 +1864,7 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
     if (toolName !== 'replay') {
       await commandRecorder.recordCommand(toolName, validation.data);
       commandIndex = commandRecorder.getCurrentHistoryIndex();
+      noteCallStart();
     }
 
     // Check for failed monitored ports
@@ -1833,7 +1930,9 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
 
     // Pass validated data to handler
     try {
-      const result = await tool.handler(validation.data, extra?.signal);
+      const result = await arriveOn('mcp', () => (commandIndex !== null
+        ? unlisted(() => tool.handler(validation.data, extra?.signal))
+        : tool.handler(validation.data, extra?.signal)));
 
       if (commandIndex !== null) {
         commandRecorder.attachResult(commandIndex, result);
@@ -1940,25 +2039,19 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
 
       return result;
     } catch (error) {
-      // Check for ToolError and return its response directly
-      if (error instanceof ToolError) {
-        return error.response;
-      }
-
-      // Check for InvalidReferenceError and return its formatted response
-      if (error instanceof InvalidReferenceError) {
-        return error.response;
-      }
-
-      return {
-        content: [
-          {
-            type: 'text',
-            text: error instanceof Error ? error.message : `${error}`,
-          },
-        ],
-        isError: true
-      };
+      const response = error instanceof ToolError || error instanceof InvalidReferenceError
+        ? error.response
+        : {
+            content: [
+              {
+                type: 'text',
+                text: error instanceof Error ? error.message : `${error}`,
+              },
+            ],
+            isError: true
+          };
+      if (commandIndex !== null) commandRecorder.attachResult(commandIndex, response);
+      return response;
     } finally {
       if (marksBoundary) {
         // Scheduled and not awaited: the wait for the boundary to go quiet is
@@ -2066,6 +2159,7 @@ async function runCliSequence(argv: string[]): Promise<void> {
 }
 
 async function main() {
+  enableRunLog();
   // CLI mode bypasses the MCP stdio server entirely - session detection, the
   // dashboard hub, and the log-processor orchestrator are all multi-session-
   // coordination features irrelevant to a one-shot process.
@@ -2323,7 +2417,7 @@ async function main() {
 
   // Reachable by CLI only once the tools can actually run.
   sessionEndpoint = await startSessionEndpoint({
-    executeToolCall,
+    executeToolCall: (tool, args, signal) => arriveOn('cli', () => executeToolCall(tool, args, signal)),
     awaitReady: () => startupGate.wait(),
     identity: {
       pid: process.pid,

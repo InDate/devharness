@@ -38,6 +38,10 @@ export interface RunRecord {
   finalResponse?: any;
   /** Failure that escaped the run path itself (not a step failure). */
   error?: string;
+  /** When each top-level step started, by position. */
+  stepStarts?: Array<number | undefined>;
+  /** The `runAll` suite this run is one sequence of. */
+  suite?: { id: string; label: string };
 }
 
 /** How long a settled run (completed/failed/cancelled/paused) stays retrievable. */

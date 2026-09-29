@@ -1,0 +1,295 @@
+{
+  "_comment": "CDP Tools replay sequence. Load with: replay({ action: \"load\", filename: \"<this-file>\" }), then run with: replay({ action: \"run\", name: \"<this-file>\" }). What the app did under each step, and the responses that answer it on replay, are in the file of the same name under activity/.",
+  "id": "seq-1790650000000-1",
+  "name": "state-lifecycle",
+  "description": "Every store the page keeps, written, changed, reloaded, removed and cleared again",
+  "expectedOutcome": "Each store's rows read set, then changed, survive the reload, then read removed; the second clear records nothing",
+  "startUrl": "http://localhost:7788/",
+  "commands": [
+    {
+      "tool": "navigate",
+      "params": {
+        "action": "goto",
+        "url": "http://localhost:7788/"
+      }
+    },
+    {
+      "tool": "check",
+      "params": {
+        "selector": "[data-testid=\"whats-new\"]",
+        "condition": "present",
+        "holds": {
+          "run": "dismiss-whats-new"
+        },
+        "fails": "continue"
+      },
+      "comment": "a fresh browser shows the banner; a second run in the same browser does not"
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"write-local\"]"
+      },
+      "comment": "write each store once: every row under these steps reads as set"
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"write-session\"]"
+      }
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"write-cookie\"]"
+      }
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"write-idb\"]"
+      }
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"write-cache\"]"
+      }
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"write-file\"]"
+      }
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"register-sw\"]"
+      }
+    },
+    {
+      "tool": "check",
+      "params": {
+        "localStorage": "socket-app:draft",
+        "condition": "present"
+      }
+    },
+    {
+      "tool": "check",
+      "params": {
+        "cookie": "socket-app-seen",
+        "condition": "present",
+        "withinMs": 2000
+      }
+    },
+    {
+      "tool": "check",
+      "params": {
+        "indexedDB": "socket-app/drafts/draft-1",
+        "condition": "present",
+        "withinMs": 3000
+      }
+    },
+    {
+      "tool": "check",
+      "params": {
+        "selector": "[data-testid=\"stored\"][data-session][data-cache][data-file][data-sw]",
+        "condition": "present",
+        "withinMs": 3000
+      },
+      "comment": "the stores a synchronous check cannot read, through the page's own readout"
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"write-local\"]"
+      },
+      "comment": "write the same keys again: these rows read as changed"
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"write-idb\"]"
+      }
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"get-session\"]"
+      },
+      "comment": "the draft endpoint takes a session token"
+    },
+    {
+      "tool": "wait",
+      "params": {
+        "selector": "[data-testid=\"session-state\"]:has-text(\"s-\")",
+        "timeoutMs": 15000
+      }
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"save-draft\"]"
+      },
+      "comment": "one click, a storage change and a network crossing"
+    },
+    {
+      "tool": "check",
+      "params": {
+        "traffic": {
+          "urlIncludes": "/draft",
+          "method": "POST"
+        },
+        "count": 1,
+        "operator": "equals",
+        "withinMs": 3000
+      }
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"open-worker\"]"
+      },
+      "comment": "a worker running when the page reloads"
+    },
+    {
+      "tool": "check",
+      "params": {
+        "selector": "[data-testid=\"stored\"][data-worker]",
+        "condition": "present",
+        "withinMs": 2000
+      }
+    },
+    {
+      "tool": "navigate",
+      "params": {
+        "action": "goto",
+        "url": "http://localhost:7788/"
+      },
+      "comment": "reload: the worker stops, and every store survives"
+    },
+    {
+      "tool": "check",
+      "params": {
+        "selector": "[data-testid=\"stored\"][data-local][data-session][data-cookie][data-idb][data-cache][data-file][data-sw]",
+        "condition": "present",
+        "withinMs": 5000
+      }
+    },
+    {
+      "tool": "check",
+      "params": {
+        "selector": "[data-testid=\"stored\"][data-worker]",
+        "condition": "absent"
+      }
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"open-worker\"]"
+      },
+      "comment": "a worker with its own socket, then closed by the page"
+    },
+    {
+      "tool": "check",
+      "params": {
+        "traffic": {
+          "urlIncludes": "/small",
+          "direction": "received"
+        },
+        "count": 1,
+        "operator": "gte",
+        "withinMs": 5000
+      }
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"close-all\"]"
+      }
+    },
+    {
+      "tool": "check",
+      "params": {
+        "selector": "[data-testid=\"stored\"][data-worker]",
+        "condition": "absent",
+        "withinMs": 2000
+      }
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"clear-state\"]"
+      },
+      "comment": "remove every write: each row reads as removed"
+    },
+    {
+      "tool": "check",
+      "params": {
+        "localStorage": "socket-app:draft",
+        "condition": "absent",
+        "withinMs": 3000
+      }
+    },
+    {
+      "tool": "check",
+      "params": {
+        "cookie": "socket-app-seen",
+        "condition": "absent",
+        "withinMs": 2000
+      }
+    },
+    {
+      "tool": "check",
+      "params": {
+        "indexedDB": "socket-app/drafts/draft-1",
+        "condition": "absent",
+        "withinMs": 3000
+      }
+    },
+    {
+      "tool": "check",
+      "params": {
+        "selector": "[data-testid=\"stored\"]:has-text(\"nothing\")",
+        "condition": "present",
+        "withinMs": 3000
+      }
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"clear-state\"]"
+      },
+      "comment": "clear an empty app: a baseline with nothing here makes anything later a change"
+    },
+    {
+      "tool": "check",
+      "params": {
+        "selector": "[data-testid=\"stored\"]:has-text(\"nothing\")",
+        "condition": "present",
+        "withinMs": 3000
+      }
+    }
+  ],
+  "createdAt": 1790650000000,
+  "tags": [
+    "socket-app"
+  ]
+}

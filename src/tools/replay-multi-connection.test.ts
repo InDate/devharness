@@ -17,6 +17,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { createReplayTools } from './replay-tools.js';
 import { CommandRecorder } from '../command-recorder.js';
 import { productionShaped } from '../test-support/fake-execute-tool-call.js';
+import { HELD, runsOnPass } from '../test-support/check-steps.js';
 import {
   analyzeRecordedStepConnections,
   normalizeStepConnections,
@@ -42,6 +43,7 @@ function connectionsResponse(refs: string[]) {
 function makeHarness(opts: { live?: string[] } = {}) {
   const calls: Array<{ tool: string; params: Record<string, any> }> = [];
   const executeToolCall = vi.fn(productionShaped(async (tool: string, params: Record<string, any>) => {
+    if (tool === 'check') return HELD;
     calls.push({ tool, params });
     if (tool === 'listConnections') return connectionsResponse(opts.live ?? []);
     return { content: [{ type: 'text', text: '' }] };
@@ -266,17 +268,17 @@ describe('run against a two-connection sequence', () => {
     expect(text(res)).toContain(MEMBER);
   });
 
-  // A setup sequence normally sits BEHIND a conditional, so its references have
+  // A setup sequence normally sits BEHIND a check, so its references have
   // to be rebindable from the outer run - otherwise the only references you can
   // rebind are the ones that needed no rebinding.
-  it('accepts a key that only a conditional sub-sequence names', async () => {
+  it('accepts a key that only a nested sequence names', async () => {
     const { replay, recorder, calls } = makeHarness({ live: [OWNER, 'my-second-browser'] });
     await recorder.createSequenceFromCommands('duo-setup', [
       { tool: 'launchChrome', params: { reference: MEMBER } },
       { tool: 'dom', params: { action: 'querySelector', selector: '#member-claim', connectionReason: MEMBER } },
     ]);
     await recorder.createSequenceFromCommands('duo-outer', [
-      { tool: 'conditional', params: { if: '{{!selector:#needs-setup}}', then: 'duo-setup' } },
+      runsOnPass('duo-setup'),
     ]);
     const sequenceId = recorder.listSequences().find(s => s.name === 'duo-outer')!.id;
 
@@ -290,8 +292,9 @@ describe('run against a two-connection sequence', () => {
     // the rebinding reached the nested step, and the nested launch was skipped
     // because the mapped browser is already live
     expect(calls.filter(c => c.tool === 'launchChrome')).toEqual([]);
-    // the first dom call is the selector condition itself, on the run connection
-    expect(domConnections(calls)).toEqual([OWNER, 'my-second-browser']);
+    // the check that runs duo-setup reads through the check tool, so the one
+    // dom call is the nested step's, on the rebound connection
+    expect(domConnections(calls)).toEqual(['my-second-browser']);
   });
 
   it('launches the mapped browser when the session does not have it', async () => {
@@ -301,7 +304,7 @@ describe('run against a two-connection sequence', () => {
       { tool: 'dom', params: { action: 'querySelector', selector: '#member-claim', connectionReason: MEMBER } },
     ]);
     await recorder.createSequenceFromCommands('duo-outer', [
-      { tool: 'conditional', params: { if: '{{!selector:#needs-setup}}', then: 'duo-setup' } },
+      runsOnPass('duo-setup'),
     ]);
     const sequenceId = recorder.listSequences().find(s => s.name === 'duo-outer')!.id;
 
@@ -321,7 +324,7 @@ describe('run against a two-connection sequence', () => {
       { tool: 'dom', params: { action: 'querySelector', selector: '#member-claim', connectionReason: MEMBER } },
     ]);
     await recorder.createSequenceFromCommands('duo-outer', [
-      { tool: 'conditional', params: { if: '{{selector:#needs-setup}}', then: 'duo-setup' } },
+      runsOnPass('duo-setup'),
     ]);
     const sequenceId = recorder.listSequences().find(s => s.name === 'duo-outer')!.id;
 
@@ -336,13 +339,13 @@ describe('run against a two-connection sequence', () => {
   });
 
   // Mutual recursion between sub-sequences must not hang the validation.
-  it('terminates on a conditional cycle', async () => {
+  it('terminates on a cycle of checks running each other', async () => {
     const { replay, recorder } = makeHarness({ live: [OWNER] });
     await recorder.createSequenceFromCommands('ping', [
-      { tool: 'conditional', params: { if: '{{selector:#x}}', then: 'pong' } },
+      runsOnPass('pong'),
     ]);
     await recorder.createSequenceFromCommands('pong', [
-      { tool: 'conditional', params: { if: '{{selector:#y}}', then: 'ping' } },
+      runsOnPass('ping'),
     ]);
     const sequenceId = recorder.listSequences().find(s => s.name === 'ping')!.id;
 
@@ -642,13 +645,13 @@ describe('generated test code', () => {
   it('refuses to emit a green empty test for steps it cannot generate', async () => {
     const { replay, recorder } = makeHarness();
     await recorder.createSequenceFromCommands('setup-only', [
-      { tool: 'conditional', params: { if: '{{!indexedDB:identity/keys/device}}', then: 'mint-identity' } },
+      runsOnPass('mint-identity'),
       { tool: 'launchChrome', params: { reference: MEMBER } },
     ]);
 
     for (const format of ['playwright', 'puppeteer'] as const) {
       const code = text(await replay.handler({ action: 'get', name: 'setup-only', outputFormat: format } as any));
-      expect(code).toContain('[not generated] conditional');
+      expect(code).toContain('[not generated] check');
       expect(code).toContain('mint-identity');
       expect(code).toContain('[not generated] launchChrome');
       expect(code).toContain('would otherwise pass without doing anything');

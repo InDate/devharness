@@ -2,13 +2,17 @@
 import { Fragment, render } from 'preact';
 import { createPortal } from 'preact/compat';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { Boundary, Scope } from './boundary.js';
-import { About, Notes, Variables } from './sequence.js';
+import { Traffic, Scope } from './boundary.js';
+import { toggleVariables, useVariablesHidden } from './variables-shown.js';
+import { History } from './history.js';
+import { Tools } from './tools.js';
+import { About } from './sequence.js';
 import { Editing } from './editing.js';
 import { Glyph } from './glyph.js';
-import { Fold } from './row.js';
 import { onRevealResponse, setShowHidden, useShowHidden } from './focus.js';
 import { CaptureDialog } from './capture.js';
+import { HoldPanel } from './hold-panel.js';
+import { goToSection } from './goto.js';
 import { SavedHidden, SavedPayloads, SavedResponses, choicesIn, rearmRule } from './crossing.js';
 import type { BenchView, BoundaryEvent, BoundaryState } from '../wire.js';
 import './bench.css';
@@ -53,8 +57,8 @@ function isFailure(event: BoundaryEvent): boolean {
  * Both are properties of the session rather than of a tab: a held page has its
  * JS stopped, so a click on the app reaches nothing and a step driven into it
  * lands nowhere, and every tab reads the open sequence. Held inside one tab,
- * the state was unreadable from the other three - a page stopped from STEPS
- * looked like an app that had broken.
+ * the state is unreadable from the others, and a page held from there reads as
+ * an app that has broken.
  *
  * Fixed at the foot of the page rather than in the header: it is reached while
  * reading whatever is on screen, and the foot is the one edge no tab's own
@@ -65,16 +69,21 @@ function isFailure(event: BoundaryEvent): boolean {
  * plays - a nine-step run finishes inside two seconds, so a slower clock
  * reports a run that looks like it never started.
  */
-function Footing({ base, onNew, onShot, onSteps }: {
+function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
   base: string;
+  /** Go to where a held layer, or the sequence, is read in full. */
+  onGo: (layer: 'code' | 'ui' | 'network' | 'sequence' | 'sequences') => void;
+  /** Show the UI tab, whose head the variables button toggles. */
+  onVariables: () => void;
   onNew: () => void;
-  /** Show STEPS, where a rule's traffic row is opened from the proxy panel. */
-  onSteps: () => void;
+  /** The sequence open on the session, and whether a run is going in it; a recording reports nothing. */
+  onSequence: (name: string | null, busy: boolean) => void;
   /** A capture lands on the screen that holds the reel, so it opens there. */
   onShot: () => void;
 }) {
   const [state, setState] = useState<BenchView | null>(null);
   const [gone, setGone] = useState(false);
+  const variablesHidden = useVariablesHidden();
   // The header's place for the state disc, found once both are on the page.
   const [slot, setSlot] = useState<HTMLElement | null>(null);
   useEffect(() => { setSlot(document.getElementById('statedisc-slot')); }, []);
@@ -82,7 +91,7 @@ function Footing({ base, onNew, onShot, onSteps }: {
   const [asked, setAsked] = useState<boolean | null>(null);
   const [shooting, setShooting] = useState(false);
   /** Which reading is open over whatever tab is showing. */
-  const [showing, setShowing] = useState<'about' | 'vars' | 'proxy' | null>(null);
+  const [showing, setShowing] = useState<'about' | 'proxy' | 'hold' | null>(null);
   // A response a traffic row asked to see: the panel opens on it.
   const [revealed, setRevealed] = useState<string | null>(null);
   const showHidden = useShowHidden();
@@ -91,6 +100,8 @@ function Footing({ base, onNew, onShot, onSteps }: {
   const [boundary, setBoundary] = useState<BoundaryState | null>(null);
   /** What the session answered when asked to relaunch through a proxy. */
   const [proxyAsked, setProxyAsked] = useState('');
+  // A first click on Baseline, where one stands, arms it; the second replaces it.
+  const [rebaselining, setRebaselining] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -169,6 +180,13 @@ function Footing({ base, onNew, onShot, onSteps }: {
     return () => clearTimeout(timer);
   }, [boundary]);
 
+  const openName = state?.sequence?.name ?? null;
+  const reporting = state !== null && state.sequence?.recording !== true;
+  const busyNow = state?.sequence?.busy === true;
+  useEffect(() => {
+    if (reporting) onSequence(openName, busyNow);
+  }, [reporting, openName, busyNow]);
+
   if (gone) {
     return <div class="footing">
       <div class="footbar">
@@ -179,10 +197,12 @@ function Footing({ base, onNew, onShot, onSteps }: {
   if (!state) return <div class="footing"><div class="footbar"><span class="held waiting">…</span></div></div>;
 
   // What the poll last reported, unless this button has just asked for the
-  // other thing. Freezing takes a moment and the poll is a second apart, so
+  // other thing. Holding takes a moment and the poll is a second apart, so
   // reading only the poll leaves the button ignoring its own click.
   const frozen = asked ?? state.frozen;
   const sequence = state.sequence;
+  const trafficHeld = state.held.some(layer => layer.layer === 'network');
+  const waiting = state.queued.length;
   // What the proxy panel counts: everything it holds, or while a recording
   // runs only what crossed after it began - the rest belongs to no step of it.
   const since = sequence?.recording ? sequence.recordingSince : undefined;
@@ -195,7 +215,7 @@ function Footing({ base, onNew, onShot, onSteps }: {
     own: counted.filter(event => !event.owned).length,
     failed: counted.filter(isFailure).length,
     // Answered, dropped or refused by the proxy rather than by the server.
-    intercepted: counted.filter(event => event.heldAs !== undefined).length,
+    intercepted: counted.filter(event => event.answeredAs !== undefined).length,
     sockets: boundary?.totals?.sockets.open ?? 0,
     sinceRecording: since !== undefined,
   };
@@ -213,14 +233,14 @@ function Footing({ base, onNew, onShot, onSteps }: {
    *
    * Conditions in the order they are cleared: a sequence is opened, the run it
    * drives finishes, the page it drives is let go. A control that clears one
-   * itself does not ask for it - RESTART and REPLAY release the freeze before
+   * itself does not ask for it - RESTART and REPLAY release the hold before
    * they drive, so neither names it.
    */
   const barred = (needs: { open?: boolean; idle?: boolean; running?: boolean }) => {
     if (needs.open && !sequence?.name) return 'pick a sequence first';
     if (needs.idle && sequence?.busy) return 'the run is going - stop it first';
     if (needs.running && frozen && !sequence?.paused) {
-      return 'the page is frozen - let it run first';
+      return 'the page is held - let it run first';
     }
     return null;
   };
@@ -237,17 +257,31 @@ function Footing({ base, onNew, onShot, onSteps }: {
   // a line just inside the one before and the next slice.
   const modes = ([
     ['recording', state.sequence?.recording === true],
-    ['frozen', frozen === true],
+    // The page held - its screen or its code - and the traffic held, each in
+    // its own colour: held traffic leaves the page running, so the two are
+    // different conditions and the frame says which stands.
+    ['frozen', frozen === true || state.held.some(layer => layer.layer !== 'network')],
+    ['traffic', trafficHeld],
     // Any run the bench is making counts, not only one started by play: a
     // run to a step drives the page the same way.
     ['playing', state.sequence?.playing === true || (state.sequence?.busy === true && !state.sequence?.recording)],
     ['paused', state.sequence?.paused === true],
   ] as const).filter(([, on]) => on).map(([mode]) => mode);
+  // A held layer something is waiting on pulses: the traffic while messages
+  // wait at the proxy, the page while its code hold is armed for the next JS.
+  const codeArmed = state.held.some(layer => layer.layer === 'code' && layer.standing?.armed === true);
+  const waitingOn = new Set<string>([
+    ...(trafficHeld && waiting > 0 ? ['traffic'] : []),
+    ...(codeArmed ? ['frozen'] : []),
+  ]);
+  // The first layer something waits on, in the frames' order, takes the
+  // whole disc on each pulse.
+  const attention = modes.find(mode => waitingOn.has(mode));
   const tone: Record<string, string> = {
-    recording: 'var(--alert)', frozen: 'var(--frost)', playing: 'var(--sequence)', paused: 'color-mix(in srgb, var(--sequence) 50%, transparent)',
+    recording: 'var(--alert)', frozen: 'var(--frost)', traffic: 'var(--caused)', playing: 'var(--sequence)', paused: 'color-mix(in srgb, var(--sequence) 50%, transparent)',
   };
   const said = modes.length
-    ? modes.map(mode => (mode === 'frozen' ? 'page frozen' : mode)).join(' · ')
+    ? modes.map(mode => (mode === 'frozen' ? 'page held' : mode === 'traffic' ? 'traffic held' : mode)).join(' · ')
     : 'idle';
   const slice = 100 / Math.max(1, modes.length);
   const disc = modes.length
@@ -258,12 +292,21 @@ function Footing({ base, onNew, onShot, onSteps }: {
     <>
       {/* The whole screen framed in each state's colour, and the disc naming them. */}
       {modes.map((mode, k) => (
-        <div key={mode} class={`stateframe ${mode}`} aria-hidden="true"
-          style={{ inset: `${4 + k * 5}px`, borderRadius: `${14 - k * 4}px`, borderColor: tone[mode] }} />
+        <div key={mode} class={`stateframe ${mode}${waitingOn.has(mode) ? ' waiting' : ''}`} aria-hidden="true"
+          style={{
+            inset: `${4 + k * 5}px`, top: `calc(var(--holdbar, 0px) + ${4 + k * 5}px)`,
+            borderRadius: `${14 - k * 4}px`, borderColor: tone[mode],
+          }} />
       ))}
+      {showing === 'hold' && createPortal(
+        <HoldPanel state={state} post={post} onClose={() => setShowing(null)} onGo={onGo} />,
+        document.body,
+      )}
       {slot && createPortal(
-        <span class={modes.length ? 'statedisc on' : 'statedisc'} title={said} role="status" aria-label={said}
-          style={disc ? { background: disc } : undefined} />,
+        <button class={`statedisc${modes.length ? ' on' : ''}${attention ? ' attention' : ''}`}
+          title={`${said} - open the hold`} aria-label={said}
+          style={{ ...(disc ? { background: disc } : {}), ...(attention ? { '--attention': tone[attention] } : {}) }}
+          onClick={() => setShowing(showing === 'hold' ? null : 'hold')} />,
         slot,
       )}
       {state.shotArmed && (
@@ -316,7 +359,7 @@ function Footing({ base, onNew, onShot, onSteps }: {
               control that carries it on. */}
           <span class={sequence.playing ? 'at running' : sequence.paused ? 'at paused' : 'at'}>
             {sequence.playing ? 'running · '
-              : sequence.paused ? (frozen ? 'paused · frozen · ' : 'paused · ')
+              : sequence.paused ? (frozen ? 'paused · held · ' : 'paused · ')
               : ''}
             step <b>{Math.min(sequence.currentStep + 1, sequence.total)}</b> of {sequence.total}
           </span>
@@ -333,7 +376,7 @@ function Footing({ base, onNew, onShot, onSteps }: {
             const here = boundary.events.filter(event => event.step === ran);
             // Answered from a rule rather than by the server: the payload came
             // from the sequence, so it is the second thing worth a number.
-            const answered = here.filter(event => event.heldAs !== undefined).length;
+            const answered = here.filter(event => event.answeredAs !== undefined).length;
             // Nothing crossed, so nothing is stated. A nought is a reading to
             // interpret, and its absence says the same thing without one.
             if (here.length === 0) return null;
@@ -361,7 +404,7 @@ function Footing({ base, onNew, onShot, onSteps }: {
             aria-label="RESTART"
             onClick={async () => {
               if (barred({ idle: true })) return;
-              await post('/freeze', { frozen: false });
+              await post('/hold/page', { held: false });
               await post('/sequence/goto', { step: 0 });
             }}><Glyph of="restart" /></button>
           <button class="chip-toggle" {...held(barred({ idle: true }))}
@@ -369,7 +412,7 @@ function Footing({ base, onNew, onShot, onSteps }: {
             aria-label="REPLAY"
             onClick={async () => {
               if (barred({ idle: true })) return;
-              await post('/freeze', { frozen: false });
+              await post('/hold/page', { held: false });
               await post('/sequence/goto', { step: 0 });
               await post('/sequence/play');
             }}><Glyph of="replay" /></button>
@@ -378,22 +421,21 @@ function Footing({ base, onNew, onShot, onSteps }: {
             aria-label="STEP"
             onClick={async () => {
               if (barred({ idle: true, running: true })) return;
-              if (sequence.paused) await post('/freeze', { frozen: false });
+              if (sequence.paused) await post('/hold/page', { held: false });
               await post('/sequence/step');
             }}
           ><Glyph of="step" /></button>
           <button
             class={sequence.paused ? 'chip-toggle waiting' : 'chip-toggle'}
-            {...held(barred({ idle: true, running: true }))}
-            title={barred({ idle: true, running: true })
+            {...held(barred({ idle: true }))}
+            title={barred({ idle: true })
               ?? (sequence.paused
                 ? `carry on from step ${Math.min(sequence.currentStep + 1, sequence.total)}`
                 : 'run from here')}
             aria-label="PLAY"
             onClick={async () => {
-              if (barred({ idle: true, running: true })) return;
-              // The pause froze the page, so carrying on lets it run again.
-              if (sequence.paused) await post('/freeze', { frozen: false });
+              if (barred({ idle: true })) return;
+              // Play lets go of any hold itself before it drives the page.
               await post('/sequence/play');
             }}
           ><Glyph of="play" /></button>
@@ -423,13 +465,42 @@ function Footing({ base, onNew, onShot, onSteps }: {
               one, so the bar states whether there is anything in there before
               it is opened. Two shapes rather than two colours: at this size a
               change of hue is the hardest thing on the bar to notice. */}
-          <button class="chip-toggle"
-            title={carrying
-              ? 'the values this run carries, and where each came from'
-              : 'nothing is carried between steps yet'}
+          <button
+            title={variablesHidden
+              ? 'list the variables at the top of the steps'
+              : 'hide the variables at the top of the steps'}
             aria-label="VARIABLES"
-            onClick={() => setShowing('vars')}
+            class={variablesHidden ? 'chip-toggle' : 'chip-toggle chosen'}
+            onClick={() => { onVariables(); toggleVariables(); }}
           ><Glyph of={carrying ? 'cogset' : 'cog'} /></button>
+          {/* A play that keeps its traffic, in a section of its own: it
+              replaces what later plays are compared against. */}
+          <span class="rule" />
+          {(() => {
+            // The baseline standing is the newest recorded traffic on any
+            // step; its time is what the button's words carry.
+            const at = Math.max(0, ...(sequence.steps ?? []).map(step => step.traffic?.recordedAt ?? 0));
+            const stop = barred({ idle: true })
+              ?? (boundary && !boundary.running ? 'a baseline keeps what crosses the proxy, and this browser was not launched through one' : null);
+            const when = at ? new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null;
+            return (
+              <button class={rebaselining ? 'chip-toggle sure' : 'chip-toggle'} {...held(stop)}
+                title={stop ?? (rebaselining
+                  ? 'click again to replace the baseline with a fresh play from the first step'
+                  : when
+                    ? `baseline from ${when} - play from the first step and keep its traffic in its place`
+                    : 'play from the first step and keep its traffic as the baseline later plays are compared against')}
+                aria-label="BASELINE"
+                onMouseLeave={() => setRebaselining(false)}
+                onClick={async () => {
+                  if (stop) return;
+                  if (when && !rebaselining) { setRebaselining(true); return; }
+                  setRebaselining(false);
+                  await post('/hold/page', { held: false });
+                  await post('/sequence/baseline');
+                }}><Glyph of="baseline" /></button>
+            );
+          })()}
         </div>
       )}
 
@@ -489,22 +560,24 @@ function Footing({ base, onNew, onShot, onSteps }: {
             thing it can do about it. */}
         {boundary && (
           <button
-            /* Three states, not two. A held page issues nothing, so a proxy
-               that is recording and one whose page is stopped are both quiet -
-               and reading the green one as "traffic is flowing" is how a
-               frozen page gets mistaken for an app that has gone silent. */
+            /* Three states, not two. A held page starts no traffic of its own,
+               though what the server pushes still crosses, so reading the green
+               one as "the app is working" is how a frozen page gets mistaken
+               for an app that has gone quiet on its own. */
             class={!boundary.running ? 'chip-toggle blind'
               : frozen ? 'chip-toggle stilled'
               : lit ? `chip-toggle recording lit-${lit}` : 'chip-toggle recording'}
             title={!boundary.running
               ? 'nothing records what crosses the boundary - open its controls'
+              : trafficHeld
+                ? `recording: traffic is held at the proxy, ${waiting} waiting to reach the page`
               : frozen
-                ? 'recording, and nothing is crossing: the page is frozen'
+                ? 'recording: the held page starts nothing, and what the server sends still arrives here'
                 : `${counts.caused} caused by steps · ${counts.own} the app's own`
                   + `${counts.failed ? ` · ${counts.failed} failed` : ''}`
                   + `${counts.sinceRecording ? ' since recording began' : ''} - open for the rest`}
             aria-label={!boundary.running ? 'NOT RECORDING'
-              : frozen ? 'RECORDING WHILE FROZEN' : 'RECORDING'}
+              : frozen ? 'RECORDING WHILE HELD' : 'RECORDING'}
             onClick={() => setShowing('proxy')}
           >
             <Glyph of="proxy" />
@@ -519,18 +592,19 @@ function Footing({ base, onNew, onShot, onSteps }: {
         <button
           class={frozen ? 'chip-toggle frozen' : 'chip-toggle'}
           title={frozen
-            ? `the page is frozen at ${state.tickMs}ms — its JS is stopped, so it cannot be driven. Click to let it run.`
-            : 'the page is running and can be driven. Click to freeze it.'}
-          aria-label={frozen ? 'FROZEN' : 'FREEZE'}
+            ? `held at ${state.tickMs}ms: its code and screen are stopped${trafficHeld ? ', and traffic waits at the proxy' : ''}, so it cannot be driven. Click to let it all run.`
+            : `the page is running and can be driven. Click to hold its code, screen${boundary?.running ? ' and traffic' : ''}.`}
+          aria-label={frozen ? 'HELD' : 'HOLD'}
           onClick={async () => {
             setAsked(!frozen);
-            await post('/freeze', { frozen: !frozen });
+            // Letting the page run carries on a run the hold paused.
+            await post('/hold/page', { held: !frozen, resume: frozen });
             // Back to whatever the page reports: the request may have been
             // refused, and a button that keeps its own answer would report a
-            // freeze that is not there.
+            // hold that is not there.
             setAsked(null);
           }}
-        ><Glyph of="freeze" /></button>
+        ><Glyph of="hold" /></button>
         <button class={showHidden ? 'chip-toggle showhidden on' : 'chip-toggle showhidden'}
           title={showHidden ? 'leave ignored traffic out of the list again' : 'show the ignored traffic, dimmed'}
           aria-label={showHidden ? 'HIDE IGNORED' : 'SHOW IGNORED'} aria-pressed={showHidden}
@@ -542,7 +616,7 @@ function Footing({ base, onNew, onShot, onSteps }: {
     {/* Outside the bar, not within it: `.footing` is transformed, and a
         transform makes its element the containing block for anything fixed
         inside it - the scrim would cover the bar rather than the screen. */}
-    {(showing === 'proxy' || (showing !== null && sequence?.name)) && (
+    {(showing === 'proxy' || (showing === 'about' && sequence?.name)) && (
         <div class="scrim" onClick={() => setShowing(null)}>
           <div class="report" onClick={(e: MouseEvent) => e.stopPropagation()}>
             {showing === 'proxy'
@@ -556,7 +630,7 @@ function Footing({ base, onNew, onShot, onSteps }: {
                         <span class="statusdot" />
                         <span class="statustitle">
                           {tone === 'blind' ? 'Not recording'
-                            : tone === 'stilled' ? 'Recording, page frozen'
+                            : tone === 'stilled' ? (trafficHeld ? 'Recording, traffic held' : 'Recording, page held')
                             : 'Recording traffic'}
                         </span>
                         <span class="grow" />
@@ -564,7 +638,8 @@ function Footing({ base, onNew, onShot, onSteps }: {
                       </div>
                       <p class="statussub">
                         {tone === 'blind' ? 'This browser was launched without a proxy, so nothing records what crosses.'
-                          : tone === 'stilled' ? 'Nothing crosses while the page is held.'
+                          : tone === 'stilled' && trafficHeld ? `The page is held and what the server sends waits at the proxy: ${waiting} waiting. It crosses in order on release, or one message at a time from the held panel, and is recorded as it crosses.`
+                          : tone === 'stilled' ? 'The page is held, so it starts nothing. What the server sends still crosses and is recorded; the page handles it once released.'
                           : counts.sinceRecording ? `Counted since "${sequence?.name}" began recording.`
                           : 'Counted since the proxy started.'}
                       </p>
@@ -594,13 +669,6 @@ function Footing({ base, onNew, onShot, onSteps }: {
                   <button class="close" title="close" onClick={() => setShowing(null)}>×</button>
                 </div>
               )}
-            {showing === 'vars' && sequence && (
-              <Variables
-                variables={sequence.variables ?? []}
-                steps={sequence.steps ?? []}
-                post={post}
-              />
-            )}
             {showing === 'proxy' && boundary?.running && (
                 <SavedResponses
                   base={base}
@@ -699,28 +767,134 @@ function Footing({ base, onNew, onShot, onSteps }: {
   );
 }
 
+type Tab = 'editing' | 'traffic' | 'history' | 'tools';
+
+/** The tab's word in the address, and back. A word no tab has opens UI. */
+const TAB_WORDS: Record<Tab, string> = { editing: 'ui', traffic: 'traffic', history: 'history', tools: 'tools' };
+
+/**
+ * Where the bench stands, as the address holds it: the tab and the open
+ * sequence. Each move pushes an entry, so the browser's back and forward
+ * return to the list after a sequence is opened, and to the tab before.
+ */
+interface Place { tab: Tab; sequence: string | null }
+
+function placeOf(): Place {
+  const query = new URLSearchParams(location.search);
+  const word = query.get('tab');
+  const tab = (Object.keys(TAB_WORDS) as Tab[]).find(key => TAB_WORDS[key] === word) ?? 'editing';
+  return { tab, sequence: query.get('sequence') || null };
+}
+
+function addressOf(place: Place): string {
+  const query = new URLSearchParams();
+  if (place.tab !== 'editing') query.set('tab', TAB_WORDS[place.tab]);
+  if (place.sequence) query.set('sequence', place.sequence);
+  const search = query.toString();
+  return `${location.pathname}${search ? `?${search}` : ''}`;
+}
+
+function samePlace(a: Place, b: Place): boolean {
+  return a.tab === b.tab && a.sequence === b.sequence;
+}
+
+async function postTo(path: string, body?: Record<string, unknown>): Promise<void> {
+  await fetch(`${BASE}${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body ?? {}),
+  }).catch(() => { /* the bench outlives a restart */ });
+}
+
 function Bench() {
-  const [tab, setTab] = useState<'editing' | 'boundary' | 'notes'>('editing');
-  // Asked for from the footing, answered on the steps screen: a recording
-  // produces steps, so it is written where they are read.
+  const [tab, setTab] = useState<Tab>(() => placeOf().tab);
+  // Asked for from the footing, answered on UI: a recording produces steps, so
+  // it is written where they are read.
   const [starting, setStarting] = useState(false);
   // The tab a capture was started from, to go back to once it is kept or
-  // dropped: a capture taken mid-recording opens on UI, and the recorder's
-  // controls are on STEPS.
-  const [shotFrom, setShotFrom] = useState<'boundary' | 'notes' | null>(null);
+  // dropped: every capture opens on UI, where the reel it lands in is.
+  const [shotFrom, setShotFrom] = useState<Exclude<Tab, 'editing'> | null>(null);
+  const [busy, setBusy] = useState(false);
+  /** The sequence the session last reported open; undefined before the first report. */
+  const shown = useRef<string | null | undefined>(undefined);
+  /**
+   * The sequence a history move has posted for and the session has not yet
+   * reported. Polls in flight while the post lands still carry the old name,
+   * and each would push that name back onto the history.
+   */
+  const pending = useRef<{ sequence: string | null } | null>(null);
+
+  const go = (next: Place) => {
+    if (!samePlace(next, placeOf())) history.pushState(null, '', addressOf(next));
+    setTab(next.tab);
+  };
+  const goTab = (next: Tab) => go({ tab: next, sequence: placeOf().sequence });
+
+  const reach = (sequence: string | null) => {
+    if (sequence === shown.current) return;
+    const asked = { sequence };
+    pending.current = asked;
+    void postTo(sequence ? '/sequence/select' : '/sequence/cancel', sequence ? { name: sequence } : {})
+      .then(() => setTimeout(() => {
+        if (pending.current !== asked) return;
+        pending.current = null;
+        // A select the session refused leaves the address naming a sequence
+        // that is not open; it is set back to the one that is.
+        if (shown.current !== undefined && shown.current !== placeOf().sequence) {
+          history.replaceState(null, '', addressOf({ tab: placeOf().tab, sequence: shown.current }));
+        }
+      }, 1000));
+  };
+
+  const onSequence = (name: string | null, running: boolean) => {
+    setBusy(running);
+    const first = shown.current === undefined;
+    shown.current = name;
+    if (pending.current) {
+      if (pending.current.sequence === name) pending.current = null;
+      return;
+    }
+    const at = placeOf();
+    if (at.sequence === name) return;
+    const next = addressOf({ tab: at.tab, sequence: name });
+    if (first) history.replaceState(null, '', next);
+    else history.pushState(null, '', next);
+  };
+
+  useEffect(() => {
+    const onPop = () => {
+      const at = placeOf();
+      setTab(at.tab);
+      reach(at.sequence);
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
+  const home = () => {
+    if (busy) return;
+    go({ tab: 'editing', sequence: null });
+    reach(null);
+  };
+
   return (
     <>
       <header>
-        <h1>bench</h1>
+        <h1 class="home" role="link" aria-disabled={busy ? true : undefined}
+          title={busy ? 'the run is going - stop it first' : 'the list of sequences'}
+          onClick={home}>bench</h1>
         <nav>
-          <button class={tab === 'editing' ? 'on' : ''} onClick={() => setTab('editing')}>
+          <button class={tab === 'editing' ? 'on' : ''} onClick={() => goTab('editing')}>
             UI
           </button>
-          <button class={tab === 'boundary' ? 'on' : ''} onClick={() => setTab('boundary')}>
-            Boundary
+          <button class={tab === 'traffic' ? 'on' : ''} onClick={() => goTab('traffic')}>
+            Traffic
           </button>
-          <button class={tab === 'notes' ? 'on' : ''} onClick={() => setTab('notes')}>
-            Steps
+          <button class={tab === 'history' ? 'on' : ''} onClick={() => goTab('history')}>
+            History
+          </button>
+          <button class={tab === 'tools' ? 'on' : ''} onClick={() => goTab('tools')}>
+            Tools
           </button>
         </nav>
         {/* The state disc is drawn here by the footing, which reads the state,
@@ -731,24 +905,30 @@ function Bench() {
       {tab === 'editing' && (
         <Editing
           base={BASE}
-          onReturn={() => { setTab(shotFrom ?? 'notes'); setShotFrom(null); }}
+          onReturn={() => { if (shotFrom) goTab(shotFrom); setShotFrom(null); }}
           returnsFromShot={shotFrom !== null}
           starting={starting}
           onStarted={() => setStarting(false)}
         />
       )}
-      {tab === 'boundary' && <Boundary base={BASE} />}
-      {tab === 'notes' && (
-        <Notes base={BASE} starting={starting} onDone={() => setStarting(false)} />
-      )}
+      {tab === 'traffic' && <Traffic base={BASE} />}
+      {tab === 'history' && <History base={BASE} />}
+      {tab === 'tools' && <Tools base={BASE} />}
       <Footing
         base={BASE}
-        onNew={() => { setTab('editing'); setStarting(true); }}
-        onSteps={() => setTab('notes')}
+        onSequence={onSequence}
+        onNew={() => { goTab('editing'); setStarting(true); }}
+        onVariables={() => goTab('editing')}
+        onGo={(layer) => {
+          if (layer === 'code') { void postTo('/devtools'); return; }
+          goTab(layer === 'network' ? 'traffic' : 'editing');
+          if (layer === 'network') goToSection('waiting');
+          if (layer === 'sequence') goToSection('step-here');
+        }}
         onShot={() => {
           setStarting(false);
           if (tab !== 'editing') setShotFrom(tab);
-          setTab('editing');
+          goTab('editing');
         }}
       />
     </>

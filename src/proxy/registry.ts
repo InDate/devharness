@@ -6,8 +6,11 @@
  * browses, and a browse crosses tabs.
  */
 import { InterceptProxy, type ProxyCursor } from './intercept-proxy.js';
+import { attachLayer } from '../hold.js';
 
 const proxies = new Map<string, InterceptProxy>();
+/** Detaches each proxy's queue from the hold record when the proxy stops. */
+const networkDetach = new Map<string, () => void>();
 /** The flags that launch a browser through each reference's proxy. */
 const launchArgs = new Map<string, string[]>();
 
@@ -15,41 +18,7 @@ const launchArgs = new Map<string, string[]>();
 let current: ProxyCursor | undefined;
 
 /**
- * A replay step held open until what it waits for has crossed: `count` of
- * the kind `key` names, or of anything with no key, within `seconds`. On
- * `onFail: 'fail'` a step whose crossings never came fails; on `continue` the
- * run goes on without them.
- */
-export interface StepWait {
-  step: number;
-  key?: string;
-  count: number;
-  seconds: number;
-  onFail: 'fail' | 'continue';
-}
-
-const stepWaits = new Map<string, StepWait[]>();
-const waitFailures = new Map<string, string>();
-
-/**
- * How one wait went in one pass: `waiting` while its step is held, then met,
- * failed, or carried on without what it waited for, with how many arrived.
- */
-export interface WaitOutcome {
-  runId: string;
-  step: number;
-  key?: string;
-  state: 'waiting' | 'met' | 'failed' | 'carried';
-  arrived: number;
-  count: number;
-  seconds: number;
-  startedAt: number;
-}
-
-const waitOutcomes = new Map<string, WaitOutcome[]>();
-
-/**
- * How one check - or conditional - step went in one pass: the answer, what
+ * How one check step went in one pass: the answer, what
  * the step did on it, and the sequence it ran with how many steps that took.
  * Kept for the newest pass only, as a pass reads its own.
  */
@@ -74,6 +43,8 @@ export interface CheckOutcome {
 export interface RanStep {
   tool: string;
   line: string;
+  /** A check's parameters, which its answer's words are read from. */
+  params?: Record<string, unknown>;
   success: boolean;
   error?: string;
   check?: {
@@ -93,25 +64,6 @@ export function recordCheckOutcome(reference: string, outcome: CheckOutcome): vo
   const kept = (checkOutcomes.get(reference) ?? [])
     .filter(one => one.runId === outcome.runId && one.step !== outcome.step);
   checkOutcomes.set(reference, [...kept, outcome]);
-}
-
-/** How this browser's waits went, newest pass last. */
-export function waitOutcomesFor(reference: string): WaitOutcome[] {
-  return waitOutcomes.get(reference) ?? [];
-}
-
-/** The waits a browser's replays hold their steps open for, replacing any it had. */
-export function setStepWaits(reference: string, waits: StepWait[]): void {
-  if (waits.length) stepWaits.set(reference, waits);
-  else stepWaits.delete(reference);
-}
-
-/** The failure a wait left on this browser's last released step, taken once. */
-export function takeWaitFailure(reference: string | undefined): string | undefined {
-  if (reference === undefined) return undefined;
-  const failure = waitFailures.get(reference);
-  waitFailures.delete(reference);
-  return failure;
 }
 
 export async function startProxyFor(reference: string, appUrl?: string): Promise<{
@@ -137,7 +89,21 @@ export async function startProxyFor(reference: string, appUrl?: string): Promise
   // it, so without this the page load that launch causes carries no command.
   if (current) proxy.mark(current);
   proxies.set(reference, proxy);
+  networkDetach.set(reference, attachLayer(reference, 'network', proxy.queue.mechanism()));
   return { proxy, chromeArgs };
+}
+
+const cursorEnds = new Set<(ending: ProxyCursor) => void>();
+
+/**
+ * Call `listener` with each cursor as it is replaced or cleared, before the
+ * next one takes its place. A store read on a timer reads again here, so a
+ * change made under a step is stamped with that step rather than with
+ * whatever is in flight when the timer next fires. Returns the unsubscribe.
+ */
+export function onCursorEnd(listener: (ending: ProxyCursor) => void): () => void {
+  cursorEnds.add(listener);
+  return () => { cursorEnds.delete(listener); };
 }
 
 /**
@@ -149,6 +115,7 @@ export async function startProxyFor(reference: string, appUrl?: string): Promise
  * resolved at the point a command is recorded - some carry no connection.
  */
 export function markOnProxies(cursor: ProxyCursor | undefined): void {
+  if (current) for (const listener of cursorEnds) listener(current);
   current = cursor;
   for (const proxy of proxies.values()) proxy.mark(cursor);
 }
@@ -230,35 +197,6 @@ export function releaseCommand(
   return onBoundary(async () => {
     if (reference === undefined) await settleProxies(quietMs, capMs);
     else await proxies.get(reference)?.settle(quietMs, capMs);
-    // Held open, still marked, until what the step waits for has crossed:
-    // released on time alone, what arrives after is stamped with no step.
-    const cursor = current;
-    const proxy = reference === undefined ? undefined : proxies.get(reference);
-    // A branch's own steps share the parent step's number; the parent's waits
-    // are the parent's, held once at its own release.
-    if (proxy && cursor?.kind === 'replay' && !cursor.within?.length) {
-      for (const wait of stepWaits.get(reference!) ?? []) {
-        if (wait.step !== cursor.step) continue;
-        // Kept per browser for the pass's rows; a pass replaces the one before.
-        const outcome: WaitOutcome = {
-          runId: cursor.runId, step: cursor.step, ...(wait.key ? { key: wait.key } : {}),
-          state: 'waiting', arrived: 0, count: wait.count, seconds: wait.seconds, startedAt: Date.now(),
-        };
-        const kept = (waitOutcomes.get(reference!) ?? []).filter(one => one.runId === cursor.runId
-          && !(one.step === outcome.step && one.key === outcome.key));
-        waitOutcomes.set(reference!, [...kept, outcome]);
-        const came = await proxy.awaitCrossings({
-          runId: cursor.runId, step: cursor.step, count: wait.count, timeoutMs: wait.seconds * 1000,
-          ...(wait.key ? { key: wait.key } : {}),
-        });
-        outcome.arrived = came.arrived;
-        outcome.state = came.met ? 'met' : wait.onFail === 'fail' ? 'failed' : 'carried';
-        if (outcome.state === 'failed') {
-          waitFailures.set(reference!, `step ${wait.step + 1} waited ${wait.seconds}s for ${wait.count} of ${wait.key ?? 'anything'} and got ${came.arrived}`);
-          break;
-        }
-      }
-    }
     markOnProxies(undefined);
     return Date.now();
   });
@@ -276,6 +214,30 @@ export function boundarySettled(): Promise<void> {
  */
 export function currentCursor(): ProxyCursor | undefined {
   return current;
+}
+
+/**
+ * When each call started, newest last: every tool call an agent makes, and
+ * every step a run takes. A traffic check counts from the start of a call a
+ * given number back, so the list holds calls, not only the ones that mark the
+ * proxies: every call counts, read-only ones included.
+ */
+const callStarts: number[] = [];
+const MAX_CALL_STARTS = 500;
+
+export function noteCallStart(at = Date.now()): void {
+  callStarts.push(at);
+  if (callStarts.length > MAX_CALL_STARTS) callStarts.splice(0, callStarts.length - MAX_CALL_STARTS);
+}
+
+/**
+ * When the call `back` before the newest began. The newest is the call
+ * asking, so 0 is its own start and 1 the call before it; undefined past the
+ * first call noted.
+ */
+export function callStartedBack(back: number): number | undefined {
+  const at = callStarts.length - 1 - back;
+  return at >= 0 ? callStarts[at] : undefined;
 }
 
 export function getProxy(reference: string): InterceptProxy | undefined {
@@ -296,6 +258,9 @@ export async function stopProxyFor(reference: string): Promise<boolean> {
   if (!proxy) return false;
   proxies.delete(reference);
   launchArgs.delete(reference);
+  networkDetach.get(reference)?.();
+  networkDetach.delete(reference);
+  proxy.queue.releaseAll();
   await proxy.stop().catch(() => {});
   return true;
 }

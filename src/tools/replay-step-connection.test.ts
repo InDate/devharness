@@ -11,7 +11,7 @@ import type { ExecutionContext } from './replay-executor.js';
 import type { CommandSequence, RecordedCommand } from '../command-recorder.js';
 import { configManager } from '../config.js';
 import { productionShaped } from '../test-support/fake-execute-tool-call.js';
-import { createErrorResponse } from '../messages.js';
+import { createErrorResponse, createSuccessResponse } from '../messages.js';
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -27,7 +27,8 @@ interface Call {
 function makeHarness(responses: Record<string, any> = {}) {
   const calls: Call[] = [];
   const executeToolCall = vi.fn(productionShaped(async (tool: string, params: Record<string, any>) => {
-    calls.push({ tool, action: params.action, connectionReason: params.connectionReason, params });
+    // getDebuggerStatus names its connection `reference`; either is where the call went.
+    calls.push({ tool, action: params.action, connectionReason: params.connectionReason ?? params.reference, params });
     const key = `${tool}.${params.action}`;
     if (key in responses) {
       const r = responses[key];
@@ -60,6 +61,18 @@ const seq = (commands: RecordedCommand[]): CommandSequence => ({
   name: 'conn-seq',
   commands,
   createdAt: 1,
+});
+
+/** getDebuggerStatus as it answers for a page paused with `callFrameId` on top. */
+const pausedStatus = (reference: string, callFrameId: string) => ({
+  ...createSuccessResponse('CONNECTION_STATUS', {}, { reference, paused: true }),
+  _meta: {
+    tool: 'getDebuggerStatus', timestamp: 0,
+    debugger: {
+      reference, connected: true, paused: true, totalBreakpoints: 0,
+      pausedAt: { url: 'http://a/app.js', lineNumber: 4, functionName: 'handler', callFrameId },
+    },
+  },
 });
 
 /** All calls for a tool (optionally an action), in order. */
@@ -116,9 +129,10 @@ describe('bug-008: inspect steps and connection resolution', () => {
 
   it('refreshes a stale callFrameId against the step connection, not the run connection', async () => {
     const { calls, ctx } = makeHarness({
-      'inspect.getCallStack': {
-        content: [{ type: 'text', text: '{"callFrameId": "fresh-frame"}' }],
-      },
+      // Only the step's own connection is paused, which is where the frame is.
+      getDebuggerStatus: (params: any) => params.reference === 'device-b'
+        ? pausedStatus('device-b', 'fresh-frame')
+        : { content: [{ type: 'text', text: '' }] },
     });
     await executeSteps({
       sequence: seq([
@@ -128,7 +142,7 @@ describe('bug-008: inspect steps and connection resolution', () => {
       ctx,
     });
 
-    const stackProbes = find(calls, 'inspect', 'getCallStack');
+    const stackProbes = find(calls, 'getDebuggerStatus');
     // [0] is the run-level pre-run resume probe; [1] is the callFrameId refresh,
     // which must target the step's own connection
     expect(stackProbes[0].connectionReason).toBe('device-a');
@@ -185,7 +199,7 @@ describe('bug-009: validation machinery follows the per-step connection', () => 
     });
 
     // calls[0] is the run-level "resume if a previous run left us paused" probe
-    expect(calls[0]).toMatchObject({ tool: 'inspect', action: 'getCallStack', connectionReason: 'device-a' });
+    expect(calls[0]).toMatchObject({ tool: 'getDebuggerStatus', connectionReason: 'device-a' });
 
     // every observation around the click must target device-b (listConnections
     // is the step-connection existence probe - it is session-wide, not per
@@ -248,7 +262,7 @@ describe('bug-009: validation machinery follows the per-step connection', () => 
     });
 
     // first probe is the run-level pre-run resume check, second is the post-step check
-    const stackProbes = find(calls, 'inspect', 'getCallStack');
+    const stackProbes = find(calls, 'getDebuggerStatus');
     expect(stackProbes.map(c => c.connectionReason)).toEqual(['device-a', 'device-b']);
   });
 
@@ -319,7 +333,7 @@ describe('bug-009: validation machinery follows the per-step connection', () => 
     const queries = find(calls, 'dom', 'querySelector');
     expect(queries.map(q => q.connectionReason)).toEqual(['device-b', 'device-a']);
     // pause probes follow suit
-    expect(find(calls, 'inspect', 'getCallStack').map(c => c.connectionReason))
+    expect(find(calls, 'getDebuggerStatus').map(c => c.connectionReason))
       .toEqual(['device-a', 'device-b', 'device-a']);
   });
 });

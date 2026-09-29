@@ -15,7 +15,7 @@ Every capability below is the one `replay` tool, dispatched on `action`:
 | Group | Actions |
 |---|---|
 | History | `history`, `repeat`, `runFromLog` |
-| Authoring | `create`, `recordInteraction`, `insert`, `addConditional`, `declare` |
+| Authoring | `create`, `recordInteraction`, `insert`, `addCheck`, `declare` |
 | Managing | `list`, `get`, `delete`, `export`, `load`, `listSaved`, `deleteSaved` |
 | Running | `run`, `runAll`, `step`, `finish`, `status`, `cancel` |
 
@@ -280,8 +280,9 @@ Notes:
 - Only the tool *name* is checked. Params are deliberately not validated against
   the tools' schemas, because a param may legitimately hold a `{{var:...}}` or
   `{{timestamp}}` token at rest that only resolves to its real type at run time.
-- `conditional` is exempt - it is a virtual step tool the executor handles
-  itself and it is never a registered tool (see [Conditional Steps](#conditional-steps)).
+- `forEach` is exempt - it is a virtual step tool the executor handles
+  itself and it is never a registered tool (see [forEach Steps](#foreach-steps)).
+  `conditional`, which a check that runs a sequence replaced, is flagged.
 - A rejected `create` does not clobber an existing same-named sequence; a
   rejected `load` is dropped from memory so it can't be run by id.
 
@@ -400,7 +401,7 @@ Lifetime and limits:
   `status`/`cancel` with that id return `REPLAY_RUN_NOT_FOUND`.
 - `cancel` with a `runId` aborts the run's controller. The run's signal is
   forwarded to every step's tool handler; cancellation also reaches nested
-  sequences (`conditional` flows, nested `replay run` steps) - they share the
+  sequences (a check's `{ run }`, nested `replay run` steps) - they share the
   parent run's signal. Status shows `cancelling` until the run actually stops.
   What a cancel does to the step that is currently in flight depends on the
   tool, and the three levels are genuinely different (see the table below).
@@ -423,7 +424,7 @@ Lifetime and limits:
   Two caveats that apply to every row: work already dispatched to the browser
   may still take effect, and a "stops waiting" step leaves work running in the
   target that no one is watching any more.
-- A nested run started by a sequence step (a `conditional` flow, or a
+- A nested run started by a sequence step (a check's `{ run }`, or a
   `replay run` step - which is forced to `wait: true`) is part of its parent
   run, never a separate top-level run.
 
@@ -461,7 +462,7 @@ replay({ action: 'run', name: 'magic-link-login', startUrl: 'https://app.example
   `navigate goto` url, a `request` url, ...), and the launch `url` of any
   connection the sequence declares - keeping path, query and hash. Relative
   URLs are untouched. The stored sequence is never mutated.
-- The retarget travels **into nested sequences**: a `conditional`'s `then` and
+- The retarget travels **into nested sequences**: a check's `{ run }` and
   a `forEach`'s `do` load from the recorder in their recorded form, and the
   run's origin is applied to each as it loads, at every depth. Without that a
   retargeted run drives two origins at once - the parent on the target
@@ -620,7 +621,7 @@ builds them, and so does the prompt a `run` returns when typed text is present
 and `variables` is omitted. Read them from there rather than composing them by
 hand.
 
-The substitutions reach **nested sequences** - a `conditional`'s `then` and a
+The substitutions reach **nested sequences** - a check's `{ run }` and a
 `forEach`'s `do`, at every depth - so a key naming a step in a shared login
 helper lands there. `runAll` holds one map for the whole suite and validates it
 against the union of the selected sequences: a key matching any member is
@@ -735,7 +736,7 @@ Behaviour worth knowing:
   `Array(3)`) come back as strings - capture a specific field, not a whole DOM
   object.
 - The store is shared by reference across the whole run, including nested
-  `conditional` sequences and steps running on other connections, and it
+  sequences a check runs and steps running on other connections, and it
   survives a mid-run pause into `step`/`finish`.
 
 ### Interpolation Tokens
@@ -850,7 +851,7 @@ Recorded name on the left, a reference from this session on the right. Both
 sides are sanitized, so spaced forms work. A key matching nothing in the
 sequence is rejected before anything runs, listing the references the sequence
 actually uses — a typo fails loudly instead of being ignored. "The sequence"
-includes any sequence reached through a `conditional` step, since a setup
+includes any sequence a check runs, since a setup
 sequence normally lives behind one; when such a sub-sequence can't be resolved
 in memory the key is accepted rather than guessed at.
 
@@ -1074,10 +1075,10 @@ step against one `page` would relocate the same silent collapse into the
 exported test.
 
 The generators only know `navigate` and `input` steps. Anything else —
-`conditional`, `launchChrome`, `inspect`, `storage`, `wait`, `breakpoint` —
+`check`, `launchChrome`, `inspect`, `storage`, `wait`, `breakpoint` —
 becomes a `// [not generated]` comment naming the step, and a sequence where
 *nothing* could be generated exports a test that **throws** rather than an empty
-one that passes. A setup sequence made of a conditional and a launch has no
+one that passes. A setup sequence made of a check and a launch has no
 Playwright equivalent at all; run it with `replay({ action: 'run' })` instead of
 exporting it.
 
@@ -1093,48 +1094,119 @@ replay in one browser and report success — the "member" steps ran in the owner
 browser, the owner saw their own optimistic update, and a cross-user propagation
 assertion went green having never involved a second user.
 
-## Conditional Steps
+## Check Steps
 
-`conditional` is a virtual step tool: it is handled inside the executor, never
-appears in the tool list, and is exempt from tool-name validation.
+A `check` step reads one thing and answers held, failed or error:
 
-Not being a real tool, it is never recorded, so `create` and `insert` — which
-both build steps out of recorded history — cannot produce one. `addConditional`
-is its authoring action:
+| It reads | Parameters |
+|---|---|
+| an element | `selector` + `condition`: `present`, `absent`, `visible`, `hittable`, `enabled`, or `text` / `attribute` / `count` with `operator` + `right` |
+| a value | `value` (typically `{{var:name.path}}`) + `operator` + `right` |
+| a JS predicate | `expression`, read in a page or a Node target |
+| the URL | `url`, with `operator` `equals` (default), `contains` or `matches` |
+| a cookie, a localStorage key, an IndexedDB record | `cookie` / `localStorage` / `indexedDB` (`DB/STORE/KEY`, or `DB/STORE` for any record), `condition` `present` (default) or `absent` |
+| traffic crossing the proxy | `traffic: { urlIncludes, method }` for requests, `traffic: { urlIncludes, direction, textIncludes }` for frames, with `count` + `operator` (default at least 1) |
+| a socket | `socket` (a substring of its URL), `condition` `open` (default) or `closed` |
+| time alone | `afterMs` and nothing else - a timer |
+
+`afterMs` waits before the first read; `withinMs` reads again every `pollMs`
+until it holds, for at most that long. With neither, it reads once.
+
+A traffic check is counted by the proxy itself, matched exactly as a pin
+matches - the same fields, the same code, a lone `"key":value` in
+`textIncludes` compared as a top-level JSON field. The count starts at the
+start of the call `stepsBack` before the check (default 1, the call just
+before it): the proxy counts what is already on its record from then, with
+the full text each crossing carried, then each crossing as it passes until the
+check ends. Every call counts - every tool call an agent makes, reads
+included, and every step of a run - so a `screenshot` between a click and its
+check makes the click `stepsBack: 2`. The default matters because traffic a
+call caused has usually crossed by the time the check is called: a step ends
+once its traffic settles. `count` with `gte` (the default) or `gt` holds as soon as it is met;
+`equals`, `lte` and `lt` read until `withinMs` ends, since a later crossing can
+break them, and fail as soon as they are exceeded:
 
 ```javascript
-replay({ action: 'addConditional',
+check({ traffic: { urlIncludes: '/api/items', method: 'GET' }, count: 4, operator: 'equals', withinMs: 3000 })
+check({ traffic: { urlIncludes: '/live', direction: 'received', textIncludes: '"tag":"tick"' }, count: 3, withinMs: 5000 })
+check({ traffic: { urlIncludes: '/analytics' }, count: 0, operator: 'equals', withinMs: 2000 })
+check({ socket: '/live', condition: 'closed', withinMs: 10000 })
+```
+
+Both read through the proxy the browser was launched with, so on a browser
+launched without `proxy: true` they answer an error; the bench says so when a
+sequence holding one is opened, with a button to relaunch through a proxy. In a
+run, the step before a traffic check stays marked while the check waits, so the
+crossings it counts are listed under the step that caused them. Operators:
+`equals`, `notEquals`, `contains`, `matches`, `gt`, `gte`, `lt`, `lte`,
+`exists`, `notExists`.
+
+What the run does on each answer is the step's `holds` and `fails`:
+
+```json
+{ "tool": "check", "params": {
+    "selector": "[data-testid=whats-new]", "condition": "present",
+    "holds": { "run": "dismiss-whats-new" },
+    "fails": "continue" } }
+```
+
+- `continue` - carry on at the next step. The default for `holds`.
+- `stop` - end the run here, failed. The default for `fails`.
+- `{ run: "<sequence>", resumeAt }` - run that sequence inline, then carry on at
+  the next step, or at `resumeAt` (0-based, forward only) to skip the steps
+  between. A guard is a check whose pass runs a sequence.
+
+An **error** - a bad selector, a page paused at a breakpoint, no connection, an
+element check against a Node target - stops the run whatever `fails` says: a
+check that could not be read has not failed, and carrying on past it would
+report a run that never looked. A malformed selector and a paused page end the
+read at once, not at the end of `withinMs`. An element read survives a
+navigation part-way through, and `replay cancel` stops a read mid-poll.
+
+`assert` and `wait` are checks with a fixed answer to what happens next: an
+`assert` stops the run on a fail, and reads a DOM condition for up to 5s
+(`timeoutMs`); a `wait` reads for up to 15s. Called directly, they keep their
+own messages and fail the call on a fail. Written into a sequence - `create`,
+`insert`, a bench timer, a recorded timer - they are stored as `check` steps.
+Existing `assert` and `wait` steps in a sequence file run as they are.
+
+Called directly, `check` answers held or failed without failing the call, and
+errors only on a check it cannot read; `_meta.check` carries `outcome`,
+`subject`, `found`, `elapsedMs` and `polls`. A run records each check's answer,
+what it did, how long it read for against its limit, and the steps a sequence
+it ran took, which the bench shows on the check's row.
+
+### Adding a check
+
+`create` and `insert` build steps out of recorded history, so a check that runs
+another sequence has one authoring action, `addCheck`:
+
+```javascript
+replay({ action: 'addCheck',
          name: 'checkout-flow',              // or sequenceId
-         condition: '{{selector:.cookie-banner}}',
-         thenSequence: 'dismiss-cookie-banner',
+         check: { selector: '.cookie-banner', condition: 'present',
+                  holds: { run: 'dismiss-cookie-banner' }, fails: 'continue' },
          insertAfterStep: 2,                 // omit to append; 0 puts it first
          comment: 'EU builds only' })        // optional
 ```
 
-which stores the step as:
-
-```json
-{ "tool": "conditional", "params": {
-    "if": "{{selector:.cookie-banner}}",
-    "then": "dismiss-cookie-banner" } }
-```
-
-Rejected before the sequence is touched: a condition that doesn't parse, an
-unknown type, an uncompilable or over-long `url:matches` regex, a malformed
-`indexedDB` path, a `thenSequence` naming no known sequence or naming this one
-(which would recurse to `maxConditionalDepth`), an out-of-range
-`insertAfterStep`. Values holding a `{{var:...}}` token are skipped — they are
-substituted at run time.
+Rejected before the sequence is touched: parameters the `check` tool's own
+schema refuses, a `run` naming no known sequence or naming this one (which would
+recurse to `maxConditionalDepth`), a `resumeAt` at or before the check, an
+out-of-range `insertAfterStep`. `resumeAt` is given against the sequence as it
+stands and stored against the list the check goes into.
 
 A sequence already saved on disk is rewritten in place; otherwise it waits for
 `export`. The response says which.
 
-`then` is the name of another sequence, loaded and run inline when the condition
-holds, and it shares the parent run's captured variables. A `launchChrome` step
+### The sequence a check runs
+
+The sequence `{ run }` names is loaded and run inline, and it shares the parent
+run's captured variables, remaining time and cancel. A `launchChrome` step
 inside it is skipped when that reference is already connected, and run when it
 isn't - so a setup sequence spanning two browsers can create the second one.
 
-Which browser the sub-sequence's *bare* steps run in follows from that:
+Which browser the nested sequence's *bare* steps run in follows from that:
 
 | The nested `launchChrome` | Bare steps run in |
 |---|---|
@@ -1163,25 +1235,8 @@ that name their own `connectionReason` are unaffected either way.
 > `listConnections` shows the giveaway: same `port` means same instance and
 > therefore shared storage.
 
-Supported conditions:
-
-| Condition | True when |
-|---|---|
-| `{{selector:CSS}}` / `{{!selector:CSS}}` | element exists / doesn't |
-| `{{url:contains:STRING}}` | current URL contains the string |
-| `{{url:matches:REGEX}}` | current URL matches the regex |
-| `{{url:EXACT}}` | current URL equals the value |
-| `{{cookie:NAME}}` / `{{!cookie:NAME}}` | cookie exists / doesn't |
-| `{{localStorage:KEY}}` / `{{!localStorage:KEY}}` | key exists / doesn't |
-| `{{indexedDB:DB/STORE/KEY}}` / `{{!indexedDB:...}}` | that record exists / doesn't |
-| `{{indexedDB:DB/STORE}}` | the object store holds at least one record |
-
-An element that isn't on the page counts as *absent*, not an error, so
-`{{!selector:...}}` skips correctly. A malformed selector or a disconnected
-browser still fails the run. The page is probed once with no retry (precede an
-async marker with a `wait` step), and a hidden element counts as present.
-
-Every condition reads the tool's structured result, never its printed text, so
+A url, cookie, storage or IndexedDB check reads the tool's structured result,
+never its printed text, so
 stored *data* cannot answer a question about *structure*: a localStorage value
 of `"null"` (or one containing "not found") is present, an empty string is
 present, a cookie name matches exactly rather than as a suffix, and a URL
@@ -1193,25 +1248,21 @@ healing setup sequence exists to fix. A value that cannot be represented in
 JSON (a non-extractable `CryptoKey`, a `Blob`) still counts as present.
 Presence comes from the storage tool's structured result, not its printed text,
 so a record whose *value* happens to read "No record found for this key." is
-still present. A condition is written as text, so an all-digits key is probed as
+still present. An IndexedDB key is written as text, so an all-digits key is probed as
 a string and then, if that misses, as a number - IndexedDB keys `42` and `"42"`
 are different keys.
 
-A condition is interpolated like any other step parameter, so a captured
-variable can drive it — `{{indexedDB:identity/keys/{{var:deviceId}}}}` after an
-earlier `inspect({ saveAs: 'deviceId' })`.
+A check is interpolated like any other step parameter, so a captured variable
+can drive it - `indexedDB: 'identity/keys/{{var:deviceId}}'` after an earlier
+`inspect({ saveAs: 'deviceId' })`.
 
-A condition that is legitimately *not met* skips the nested sequence and the
-step counts as a success. A condition that cannot be *evaluated* (bad format,
-unknown type, invalid or over-long regex, tool error) fails the run.
-
-Nesting is capped by `replay.maxConditionalDepth` (default 10) and regexes by
-`replay.maxRegexLength` (default 500); both are `.devharness/config.json`
+Nesting is capped by `replay.maxConditionalDepth` (default 10) and URL regexes
+by `replay.maxRegexLength` (default 500); both are `.devharness/config.json`
 settings. Oscillating chains (A→B→A) are allowed up to the depth limit.
 
 ## forEach Steps
 
-`forEach` is the second virtual step tool: handled inside the executor, never a
+`forEach` is a virtual step tool: handled inside the executor, never a
 registered tool, exempt from tool-name validation via `VIRTUAL_STEP_TOOLS`.
 
 ```json
@@ -1253,7 +1304,7 @@ captures persist across iterations.
 Budget is the parent's *remaining* total, decremented per iteration, so a loop
 cannot extend the run's total the way a fresh copy would. Depth shares
 `maxConditionalDepth`: a loop body that loops is the same runaway risk as a
-conditional chain. `maxItems` (default 100) is a backstop, and hitting it is
+chain of checks running sequences. `maxItems` (default 100) is a backstop, and hitting it is
 logged rather than silently truncating.
 
 An empty source is a success with `iterations: 0`, rendered as "N item(s) found,
@@ -1392,6 +1443,9 @@ work". Exactly one of four mutually exclusive forms:
   per-step `connectionReason` is honoured (multi-device sequences).
 - `wait({ ms })` needs no browser at all and never triggers a Chrome
   auto-launch; `wait({ expression })` also works against a Node.js target.
+- A `wait` is a check with a time limit (see [Check Steps](#check-steps)): one
+  written into a sequence from history is stored as a `check` step with the
+  same selector, expression or time, and `withinMs` in place of `timeoutMs`.
 
 ## Click Validation
 

@@ -1,10 +1,10 @@
 /** @jsxImportSource preact */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import {
-  CrossingRow, choicesIn, rearmRule, socketName, keyOf, labelOf, isFrame, stabilityIn,
-  type RuleActions, type RuleScope,
-} from './crossing.js';
-import type { BoundaryEvent, BoundaryRule, BoundaryState, BoundaryTotals } from '../wire.js';
+import { CrossingRow, choicesIn, socketName, keyOf, type RuleActions } from './crossing.js';
+import { useActivity } from './activity.js';
+import type { BoundaryEvent, BoundaryTotals, QueuedView } from '../wire.js';
+import { waited } from './sequence.js';
+import { useGoToTarget } from './goto.js';
 import { useEscape } from './escape.js';
 import { Fold, Row } from './row.js';
 
@@ -129,8 +129,14 @@ function cadence(ms: number): string {
   return ms >= 1000 ? `every ${(ms / 1000).toFixed(1)}s` : `every ${ms}ms`;
 }
 
-export function Boundary({ base }: { base: string }): preact.JSX.Element {
-  const [state, setState] = useState<BoundaryState | null>(null);
+/**
+ * Everything that crossed, in the rows the UI tab lists under each step: the
+ * same card, the same actions, the same hidden kinds. Repeats still arriving
+ * sit above the stream, counted in place.
+ */
+export function Traffic({ base }: { base: string }): preact.JSX.Element {
+  const activity = useActivity(base, undefined);
+  const state = activity.boundary;
   const [filters, setFilters] = useState<Filter[]>([]);
   const [menu, setMenu] = useState<{ event: BoundaryEvent; x: number; y: number } | null>(null);
   const [report, setReport] = useState<{ event: BoundaryEvent; alike: number } | null>(null);
@@ -139,25 +145,7 @@ export function Boundary({ base }: { base: string }): preact.JSX.Element {
   useEscape(menu !== null, () => setMenu(null));
   useEscape(report !== null, () => setReport(null));
   const [said, setSaid] = useState('');
-  const [scoped, setScoped] = useState('');
-  // Hidden kinds stay out of this list; the proxy panel lists them and puts one back.
-  const showHidden = false;
   const note = useRef<HTMLTextAreaElement | null>(null);
-
-  useEffect(() => {
-    let live = true;
-    const poll = async () => {
-      try {
-        const res = await fetch(`${base}/proxy/events?since=`);
-        if (live) setState(await res.json());
-      } catch {
-        /* the bench outlives a restart; the next poll picks it up */
-      }
-    };
-    void poll();
-    const timer = setInterval(poll, 500);
-    return () => { live = false; clearInterval(timer); };
-  }, [base]);
 
   useEffect(() => {
     const close = () => setMenu(null);
@@ -174,27 +162,14 @@ export function Boundary({ base }: { base: string }): preact.JSX.Element {
     };
   }, []);
 
-  // Declared before the filter that reads it: the filter runs during render,
-  // and a `const` referenced from a closure before its own line throws on the
-  // first poll that carries an event. The typecheckers allow it, because
-  // neither can say when a closure runs.
-  const byKey = new Map((state?.rules ?? []).map(rule => [rule.key, rule]));
-  // A rule bound to a step governs that step's crossing of its kind and no
-  // other, so the same kind at another step is not its row.
-  const ruleFor = (event: BoundaryEvent) => {
-    const rule = byKey.get(keyOf(event));
-    return rule && (!rule.steps || (event.step !== undefined && rule.steps.includes(event.step))) ? rule : undefined;
-  };
-  const stability = stabilityIn(state?.events ?? []);
-
   const passes = useCallback((event: BoundaryEvent) => {
-    if (!showHidden && (state?.hidden ?? []).some(kind => !kind.off && kind.key === keyOf(event))) return false;
+    if (activity.isHidden(event)) return false;
     for (const filter of filters) {
       if (filter.mode === 'out' && fieldValue(event, filter.field) === filter.value) return false;
     }
     const only = filters.filter(f => f.mode === 'on');
     return only.length === 0 || only.every(f => fieldValue(event, f.field) === f.value);
-  }, [filters, state?.rules, showHidden]);
+  }, [filters, activity.isHidden]);
 
   const { repeating, stream } = useMemo(() => {
     const groups = group((state?.events ?? []).filter(passes));
@@ -211,47 +186,11 @@ export function Boundary({ base }: { base: string }): preact.JSX.Element {
     };
   }, [state, passes]);
 
-  const post = async (path: string, body: Record<string, unknown>) => {
-    await fetch(`${base}${path}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    }).catch(() => { /* the bench outlives a restart */ });
-  };
-
-  const rule = (event: BoundaryEvent, verb: 'answer' | 'block' | 'hide',
-                body?: string, status?: string, match?: string, edited?: boolean, scope?: RuleScope, payload?: string) => void post('/boundary/rule', {
-    key: match ?? keyOf(event), verb, frame: isFrame(event), label: labelOf(event),
-    ...(body !== undefined ? { body } : {}),
-    ...(payload ? { payload } : {}),
-    ...(edited ? { edited: true } : {}),
-    ...(status !== undefined ? { status } : {}),
-    ...(event.preview !== undefined ? { recorded: event.preview } : {}),
-    ...(scope
-      ? scope.method ? { method: scope.method } : {}
-      : !isFrame(event) && event.method ? { method: event.method } : {}),
-    ...(scope?.step !== undefined && scope.step !== null ? { step: scope.step } : {}),
-    // A frame's payload text is the whole predicate, so the socket and the
-    // direction it crossed on are recorded with it and bound the match.
-    ...(scope
-      ? { ...(scope.url ? { url: scope.url } : {}), ...(scope.direction ? { direction: scope.direction } : {}) }
-      : isFrame(event) ? { url: event.url, direction: event.direction } : {}),
-  });
-
+  // Step labels come from the proxy's own reading here, since this tab holds
+  // no sequence state of its own.
   const actions: RuleActions = {
-    answer: (event, body, status, match, edited, scope, payload) => rule(event, 'answer', body, status, match, edited, scope, payload),
-    block: (event) => rule(event, 'block'),
-    hide: (event) => rule(event, 'hide'),
-    clear: (event) => void post('/boundary/rule/clear', { key: keyOf(event) }),
-    report: (event) => {
-      const alike = (state?.events ?? []).filter(e =>
-        e.evidence?.shape !== undefined && e.evidence.shape === event.evidence?.shape).length;
-      setReport({ event, alike: alike || 1 });
-    },
-    set: (standing, next) => void rearmRule((path, body) => post(path, body ?? {}), standing, next),
+    ...activity.actions,
     choices: choicesIn(state?.events ?? [], state?.steps, state?.forSequence),
-    names: state?.names,
-    rename: (event, name) => void post('/boundary/name', { key: keyOf(event), name }),
   };
 
   const sendReport = async (event: BoundaryEvent) => {
@@ -263,13 +202,30 @@ export function Boundary({ base }: { base: string }): preact.JSX.Element {
     setTimeout(() => { setReport(null); setSaid(''); }, 1400);
   };
 
-  if (!state) return <div class="hint">reading the boundary…</div>;
+  if (!state) return <div class="hint">reading the traffic…</div>;
   if (!state.running) {
     return <div class="hint">this browser was not launched through a proxy</div>;
   }
 
+  const rowFor = (made: Group) => (
+    <CrossingRow
+      key={made.key}
+      event={made.newest}
+      base={base}
+      hidden={activity.wasHidden(made.newest)}
+      rule={activity.ruleFor(made.newest)}
+      seen={activity.stability.get(keyOf(made.newest))}
+      repeats={made.events.length}
+      cadence={made.periodMs ? cadence(made.periodMs) : undefined}
+      open={open === made.key}
+      onOpen={() => setOpen(open === made.key ? null : made.key)}
+      actions={actions}
+      onMenu={(x, y) => setMenu({ event: made.newest, x, y })}
+    />
+  );
+
   return (
-    <div class="boundary">
+    <div class="traffic">
       {/* The proxy's own controls - what it may reach, what it refuses, what
           it holds - are carried by the bar's panel, under every tab. */}
       <Totals totals={state.totals} />
@@ -286,50 +242,24 @@ export function Boundary({ base }: { base: string }): preact.JSX.Element {
           ))}
         </div>
       )}
+      {(state.holding || (state.queued?.length ?? 0) > 0) && (
+        <Waiting base={base} queued={state.queued ?? []} />
+      )}
       {repeating.length > 0 && (
         <section class="repeating">
-          <div class="sectionhead">
-            <span>repeating</span>
-            <span class="quiet">
-              {repeating.length} kind{repeating.length === 1 ? '' : 's'} still arriving, counted in place
-            </span>
+          {/* Headed as the home page heads its groups: the name, then the count. */}
+          <div class="sectionhead" title="kinds still arriving, each counted in place on one row">
+            repeating <span class="quiet">{repeating.length}</span>
           </div>
-          <ol class="stream">
-            {repeating.map(made => (
-              <CrossingRow
-                key={made.key}
-                event={made.newest}
-                base={base}
-                rule={ruleFor(made.newest)}
-                seen={stability.get(keyOf(made.newest))}
-                repeats={made.events.length}
-                cadence={made.periodMs ? cadence(made.periodMs) : undefined}
-                open={open === made.key}
-                onOpen={() => setOpen(open === made.key ? null : made.key)}
-                actions={actions}
-                onMenu={(x, y) => setMenu({ event: made.newest, x, y })}
-              />
-            ))}
-          </ol>
+          <ol class="activitycards">{repeating.map(rowFor)}</ol>
         </section>
       )}
-      <ol class="stream">
-        {stream.map(made => (
-          <CrossingRow
-            key={made.key}
-            event={made.newest}
-            base={base}
-            rule={ruleFor(made.newest)}
-            seen={stability.get(keyOf(made.newest))}
-            repeats={made.events.length}
-            cadence={made.periodMs ? cadence(made.periodMs) : undefined}
-            open={open === made.key}
-            onOpen={() => setOpen(open === made.key ? null : made.key)}
-            actions={actions}
-            onMenu={(x, y) => setMenu({ event: made.newest, x, y })}
-          />
-        ))}
-      </ol>
+      <section class="crossed-all">
+        <div class="sectionhead" title="everything else that crossed, newest first">
+          crossed <span class="quiet">{stream.length}</span>
+        </div>
+        <ol class="activitycards">{stream.map(rowFor)}</ol>
+      </section>
       {menu && (
         <Menu
           menu={menu}
@@ -361,6 +291,53 @@ export function Boundary({ base }: { base: string }): preact.JSX.Element {
   );
 }
 
+/**
+ * What the proxy is keeping while the traffic is held, oldest first.
+ *
+ * Each can be let through on its own while the rest stay held, so the page
+ * receives one chosen message and its effect is read on a screen that nothing
+ * else has moved. Recorded as it crosses, so it lands under the step that let
+ * it through.
+ */
+function Waiting({ base, queued }: { base: string; queued: QueuedView[] }) {
+  const here = useGoToTarget<HTMLElement>('waiting');
+  const letThrough = (id: number) => void fetch(`${base}/hold/let`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id }),
+  }).catch(() => {});
+  return (
+    <section class="waiting" id="waiting" ref={here}>
+      <div class="sectionhead" title={queued.length
+        ? 'held at the proxy, oldest first - let one through and the rest stay held'
+        : 'the traffic is held, and nothing has arrived since'}>
+        waiting <span class="quiet">{queued.length}</span>
+      </div>
+      {queued.length > 0 && (
+        <ol class="activitycards">
+          {queued.map(item => {
+            let path = item.url;
+            try { path = new URL(item.url).pathname; } catch { /* not a URL */ }
+            return (
+              <Row
+                key={item.id}
+                classes={['waitrow']}
+                columns={['here']}
+                source={item.kind === 'response' ? 'response' : item.direction === 'sent' ? 'sent' : 'received'}
+                way={item.kind === 'response' ? undefined : item.direction === 'sent' ? '→' : '←'}
+                label={<><span class="tag">{path}</span><span class="what">{item.preview ?? ''}</span></>}
+                title={item.preview}
+                reading={<span class="meta">{waited(item.ageMs)}</span>}
+                slots={{ here: () => letThrough(item.id) }}
+                titles={{ here: 'let this one through to the page; the rest stay held' }}
+                open={false}
+                onOpen={() => {}}
+              />
+            );
+          })}
+        </ol>
+      )}
+    </section>
+  );
+}
 
 /**
  * What this browser may reach, and the way out of a scope that is too tight.

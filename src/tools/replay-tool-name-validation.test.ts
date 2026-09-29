@@ -76,8 +76,12 @@ describe('findUnknownStepTools', () => {
     expect(unknown.suggestion).toBe('inspect');
   });
 
-  it('accepts the "conditional" virtual step, which is not a registered tool', () => {
-    expect(findUnknownStepTools([{ tool: 'conditional' }], KNOWN_TOOLS)).toEqual([]);
+  it('accepts the "forEach" virtual step, which is not a registered tool', () => {
+    expect(findUnknownStepTools([{ tool: 'forEach' }], KNOWN_TOOLS)).toEqual([]);
+  });
+
+  it('flags "conditional", which a check that runs a sequence replaced', () => {
+    expect(findUnknownStepTools([{ tool: 'conditional' }], KNOWN_TOOLS)).toHaveLength(1);
   });
 
   it('flags a non-string tool field instead of throwing', () => {
@@ -131,7 +135,7 @@ describe('replay load - tool name validation', () => {
 
   it('loads a valid sequence normally', async () => {
     const { replay, recorder } = makeReplay(
-      seq([{ tool: 'navigate', params: {} }, { tool: 'conditional', params: {} }]),
+      seq([{ tool: 'navigate', params: {} }, { tool: 'forEach', params: {} }]),
       () => KNOWN_TOOLS
     );
 

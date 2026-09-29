@@ -329,6 +329,22 @@ export function createPageTools(
           }
 
           case 'info': {
+            // A paused page still has its address, which needs no page JS;
+            // the title does, and a paused page never answers it. Reported as
+            // not loaded, a paused page read as a dead connection, and a
+            // replay then tried to launch a second browser under its name.
+            if (targetCdpManager.isPaused()) {
+              const url = page.url();
+              const response = createSuccessResponse('PAGE_INFO_PAUSED', { url });
+              response._meta = {
+                tool: 'navigate',
+                action: 'info',
+                timestamp: Date.now(),
+                navigate: { url, action: 'info', paused: true },
+              };
+              return response;
+            }
+
             const result = await executeWithPauseDetection(
               targetCdpManager,
               async () => {

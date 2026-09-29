@@ -12,7 +12,7 @@ import { z } from 'zod';
 import { createTool } from '../validation-helpers.js';
 import type { ToolResponseMeta } from '../tool-response.js';
 import type { ExecuteToolCall } from '../types.js';
-import { CHECK_OPERATORS, ELEMENT_CONDITIONS, assertAsCheck, formOf, runCheck, waitAsCheck, type CheckSpec } from './check-engine.js';
+import { CHECK_OPERATORS, ELEMENT_CONDITIONS, SOCKET_CONDITIONS, assertAsCheck, formOf, runCheck, waitAsCheck, type CheckSpec } from './check-engine.js';
 
 /** What a sequence step does on one answer. */
 export const checkOutcomeSchema = z.union([
@@ -26,7 +26,7 @@ export type CheckOutcome = z.infer<typeof checkOutcomeSchema>;
 
 export const checkSchema = z.object({
   selector: z.string().optional().describe('An element to check, with `condition`. Supports :has-text("x")'),
-  condition: z.enum(ELEMENT_CONDITIONS).optional().describe('selector: present | visible | hittable (nothing covers its centre) | absent | text | attribute | count | enabled. cookie/localStorage/indexedDB: present (default) or absent'),
+  condition: z.enum([...ELEMENT_CONDITIONS, ...SOCKET_CONDITIONS]).optional().describe('selector: present | visible | hittable (nothing covers its centre) | absent | text | attribute | count | enabled. cookie/localStorage/indexedDB: present (default) or absent. socket: open (default) or closed'),
   attribute: z.string().optional().describe("condition 'attribute': which attribute to read"),
   value: z.any().optional().describe('A value to check, typically a {{var:name.path}} template, with `operator` and `right`'),
   operator: z.enum(CHECK_OPERATORS).optional().describe('How the value, or the element\'s text/attribute/count, is compared with `right`. For `url`: equals (default), contains or matches'),
@@ -36,6 +36,15 @@ export const checkSchema = z.object({
   cookie: z.string().optional().describe('A cookie name'),
   localStorage: z.string().optional().describe('A localStorage key'),
   indexedDB: z.string().optional().describe('DB/STORE/KEY for one record, or DB/STORE for any record in the store'),
+  traffic: z.object({
+    urlIncludes: z.string().optional().describe("Substring of the request's URL, or of the socket's URL for a frame"),
+    method: z.string().optional().describe('A request: only this method'),
+    direction: z.enum(['sent', 'received']).optional().describe('A frame: only this way'),
+    textIncludes: z.string().optional().describe('A frame: what its payload carries. A lone "key":value pair compares that top-level JSON field; anything else is a substring'),
+  }).strict().optional().describe('Traffic crossing the proxy since the start of the call stepsBack before the check, matched as a pin matches it: a request by urlIncludes + method, a frame by urlIncludes + direction + textIncludes. Needs the browser launched with proxy: true'),
+  stepsBack: z.number().int().min(0).optional().describe('traffic: count from the start of the call this many back - 1 (default) is the call before the check, whose traffic has usually crossed by the time the check runs; 0 counts from the check itself. Every call counts, in a run each step'),
+  count: z.number().int().min(0).optional().describe('traffic: how many crossings, compared by operator (default gte). equals, lte and lt read until withinMs ends, since a later crossing can break them'),
+  socket: z.string().optional().describe("A socket whose URL carries this, with condition open (default) or closed. Needs the browser launched with proxy: true"),
   afterMs: z.number().int().min(0).max(600000).optional().describe('Read nothing until this much time has passed. On its own, a check that holds once it has - a timer'),
   withinMs: z.number().int().min(0).max(600000).optional().describe('Read again until it holds, for at most this long after afterMs. 0 or omitted reads once'),
   pollMs: z.number().int().min(25).max(5000).optional().describe('Time between reads (default 100)'),
@@ -75,7 +84,7 @@ export function asCheckStep<C extends { tool: string; params: Record<string, any
 
 /** Subjects a check names; more than one is a check that means two things. */
 function subjectsOf(args: CheckArgs): string[] {
-  return (['selector', 'value', 'expression', 'url', 'cookie', 'localStorage', 'indexedDB'] as const)
+  return (['selector', 'value', 'expression', 'url', 'cookie', 'localStorage', 'indexedDB', 'traffic', 'socket'] as const)
     .filter(key => key in args && (key === 'value' || args[key] !== undefined));
 }
 
@@ -85,7 +94,7 @@ export function createCheckTools(
 ) {
   return {
     check: createTool(
-      'Check one thing and answer held or failed: an element (selector + condition), a value ({{var:...}} + operator + right), a JS expression, the URL, a cookie, a localStorage key or an IndexedDB record - or time alone (afterMs). withinMs reads again until it holds; afterMs waits before the first read. Called directly it answers without failing. As a sequence step, holds and fails say what happens next: continue, stop, or { run: "<sequence>", resumeAt } to run another sequence and resume. assert is a check whose failure stops the run; wait is a check with a time limit.',
+      'Check one thing and answer held or failed: an element (selector + condition), a value ({{var:...}} + operator + right), a JS expression, the URL, a cookie, a localStorage key, an IndexedDB record, traffic crossing the proxy (traffic + count) or a socket being open or closed - or time alone (afterMs). withinMs reads again until it holds; afterMs waits before the first read. Called directly it answers without failing. As a sequence step, holds and fails say what happens next: continue, stop, or { run: "<sequence>", resumeAt } to run another sequence and resume. assert is a check whose failure stops the run; wait is a check with a time limit.',
       checkSchema,
       async (args: CheckArgs, abortSignal?: AbortSignal) => {
         const subjects = subjectsOf(args);

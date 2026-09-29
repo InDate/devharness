@@ -1,14 +1,14 @@
 /**
- * Conditional sub-sequences must inherit the parent run's timeout budget.
+ * A sequence a check runs must inherit the parent run's timeout budget.
  *
- * executeConditionalFlow used to call executeSteps without stepTimeout or
+ * The nested run used to call executeSteps without stepTimeout or
  * totalTimeout, so substeps silently fell back to the defaults (30s/5min) no
  * matter what the caller passed. That only became observable once stepTimeout
  * was actually enforced - before then both values were being discarded anyway.
  *
  * The second test is the one that matters for correctness: the total must be
  * inherited as the parent's REMAINING budget, or wrapping steps in a
- * conditional becomes a way to extend it.
+ * check becomes a way to extend it.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -17,10 +17,12 @@ import type { ExecutionContext } from './replay-executor.js';
 import type { CommandSequence, RecordedCommand } from '../command-recorder.js';
 import { configManager } from '../config.js';
 import { productionShaped } from '../test-support/fake-execute-tool-call.js';
+import { HELD, runsOnPass } from '../test-support/check-steps.js';
 
 function makeHarness(responses: Record<string, any> = {}, nested?: CommandSequence) {
   const calls: string[] = [];
   const executeToolCall = vi.fn(productionShaped(async (tool: string, params: Record<string, any>) => {
+    if (tool === 'check') return HELD;
     calls.push(`${tool}.${params.action ?? ''}`);
     const key = `${tool}.${params.action}`;
     const r = key in responses ? responses[key] : responses[tool];
@@ -31,7 +33,7 @@ function makeHarness(responses: Record<string, any> = {}, nested?: CommandSequen
   const commandRecorder = {
     recordCommand: vi.fn(),
     getCurrentHistoryIndex: () => 0,
-    // executeConditionalFlow resolves the `then` sequence via loadSequence,
+    // A check's `{ run }` resolves its sequence via loadSequence,
     // which matches by name against listSequences().
     getSequence: (id: string) => (nested?.id === id ? nested : undefined),
     getFreshSequence: async (id: string) => (nested?.id === id ? nested : undefined),
@@ -76,7 +78,7 @@ const pageInfo = (url: string) => ({
   _meta: { tool: 'navigate', action: 'info', timestamp: 0, navigate: { url, title: 't', action: 'info' } },
 });
 
-describe('conditional sub-sequences inherit the parent timeout budget', () => {
+describe('a sequence a check runs inherits the parent timeout budget', () => {
   // Against pre-fix code this HANGS: the substep got the 30s default rather
   // than the caller's 300ms, so nothing bounded it inside the it() timeout.
   it("bounds a hanging substep by the parent's stepTimeout", { timeout: 3000 }, async () => {
@@ -88,7 +90,7 @@ describe('conditional sub-sequences inherit the parent timeout budget', () => {
     const started = Date.now();
     const result = await executeSteps({
       sequence: seq('outer', [
-        { tool: 'conditional', params: { if: '{{url:contains:example}}', then: 'inner' } },
+        runsOnPass('inner'),
       ]),
       ctx,
       startStep: 0,
@@ -109,7 +111,7 @@ describe('conditional sub-sequences inherit the parent timeout budget', () => {
     const started = Date.now();
     const result = await executeSteps({
       sequence: seq('outer', [
-        { tool: 'conditional', params: { if: '{{url:contains:example}}', then: 'inner' } },
+        runsOnPass('inner'),
       ]),
       ctx,
       startStep: 0,
@@ -131,7 +133,7 @@ describe('conditional sub-sequences inherit the parent timeout budget', () => {
 
     const result = await executeSteps({
       sequence: seq('outer', [
-        { tool: 'conditional', params: { if: '{{url:contains:example}}', then: 'inner' } },
+        runsOnPass('inner'),
       ]),
       ctx,
       startStep: 0,

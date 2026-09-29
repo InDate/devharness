@@ -57,7 +57,7 @@ export interface StepTraffic {
    *  a socket opened by one action can be sent on by another, and what comes
    *  back belongs where it arrived. */
   opened: number;
-  /** localStorage and sessionStorage writes, which cross no boundary at all. */
+  /** Storage writes, socket closes and worker starts and stops, which cross no boundary at all. */
   writes: number;
   /** One line each, `POST /draft 200`, capped. */
   lines: string[];
@@ -95,4 +95,6 @@ export interface StepTraffic {
    * without this number there is nothing to read it against.
    */
   windowMs?: number;
+  /** When this was taken, by a recording or by a baseline play. */
+  recordedAt?: number;
 }

@@ -1,35 +1,4 @@
 import { useEffect, useState } from 'preact/hooks';
-/**
- * A rule the proxy panel asked to see on its traffic row.
- *
- * The panel lives in the footing and the rows on STEPS, which may not be
- * mounted when the panel asks: it switches to STEPS in the same click. So the
- * request is held until a listener takes it, and taken once.
- */
-export interface RuleFocus {
-  key: string;
-  step?: number;
-}
-
-let held: RuleFocus | null = null;
-const listeners = new Set<(focus: RuleFocus) => void>();
-
-export function focusRule(focus: RuleFocus): void {
-  held = focus;
-  for (const listener of listeners) listener(focus);
-}
-
-/** Subscribe; a request made before subscribing is delivered at once. Returns the unsubscribe. */
-export function onFocusRule(listener: (focus: RuleFocus) => void): () => void {
-  listeners.add(listener);
-  if (held) listener(held);
-  return () => { listeners.delete(listener); };
-}
-
-/** Mark the request as met, so a later mount does not reopen it. */
-export function settleFocus(): void {
-  held = null;
-}
 
 /**
  * A saved response a traffic row asked to see in the proxy panel.

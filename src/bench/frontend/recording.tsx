@@ -220,7 +220,7 @@ function Start({ name, onName, startUrl, onStartUrl, what, onWhat, end, onEnd, o
             on={withAgent}
             onPick={() => setWithAgent(true)}
             title="the agent, step by step"
-            said={'Each step is held as it lands — the page freezes, capture pauses — while the '
+            said={'Each step is held as it lands — the page is held, capture pauses — while the '
               + 'agent reads it, and it offers a selector to swap in where the recorded one would '
               + 'not survive a second run.'}
           />

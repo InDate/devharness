@@ -79,8 +79,29 @@ export interface TypeActionMeta {
  */
 export interface NavigateActionMeta {
   url: string;
-  title: string;
+  /** Absent while the page is paused: reading the title runs page JS. */
+  title?: string;
   action: string;
+  /** The page is held at a breakpoint, so only what needs no page JS was read. */
+  paused?: boolean;
+}
+
+/** Where a paused debugger stands: the top frame, mapped to its original source where a source map covers it. */
+export interface PausedAtMeta {
+  url: string;
+  lineNumber: number;
+  columnNumber?: number;
+  functionName?: string;
+  callFrameId: string;
+}
+
+/** getDebuggerStatus: the debugger's state, answered the same way paused or running. */
+export interface DebuggerStatusMeta {
+  reference: string;
+  connected: boolean;
+  paused: boolean;
+  totalBreakpoints: number;
+  pausedAt?: PausedAtMeta;
 }
 
 /**
@@ -280,6 +301,7 @@ export interface ToolResponseMeta {
   click?: ClickActionMeta;
   type?: TypeActionMeta;
   navigate?: NavigateActionMeta;
+  debugger?: DebuggerStatusMeta;
   console?: ConsoleToolMeta;
   network?: NetworkToolMeta;
   content?: ContentToolMeta;
@@ -300,7 +322,7 @@ export interface ToolResponseMeta {
 /** Structured result of a bench action. Behaviour reads this, never the
  *  rendered text. */
 export interface BenchToolMeta {
-  action: 'start' | 'stop' | 'tick' | 'freeze' | 'unfreeze' | 'picker' | 'list' | 'status'
+  action: 'start' | 'stop' | 'tick' | 'hold' | 'release' | 'picker' | 'list' | 'status'
     | 'keepStep' | 'dropStep' | 'flagStep' | 'sweep' | 'retake' | 'capture';
   /** Whether the page is frozen with the picker armed, after this call. */
   active?: boolean;

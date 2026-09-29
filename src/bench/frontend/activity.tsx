@@ -5,9 +5,9 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import {
   CrossingRow, MissingRow, choicesIn, rearmRule, keyOf, labelOf, isFrame, stabilityIn, passesIn, socketName,
   ignoreMatches, ignoreCoversKind,
-  type RowMoves, type RuleActions, type RuleScope, type RowVerdict, type ResponseWait, WaitSettings,
+  type RowMoves, type RuleActions, type RuleScope, type RowVerdict,
 } from './crossing.js';
-import { countKinds, kindOf, verdictOf, type KindCount } from '../kinds.js';
+import { countKinds, kindOf, marksFields, verdictOf, type KindCount } from '../kinds.js';
 import { Row } from './row.js';
 import { useShowHidden } from './focus.js';
 import type { BoundaryEvent, BoundaryState, SequenceState } from '../wire.js';
@@ -89,7 +89,6 @@ export function useActivity(base: string, sequence: SequenceState | undefined) {
   const stepCount = sequence?.steps?.length ?? 0;
   const listed = crossedUnder(boundary, event => byKey.has(keyOf(event)), sequence?.placements, stepCount);
   const crossed = listed.byStep;
-  const gutter = sequence?.recording ? [] : (crossed.get(stepCount) ?? []).filter(e => !isHidden(e));
   // The pass the list is reading, so a staged row left from an older one is
   // marked rather than read as having just crossed.
   let pass: string | undefined;
@@ -97,7 +96,13 @@ export function useActivity(base: string, sequence: SequenceState | undefined) {
   const stability = stabilityIn(boundary?.events ?? []);
   // Each row of the latest replay against the recording of its kind on the
   // same step, for the steps the replay reached.
-  const replayed = pass?.startsWith('run-') && !!sequence?.steps && !sequence.recording;
+  // Not the play a baseline was taken from: compared with itself, every row
+  // matches. A play's id carries when it started, and a baseline when it was
+  // taken, so only a play started after the baseline is compared.
+  const baselineAt = Math.max(0, ...(sequence?.steps ?? []).map(step => step.traffic?.recordedAt ?? 0));
+  const passStarted = pass?.startsWith('run-') ? parseInt(pass.slice(4), 36) : NaN;
+  const replayed = pass?.startsWith('run-') && !!sequence?.steps && !sequence.recording
+    && !(passStarted <= baselineAt);
   const verdicts = new Map<string, RowVerdict>();
   const missing = new Map<number, Array<{ kind: string; verdict: RowVerdict }>>();
   const tally = { mismatch: 0, unexpected: 0, missing: 0 };
@@ -114,10 +119,10 @@ export function useActivity(base: string, sequence: SequenceState | undefined) {
       const was = recorded[kind];
       const mark = step.expected?.[kind];
       const body = bodies[row.id];
-      if (was && (mark?.fields || (!was.presence && was.body !== undefined)) && body === undefined) {
+      if (was && (marksFields(mark) || (!was.presence && was.body !== undefined)) && body === undefined) {
         bodiesWanted.current.push(row.id);
       }
-      const read = verdictOf(was, observed[kind] ?? { n: 0 }, body, mark);
+      const read = verdictOf(was, observed[kind] ?? { n: 0 }, body, mark, row.kind === 'write');
       if (!read) {
         const held = lastVerdicts.current.get(rowOf(step.index, row));
         if (held) {
@@ -179,8 +184,7 @@ export function useActivity(base: string, sequence: SequenceState | undefined) {
 
   const rule = (event: BoundaryEvent, verb: 'answer' | 'block' | 'hide',
                 body?: string, status?: string, match?: string, edited?: boolean, scope?: RuleScope, payload?: string,
-                wait?: ResponseWait) => void post('/boundary/rule', {
-    ...(wait ? { wait } : {}),
+  ) => void post('/boundary/rule', {
     key: match ?? keyOf(event), verb, frame: isFrame(event), label: labelOf(event),
     ...(body !== undefined ? { body } : {}),
     ...(payload ? { payload } : {}),
@@ -206,15 +210,12 @@ export function useActivity(base: string, sequence: SequenceState | undefined) {
   });
 
   const actions: RuleActions = {
-    answer: (event, body, status, match, edited, scope, payload, wait) => rule(event, 'answer', body, status, match, edited, scope, payload, wait),
+    answer: (event, body, status, match, edited, scope, payload) => rule(event, 'answer', body, status, match, edited, scope, payload),
     block: (event) => rule(event, 'block'),
     hide: (event) => rule(event, 'hide'),
     clear: (event) => void post('/boundary/rule/clear', { key: keyOf(event) }),
     report: (event) => void fetch(
       `${base}/proxy/investigate?id=${encodeURIComponent(event.id)}&note=`, { method: 'POST' }),
-    // A step waits for the row's own kind: how many, how long and what a
-    // miss does are the response's to say, one arrival until it says more.
-    waitFor: (event, step) => void post('/boundary/wait', { step, key: keyOf(event), count: 1 }),
     responses: boundary?.rules ?? [],
     use: (key, use) => void post('/boundary/rule/use', { key, use }),
     unhide: (key) => void post('/boundary/hidden/use', { key, on: false }),
@@ -222,10 +223,6 @@ export function useActivity(base: string, sequence: SequenceState | undefined) {
     // Listing a kind again on its row lifts the rule that covers it, which a
     // socket-wide rule's key is not the kind's own.
     ignoredBy: (event) => ignores.find(rule => ignoreMatches(rule, event))?.key,
-    waiting: (step, key) => (boundary?.waits ?? []).some(wait => wait.step === step && (wait.key ?? key) === key),
-    unwait: (step, key) => void post('/boundary/wait', { step, count: 0, key }),
-    waitOf: (step, key) => (boundary?.waits ?? []).find(wait => wait.step === step && (wait.key ?? key) === key),
-    setWait: (step, key, wait) => void post('/boundary/wait', { step, key, ...wait }),
     set: (rule, next) => void rearmRule(post, rule, next),
     choices: choicesIn(
       boundary?.events ?? [],
@@ -245,7 +242,7 @@ export function useActivity(base: string, sequence: SequenceState | undefined) {
   };
 
   return {
-    boundary, reading, setReading, ruleFor, isHidden, wasHidden, crossed, gutter, stepCount, pass, stability,
+    boundary, reading, setReading, ruleFor, isHidden, wasHidden, crossed, stepCount, pass, stability,
     verdicts, missing, tallied, passes, move, actions,
   };
 }
@@ -253,7 +250,7 @@ export function useActivity(base: string, sequence: SequenceState | undefined) {
 export type Activity = ReturnType<typeof useActivity>;
 
 /** Where each listed crossing crossed - its stamped step, or `after` - which a move is saved against. */
-export const originOf = new WeakMap<BoundaryEvent, string>();
+const originOf = new WeakMap<BoundaryEvent, string>();
 
 /**
  * What crossed under each step, placed where the sequence says its kind is
@@ -322,12 +319,12 @@ function crossedUnder(
  * changes as each frame lands, and an open row keyed by event closed itself on
  * the next arrival.
  */
-export function rowOf(step: number, event: BoundaryEvent): string {
+function rowOf(step: number, event: BoundaryEvent): string {
   return `${step}|${event.kind === 'request' ? `${event.method} ${keyOf(event)}` : keyOf(event)}`;
 }
 
 /** How many crossings each listed row stands for, by the event that heads it. */
-export const repeatsOf = new WeakMap<BoundaryEvent, number>();
+const repeatsOf = new WeakMap<BoundaryEvent, number>();
 
 /**
  * One step's activity - or, at the step count, the gutter after the last step
@@ -355,13 +352,10 @@ export function stepTally(activity: Activity, step: number) {
     traffic: rows.length - intercepted,
     intercepted,
     missing: step < activity.stepCount ? (activity.missing.get(step) ?? []).length : 0,
-    waits: (activity.boundary?.waits ?? []).filter(wait => wait.step === step).length,
   };
 }
 
-export function ActivityRows({ activity, step, base, recording, notesAt, running, within }: {
-  /** The step a replay is on now, whose waits are being waited on. */
-  running?: boolean;
+export function ActivityRows({ activity, step, base, recording, notesAt, within }: {
   /**
    * A step of a sequence this step ran, by its path of positions down the
    * branches: only the traffic stamped with that path is listed. Absent, the
@@ -386,26 +380,6 @@ export function ActivityRows({ activity, step, base, recording, notesAt, running
   const absent = !branch && step < stepCount ? missing.get(step) ?? [] : [];
   const top = notesAt?.('');
   const bottom = notesAt?.(null);
-  // What this step waits for, and how many of it this pass has brought: a row
-  // under its rows that each arrival pushes down, and that says so once all
-  // have come.
-  const waiting = (branch ? [] : activity.boundary?.waits ?? []).filter(wait => wait.step === step).map(wait => {
-    const came = rows
-      .filter(event => event.runId === pass
-        && (!wait.key || keyOf(event) === wait.key || (event.preview ?? '').includes(wait.key)))
-      .reduce((sum, event) => sum + (repeatsOf.get(event) ?? 1), 0);
-    const named = wait.key && (actions.names?.[`${step}|${wait.key}`] ?? actions.names?.[wait.key]);
-    // The latest crossing of the kind, this step's first: read as its row
-    // reads - the socket or verb, the way it went, and what it carried.
-    const kind = (activity.boundary?.events ?? []).filter(event => keyOf(event) === wait.key);
-    const sample = [...kind].reverse().find(event => event.step === step) ?? kind[kind.length - 1];
-    const name = named || (sample ? (isFrame(sample) ? sample.preview ?? sample.url : sample.url) : wait.key ?? '');
-    // How it went in this pass, as the replay recorded it; before its step
-    // runs there is none, and the count it has seen so far stands.
-    const outcome = (activity.boundary?.waitOutcomes ?? []).find(one => one.runId === pass
-      && one.step === step && one.key === wait.key);
-    return { wait, name, named: !!named, left: wait.count - came, sample, outcome };
-  });
   // Named kinds a response intercepts at this step, before this pass has
   // produced them: what the step is expected to be answered with, on opening
   // the sequence, replaced by the row itself once it crosses.
@@ -415,7 +389,7 @@ export function ActivityRows({ activity, step, base, recording, notesAt, running
     .map(one => ({ ...one, response: (actions.responses ?? []).find(rule => rule.key === one.key && !rule.off
       && (!rule.steps || rule.steps.includes(step))) }))
     .filter(one => one.response && !rows.some(event => event.runId === pass && keyOf(event) === one.key));
-  if (!rows.length && !absent.length && !has(top) && !has(bottom) && !waiting.length && !expected.length) return null;
+  if (!rows.length && !absent.length && !has(top) && !has(bottom) && !expected.length) return null;
   const toggle = (id: string) => setReading(reading === id ? null : id);
   // The gutter moves up into the last step only; the last step moves down into the gutter.
   const movesFor = (event: BoundaryEvent | undefined, kind: string): RowMoves | undefined => recording ? undefined : {
@@ -438,7 +412,7 @@ export function ActivityRows({ activity, step, base, recording, notesAt, running
           onOpen={() => toggle(rowOf(step, event))}
           actions={{
             ...actions,
-            waitStep: step < stepCount ? step : undefined,
+            rowStep: step < stepCount ? step : undefined,
             nameKey: (crossing) => `${step < stepCount ? step : 'after'}|${keyOf(crossing)}`,
           }}
           verdict={verdicts.get(rowOf(step, event))}
@@ -472,36 +446,6 @@ export function ActivityRows({ activity, step, base, recording, notesAt, running
           onOpen={() => {}}
         />
       ))}
-      {waiting.map(({ wait, name, named, left, sample, outcome }) => {
-        const state = outcome?.state ?? (left <= 0 ? 'met' : 'pending');
-        const got = outcome?.arrived ?? wait.count - left;
-        const remaining = outcome?.state === 'waiting'
-          ? Math.max(0, wait.seconds - (Date.now() - outcome.startedAt) / 1000).toFixed(1) : undefined;
-        return (
-        <Row
-          key={`wait|${wait.key ?? ''}`}
-          id={`wait-${step}-${wait.key ?? ''}`}
-          classes={['waitrow', running || state === 'waiting' ? 'active' : '', `wait-${state}`]}
-          columns={['remove']}
-          source={sample ? (isFrame(sample) ? socketName(sample.url) : (sample.method ?? 'GET')) : 'wait'}
-          way={sample && isFrame(sample) ? (sample.direction === 'out' ? '→' : '←') : ''}
-          label={<span class={named ? 'what named' : 'what'}>{name}</span>}
-          title={`a replay holds step ${step + 1} open up to ${wait.seconds}s; on a miss it ${wait.onFail === 'fail' ? 'fails the step' : 'carries on'}`}
-          reading={<span class="meta">{
-            state === 'waiting' ? `waiting · ${Math.max(0, wait.count - got)} left · ${remaining}s`
-            : state === 'met' ? `✓ all ${wait.count} arrived`
-            : state === 'failed' ? `✗ timed out · ${got} of ${wait.count} in ${wait.seconds}s · step failed`
-            : state === 'carried' ? `timed out · ${got} of ${wait.count} in ${wait.seconds}s · carried on`
-            : `waiting for ${wait.count} · ${wait.seconds}s`}</span>}
-          slots={{ remove: () => actions.unwait?.(step, wait.key ?? '') }}
-          titles={{ remove: 'stop waiting' }}
-          open={reading === `${step}|wait|${wait.key ?? ''}`}
-          onOpen={() => setReading(reading === `${step}|wait|${wait.key ?? ''}` ? null : `${step}|wait|${wait.key ?? ''}`)}
-        >
-          <WaitSettings wait={wait} onChange={(next) => actions.setWait?.(step, wait.key ?? '', next)} />
-        </Row>
-        );
-      })}
       {bottom}
     </ol>
   );

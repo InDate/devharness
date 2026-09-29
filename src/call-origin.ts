@@ -1,0 +1,69 @@
+/**
+ * Where a tool call came in: the MCP connection, the CLI's session socket, or
+ * the bench's own server, and the sequence run it is a step of.
+ *
+ * A call records the channel, not the one who used it: a `! devharness` typed
+ * into a session and a `devharness call` the agent runs through its shell
+ * arrive on the same socket and cannot be told apart, so the channel is the
+ * reading history can stand behind.
+ *
+ * `recorded` is set while a call that history already holds runs, so the tool
+ * calls it makes on its own behalf - a launch inside a bench start, a probe
+ * inside a step - are not listed as commands of their own. Inside a run only
+ * a step's own call is listed, for the same reason: the executor probes the
+ * page between steps, and those probes are nobody's command.
+ */
+
+import { AsyncLocalStorage } from 'async_hooks';
+
+export type CallChannel = 'mcp' | 'cli' | 'bench';
+
+interface Place {
+  from: CallChannel;
+  run?: string;
+  step?: boolean;
+  recorded?: boolean;
+}
+
+const place = new AsyncLocalStorage<Place>();
+
+/** Run `work` as arriving on `from`. */
+export function arriveOn<T>(from: CallChannel, work: () => T): T {
+  return place.run({ from }, work);
+}
+
+/** Run `work` as the run of `sequence`, keeping the channel the run was started from. */
+export function withinRun<T>(sequence: string, work: () => T): T {
+  const outer = place.getStore();
+  return place.run({ from: outer?.from ?? 'mcp', run: sequence, recorded: false }, work);
+}
+
+/** Run `work` as one step's own call inside the current run. */
+export function asStep<T>(work: () => T): T {
+  const outer = place.getStore();
+  return outer ? place.run({ ...outer, step: true }, work) : work();
+}
+
+/**
+ * Run `work` with the tool calls it makes left out of history: inside a call
+ * history already holds, or as the bench's own reading of the page.
+ */
+export function unlisted<T>(work: () => T): T {
+  const outer = place.getStore();
+  return place.run({ ...(outer ?? { from: 'mcp' }), step: false, recorded: true }, work);
+}
+
+/** Where the current call belongs in history, or undefined for a call made on another's behalf. */
+export function historyPlace(): { from: CallChannel; run?: string } | undefined {
+  const here = place.getStore();
+  if (!here || here.recorded) return undefined;
+  if (here.run !== undefined && !here.step) return undefined;
+  return { from: here.from, ...(here.run !== undefined ? { run: here.run } : {}) };
+}
+
+/** The channel of a call that entered from outside, or undefined for a call made inside another call or run. */
+export function entryChannel(): CallChannel | undefined {
+  const here = place.getStore();
+  if (!here || here.recorded || here.run !== undefined) return undefined;
+  return here.from;
+}

@@ -21,6 +21,12 @@ runs against (see the skill's Quick Start).
 - `setLogpoint`: non-pausing logging with `{expr}` interpolation, `maxExecutions` to cap noise
 
 **Execution**: `execution` (actions: pause, resume, stepOver, stepInto, stepOut, acknowledge)
+- `pause`/`resume` are the code layer of `hold`. A resume on a page the bench holds releases the whole hold
+
+**Hold**: `hold` (actions: hold, step, release, status)
+- Stops the app at one moment across its layers: `code` (the debugger), `ui` (code plus CSS animation, needs the bench open), `network` (frames and responses wait at the proxy, needs `proxy: true`). All three by default
+- `step({ layer })` moves one layer on by its unit - a statement, a callback, a message - and stops it again
+- While the bench or a paused sequence holds a page, a tool that drives it is refused, naming the hold
 
 **Inspection**: `inspect` (actions: getCallStack, getVariables, evaluateExpression, searchCode, searchFunctions, listTargets)
 - `listTargets` lists the service, dedicated and shared worker targets on this browser. `evaluateExpression({ target })` runs the expression inside one of them, addressed by target id or by a substring of its URL - a substring matching two targets is refused with both named. A worker's console reaches no page listener, so `console({ action: 'list' | 'recent', target })` reads it from that target; recording starts at first attach
@@ -34,10 +40,10 @@ runs against (see the skill's Quick Start).
 
 **Network**: `network` (actions: list, get, search, enable, disable, setConditions)
 
-**Proxy**: `proxy` (actions: status, events, sockets, body, hold, holdFrame, release, holds)
+**Proxy**: `proxy` (actions: status, events, sockets, body, answer, answerFrame, withdraw, answers, refuse)
 - Needs `launchChrome({ proxy: true })`. Holds what reached the outside world, where `network` reads what CDP saw
 - Each event carries the step that owns it, a level read from stored evidence, and what the page says started it. A timer-rooted request or send owns nothing, so an app's own polling stays out of every step
-- `hold` answers a URL with a value; `holdFrame` replaces or drops one socket message
+- `answer` answers a URL with a value; `answerFrame` replaces or drops one socket message
 - Full model - roots, levels, socket shapes, ruling a payload shape, what reaches a recording: [boundary.md](boundary.md)
 
 **Page**: `navigate` (actions: goto, reload, back, forward, info)
@@ -59,15 +65,17 @@ runs against (see the skill's Quick Start).
 - A read never creates a database: `idbGet` on an unknown name errors rather than silently creating it
 - `clear` defaults to cookies + localStorage + sessionStorage. `indexedDB` is opt-in via `types` - dropping whole databases is far less recoverable
 
-**HTTP / assertions**: `request`, `assert`, `saveToDisk`
+**HTTP / assertions**: `request`, `check`, `assert`, `saveToDisk`
 - `request`: HTTP request as a sequence step. `destination: 'node'` sends it from the MCP server process (no browser, no CORS/cookies); `destination: 'browser'` runs `fetch()` in a connected tab (that page's cookies/session/origin). `saveAs` captures the response for later steps
-- `assert`: assert a condition as a sequence step, failing the sequence if false - use `{{var:name.path}}` templates against values captured by a prior `saveAs`
+- `check`: read one thing - an element, a value, an expression, the URL, a cookie, storage, traffic crossing the proxy (`traffic` matched as a pin, with `count`), a `socket` open or closed, or time alone (`afterMs`) - and answer held or failed; `withinMs` reads again until it holds. Called directly it never fails the call on a failed check. As a sequence step, `holds` / `fails` are `continue`, `stop`, or `{ run: '<sequence>', resumeAt }` - a guard is a check whose pass runs a sequence
+- `assert`: a check whose fail stops the sequence - use `{{var:name.path}}` templates against values captured by a prior `saveAs`
 - **Capturing values with `saveAs`**: supported on `request` and on `inspect({ action: 'evaluateExpression' })`. They store different shapes - `request` stores the whole response object (so `{{var:login.body.token}}`), `inspect` stores the evaluated value itself (so `{{var:pairingUrl}}` is the string). A `saveAs` that cannot be honoured now fails the step rather than silently capturing nothing. Async expressions work: a returned Promise is awaited and the settled value is captured exactly (JSON-serializable values are captured by value, not from display text)
 
 **Wait**: `wait` (exactly one of: selector, selectorGone, expression, ms)
 - The primitive for "the previous step kicked off async work": `wait({ selector })` until an element appears (extended `:has-text()` selectors supported), `wait({ selectorGone })` until it disappears, `wait({ expression })` until a synchronous JS predicate evaluates truthy, `wait({ ms })` fixed sleep (last resort)
 - Condition forms poll from the MCP side, so they survive a navigation mid-wait and never depend on in-page timers or promises resolving. Default timeout 15s (`timeoutMs`, `pollIntervalMs` tunable); on timeout the step fails cleanly (stopping a sequence) instead of hanging
 - For async in-page work, kick it off in one step (store its result in a global), then `wait({ expression: 'window.__result !== undefined' })`
+- A wait is a check with a time limit; written into a sequence from history it is stored as a `check` step
 
 **Issues**: `issues` (actions: list, create, workOn, resolve, acknowledge, comment, publish, sync, import, link, pullSequence)
 - `create`/`comment`: track bugs and features as Markdown issues, optionally linked to a replay sequence
@@ -84,15 +92,15 @@ runs against (see the skill's Quick Start).
 - `pullSequence` writes a sequence out of an issue to disk. Nothing is written until you ask, and nothing is ever run automatically: sequence steps are `{tool, params}` for **any** tool, so a sequence in a public issue is a script, not a macro. One authored by a GitHub account other than the one `gh` is logged in as is refused until a **person** has read it and re-run with `confirm: true` - an agent must not confirm on its own. One using `execution`, `saveToDisk`, `server`, `request` or `download` is refused unless you pass `allowPrivilegedSteps: true`. Read the step list in the response before you do
 - All of these are blocked while any bug is `pending` - `acknowledge` first
 
-**Bench**: `bench` (actions: start, stop, freeze, unfreeze, picker, tick, keepStep, dropStep, flagStep, sweep, retake, capture, list, status)
+**Bench**: `bench` (actions: start, stop, hold, release, picker, tick, keepStep, dropStep, flagStep, sweep, retake, capture, list, status)
 - The panel beside a driven app: it holds the page still, shows what crossed the boundary and what caused each thing, records and steps sequences, and collects element-level comments
 
 - For when describing a UI problem costs more than pointing at it. `start` opens the bench in its own tab with the page still running and Chrome's element picker idle; the person arms the picker, clicks an element in the app tab, types a comment in the bench, saves. Each annotation records the selector, the text, the component name and the JSX source location where a dev build exposes one - so the report carries what the element *is*, not a description of where it sits
 - Nothing is injected into the page being driven. The comment box, picker toggle, tick buttons and boundary stream live in the bench tab, served from `127.0.0.1` while apps sit on `localhost` - a different site, so Chrome gives it its own renderer process and freezing the app pane cannot take the UI down with it. Chrome's split view has no API (`splitViewId` is read-only), so the tab is opened beside the app for the person to split manually
-- The freeze stops two clocks. `Debugger.pause` holds the page's JS, and with it every timer and `rAF` callback; CSS animations run on the compositor and need `Animation.setPlaybackRate(0)` as well. Both are released on `stop`, and the page goes back to real time
-- `tick({ steps })` runs that many callbacks and freezes again - the exact unit, since one callback is one thing the page does and where its state changes. `tick({ budgetMs })` is the convenience for chasing a known timeout: it runs as many callbacks as it takes to cover that much page time and reports where it landed, which is rarely the number asked for. Either way this is how you walk into a state that only exists mid-interaction (a toast before it auto-dismisses, a spinner between two renders) and hold it there to be clicked. `Emulation.setVirtualTimePolicy` would give exact millisecond steps but is a one-way door - it replaces the page's clock with no way back, so the tab could never be handed over working
+- The screen hold stops two clocks. `Debugger.pause` holds the page's JS, and with it every timer and `rAF` callback; CSS animations run on the compositor and need `Animation.setPlaybackRate(0)` as well. Both are released on `stop`, and the page goes back to real time
+- `tick({ steps })` runs that many callbacks and holds again - the exact unit, since one callback is one thing the page does and where its state changes. `tick({ budgetMs })` is the convenience for chasing a known timeout: it runs as many callbacks as it takes to cover that much page time and reports where it landed, which is rarely the number asked for. Either way this is how you walk into a state that only exists mid-interaction (a toast before it auto-dismisses, a spinner between two renders) and hold it there to be clicked. `Emulation.setVirtualTimePolicy` would give exact millisecond steps but is a one-way door - it replaces the page's clock with no way back, so the tab could never be handed over working
 - Each step records the callbacks it ran through - what scheduled them, the function, the source line and the page time they landed at - and the bench keeps a running log beside the hold controls. This only exists while stepping: a freely running page is never paused, so there is nothing to observe it with short of tracing
-- While the picker is armed every click is a pick; disarming it hands clicks back to the app. Driving the app also needs the page running - under a freeze its JS is stopped, so a click reaches nothing - so `unfreeze` and `freeze` toggle the hold without leaving the bench. Picking works in both states, since the picker is Chrome's rather than the page's
+- While the picker is armed every click is a pick; disarming it hands clicks back to the app. Driving the app also needs the page running - under a hold its JS is stopped, so a click reaches nothing - so `release` and `hold` toggle it without leaving the bench. Picking works in both states, since the picker is Chrome's rather than the page's
 - Closing the bench tab ends it: the page is released back to real time, the debugger detaches and the server shuts down. `stop` does the same from the agent side. Annotations are written as they are saved, so neither loses anything
 - `sweep` reports the note captures no sequence refers to any more, and with `remove: true` deletes them. It reads every sequence store, so a capture another sequence cites is never taken, and needs no browser
 - Full reference, including pausing a run and the boundary panel: [bench.md](bench.md)
@@ -108,11 +116,12 @@ runs against (see the skill's Quick Start).
 - Use `global: true` to access servers started from a different working directory
 - `start({ watch: true, watchPaths?: [...] })`: devharness watches the given paths (default: cwd) and auto-restarts the server on file changes, instead of relying on `--watch`/nodemon. Pause-aware: if a breakpoint debugger is paused on that server's inspector port, the restart queues instead of firing immediately - `cancelPendingRestart` discards a queued restart to keep debugging without it firing on resume
 
-**Replay**: `replay` (actions: history, create, list, get, delete, export, load, listSaved, deleteSaved, run, runAll, step, finish, insert, addConditional, status, cancel, repeat, runFromLog, recordInteraction)
+**Replay**: `replay` (actions: history, create, list, get, delete, export, load, listSaved, deleteSaved, run, runAll, step, finish, insert, addCheck, status, cancel, repeat, runFromLog, recordInteraction)
 - `recordInteraction`: record mouse, keyboard, and navigation events with a visual overlay
-- `runAll`: run every sequence in a folder and report one line each - `replay({ action: 'runAll', folder: 'spine', connectionReason: 'my-app' })`. Sequences may live in SUBFOLDERS of the sequences dir (`spine/`, `story/`, `_helpers/`); filenames are relative to that root (`spine/spine-01.json`) and `load` still accepts the bare basename. The whole tree is LOADED before anything runs, so a sequence in one folder can still reference a helper in another by name (a conditional's `then`, a forEach's `do`) - those resolve by sequence name, not by path. Folders whose name starts with `_` are loaded but never run by a bare `runAll`, which is where preamble guards and forEach bodies belong; naming such a folder explicitly runs it anyway. A failure is recorded and the suite continues (`continueOnFailure`, default true). Scoped to one root: the project sequences dir, or the global one with `global: true`. Accepts `baseUrl`, so one call runs a suite against any deployment
+- `runAll`: run every sequence in a folder and report one line each - `replay({ action: 'runAll', folder: 'spine', connectionReason: 'my-app' })`. Sequences may live in SUBFOLDERS of the sequences dir (`spine/`, `story/`, `_helpers/`); filenames are relative to that root (`spine/spine-01.json`) and `load` still accepts the bare basename. The whole tree is LOADED before anything runs, so a sequence in one folder can still reference a helper in another by name (a check's `{ run }`, a forEach's `do`) - those resolve by sequence name, not by path. Folders whose name starts with `_` are loaded but never run by a bare `runAll`, which is where preamble guards and forEach bodies belong; naming such a folder explicitly runs it anyway. A failure is recorded and the suite continues (`continueOnFailure`, default true). Scoped to one root: the project sequences dir, or the global one with `global: true`. Accepts `baseUrl`, so one call runs a suite against any deployment
+- `addCheck`: add a check step - `replay({ action: 'addCheck', name: 'flow', check: { selector: '.cookie-banner', condition: 'present', holds: { run: 'dismiss-banner' }, fails: 'continue' } })`
 - `export`: export a sequence to file - `format: sequence | playwright | puppeteer`
-- `repeat`: instantly re-execute commands by history index - `replay({ action: 'repeat', indices: [0, 1, 2] })`. Each tool response shows its history index in the "Repeat" hint
+- `repeat`: instantly re-execute commands by history index - `replay({ action: 'repeat', indices: [0, 1, 2] })`. Each tool response shows its history index in its `Replay: N` footer. History also holds bench and CLI calls and every step of a sequence run, marked with the run's name
 - `run`: does not block - returns a `runId` immediately and executes in the background; poll `status({ runId })` for progress and the final result (kept 30 min in memory), `cancel({ runId })` stops it at the next step boundary. `wait: true` blocks for the full result (pre-0.7 behaviour). `startUrl` overrides the stored start URL for one run; `baseUrl` retargets every absolute URL at another deployment's origin
 - Use `global: true` with `export` to save to ~/.cdp-tools/sequences/ instead of the working directory
 

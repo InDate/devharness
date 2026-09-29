@@ -19,6 +19,8 @@ import type { ExecuteToolCall } from '../types.js';
 import { isExtendedSelector, parseExtendedSelector } from '../utils/selector-resolver.js';
 import { abortableSleep, isAbortError, throwIfAborted } from '../utils/abort.js';
 import { evaluateCondition, type ExecutionContext } from './replay-executor.js';
+import { callStartedBack, getProxy } from '../proxy/registry.js';
+import type { CrossingMatch } from '../proxy/intercept-proxy.js';
 
 export const CHECK_OPERATORS = [
   'equals', 'notEquals', 'exists', 'notExists', 'gt', 'gte', 'lt', 'lte', 'contains', 'matches',
@@ -29,8 +31,9 @@ export const ELEMENT_CONDITIONS = [
   'present', 'visible', 'hittable', 'absent', 'text', 'attribute', 'count', 'enabled',
 ] as const;
 export type ElementCondition = typeof ELEMENT_CONDITIONS[number];
+export const SOCKET_CONDITIONS = ['open', 'closed'] as const;
+export type SocketCondition = typeof SOCKET_CONDITIONS[number];
 
-/** What one check reads. At most one subject; none is a check on time alone. */
 /** A wait's time limit and read interval when its call names none. */
 export const WAIT_TIMEOUT_MS = 15000;
 const WAIT_POLL_MS = 100;
@@ -73,10 +76,11 @@ export function waitAsCheck(args: {
   };
 }
 
+/** What one check reads. At most one subject; none is a check on time alone. */
 export interface CheckSpec {
   /** An element, and what is required of it. */
   selector?: string;
-  condition?: ElementCondition;
+  condition?: ElementCondition | SocketCondition;
   /** `condition: 'attribute'`: which attribute is read. */
   attribute?: string;
   /** A value, typically a resolved `{{var:...}}`. Read when `hasValue` is set, since the value may be undefined. */
@@ -88,6 +92,21 @@ export interface CheckSpec {
   expression?: string;
   /** The page's URL, compared by `operator` (equals, contains or matches). */
   url?: string;
+  /**
+   * Traffic crossing the proxy from when the check starts: the fields a pin
+   * matches on, counted by the proxy as they cross. `count` with `operator`
+   * says how many; the default is at least one.
+   */
+  traffic?: CrossingMatch;
+  count?: number;
+  /**
+   * Where the count starts: the start of the call this many back, the check
+   * itself being 0. Default 1, the call before the check, whose traffic has
+   * usually crossed by the time the check is called.
+   */
+  stepsBack?: number;
+  /** A socket whose URL carries this, `condition` `open` (default) or `closed`. */
+  socket?: string;
   /** Presence of a cookie, a localStorage key, or an IndexedDB record (`DB/STORE/KEY`, or `DB/STORE` for any). */
   cookie?: string;
   localStorage?: string;
@@ -100,7 +119,7 @@ export interface CheckSpec {
   pollMs?: number;
 }
 
-export type CheckForm = 'time' | 'value' | 'element' | 'expression' | 'url' | 'cookie' | 'localStorage' | 'indexedDB';
+export type CheckForm = 'time' | 'value' | 'element' | 'expression' | 'url' | 'cookie' | 'localStorage' | 'indexedDB' | 'traffic' | 'socket';
 
 /** What an element probe saw. */
 export interface ElementProbe {
@@ -128,7 +147,7 @@ export interface CheckReading {
   detail?: string;
   /** The last read that threw, when the reading failed on errors rather than on the page. */
   lastError?: string;
-  errorKind?: 'invalid' | 'paused' | 'no-connection' | 'not-connected' | 'node' | 'unreadable';
+  errorKind?: 'invalid' | 'paused' | 'no-connection' | 'not-connected' | 'node' | 'unreadable' | 'no-proxy';
   elapsedMs: number;
   polls: number;
 }
@@ -296,6 +315,8 @@ export function formOf(spec: CheckSpec): CheckForm {
   if (spec.cookie !== undefined) return 'cookie';
   if (spec.localStorage !== undefined) return 'localStorage';
   if (spec.indexedDB !== undefined) return 'indexedDB';
+  if (spec.traffic !== undefined) return 'traffic';
+  if (spec.socket !== undefined) return 'socket';
   return 'time';
 }
 
@@ -314,6 +335,13 @@ export function subjectOf(spec: CheckSpec): string {
     case 'cookie': return `cookie ${spec.cookie} ${spec.condition === 'absent' ? 'absent' : 'present'}`;
     case 'localStorage': return `localStorage ${spec.localStorage} ${spec.condition === 'absent' ? 'absent' : 'present'}`;
     case 'indexedDB': return `indexedDB ${spec.indexedDB} ${spec.condition === 'absent' ? 'absent' : 'present'}`;
+    case 'traffic': {
+      const t = spec.traffic!;
+      const what = [t.method, t.direction, t.urlIncludes, t.textIncludes !== undefined ? said(t.textIncludes) : undefined]
+        .filter(Boolean).join(' ');
+      return `traffic ${what || 'any'} count ${spec.operator ?? 'gte'} ${spec.count ?? 1}`;
+    }
+    case 'socket': return `socket ${spec.socket} ${spec.condition === 'closed' ? 'closed' : 'open'}`;
     case 'time': return `${spec.afterMs ?? 0}ms passed`;
   }
 }
@@ -331,7 +359,13 @@ function foundOf(condition: ElementCondition, probe: ElementProbe, attribute?: s
   return parts.join(', ');
 }
 
-type Read = { held: boolean; found?: string; probe?: ElementProbe; detail?: string };
+/**
+ * One read. `final` says whether the answer can still change: a count that
+ * must not be exceeded holds only once its time is up, and fails as soon as it
+ * is exceeded; left undefined, a read that holds is final and one that fails
+ * is read again.
+ */
+type Read = { held: boolean; found?: string; probe?: ElementProbe; detail?: string; final?: boolean };
 class CheckError extends Error {
   constructor(message: string, readonly kind: NonNullable<CheckReading['errorKind']>) { super(message); }
 }
@@ -357,6 +391,9 @@ export async function runCheck(spec: CheckSpec, deps: CheckDeps): Promise<CheckR
   if (form === 'element' && spec.condition === 'attribute' && !spec.attribute) {
     return reading('error', { errorKind: 'invalid', detail: 'condition "attribute" needs the attribute to read' });
   }
+  if (form === 'element' && (SOCKET_CONDITIONS as readonly string[]).includes(spec.condition ?? '')) {
+    return reading('error', { errorKind: 'invalid', detail: `condition "${spec.condition}" is a socket's, not an element's` });
+  }
   if (form === 'value' && !spec.operator) {
     return reading('error', { errorKind: 'invalid', detail: 'a value check needs an operator' });
   }
@@ -365,8 +402,11 @@ export async function runCheck(spec: CheckSpec, deps: CheckDeps): Promise<CheckR
   // missing connection is an error before any time is spent.
   let read: () => Promise<Read>;
   let cdpManager: any;
+  // A traffic check's counter lives in the proxy until the check ends,
+  // however it ends, cancel included.
+  const releases: Array<() => void> = [];
   try {
-    read = await readerFor(spec, form, deps, (manager) => { cdpManager = manager; });
+    read = await readerFor(spec, form, deps, (manager) => { cdpManager = manager; }, (release) => { releases.push(release); });
   } catch (error: any) {
     if (isAbortError(error)) throw error;
     return reading('error', {
@@ -375,43 +415,60 @@ export async function runCheck(spec: CheckSpec, deps: CheckDeps): Promise<CheckR
     });
   }
 
-  if (spec.afterMs && spec.afterMs > 0) await abortableSleep(spec.afterMs, deps.abortSignal);
-  // Time alone needs no read: the wait above is the whole check.
-  if (form === 'time') return reading('held', { found: `${spec.afterMs ?? 0}ms passed` });
-  const pollMs = spec.pollMs ?? 100;
-  const deadline = Date.now() + (spec.withinMs ?? 0);
-  let last: Read | undefined;
-  let lastError: string | undefined;
+  try {
+    return await readUntilAnswered();
+  } finally {
+    for (const release of releases) release();
+  }
 
-  while (true) {
-    throwIfAborted(deps.abortSignal);
-    // Nothing on a page held at a breakpoint can change, so waiting on it only
-    // spends the time limit.
-    if (cdpManager?.isPaused?.()) {
-      return reading('error', { errorKind: 'paused', detail: 'the page is paused at a breakpoint, so nothing on it can change' });
-    }
-    polls++;
-    try {
-      last = await read();
-      lastError = undefined;
-      if (last.held) return reading('held', { found: last.found, ...(last.probe ? { probe: last.probe } : {}) });
-    } catch (error: any) {
-      if (isAbortError(error)) throw error;
-      if (error instanceof CheckError) return reading('error', { errorKind: error.kind, detail: error.message });
-      lastError = error?.message || String(error);
-      if (form !== 'expression' && isSelectorSyntaxError(lastError!)) {
-        return reading('error', { errorKind: 'invalid', detail: `invalid selector "${spec.selector}": ${lastError}` });
+  async function readUntilAnswered(): Promise<CheckReading> {
+    if (spec.afterMs && spec.afterMs > 0) await abortableSleep(spec.afterMs, deps.abortSignal);
+    // Time alone needs no read: the wait above is the whole check.
+    if (form === 'time') return reading('held', { found: `${spec.afterMs ?? 0}ms passed` });
+    const pollMs = spec.pollMs ?? 100;
+    const deadline = Date.now() + (spec.withinMs ?? 0);
+    let last: Read | undefined;
+    let lastError: string | undefined;
+
+    while (true) {
+      throwIfAborted(deps.abortSignal);
+      // Nothing on a page held at a breakpoint can change, so waiting on it only
+      // spends the time limit.
+      if (cdpManager?.isPaused?.()) {
+        return reading('error', { errorKind: 'paused', detail: 'the page is paused at a breakpoint, so nothing on it can change' });
       }
+      polls++;
+      try {
+        last = await read();
+        lastError = undefined;
+        if (last.final ?? last.held) {
+          return reading(last.held ? 'held' : 'failed', {
+            ...(last.found !== undefined ? { found: last.found } : {}),
+            ...(last.probe ? { probe: last.probe } : {}),
+            ...(last.detail ? { detail: last.detail } : {}),
+          });
+        }
+      } catch (error: any) {
+        if (isAbortError(error)) throw error;
+        if (error instanceof CheckError) return reading('error', { errorKind: error.kind, detail: error.message });
+        lastError = error?.message || String(error);
+        if (form !== 'expression' && isSelectorSyntaxError(lastError!)) {
+          return reading('error', { errorKind: 'invalid', detail: `invalid selector "${spec.selector}": ${lastError}` });
+        }
+      }
+      if (Date.now() + pollMs > deadline) {
+        // A read that holds but could still change - a count that must not be
+        // exceeded - is answered by where it stands when the time is up.
+        if (last?.held) return reading('held', { ...(last.found !== undefined ? { found: last.found } : {}) });
+        return reading('failed', {
+          ...(last?.found !== undefined ? { found: last.found } : {}),
+          ...(last?.probe ? { probe: last.probe } : {}),
+          ...(last?.detail ? { detail: last.detail } : {}),
+          ...(lastError ? { lastError } : {}),
+        });
+      }
+      await abortableSleep(pollMs, deps.abortSignal);
     }
-    if (Date.now() + pollMs > deadline) {
-      return reading('failed', {
-        ...(last?.found !== undefined ? { found: last.found } : {}),
-        ...(last?.probe ? { probe: last.probe } : {}),
-        ...(last?.detail ? { detail: last.detail } : {}),
-        ...(lastError ? { lastError } : {}),
-      });
-    }
-    await abortableSleep(pollMs, deps.abortSignal);
   }
 }
 
@@ -420,8 +477,45 @@ async function readerFor(
   form: CheckForm,
   deps: CheckDeps,
   onManager: (cdpManager: any) => void,
+  onRelease: (release: () => void) => void,
 ): Promise<() => Promise<Read>> {
   if (form === 'time') return async () => ({ held: true, found: `${spec.afterMs ?? 0}ms passed` });
+
+  if (form === 'traffic' || form === 'socket') {
+    const proxy = deps.connectionReason ? getProxy(deps.connectionReason) : undefined;
+    if (!proxy) {
+      throw new CheckError(
+        `a ${form} check reads what crosses the proxy, and "${deps.connectionReason ?? '(no connection)'}" was not launched through one - launchChrome({ proxy: true })`,
+        'no-proxy');
+    }
+    if (form === 'socket') {
+      const wantOpen = spec.condition !== 'closed';
+      return async () => {
+        const open = proxy.socketOpen(spec.socket!);
+        return { held: open === wantOpen, found: open ? 'open' : 'closed' };
+      };
+    }
+    // Counted by the proxy from the start of the call `stepsBack` before
+    // this one: what is already on its record, then each crossing as it
+    // passes its pins. With no call that far back, from now.
+    const since = callStartedBack(spec.stepsBack ?? 1) ?? Date.now();
+    const counter = proxy.count(spec.traffic!, since);
+    const partial = proxy.isPartial(counter);
+    onRelease(() => proxy.release(counter));
+    const operator = spec.operator ?? 'gte';
+    const target = spec.count ?? 1;
+    // More crossings can break these, so they hold only once the time is up.
+    const bounded = operator === 'equals' || operator === 'lte' || operator === 'lt';
+    return async () => {
+      const hits = proxy.hitsOf(counter) ?? 0;
+      const held = compare(hits, operator, target).passed;
+      const exceeded = bounded && hits > target;
+      return {
+        held, found: `${hits} crossed`, final: bounded ? exceeded : held,
+        ...(partial ? { detail: 'the proxy had discarded the oldest crossings in the window, so the count may be short' } : {}),
+      };
+    };
+  }
 
   if (form === 'value') {
     return async () => {
@@ -476,7 +570,8 @@ async function readerFor(
     };
   }
 
-  const condition = spec.condition ?? 'present';
+  // A socket's condition on an element is refused before any read, in runCheck.
+  const condition = (spec.condition ?? 'present') as ElementCondition;
   if (condition === 'present' || condition === 'absent') {
     const present = presenceExpression(spec.selector!);
     if (typeof present !== 'string') throw new CheckError(`invalid selector "${spec.selector}": ${present.error}`, 'invalid');

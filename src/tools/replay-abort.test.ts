@@ -23,6 +23,7 @@ import type { CommandSequence, RecordedCommand } from '../command-recorder.js';
 import type { ExecuteToolCall } from '../types.js';
 import { configManager } from '../config.js';
 import { productionShaped } from '../test-support/fake-execute-tool-call.js';
+import { HELD, runsOnPass } from '../test-support/check-steps.js';
 
 // ---------------------------------------------------------------------------
 // Harness: an executeToolCall that routes `wait` to the REAL wait handler
@@ -65,6 +66,7 @@ function makeHarness(opts: {
   // productionShaped mirrors index.ts: any isError response becomes a thrown
   // ToolError, carrying the response the classifiers read.
   const executeToolCall: ExecuteToolCall = vi.fn(productionShaped(async (tool: string, params: any, abortSignal?: AbortSignal) => {
+    if (tool === 'check') return HELD;
     calls.push({ tool, action: params.action, params });
     if (tool === 'wait') {
       return await wait.handler(params as any, abortSignal);
@@ -193,10 +195,10 @@ describe('run-signal abort interrupts wait steps', () => {
 });
 
 // ---------------------------------------------------------------------------
-// the signal reaches nested conditional sequences
+// the signal reaches sequences a check runs
 // ---------------------------------------------------------------------------
 
-describe('run-signal abort inside a conditional substep', () => {
+describe('run-signal abort inside a sequence a check runs', () => {
   it('stops the nested run promptly (the signal used to be dropped at the executeSteps call)', { timeout: 10000 }, async () => {
     const inner = seq([
       { tool: 'wait', params: { selector: '#never', timeoutMs: 120000, pollIntervalMs: 20 } },
@@ -213,7 +215,7 @@ describe('run-signal abort inside a conditional substep', () => {
     const controller = new AbortController();
     const run = executeSteps({
       sequence: seq([
-        { tool: 'conditional', params: { if: '{{selector:.x}}', then: 'inner-flow' } },
+        runsOnPass('inner-flow'),
       ]),
       startStep: 0,
       ctx: h.ctx,
@@ -233,7 +235,7 @@ describe('run-signal abort inside a conditional substep', () => {
     await new Promise(r => setTimeout(r, 500));
     expect(h.getPollCount()).toBe(pollsAtSettle);
 
-    // The conditional step failed via the nested abort; the substep carries
+    // The check step failed via the nested abort; the substep carries
     // the canonical abort message and the step after the nested wait never ran.
     expect(result.results[0].success).toBe(false);
     expect(result.results[0].substeps?.[0].error).toBe('Replay aborted by user');

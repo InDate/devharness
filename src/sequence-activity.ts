@@ -21,7 +21,6 @@ interface WithActivity {
   name: string;
   commands?: Array<{ traffic?: unknown; expected?: unknown }>;
   boundaryRules?: unknown[];
-  boundaryWaits?: unknown[];
   boundaryRefuse?: 'writes';
   boundaryNames?: Record<string, string>;
   boundaryPlacements?: Record<string, number>;
@@ -49,7 +48,6 @@ export interface SequenceActivity {
   name: string;
   /** Saved responses: what answers a kind of traffic on replay. */
   responses?: unknown[];
-  waits?: unknown[];
   refuseWrites?: boolean;
   names?: Record<string, string>;
   /** Where a kind of traffic is listed and compared, by where it crossed; see `boundaryPlacements`. */
@@ -77,7 +75,7 @@ export function activityPathFor(sequencePath: string): string {
 /** The sequence as written to its own file, and its activity, or none when it has none. */
 export function splitActivity<T extends WithActivity>(sequence: T): { actions: T; activity?: SequenceActivity } {
   const {
-    boundaryRules, boundaryWaits, boundaryRefuse, boundaryNames, boundaryPlacements, boundaryRulesOff, boundaryRulesOn,
+    boundaryRules, boundaryRefuse, boundaryNames, boundaryPlacements, boundaryRulesOff, boundaryRulesOn,
     boundaryHiddenOn, boundaryHiddenOff, ...rest
   } = sequence;
   const steps: Record<string, ActivityStep> = {};
@@ -98,7 +96,6 @@ export function splitActivity<T extends WithActivity>(sequence: T): { actions: T
     sequence: sequence.id,
     name: sequence.name,
     ...(boundaryRules?.length ? { responses: boundaryRules } : {}),
-    ...(boundaryWaits?.length ? { waits: boundaryWaits } : {}),
     ...(boundaryRefuse === 'writes' ? { refuseWrites: true } : {}),
     ...(boundaryNames && Object.keys(boundaryNames).length ? { names: boundaryNames } : {}),
     ...(boundaryPlacements && Object.keys(boundaryPlacements).length ? { placements: boundaryPlacements } : {}),
@@ -108,7 +105,7 @@ export function splitActivity<T extends WithActivity>(sequence: T): { actions: T
     ...(boundaryHiddenOff?.length ? { hiddenOff: boundaryHiddenOff } : {}),
     ...(Object.keys(steps).length ? { steps } : {}),
   };
-  const empty = !activity.responses && !activity.waits && !activity.refuseWrites && !activity.names
+  const empty = !activity.responses && !activity.refuseWrites && !activity.names
     && !activity.placements && !activity.responsesOff && !activity.responsesOn
     && !activity.hiddenOn && !activity.hiddenOff && !activity.steps;
   return empty ? { actions } : { actions, activity };
@@ -135,7 +132,6 @@ export function mergeActivity<T extends WithActivity>(sequence: T, activity: Seq
     ...sequence,
     ...(sequence.commands ? { commands } : {}),
     ...(activity.responses && !sequence.boundaryRules ? { boundaryRules: activity.responses } : {}),
-    ...(activity.waits && !sequence.boundaryWaits ? { boundaryWaits: activity.waits } : {}),
     ...(activity.refuseWrites && !sequence.boundaryRefuse ? { boundaryRefuse: 'writes' as const } : {}),
     ...(activity.names && !sequence.boundaryNames ? { boundaryNames: activity.names } : {}),
     ...(activity.placements && !sequence.boundaryPlacements ? { boundaryPlacements: activity.placements } : {}),
@@ -232,12 +228,6 @@ export function renumberSteps<T extends WithActivity & { commands?: Array<{ tool
   sequence: T,
   map: (old: number) => number | undefined,
 ): void {
-  if (sequence.boundaryWaits) {
-    const waits = (sequence.boundaryWaits as Array<{ step: number }>)
-      .map(wait => ({ ...wait, step: map(wait.step) }))
-      .filter((wait): wait is { step: number } => wait.step !== undefined);
-    sequence.boundaryWaits = waits;
-  }
   if (sequence.boundaryRulesOn) {
     sequence.boundaryRulesOn = sequence.boundaryRulesOn.map(use => {
       if (!use.steps) return use;
@@ -270,11 +260,6 @@ export function renumberSteps<T extends WithActivity & { commands?: Array<{ tool
     sequence.boundaryPlacements = placed;
   }
   for (const command of sequence.commands ?? []) {
-    if (command.tool === 'conditional' && typeof command.params?.rejoinAt === 'number') {
-      const to = map(command.params.rejoinAt);
-      if (to === undefined) delete command.params.rejoinAt;
-      else command.params.rejoinAt = to;
-    }
     if (command.tool === 'check') {
       for (const answer of ['holds', 'fails'] as const) {
         const action = command.params?.[answer];

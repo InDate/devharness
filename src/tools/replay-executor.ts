@@ -4,7 +4,7 @@
 
 import type { StepTraffic } from '../annotation.js';
 import type { CommandRecorder, RecordedCommand, CommandSequence, ActiveSequenceState } from '../command-recorder.js';
-import { markOnProxies, markNextCommand, releaseCommand, boundarySettled, getProxy, recordCheckOutcome, takeWaitFailure } from '../proxy/registry.js';
+import { markOnProxies, markNextCommand, releaseCommand, boundarySettled, getProxy, recordCheckOutcome, noteCallStart } from '../proxy/registry.js';
 import { tallyShapes, type ShapeRules } from '../proxy/intercept-proxy.js';
 import type { ExecuteToolCall } from '../types.js';
 import { abortableDelayResult } from '../utils/abort.js';
@@ -18,6 +18,8 @@ import { getMessage, isElementNotFoundFailure } from '../messages.js';
 import type { CheckOutcome as CheckAction } from './check-tools.js';
 import { assertAsCheck, subjectOf as subjectOfCheck, waitAsCheck } from './check-engine.js';
 import type { CheckOutcome as CheckOutcomeRecord, RanStep } from '../proxy/registry.js';
+import { asStep, withinRun } from '../call-origin.js';
+import type { DebuggerStatusMeta } from '../tool-response.js';
 
 // Re-export replay cursor functions
 export { injectReplayCursor, showClickEffect, showKeyPress, removeReplayCursor } from '../replay-cursor.js';
@@ -46,10 +48,10 @@ export interface ExecutionContext {
   commandRecorder: CommandRecorder;
   connectionReason: string;
   logPrefix?: string;
-  /** Current nesting depth for conditional commands (used for recursion protection) */
-  conditionalDepth?: number;
+  /** How many sequences deep this run is, through checks' `{ run }` and forEach's `do`; bounds recursion. */
+  nestingDepth?: number;
   /** Call stack of sequence names for circular reference detection */
-  conditionalCallStack?: string[];
+  nestingCallStack?: string[];
   /** Per-run variable store for {{var:name.path}} interpolation. Populated by
    *  { saveAs } steps (see CAPTURE_SOURCES), consumed by later steps' param
    *  interpolation. Shared BY REFERENCE with per-step ctx clones and nested
@@ -76,7 +78,7 @@ export interface ExecutionContext {
   launchedConnections?: Set<string>;
   /**
    * The origin every absolute URL in this run takes, from `run`/`runAll`'s
-   * `baseUrl`. Inherited by nested sequences (a `conditional`'s `then`, a
+   * `baseUrl`. Inherited by nested sequences (a check's `{ run }`, a
    * `forEach`'s `do`), which load from the recorder in their recorded form:
    * without it the parent runs against the target deployment and the helper
    * that logs in or navigates runs against the recorded one, so a retargeted
@@ -85,7 +87,7 @@ export interface ExecutionContext {
   rebaseOrigin?: string;
   /**
    * Recorded-typed-text substitutions for this run, from `run`/`runAll`'s
-   * `variables`. Inherited by nested sequences (a `conditional`'s `then`, a
+   * `variables`. Inherited by nested sequences (a check's `{ run }`, a
    * `forEach`'s `do`), which load from the recorder in their recorded form:
    * without it the credential a caller supplied stops at the top-level
    * sequence and the shared login helper types its RECORDED password into the
@@ -95,7 +97,7 @@ export interface ExecutionContext {
   /**
    * Values from the run's `envFile`, checked by {{env:NAME}} before
    * process.env. Inherited by nested sequences, so a shared login helper
-   * reached by a `conditional` resolves against the same file. The server's
+   * reached by a check's `{ run }` resolves against the same file. The server's
    * own process.env is never mutated: two background runs may name different
    * files, and a global write would let one run's credentials resolve inside
    * the other.
@@ -114,10 +116,9 @@ export interface StepResult {
   tool: string;
   success: boolean;
   error?: string;
-  // For conditional commands - nested substeps
+  // For a check that ran a sequence, or a forEach - nested substeps
   substeps?: StepResult[];
   sequenceName?: string;
-  conditionMet?: boolean;
   /** check: how the reading went, and what the step did on it. */
   check?: {
     outcome: 'held' | 'failed'; subject: string; found?: string; action: 'continue' | 'stop' | 'run';
@@ -304,7 +305,7 @@ export const TOOLS_NEEDING_CONNECTION = [
 export const TOOLS_ACCEPTING_CONNECTION = [
   ...TOOLS_NEEDING_CONNECTION,
   'inspect', 'execution', 'breakpoint', 'getSourceCode', 'detectModals', 'dismissModal', 'assert',
-  'wait', 'check'
+  'wait', 'check', 'hold'
 ];
 
 /**
@@ -352,7 +353,7 @@ export function commandTakesInjectedConnection(cmd: { tool: string; params?: Rec
 }
 
 // =============================================================================
-// Conditional Evaluation
+// Page-state conditions, read by the check engine for url, cookie, storage and IndexedDB checks
 // =============================================================================
 
 /**
@@ -371,71 +372,6 @@ export const CONDITION_TYPES = ['selector', 'url', 'cookie', 'localStorage', 'in
 
 /** Shape of a handlebar condition: `{{type:value}}` or `{{!type:value}}`. */
 const CONDITION_PATTERN = /^\{\{(!?)(\w+):(.+)\}\}$/;
-
-/**
- * Check a condition at authoring time: shape, type, and the `url`/`indexedDB`
- * sub-forms. A value holding a `{{var:...}}` token is skipped - it is
- * substituted at run time, so its final shape is unknowable here.
- */
-export function validateConditionSyntax(
-  condition: string,
-  maxRegexLength = configManager.getReplayConfig().maxRegexLength
-): { ok: true } | { ok: false; reason: string } {
-  const match = condition.match(CONDITION_PATTERN);
-  if (!match) {
-    return {
-      ok: false,
-      reason: `Invalid condition format: "${condition}". Expected {{type:value}} or {{!type:value}}. Supported types: ${CONDITION_TYPES.join(', ')}`
-    };
-  }
-
-  const [, , type, value] = match;
-  if (!(CONDITION_TYPES as readonly string[]).includes(type)) {
-    return {
-      ok: false,
-      reason: `Unknown condition type: "${type}". Supported types: ${CONDITION_TYPES.join(', ')}`
-    };
-  }
-
-  const interpolated = value.includes('{{');
-
-  if (type === 'url' && value.startsWith('matches:') && !interpolated) {
-    const pattern = value.substring('matches:'.length);
-    if (pattern.length > maxRegexLength) {
-      return {
-        ok: false,
-        reason: `Regex pattern too long (${pattern.length} chars, max ${maxRegexLength}). Simplify the pattern or increase maxRegexLength in config.`
-      };
-    }
-    try {
-      new RegExp(pattern);
-    } catch (regexError: any) {
-      return {
-        ok: false,
-        reason: `Invalid regex pattern "${pattern}": ${regexError.message}. Check syntax at https://regex101.com (JavaScript flavor).`
-      };
-    }
-  }
-
-  if (type === 'indexedDB' && !interpolated) {
-    const [db, store, ...rest] = value.split('/');
-    if (!db || !store) {
-      return {
-        ok: false,
-        reason: `Invalid indexedDB condition "${value}". Expected {{indexedDB:DB/STORE/KEY}} or {{indexedDB:DB/STORE}}.`
-      };
-    }
-    if (rest.length > 0 && !rest.join('/')) {
-      return {
-        ok: false,
-        reason: `Invalid indexedDB condition "${value}": the key is empty.`
-          + ` Use {{indexedDB:${db}/${store}}} to ask whether the store holds anything.`
-      };
-    }
-  }
-
-  return { ok: true };
-}
 
 /**
  * Evaluate a handlebar-style condition
@@ -691,7 +627,7 @@ export async function evaluateCondition(
   }
 }
 
-export interface ConditionalFlowResult {
+export interface NestedRunResult {
   success: boolean;
   executed: boolean;
   sequenceName: string;
@@ -703,8 +639,8 @@ export interface ConditionalFlowResult {
 }
 
 /**
- * Shared preparation for any sequence run INSIDE another one (`conditional`'s
- * `then`, `forEach`'s `do`): decide which of its `launchChrome` steps still
+ * Shared preparation for any sequence run INSIDE another one (a check's
+ * `{ run }`, `forEach`'s `do`): decide which of its `launchChrome` steps still
  * apply, and which browser its bare steps belong to.
  *
  * Drop launchChrome steps whose browser already exists - the caller handed us a
@@ -772,80 +708,9 @@ async function prepareNestedSequence(
 }
 
 /**
- * Execute a conditional flow - runs a sequence if condition is met
- */
-export async function executeConditionalFlow(
-  condition: string,
-  sequenceName: string,
-  ctx: ExecutionContext,
-  recorder: CommandRecorder,
-  /**
-   * The parent run's timeout budget, so substeps are bounded the way the
-   * caller asked rather than silently falling back to the defaults.
-   *
-   * `totalTimeout` must be the parent's REMAINING budget, not a fresh copy of
-   * its original value - otherwise wrapping steps in a conditional becomes a
-   * way to extend the total, and a caller who set a tight bound to fail fast
-   * would not get it.
-   */
-  budget?: { stepTimeout?: number; totalTimeout?: number },
-  /**
-   * The parent RUN's signal. Without it a nested sequence is deaf to
-   * `replay cancel` even at its own step boundaries - the substep loop would
-   * run to completion after the user cancelled.
-   */
-  abortSignal?: AbortSignal
-): Promise<ConditionalFlowResult> {
-  const { logPrefix = 'executor' } = ctx;
-  const replayConfig = configManager.getReplayConfig();
-  const currentDepth = ctx.conditionalDepth ?? 0;
-  const callStack = ctx.conditionalCallStack ?? [];
-
-  // Check recursion depth limit - allows oscillating patterns (A→B→A) up to max depth
-  if (currentDepth >= replayConfig.maxConditionalDepth) {
-    const chain = [...callStack, sequenceName].join(' → ');
-    await debugLog(logPrefix, `Conditional depth limit exceeded: ${chain}`);
-    return {
-      success: false,
-      executed: false,
-      sequenceName,
-      error: `Conditional depth limit (${replayConfig.maxConditionalDepth}) reached: ${chain}. Increase maxConditionalDepth in config if this is intentional.`
-    };
-  }
-
-  // Evaluate the condition
-  const condResult = await evaluateCondition(condition, ctx);
-
-  if (!condResult.met) {
-    // Check if this is an error vs genuine "condition not met"
-    if ('isError' in condResult && condResult.isError) {
-      // This is an ERROR - fail the sequence
-      await debugLog(logPrefix, `Condition evaluation ERROR: ${condResult.reason}`);
-      return {
-        success: false,
-        executed: false,
-        sequenceName,
-        error: `Condition evaluation failed: ${condResult.reason}`
-      };
-    }
-
-    // Genuine "condition not met" - this is success (we correctly evaluated and skipped)
-    if ('reason' in condResult && condResult.reason) {
-      await debugLog(logPrefix, `Condition not met: ${condResult.reason}`);
-    } else {
-      await debugLog(logPrefix, `Condition ${condition} not met, skipping sequence ${sequenceName}`);
-    }
-    return { success: true, executed: false, sequenceName };
-  }
-
-  await debugLog(logPrefix, `Condition ${condition} met, loading sequence: ${sequenceName}`);
-  return runBranch(sequenceName, ctx, recorder, budget, abortSignal);
-}
-
-/**
- * Run a named sequence inside a step of another: a conditional's `then`, or a
- * check's `{ run }`. Shares the run's variables, remaining time and cancel;
- * bounded by the conditional depth, as any sequence one run reaches is.
+ * Run a named sequence inside a step of another: a check's `{ run }`. Shares
+ * the run's variables, remaining time and cancel; bounded by the nesting
+ * depth, as any sequence one run reaches is.
  */
 export async function runBranch(
   sequenceName: string,
@@ -853,18 +718,18 @@ export async function runBranch(
   recorder: CommandRecorder,
   budget?: { stepTimeout?: number; totalTimeout?: number },
   abortSignal?: AbortSignal
-): Promise<ConditionalFlowResult> {
+): Promise<NestedRunResult> {
   const { logPrefix = 'executor' } = ctx;
   const replayConfig = configManager.getReplayConfig();
-  const currentDepth = ctx.conditionalDepth ?? 0;
-  const callStack = ctx.conditionalCallStack ?? [];
+  const currentDepth = ctx.nestingDepth ?? 0;
+  const callStack = ctx.nestingCallStack ?? [];
   if (currentDepth >= replayConfig.maxConditionalDepth) {
     const chain = [...callStack, sequenceName].join(' → ');
     return {
       success: false,
       executed: false,
       sequenceName,
-      error: `Conditional depth limit (${replayConfig.maxConditionalDepth}) reached: ${chain}. Increase maxConditionalDepth in config if this is intentional.`
+      error: `Nesting depth limit (${replayConfig.maxConditionalDepth}) reached: ${chain}. Increase maxConditionalDepth in config if this is intentional.`
     };
   }
 
@@ -877,7 +742,7 @@ export async function runBranch(
   const { filteredSequence, nestedConnection, filteredCommands } =
     await prepareNestedSequence(loadResult.sequence, ctx, sequenceName, logPrefix);
 
-  await debugLog(logPrefix, `Executing conditional sequence "${filteredSequence.name}" with ${filteredCommands.length} commands (depth: ${currentDepth + 1})`);
+  await debugLog(logPrefix, `Executing nested sequence "${filteredSequence.name}" with ${filteredCommands.length} commands (depth: ${currentDepth + 1})`);
 
   // Execute the sequence with updated call stack and depth
   const execResult = await executeSteps({
@@ -886,8 +751,8 @@ export async function runBranch(
     ctx: {
       ...ctx,
       ...(nestedConnection ? { connectionReason: nestedConnection } : {}),
-      conditionalDepth: currentDepth + 1,
-      conditionalCallStack: [...callStack, sequenceName]
+      nestingDepth: currentDepth + 1,
+      nestingCallStack: [...callStack, sequenceName]
     },
     // Omitted keys fall back to executeSteps' own defaults, so an unbudgeted
     // caller behaves exactly as before.
@@ -899,14 +764,14 @@ export async function runBranch(
   // Check for failures
   const failedStep = execResult.results.find(r => !r.success);
   if (failedStep) {
-    // Don't wrap errors that are already from nested conditionals - just pass through
-    const isNestedConditionalError = failedStep.tool === 'conditional' ||
-      failedStep.error?.includes('Conditional depth limit') ||
+    // Don't wrap errors that are already from nested runs - just pass through
+    const isNestedRunError = failedStep.tool === 'check' ||
+      failedStep.error?.includes('Nesting depth limit') ||
       failedStep.error?.includes('Condition evaluation failed');
 
-    const error = isNestedConditionalError
+    const error = isNestedRunError
       ? failedStep.error
-      : `Conditional sequence "${sequenceName}" failed at step ${failedStep.step} (${failedStep.tool}): ${failedStep.error}`;
+      : `Sequence "${sequenceName}" run by a check failed at step ${failedStep.step} (${failedStep.tool}): ${failedStep.error}`;
 
     return {
       success: false,
@@ -919,7 +784,7 @@ export async function runBranch(
     };
   }
 
-  await debugLog(logPrefix, `Conditional sequence completed successfully in ${execResult.durationMs}ms`);
+  await debugLog(logPrefix, `Nested sequence completed successfully in ${execResult.durationMs}ms`);
   return {
     success: true,
     executed: true,
@@ -939,6 +804,7 @@ export function ranStepsOf(results: StepResult[], commands?: RecordedCommand[]):
   return results.map(result => ({
     tool: result.tool,
     line: stepLine(commands?.[result.step - 1]),
+    ...(result.check && commands?.[result.step - 1]?.params ? { params: commands[result.step - 1].params } : {}),
     success: result.success,
     ...(result.error ? { error: result.error } : {}),
     ...(result.check ? { check: {
@@ -986,8 +852,8 @@ export interface ForEachFlowResult {
  * list the caller wants and is a recordable step. `{{selectorAll:CSS}}` covers
  * the DOM case without making the caller hand-write an evaluate for it.
  *
- * Note the asymmetry with `conditional`'s conditions: those ask whether one
- * named thing exists, so they can't express "give me every X". That gap is the
+ * Note the asymmetry with a check: a check asks whether one thing holds, so
+ * it can't express "give me every X". That gap is the
  * whole reason this step exists.
  */
 export async function resolveForEachItems(
@@ -1117,10 +983,10 @@ export async function executeForEachFlow(
   const replayConfig = configManager.getReplayConfig();
   const startedAt = Date.now();
   const sequenceName = params.do;
-  const currentDepth = ctx.conditionalDepth ?? 0;
-  const callStack = ctx.conditionalCallStack ?? [];
+  const currentDepth = ctx.nestingDepth ?? 0;
+  const callStack = ctx.nestingCallStack ?? [];
 
-  // Shares the conditional depth budget: a loop body that loops is the same
+  // Shares the nesting depth budget: a loop body that loops is the same
   // runaway risk, and one cap is easier to reason about than two.
   if (currentDepth >= replayConfig.maxConditionalDepth) {
     const chain = [...callStack, sequenceName].join(' → ');
@@ -1188,8 +1054,8 @@ export async function executeForEachFlow(
       ctx: {
         ...ctx,
         ...(nestedConnection ? { connectionReason: nestedConnection } : {}),
-        conditionalDepth: currentDepth + 1,
-        conditionalCallStack: [...callStack, sequenceName],
+        nestingDepth: currentDepth + 1,
+        nestingCallStack: [...callStack, sequenceName],
       },
       ...(budget?.stepTimeout !== undefined ? { stepTimeout: budget.stepTimeout } : {}),
       ...(budget?.totalTimeout !== undefined
@@ -1572,55 +1438,39 @@ export function formatMissingStepConnection(opts: {
 }
 
 /**
- * Check if debugger is paused and return breakpoint info if so
+ * The debugger's state on the context's connection, read from
+ * getDebuggerStatus's `_meta`. That call answers the same way paused or
+ * running, so a run that is not paused makes no failed call to learn it.
+ * Undefined when the connection cannot be read.
+ */
+export async function debuggerStatusOf(ctx: ExecutionContext): Promise<DebuggerStatusMeta | undefined> {
+  const { executeToolCall, connectionReason } = ctx;
+  if (!connectionReason) return undefined;
+  try {
+    const result = await executeToolCall('getDebuggerStatus', { reference: connectionReason });
+    return result?._meta?.debugger;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Where the debugger is paused, or null while it runs.
  */
 export async function checkIfPaused(
   ctx: ExecutionContext
 ): Promise<BreakpointHitInfo | null> {
-  const { executeToolCall, connectionReason, logPrefix = 'executor' } = ctx;
-
-  if (!connectionReason) return null;
-
-  try {
-    const callStackResult = await executeToolCall('inspect', {
-      action: 'getCallStack',
-      connectionReason
-    });
-
-    const callStackText = callStackResult?.content?.[0]?.text || '';
-    const isPaused = callStackText.includes('callFrameId');
-
-    if (isPaused) {
-      // Extract pause location from call stack - try header format first, then JSON
-      let url = 'unknown';
-      let lineNumber = 0;
-      let columnNumber: number | undefined;
-      let functionName: string | undefined;
-
-      // Try header format: "Paused at: http://localhost:3101/client.js:6"
-      const pausedAtMatch = callStackText.match(/Paused at:\s*([^:\s]+):(\d+)/);
-      if (pausedAtMatch) {
-        url = pausedAtMatch[1];
-        lineNumber = parseInt(pausedAtMatch[2], 10);
+  const status = await debuggerStatusOf(ctx);
+  if (!status?.paused) return null;
+  const at = status.pausedAt;
+  return at
+    ? {
+        url: at.url,
+        lineNumber: at.lineNumber,
+        ...(at.columnNumber !== undefined ? { columnNumber: at.columnNumber } : {}),
+        ...(at.functionName ? { functionName: at.functionName } : {}),
       }
-
-      // Try JSON format for more details
-      const sourceMatch = callStackText.match(/"source":\s*"([^"]+)"/);
-      const lineMatch = callStackText.match(/"line":\s*(\d+)/);
-      const colMatch = callStackText.match(/"column":\s*(\d+)/);
-      const funcMatch = callStackText.match(/"functionName":\s*"([^"]+)"/);
-
-      if (sourceMatch) url = sourceMatch[1];
-      if (lineMatch) lineNumber = parseInt(lineMatch[1], 10);
-      if (colMatch) columnNumber = parseInt(colMatch[1], 10);
-      if (funcMatch && funcMatch[1]) functionName = funcMatch[1];
-
-      return { url, lineNumber, columnNumber, functionName };
-    }
-    return null;
-  } catch {
-    return null;
-  }
+    : { url: 'unknown', lineNumber: 0 };
 }
 
 /**
@@ -1818,6 +1668,28 @@ export async function navigateToStartUrl(
 // Command Execution
 // =============================================================================
 
+/** The signal one step's call runs under: the run's cancel, or the step's own timeout, whichever comes first. */
+function stepSignalOf(run: AbortSignal | undefined, step: AbortController): AbortSignal {
+  return run ? AbortSignal.any([run, step.signal]) : step.signal;
+}
+
+/**
+ * A tool's error text as one line for a run's report: the headings and blank
+ * lines dropped, the suggestions after it left out. The first line alone is a
+ * bare `## Error` for every response that opens with a heading, which dropped
+ * the reason from the report.
+ */
+export function failureLine(text: string): string {
+  const said: string[] = [];
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (line.startsWith('**Suggestions:**') || line.startsWith('**Suggestion:**')) break;
+    if (!line || /^#+\s/.test(line) || /^#+$/.test(line)) continue;
+    said.push(line);
+  }
+  return said.join(' ') || 'Unknown error';
+}
+
 /**
  * Execute a single command with retry logic for element not found errors
  */
@@ -1845,7 +1717,7 @@ export async function executeCommandWithRetry(
     // retries (e.g. an async-rendered button that hasn't mounted yet).
     let result: any;
     try {
-      result = await executeToolCall(tool, params, abortSignal);
+      result = await asStep(() => executeToolCall(tool, params, abortSignal));
     } catch (err: any) {
       const errorText = err?.response?.content?.[0]?.text || err?.message || '';
       // A bare "not found" also matched CONNECTION_NOT_FOUND, SEQUENCE_NOT_FOUND
@@ -1861,7 +1733,7 @@ export async function executeCommandWithRetry(
         await new Promise(resolve => setTimeout(resolve, retryDelayMs));
         continue;
       }
-      return { success: false, error: errorText.split('\n')[0] || 'Unknown error' };
+      return { success: false, error: failureLine(errorText) };
     }
 
     return { success: true, result };
@@ -2283,6 +2155,14 @@ async function gatherDiagnostics(ctx: ExecutionContext): Promise<string> {
     };
     const failedRequests = (await countRequests('4xx')) + (await countRequests('5xx'));
 
+    // Counting interactive elements runs page JS, which a paused page never
+    // answers; where it is paused is the state worth reporting instead.
+    const pausedAt = await checkIfPaused(ctx);
+    if (pausedAt) {
+      const where = `${pausedAt.url}:${pausedAt.lineNumber}${pausedAt.functionName ? ` in ${pausedAt.functionName}` : ''}`;
+      return ` | Page state: paused at ${where}, ${errorCount} console errors, ${failedRequests} failed requests`;
+    }
+
     const interactiveResult = await executeToolCall('content', {
       action: 'findInteractive',
       connectionReason
@@ -2325,7 +2205,7 @@ export interface ExecuteStepsOptions {
   /**
    * Called as each TOP-LEVEL step starts executing, so a background run can
    * report live progress. Deliberately not propagated into nested sequences
-   * (conditional flows): substeps report through their parent step only.
+   * (nested runs): substeps report through their parent step only.
    */
   onProgress?: (ev: { step: number; totalSteps: number; tool: string }) => void;
 }
@@ -2333,7 +2213,11 @@ export interface ExecuteStepsOptions {
 /**
  * Execute a range of steps from a sequence
  */
-export async function executeSteps(options: ExecuteStepsOptions): Promise<ExecutionResult> {
+export function executeSteps(options: ExecuteStepsOptions): Promise<ExecutionResult> {
+  return withinRun(options.sequence.name, () => executeStepsWithin(options));
+}
+
+async function executeStepsWithin(options: ExecuteStepsOptions): Promise<ExecutionResult> {
   const {
     sequence,
     startStep,
@@ -2396,8 +2280,9 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
   // Track breakpoints set during this sequence run (url:line format)
   const expectedBreakpoints: Set<string> = new Set();
 
-  // Auto-resume if debugger is paused from a previous run
-  if (connectionReason && startStep === 0) {
+  // Auto-resume if debugger is paused from a previous run. A nested run starts
+  // inside its parent, so a pause it finds is the parent's to judge.
+  if (connectionReason && startStep === 0 && !ctx.nestingDepth) {
     await resumeIfPaused(ctx);
   }
 
@@ -2410,12 +2295,15 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
   const executeWithTimeout = async <T>(
     promise: Promise<T>,
     timeoutMs: number,
-    timeoutMessage: string
+    timeoutMessage: string,
+    /** Cancels the step's own call, so a handler that honours its signal stops rather than running on after the run has moved past it. */
+    stepAbort?: AbortController
   ): Promise<T> => {
     let timeoutId: NodeJS.Timeout;
     const timeoutPromise = new Promise<never>((_, reject) => {
       timeoutId = setTimeout(() => {
         promise.catch(() => {});
+        stepAbort?.abort(new Error(timeoutMessage));
         reject(new Error(timeoutMessage));
       }, timeoutMs);
     });
@@ -2443,17 +2331,7 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
       overrideConnectionReason ?? ctx.connectionReason
     ).catch(() => Date.now());
     stepReleasedAt.set(step, at);
-    // A wait whose crossings never came fails the step that waited, not the
-    // one after it: the result it already has is the one that is wrong.
-    const waited = takeWaitFailure(overrideConnectionReason ?? ctx.connectionReason);
-    if (waited) {
-      const held = results.find(result => result.step === step + 1);
-      if (held) Object.assign(held, { success: false, error: waited });
-      else results.push({ step: step + 1, tool: commands[step].tool, success: false, error: waited });
-      waitFailed = true;
-    }
   };
-  let waitFailed = false;
   let boundaryStep: number | undefined;
 
   // Derived from the pass's own clock rather than minted here: one pass
@@ -2477,14 +2355,21 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
 
   for (let i = startStep; i < targetEnd; i++) {
     const cmd = commands[i];
-    // The previous step's boundary is released before this one marks, so a
-    // step's tail is credited to the step that caused it on this side exactly
-    // as it is while recording.
-    if (boundaryStep !== undefined) await releaseStep(boundaryStep);
-    if (waitFailed) break;
-    if (comparesBehaviour) stepStartedAt.set(i, Date.now());
-    await markNextCommand(cursorAt(i));
-    boundaryStep = i;
+    // A traffic check counts what the step before it caused, so that step
+    // stays marked while it waits: the crossings it counts are listed under
+    // the step that caused them, not under the check.
+    // Every step is a call a traffic check can count back to.
+    noteCallStart();
+    const holdsPrevious = cmd.tool === 'check' && cmd.params?.traffic !== undefined && boundaryStep !== undefined;
+    if (!holdsPrevious) {
+      // The previous step's boundary is released before this one marks, so a
+      // step's tail is credited to the step that caused it on this side exactly
+      // as it is while recording.
+      if (boundaryStep !== undefined) await releaseStep(boundaryStep);
+      if (comparesBehaviour) stepStartedAt.set(i, Date.now());
+      await markNextCommand(cursorAt(i));
+      boundaryStep = i;
+    }
 
     // Check if aborted
     if (abortSignal?.aborted) {
@@ -2642,6 +2527,19 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
             // share the run's variable store with the clone, don't fork it
             variableStore,
           };
+      /**
+       * Where the step's connection is paused, when that pause is not at a
+       * breakpoint this sequence set; null while it runs or when it is.
+       */
+      const unexpectedPause = async (): Promise<BreakpointHitInfo | null> => {
+        if (!stepConnection) return null;
+        const at = await checkIfPaused(stepCtx);
+        if (!at) return null;
+        const key = `${at.url}:${at.lineNumber}`;
+        const expected = expectedBreakpoints.has(key);
+        debugLog(logPrefix, `Breakpoint hit at ${key} (expected: ${expected})`);
+        return expected ? null : at;
+      };
 
       // Override launchChrome reference if custom connectionReason provided.
       // Skipped for multi-connection sequences: stamping one reference onto every
@@ -2662,19 +2560,9 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
       // Handle stale callFrameId for getVariables
       if (cmd.tool === 'inspect' && params.action === 'getVariables' && params.callFrameId && stepConnection) {
         debugLog(logPrefix, `Refreshing stale callFrameId`);
-        try {
-          const callStackResult = await executeToolCall('inspect', {
-            action: 'getCallStack',
-            connectionReason: stepConnection
-          });
-          const callStackText = callStackResult?.content?.[0]?.text || '';
-          const callFrameIdMatch = callStackText.match(/"callFrameId":\s*"([^"]+)"/);
-          if (callFrameIdMatch?.[1]) {
-            params.callFrameId = callFrameIdMatch[1];
-          }
-        } catch (err: any) {
-          debugLog(logPrefix, `Warning: Failed to get fresh callFrameId: ${err.message}`);
-        }
+        const fresh = (await debuggerStatusOf({ ...ctx, connectionReason: stepConnection }))?.pausedAt?.callFrameId;
+        if (fresh) params.callFrameId = fresh;
+        else debugLog(logPrefix, `Warning: no paused frame on ${stepConnection} to refresh the callFrameId from`);
       }
 
       // Check port before navigate goto (localhost only)
@@ -2706,97 +2594,6 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
         }
       }
 
-      // Handle conditional command specially
-      if (cmd.tool === 'conditional') {
-        // Validate required parameters
-        if (!params.if || typeof params.if !== 'string') {
-          results.push({
-            step: i + 1,
-            tool: cmd.tool,
-            success: false,
-            error: 'Conditional command requires "if" parameter with a condition string. Expected format: {{selector:.class}}, {{url:contains:text}}, {{cookie:name}}, or {{localStorage:key}}'
-          });
-          break;
-        }
-        if (!params.then || typeof params.then !== 'string') {
-          results.push({
-            step: i + 1,
-            tool: cmd.tool,
-            success: false,
-            error: 'Conditional command requires "then" parameter with the sequence name to execute when condition is met'
-          });
-          break;
-        }
-
-        const condResult = await executeConditionalFlow(
-          params.if,
-          params.then,
-          { ...stepCtx, variableStore, stampUnder: nestedUnder(i) },
-          commandRecorder,
-          // Remaining, not the original: nesting must not extend the total.
-          { stepTimeout, totalTimeout: Math.max(0, totalTimeout - (Date.now() - startTime)) },
-          // The run's signal, so cancel reaches the nested sequence too.
-          abortSignal
-        );
-
-        // Build the step result with substeps
-        const stepResult: StepResult = {
-          step: i + 1,
-          tool: cmd.tool,
-          success: condResult.success,
-          sequenceName: condResult.sequenceName,
-          conditionMet: condResult.executed,
-          substeps: condResult.substeps,
-          error: condResult.error
-        };
-
-        results.push(stepResult);
-        // Read by the bench, which shows each guard's outcome on its row; the
-        // run's own report carries it only as text.
-        if (!ctx.stampUnder && checked) {
-          recordCheckOutcome(checked, {
-            runId: proxyRun, step: i, outcome: condResult.executed ? 'held' : 'failed', subject: String(params.if),
-            action: condResult.executed ? 'run' : 'continue',
-            ...(condResult.executed ? { ran: condResult.sequenceName, steps: condResult.substeps?.length ?? 0 } : {}),
-            ...(condResult.error ? { error: condResult.error } : {}),
-          });
-        }
-        // The branch's last release cleared the cursor; what crosses before the
-        // next step is still this step's doing.
-        if (condResult.executed) await markNextCommand(cursorAt(i));
-
-        if (!condResult.success) {
-          break;
-        }
-
-        const substepCount = condResult.substeps?.length || 0;
-        debugLog(logPrefix, `Step ${i + 1} completed: conditional ${condResult.executed ? `ran ${substepCount} substeps` : 'skipped (condition not met)'}`);
-
-        // Rejoining further down, when the branch replaced the steps between.
-        // Only where the guard held: skipped over, the steps it would have
-        // replaced are the ones that still have to run.
-        if (condResult.executed && params.rejoinAt !== undefined) {
-          const rejoin = Number(params.rejoinAt);
-          // Forward only, as every other move through a run is. A backward
-          // rejoin re-runs the conditional that made it and never terminates.
-          if (!Number.isInteger(rejoin) || rejoin <= i || rejoin > targetEnd) {
-            results.push({
-              step: i + 1,
-              tool: cmd.tool,
-              success: false,
-              error: `Conditional at step ${i + 1} cannot rejoin at step ${params.rejoinAt}: `
-                + `expected a step between ${i + 2} and ${targetEnd}, counting from 1.`,
-            });
-            break;
-          }
-          debugLog(logPrefix, `Step ${i + 1} rejoins the run at step ${rejoin + 1}`);
-          i = rejoin - 1;
-          continue;
-        }
-
-        continue; // Skip the regular execution path
-      }
-
       // A check reads through the check tool; what it does on the answer is
       // the executor's, because stopping, carrying on and running another
       // sequence are all moves through the run.
@@ -2805,12 +2602,14 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
         // Exempt from stepTimeout, as a wait is: its own withinMs bounds it,
         // and the run's remaining total bounds that.
         const remaining = Math.max(1, totalTimeout - (Date.now() - startTime));
+        const checkAbort = new AbortController();
         const read = await executeWithTimeout(
-          executeCommandWithRetry(executeToolCall, 'check', params, logPrefix, abortSignal),
+          executeCommandWithRetry(executeToolCall, 'check', params, logPrefix, stepSignalOf(abortSignal, checkAbort)),
           remaining,
-          getMessage('REPLAY_STEP_TIMEOUT', { step: i + 1, tool: cmd.tool, timeoutMs: remaining, limitSource: 'remaining totalTimeout' })
+          getMessage('REPLAY_STEP_TIMEOUT', { step: i + 1, tool: cmd.tool, timeoutMs: remaining, limitSource: 'remaining totalTimeout' }),
+          checkAbort
         );
-        await markNextCommand(cursorAt(i));
+        await markNextCommand(cursorAt(boundaryStep ?? i));
         if (!read.success) {
           results.push({ step: i + 1, tool: cmd.tool, success: false, error: abortSignal?.aborted ? 'Replay aborted by user' : read.error });
           break;
@@ -2836,15 +2635,24 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
           results.push({ step: i + 1, tool: cmd.tool, success: false, check, error });
           break;
         }
+        // A pause that landed while the check read or waited stops the run
+        // here, as it would after any other step.
+        const pausedHere = action === 'continue' || typeof action === 'object' ? await unexpectedPause() : null;
         if (action === 'continue') {
           outcomeFor();
           results.push({ step: i + 1, tool: cmd.tool, success: true, check });
+          if (pausedHere) return { results, totalCommands: commands.length, durationMs: Date.now() - startTime, breakpointHit: pausedHere };
           continue;
+        }
+        if (pausedHere) {
+          outcomeFor();
+          results.push({ step: i + 1, tool: cmd.tool, success: true, check });
+          return { results, totalCommands: commands.length, durationMs: Date.now() - startTime, breakpointHit: pausedHere };
         }
         const branch = await runBranch(
           action.run, { ...stepCtx, variableStore, stampUnder: nestedUnder(i) }, commandRecorder,
           { stepTimeout, totalTimeout: Math.max(0, totalTimeout - (Date.now() - startTime)) }, abortSignal);
-        await markNextCommand(cursorAt(i));
+        await markNextCommand(cursorAt(boundaryStep ?? i));
         outcomeFor({
           ran: action.run, steps: branch.substeps?.length ?? 0,
           ranSteps: ranStepsOf(branch.substeps ?? [], branch.ranCommands),
@@ -2862,7 +2670,7 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
           if (!Number.isInteger(resume) || resume <= i || resume > targetEnd) {
             results.push({
               step: i + 1, tool: cmd.tool, success: false,
-              error: `Check at step ${i + 1} cannot resume at step ${resume + 1}: expected a step between ${i + 2} and ${targetEnd}, counting from 1.`,
+              error: `Check at step ${i + 1} cannot resume at ${resume}: resumeAt counts from 0 and must be after the check, ${i + 1} to ${targetEnd}, where ${targetEnd} ends the run.`,
             });
             break;
           }
@@ -2946,15 +2754,17 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
       const boundedByTotal = cmd.tool === 'wait' || remainingTotal < stepTimeout;
       const stepBound = cmd.tool === 'wait' ? remainingTotal : Math.min(stepTimeout, remainingTotal);
       const stepStarted = Date.now();
+      const stepAbort = new AbortController();
       const execResult = await executeWithTimeout(
-        executeCommandWithRetry(executeToolCall, cmd.tool, params, logPrefix, abortSignal),
+        executeCommandWithRetry(executeToolCall, cmd.tool, params, logPrefix, stepSignalOf(abortSignal, stepAbort)),
         stepBound,
         getMessage('REPLAY_STEP_TIMEOUT', {
           step: i + 1,
           tool: cmd.tool,
           timeoutMs: stepBound,
           limitSource: boundedByTotal ? 'remaining totalTimeout' : 'stepTimeout',
-        })
+        }),
+        stepAbort
       );
 
       // Restored after the step: a step that ran a nested sequence left the
@@ -3134,26 +2944,9 @@ export async function executeSteps(options: ExecuteStepsOptions): Promise<Execut
       debugLog(logPrefix, `Step ${i + 1} completed successfully`);
 
       // Check if we hit a breakpoint after this step (on the step's own connection)
-      if (stepConnection) {
-        const breakpointInfo = await checkIfPaused(stepCtx);
-        if (breakpointInfo) {
-          const breakpointKey = `${breakpointInfo.url}:${breakpointInfo.lineNumber}`;
-          const isExpected = expectedBreakpoints.has(breakpointKey);
-          debugLog(logPrefix, `Breakpoint hit at ${breakpointKey} (expected: ${isExpected})`);
-
-          if (isExpected) {
-            // Expected breakpoint from this sequence - continue execution
-            debugLog(logPrefix, `Expected breakpoint hit, continuing sequence`);
-          } else {
-            // Unexpected breakpoint - stop and return
-            return {
-              results,
-              totalCommands: commands.length,
-              durationMs: Date.now() - startTime,
-              breakpointHit: breakpointInfo
-            };
-          }
-        }
+      const breakpointHit = await unexpectedPause();
+      if (breakpointHit) {
+        return { results, totalCommands: commands.length, durationMs: Date.now() - startTime, breakpointHit };
       }
 
       // Post-step async operations (after marking success)
@@ -3469,45 +3262,13 @@ export interface DebugState {
  * Get current debug state (breakpoints, pause status)
  */
 export async function getDebugState(ctx: ExecutionContext): Promise<DebugState | null> {
-  const { executeToolCall, connectionReason, logPrefix = 'executor' } = ctx;
-
-  if (!connectionReason) return null;
-
-  try {
-    const breakpointResult = await executeToolCall('breakpoint', {
-      action: 'list',
-      connectionReason
-    });
-    const breakpointText = breakpointResult?.content?.[0]?.text || '';
-    const totalMatch = breakpointText.match(/\*\*Total:\*\*\s*(\d+)/);
-    const breakpointCount = totalMatch ? parseInt(totalMatch[1], 10) : 0;
-
-    // "Not paused" is the ANSWER, not a failure - but inspect.getCallStack
-    // reports it as an error response, which the live executeToolCall rethrows.
-    // Letting it reach the outer catch threw away the breakpoint count already
-    // read and reported no debug state at all for the ordinary unpaused run,
-    // which is the run this exists to describe.
-    let callStackText = '';
-    try {
-      const callStackResult = await executeToolCall('inspect', {
-        action: 'getCallStack',
-        connectionReason
-      });
-      callStackText = callStackResult?.content?.[0]?.text || '';
-    } catch (callStackError: any) {
-      if (callStackError?.response?._errorId !== 'NOT_PAUSED') throw callStackError;
-    }
-    const isPaused = callStackText.includes('callFrameId');
-
-    let pauseLocation: string | undefined;
-    if (isPaused) {
-      const pauseLocationMatch = callStackText.match(/Paused at:\s*([^\n]+)/);
-      pauseLocation = pauseLocationMatch ? pauseLocationMatch[1] : 'unknown location';
-    }
-
-    return { isPaused, pauseLocation, breakpointCount };
-  } catch (err: any) {
-    debugLog(logPrefix, `Could not get debug state: ${err.message}`);
-    return null;
-  }
+  const status = await debuggerStatusOf(ctx);
+  if (!status) return null;
+  return {
+    isPaused: status.paused,
+    pauseLocation: status.paused
+      ? (status.pausedAt ? `${status.pausedAt.url}:${status.pausedAt.lineNumber}` : 'unknown location')
+      : undefined,
+    breakpointCount: status.totalBreakpoints,
+  };
 }

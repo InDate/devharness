@@ -44,7 +44,7 @@ Not ignored → **ask** before adding it to `.gitignore`. Already tracked → sa
 
 ## Repeat instead of retyping
 
-Every response footer carries its own index: `**Repeat:** replay({ action: 'repeat', indices: [58] })`. On every call, not just failures (`replay`'s own calls aren't recorded).
+Every response footer carries its own history index, `Replay: 58`, which `replay({ action: 'repeat', indices: [58] })` takes. History holds every call from every channel - yours, the bench's, the CLI's - and each step a sequence run makes, listed as `in run \`<name>\``. Only the `replay` call itself is left out, so a run someone else started is read and repeated step by step from `replay({ action: 'history' })`.
 
 - `indices` takes a list: `[58, 59, 60, 61]` re-runs four steps in order
 - Use it for anything you already did — relaunch, re-login, refilling a form, getting back to the bug. Retyped arguments drift from what actually ran
@@ -99,7 +99,7 @@ under each step, and carries the proxy's own controls. Launch the browser with
 `proxy: true` or it records nothing.
 
 While the page is held, other devharness tools report it as paused at a
-breakpoint; `bench({ action: 'unfreeze' })` or `stop` clears that, **not**
+breakpoint; `bench({ action: 'release' })` or `stop` clears that, **not**
 `execution({ action: 'resume' })`.
 
 Ticking into a transient state, pause-and-resume, notes and captures, cropping,
@@ -180,4 +180,4 @@ Restart kills Chrome instances this session launched (relaunch with `launchChrom
 - The bench - ticking into a transient state, driving a sequence, pausing and resuming,
   notes and captures, the boundary panel, `sweep`: [references/bench.md](references/bench.md)
 - What crossed the app's boundary and what caused it - the intercepting proxy, attribution roots and levels, socket shapes, ruling a payload shape, what reaches a recording: [references/boundary.md](references/boundary.md)
-- Recording/replaying sequences — `saveAs`, per-step `connectionReason`, conditionals, `variables`, keeping a password out of the sequence file with `{{env:NAME}}`, verifying an issue fix: [references/sequences.md](references/sequences.md)
+- Recording/replaying sequences — `saveAs`, per-step `connectionReason`, checks and guards, `variables`, keeping a password out of the sequence file with `{{env:NAME}}`, verifying an issue fix: [references/sequences.md](references/sequences.md)

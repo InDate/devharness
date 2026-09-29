@@ -13,9 +13,9 @@ export type { Annotation, AnnotationTarget, StepTraffic } from '../annotation.js
 
 /** One callback the page ran, as a step passed through it. */
 export interface CallbackEntry {
-  /** Position in the run since the freeze, 1-based. */
+  /** Position in the run since the hold, 1-based. */
   index: number;
-  /** Page milliseconds this callback landed at, measured from the freeze. */
+  /** Page milliseconds this callback landed at, measured from the hold. */
   at: number;
   /** What scheduled it - setTimeout, setInterval, requestAnimationFrame. */
   kind?: string;
@@ -40,9 +40,9 @@ export interface TickResult {
   steps: number;
   /** Milliseconds the page was allowed to run to get there. */
   actualMs: number;
-  /** Total the page has been allowed to run since the freeze. */
+  /** Total the page has been allowed to run since the hold. */
   tickMs: number;
-  /** Total callbacks run since the freeze. */
+  /** Total callbacks run since the hold. */
   totalSteps: number;
   /** True when the page had nothing scheduled, so the step could not advance. */
   quiet: boolean;
@@ -54,6 +54,8 @@ export interface TickResult {
 export interface RanStep {
   tool: string;
   line: string;
+  /** A check's parameters, which its answer's words are read from. */
+  params?: Record<string, unknown>;
   success: boolean;
   error?: string;
   check?: {
@@ -90,6 +92,8 @@ export interface SequenceStep {
   expected?: Record<string, ExpectedValue>;
   /** Notes taken against this step, in the order they were made. */
   annotations?: Annotation[];
+  /** When this step was put into the sequence; absent once a baseline has taken it in. */
+  addedAt?: number;
   done: boolean;
   current: boolean;
   /** The step the run stopped on. */
@@ -114,6 +118,136 @@ export interface SequenceCard {
   notes: number;
   description?: string;
   expectedOutcome?: string;
+  /** What kind of sequence it is, as `replay declare` set; `runAll` selects by these. */
+  tags?: string[];
+}
+
+/**
+ * What one step of a run did, counted by category. `state` is absent where no
+ * bench watched the browser, since only a bench's write watch sees storage.
+ */
+export interface StepTally {
+  requests: number;
+  frames: number;
+  intercepted: number;
+  state?: number;
+  /** How long the step ran, in ms. */
+  ms?: number;
+  check?: StepCheck;
+}
+
+/**
+ * How a check, assert or wait step read, and what the run did on it: carried
+ * on, stopped, or ran another sequence. An assert or a wait records no reading
+ * of its own, so it has the outcome and action alone: held, or failed and stopped.
+ */
+export interface StepCheck {
+  outcome: 'held' | 'failed';
+  action: 'continue' | 'stop' | 'run';
+  subject?: string;
+  found?: string;
+  waitedMs?: number;
+  limitMs?: number;
+  /** The sequence the reading ran: its steps, and how many of them failed. */
+  ran?: { name: string; steps: number; failed: number };
+  error?: string;
+}
+
+/** One run of a sequence, going or ended: a replay run, or a bench's own play. */
+export interface RunRow {
+  /** The replay run's id, which stops it; a bench play is stopped by its connection. */
+  runId?: string;
+  sequence: string;
+  connection?: string;
+  via: 'replay' | 'bench';
+  status: string;
+  /** 1-based step running now, or reached. */
+  step: number;
+  total: number;
+  /** The tool that step calls. */
+  tool?: string;
+  startedAt: number;
+  endedAt?: number;
+  failure?: string;
+  suite?: { id: string; label: string };
+  /** Per step, by position, what it did. */
+  steps?: StepTally[];
+}
+
+/** One `runAll`: what chose its sequences, and how many have ended and failed. */
+export interface SuiteRow {
+  id: string;
+  label: string;
+  names: string[];
+  done: number;
+  failed: number;
+  startedAt: number;
+  endedAt?: number;
+}
+
+/** What `GET /runs` answers with: runs going now, suites, and runs that ended, newest first. */
+export interface RunsView {
+  running: RunRow[];
+  suites: SuiteRow[];
+  finished: RunRow[];
+}
+
+/**
+ * One sequence's steps, read from its file when its row opens. Kept off the
+ * card because the card rides every state poll, and the steps of every
+ * sequence on disk would ride with it.
+ */
+export interface SequenceOutline {
+  startUrl?: string;
+  /** `params` is carried for a check, assert or wait step, whose answer is worded from them. */
+  steps: Array<{ label: string; tool: string; notes: number; params?: Record<string, unknown> }>;
+  teardown: string[];
+}
+
+/** One tool call this devharness ran, as its History row lists it. */
+export interface HistoryEntry {
+  /** The index `replay repeat` takes. */
+  index: number;
+  at: number;
+  tool: string;
+  /** The action and what it acted on, without the tool's name. */
+  label: string;
+  connection?: string;
+  /** The channel the call came in on; a run's step carries the channel its run was started from. */
+  from: 'mcp' | 'cli' | 'bench';
+  /** The sequence whose run executed this call as a step. */
+  run?: string;
+  /** Absent while the call is still running. */
+  failed?: boolean;
+  /** The first line the call returned. */
+  said?: string;
+}
+
+/** One call opened: what it was given and all the text it returned. */
+export interface HistoryDetail {
+  params: Record<string, unknown>;
+  /** Absent while the call is still running. */
+  result?: string;
+}
+
+/** One tool as `listTools` gives it, for the tools tab. */
+export interface ToolCard {
+  name: string;
+  description: string;
+  /** JSON Schema of the arguments; the tab builds its starting payload from it. */
+  inputSchema: Record<string, unknown>;
+}
+
+/** The tools one toolset builds, in the order `listTools` gives them. */
+export interface ToolGroup {
+  name: string;
+  tools: ToolCard[];
+}
+
+/** What a call from the tools tab returned: the response text, and whether it failed. */
+export interface ToolRun {
+  failed: boolean;
+  result: string;
 }
 
 /** A step held while the agent reads it, and whether it needs the person. */
@@ -235,7 +369,7 @@ export interface CapturePause {
   fn?: string;
   url?: string;
   line?: number;
-  /** The bench's own freeze, a breakpoint, or the reason V8 gave for any other stop. */
+  /** The bench's own hold, a breakpoint, or the reason V8 gave for any other stop. */
   by?: string;
 }
 
@@ -319,6 +453,28 @@ export interface CaptureVersion {
   compared?: CaptureComparison;
 }
 
+export interface HeldLayerView {
+  layer: 'code' | 'ui' | 'network';
+  source: 'bench' | 'tool' | 'sequence' | 'breakpoint' | 'trigger';
+  /** Epoch ms the layer was held at. */
+  since: number;
+  /** The layer whose hold stops this one: the screen's hold stops the code. */
+  via?: 'code' | 'ui' | 'network';
+  /** The layer whose pause still holds this one after that layer was released. */
+  keptBy?: 'code' | 'ui' | 'network';
+  standing?: Record<string, unknown>;
+}
+
+export interface QueuedView {
+  id: number;
+  kind: 'frame' | 'response';
+  url: string;
+  direction?: 'sent' | 'received';
+  preview?: string;
+  /** How long it has waited: past the app's own timeout, the request has already failed. */
+  ageMs: number;
+}
+
 /**
  * What `GET /state` answers with, which is everything the page draws from.
  *
@@ -330,6 +486,12 @@ export interface BenchView {
   /** The page being driven. Not the address the bench itself is served at. */
   pageUrl: string;
   frozen: boolean;
+  /** Each layer held - code, ui, network - with what holds it; empty while everything runs. */
+  held: HeldLayerView[];
+  /** Traffic kept at the proxy while the network is held, oldest first. */
+  queued: QueuedView[];
+  /** The layers this page can hold: code needs the debugger, ui the bench, network the proxy. */
+  holdable: Array<HeldLayerView['layer']>;
   pickerArmed: boolean;
   tickMs: number;
   totalSteps: number;
@@ -352,7 +514,7 @@ export interface BenchView {
   shot?: PendingShot;
   /**
    * Set while the capture dialog is open: the picker is armed for a capture,
-   * and `heldBefore` records a freeze that was already on, which closing the
+   * and `heldBefore` records a hold that was already on, which closing the
    * dialog leaves in place. `annotationId` is the note the capture joins.
    */
   shotArmed?: { heldBefore: boolean; annotationId?: string };
@@ -366,7 +528,7 @@ export interface BenchView {
 export interface BoundaryEvent {
   id: string;
   at: number;
-  /** `write` is storage the page wrote - local, session, cookie, IndexedDB - which no network carries. */
+  /** `write` is a change no network carries: storage the page wrote, a socket it closed, a worker it started or stopped. */
   kind: 'request' | 'frame' | 'write';
   direction: 'out' | 'in';
   url: string;
@@ -376,7 +538,7 @@ export interface BoundaryEvent {
   contentType?: string;
   durationMs?: number;
   preview?: string;
-  heldAs?: 'replaced' | 'dropped' | 'refused';
+  answeredAs?: 'replaced' | 'dropped' | 'refused';
   /** The response is still arriving - a stream, rather than a finished call. */
   open?: boolean;
   commandIndex?: number;
@@ -503,11 +665,6 @@ export interface BoundaryRule {
   /** A local response belonging to another sequence: never offered here. Never stored. */
   foreign?: boolean;
   /**
-   * What a step waiting on this kind waits for: how many to cross, for how
-   * many seconds, and whether a miss fails the step or lets the run go on.
-   */
-  wait?: { count: number; seconds: number; onFail: 'fail' | 'continue' };
-  /**
    * The open sequence's steps it answers at; absent, every step. Read off the
    * sequence's use of it, never stored on the response: a step number names a
    * different action in each sequence.
@@ -579,7 +736,6 @@ export interface BoundaryState {
   refusedWrites: number;
   /** Every decision standing against this connection's traffic. */
   rules: BoundaryRule[];
-  /** How each wait went in the latest pass: waiting, met, failed or carried on, and how many came. */
   /** How each check step went in the latest pass: the answer, what the step did on it, and any sequence it ran. */
   checkOutcomes?: Array<{
     runId: string; step: number; outcome: 'held' | 'failed'; subject: string; found?: string;
@@ -587,12 +743,6 @@ export interface BoundaryState {
     waitedMs?: number; limitMs?: number;
     ranSteps?: RanStep[];
   }>;
-  waitOutcomes?: Array<{
-    runId: string; step: number; key?: string; state: 'waiting' | 'met' | 'failed' | 'carried';
-    arrived: number; count: number; seconds: number; startedAt: number;
-  }>;
-  /** Steps told to wait, each for a kind, with how many, how long, and what a miss does. */
-  waits: Array<{ step: number; key?: string; count: number; seconds: number; onFail: 'fail' | 'continue' }>;
   /**
    * Which hosts were refused, and how often.
    *
@@ -611,6 +761,10 @@ export interface BoundaryState {
    * to a step the run has not yet reached.
    */
   steps: Array<{ index: number; label: string }>;
+  /** Traffic kept at the proxy while the network is held, oldest first. */
+  queued?: QueuedView[];
+  /** Whether the proxy is holding what crosses it now. */
+  holding?: boolean;
   /**
    * The open sequence's name.
    *

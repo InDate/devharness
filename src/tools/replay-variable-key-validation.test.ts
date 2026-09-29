@@ -21,6 +21,7 @@ import { join } from 'path';
 import { CommandRecorder } from '../command-recorder.js';
 import { createReplayTools } from './replay-tools.js';
 import { productionShaped } from '../test-support/fake-execute-tool-call.js';
+import { HELD, runsOnPass } from '../test-support/check-steps.js';
 
 let dir: string;
 let recorder: CommandRecorder;
@@ -46,6 +47,7 @@ beforeEach(async () => {
   ({ replay } = createReplayTools(
     recorder,
     vi.fn(productionShaped(async (tool: string, params: Record<string, any>) => {
+    if (tool === 'check') return HELD;
       if (tool === 'input' && params.action === 'type') {
         typed.push({ selector: params.selector, text: String(params.text) });
         if (params.selector) fieldValues.set(String(params.selector), String(params.text));
@@ -98,7 +100,7 @@ describe('run rejects a key that names no step', () => {
   });
 
   it('accepts a key that names a step in a sequence it nests into', async () => {
-    await write('outer', [{ tool: 'conditional', params: { if: '{{localStorage:x}}', then: 'login' } }]);
+    await write('outer', [runsOnPass('login')]);
     await recorder.loadSequenceFromDisk(join(dir, 'outer.json'));
 
     const res = await replay.handler({

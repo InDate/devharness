@@ -9,8 +9,8 @@ import { Glyph } from './glyph.js';
 /**
  * One thing that crossed the boundary, wherever it is being read.
  *
- * BOUNDARY reads the stream and STEPS reads it under the step that caused it,
- * and both ask the same questions of a row: what crossed, what the attribution
+ * TRAFFIC reads the stream and UI reads it under the step that caused it, and
+ * both ask the same questions of a row: what crossed, what the attribution
  * rests on, and what should happen to it next time. Two renderers drifted
  * within a day of there being two, so there is one.
  */
@@ -35,7 +35,7 @@ export function bytes(n: number): string {
 export function describe(event: BoundaryEvent, typed = true): string {
   const parts: string[] = [];
   if (event.kind === 'write') return event.size ? bytes(event.size) : '';
-  if (event.heldAs) parts.push(event.heldAs);
+  if (event.answeredAs) parts.push(event.answeredAs);
   else if (event.kind === 'request') parts.push(String(event.status ?? ''));
   if (event.open) parts.push('open');
   parts.push(bytes(event.size));
@@ -45,10 +45,10 @@ export function describe(event: BoundaryEvent, typed = true): string {
 }
 
 export { isFrame, keyOf, frameMatch, leadingPairs } from '../kinds.js';
-import { isFrame, keyOf, leavesOf, samePayload, type ExpectedValue, type KindCount, type Verdict } from '../kinds.js';
+import { isFrame, keyOf, leavesOf, marksFields, samePayload, shapeOf, typeOfLeaf, type ExpectedValue, type KindCount, type Verdict } from '../kinds.js';
 import { lineDiff, sideBySide } from './diff.js';
 import { jsonLines } from './json-lines.js';
-import { Fold, LabelInput, Row } from './row.js';
+import { Fold, LabelInput, Row, type RowSlots } from './row.js';
 
 /**
  * The same text with the origin taken off every URL in it.
@@ -61,7 +61,7 @@ import { Fold, LabelInput, Row } from './row.js';
  * Applied to a whole label rather than a URL, because a step reads
  * `navigate.goto http://localhost:7788/` and only the tail is a URL.
  */
-export function lean(text: string): string {
+function lean(text: string): string {
   return text.replace(/\b[a-z][a-z0-9+.-]*:\/\/[^/\s]+/gi, '');
 }
 
@@ -175,7 +175,7 @@ export interface RuleActions {
    * because a frame edited into something else would otherwise stop matching
    * itself, and because only a person can say which part of a payload names it.
    */
-  answer: (event: BoundaryEvent, body: string, status: string, match: string, edited?: boolean, scope?: RuleScope, payload?: string, wait?: ResponseWait) => void;
+  answer: (event: BoundaryEvent, body: string, status: string, match: string, edited?: boolean, scope?: RuleScope, payload?: string) => void;
   /** Never let it leave the browser. */
   block: (event: BoundaryEvent) => void;
   /** Keep this kind out of the list. Changes no traffic. */
@@ -184,16 +184,8 @@ export interface RuleActions {
   clear: (event: BoundaryEvent) => void;
   /** Hand the row and its reading to the session. */
   report?: (event: BoundaryEvent) => void;
-  /** Tell a step to hold open until this arrives. Absent where no step owns it. */
-  waitFor?: (event: BoundaryEvent, step: number) => void;
-  /** The step that would wait, for the button to name it. */
-  waitStep?: number;
-  /** Whether a wait stands on this step, which the button shows and a second press drops. */
-  waiting?: (step: number, key: string) => boolean;
-  unwait?: (step: number, key: string) => void;
-  /** The wait a step holds for a kind, with what it waits for. */
-  waitOf?: (step: number, key: string) => ResponseWait | undefined;
-  setWait?: (step: number, key: string, wait: ResponseWait) => void;
+  /** The step the row is listed under, which a new rule's step constraint holds to. */
+  rowStep?: number;
   /** Change a standing rule, where the row can open the full rule editor. */
   set?: (rule: BoundaryRule, next: RuleEdit) => void;
   /** What a rule's constraints can be bound to, for that editor. */
@@ -230,6 +222,27 @@ export interface RowVerdict {
 export const VERDICT_WORDS: Record<RowVerdict['verdict'], string> = {
   match: 'Match', mismatch: 'Mismatch', unexpected: 'Unexpected', missing: 'Missing',
 };
+
+/** A compared row's badge word, by verdict. */
+const BADGE_WORDS: Record<RowVerdict['verdict'], string> = {
+  match: 'matched', mismatch: 'differs', unexpected: 'new', missing: 'missing',
+};
+
+/**
+ * How a row stands against its step's recording, as a badge at the head of
+ * its label: matched, new, differs, missing, or ignored for a kind left out
+ * of comparisons. Absent where the row is not compared - a step with no
+ * recording - so an unrecorded sequence reads as it always did.
+ */
+function Badge({ verdict, ignored }: { verdict?: RowVerdict; ignored?: boolean }) {
+  if (ignored) return <span class="badge ignored" title="ignored: listed, and left out of comparisons">ignored</span>;
+  if (!verdict) return null;
+  return (
+    <span class={`badge ${verdict.verdict}`} title={verdict.reasons.join(' · ') || undefined}>
+      {BADGE_WORDS[verdict.verdict]}
+    </span>
+  );
+}
 
 /** The button that writes this run over the recording, by verdict; absent where there is nothing to write. */
 function saveWords(verdict: RowVerdict | undefined): string | undefined {
@@ -281,12 +294,18 @@ function useDeltaLayout(): ['inline' | 'side', (next: 'inline' | 'side') => void
  * they do not, or nothing was recorded. A recorded kind this run did not
  * produce shows what was recorded.
  */
-export function PayloadBox({ verdict, replayed, contentType, compared = [], served }: {
+export function PayloadBox({ verdict, replayed, contentType, shaped = {}, valued = [], served }: {
   verdict?: RowVerdict;
   replayed: string | undefined;
   contentType?: string;
-  /** The fields a replay is compared on, by dotted path; their lines are tagged. */
-  compared?: string[];
+  /**
+   * The fields a replay is compared on by being there, by dotted path, with
+   * their type. Their values are not compared, so a change in one is not drawn
+   * as a change, and the line is tagged with what is.
+   */
+  shaped?: Record<string, string>;
+  /** The fields a replay is compared on by value, by dotted path; their lines are tagged. */
+  valued?: string[];
   /**
    * What a standing replacement serves in place of the crossing. Read against
    * what the server sent, so what is being served is on screen on opening the
@@ -296,8 +315,14 @@ export function PayloadBox({ verdict, replayed, contentType, compared = [], serv
 }) {
   const [layout, setLayout] = useDeltaLayout();
   const [formatted, setFormatted] = useFormatted();
-  const was = served !== undefined ? replayed : verdict?.recorded?.body;
   const now = served !== undefined ? served : verdict?.verdict === 'missing' ? undefined : replayed;
+  // The recorded payload with each key-matched field carrying this run's
+  // value: what the comparison ignores is not drawn as a difference.
+  const was = (() => {
+    const recorded = served !== undefined ? replayed : verdict?.recorded?.body;
+    return recorded !== undefined && now !== undefined && Object.keys(shaped).length
+      ? withLeavesOf(recorded, now, Object.keys(shaped)) : recorded;
+  })();
   const lines = was !== undefined && now !== undefined ? lineDiff(was, now) : undefined;
   const changed = lines?.some(line => line.op !== 'same') ?? false;
   const shown = verdict?.verdict === 'missing' ? was : now;
@@ -306,8 +331,11 @@ export function PayloadBox({ verdict, replayed, contentType, compared = [], serv
   const pathsOf = (payload: string | undefined) => {
     try { return payload === undefined ? [] : jsonLines(JSON.parse(payload)).map(line => line.path); } catch { return []; }
   };
-  const tag = (path: string | undefined) => path !== undefined && compared.includes(path)
-    ? <span class="fieldtag" title="a replay is compared on this field">match</span>
+  const tag = (path: string | undefined) => path === undefined ? null
+    : path in shaped
+      ? <span class="fieldtag" title={`compared on being there as a ${shaped[path]}, whatever it holds`}>key · {shaped[path]}</span>
+    : valued.includes(path)
+      ? <span class="fieldtag" title="compared on what it holds">value</span>
     : null;
   const laterPaths = lines && changed ? pathsOf(now) : [];
   let later = 0;
@@ -361,16 +389,54 @@ export function PayloadBox({ verdict, replayed, contentType, compared = [], serv
 }
 
 /**
+ * A JSON payload with the leaves at `paths` set to what `from` holds there,
+ * where `from` holds them; the payload as it was where either is not JSON.
+ * Written back compact, as a recorded payload is kept.
+ */
+function withLeavesOf(payload: string, from: string, paths: string[]): string {
+  try {
+    const target = JSON.parse(payload);
+    const source = JSON.parse(from);
+    for (const path of paths) {
+      const keys = path.split('.');
+      let into = target;
+      let out = source;
+      for (const key of keys.slice(0, -1)) {
+        into = into?.[key];
+        out = out?.[key];
+      }
+      const last = keys[keys.length - 1];
+      if (into && typeof into === 'object' && out && typeof out === 'object' && last in out && last in into) into[last] = out[last];
+    }
+    return JSON.stringify(target);
+  } catch {
+    return payload;
+  }
+}
+
+/** A mark's fields in words: `.token` for one matched on being there, `.status =` for one matched on its value too. */
+function markedPaths(mark: ExpectedValue): string {
+  return [
+    ...Object.keys(mark.shape ?? {}).map(path => `.${path}`),
+    ...Object.keys(mark.fields ?? {}).map(path => `.${path} =`),
+  ].join(', ');
+}
+
+/**
  * How this run compares with the recording, in words: what it matched on, or
  * what differs. Absent where the row is not being compared.
  */
-function comparison(verdict: RowVerdict | undefined, mark: ExpectedValue | undefined): string | undefined {
-  if (!verdict) return mark?.fields ? `compared on ${Object.keys(mark.fields).map(path => `.${path}`).join(', ')}` : undefined;
+function comparison(verdict: RowVerdict | undefined, mark: ExpectedValue | undefined, stored = false): string | undefined {
+  if (!verdict) return marksFields(mark) ? `compared on ${markedPaths(mark!)}` : undefined;
   if (verdict.verdict === 'unexpected') return 'Not in the recording';
   if (verdict.verdict === 'missing') return 'Recorded, not produced by this run';
   if (verdict.verdict === 'mismatch') return `Differs · ${verdict.reasons.join(', ')}`;
-  if (verdict.recorded?.presence && !mark?.fields) return 'Arrived, as recorded';
-  if (mark?.fields) return `Matches on ${Object.keys(mark.fields).map(path => `.${path}`).join(', ')}`;
+  if (verdict.recorded?.presence && !marksFields(mark)) return 'Arrived, as recorded';
+  if (marksFields(mark)) return `Matches on ${markedPaths(mark!)}`;
+  if (stored && mark?.value === undefined) {
+    return Object.keys(shapeOf(verdict.recorded?.body ?? '')).length
+      ? 'Matches on its fields and their types' : 'Written, as recorded';
+  }
   return verdict.recorded?.body === undefined ? 'Matches on status and count' : 'Matches the recording';
 }
 
@@ -406,16 +472,19 @@ export function MissingRow({ kind, verdict, open, onOpen, moves }: {
   moves?: RowMoves;
 }) {
   const [head, ...rest] = kind.split(' ');
+  // A frame's kind starts with its arrow and names no socket, so the arrow
+  // goes where a live frame row has it and the source is left blank.
+  const frame = head === '←' || head === '→';
   return (
     <Row
       classes={['missing']}
-      source={head}
+      columns={moves ? ['remove', 'up', 'down'] : ['remove']}
+      source={frame ? '' : head}
+      way={frame ? head : ''}
       title="recorded on this step, and not produced by this run"
+      badge={<Badge verdict={verdict} />}
       label={<span class="what">{rest.join(' ')}</span>}
-      reading={<>
-        <span class="verdict missing">Missing</span>
-        <span class="meta">recorded ×{verdict.recorded?.n ?? 0}</span>
-      </>}
+      reading={<span class="meta">recorded ×{verdict.recorded?.n ?? 0}</span>}
       slots={{
         remove: () => verdict.onUpdate(),
         ...(moves?.up ? { up: moves.up } : {}), ...(moves?.down ? { down: moves.down } : {}),
@@ -440,23 +509,33 @@ export function MissingRow({ kind, verdict, open, onOpen, moves }: {
  * differs on every run; comparing only the fields that matter leaves the
  * rest free.
  */
-function FieldList({ payload, ticked, onToggle }: {
+function FieldList({ payload, ticked, valued, onToggle, onToggleValue }: {
   payload: string;
   ticked: string[];
+  /** The ticked fields matched on their value too; the rest are matched on being there, as the same type. */
+  valued: string[];
   onToggle: (path: string) => void;
+  onToggleValue: (path: string) => void;
 }) {
   const leaves = leavesOf(payload);
   return (
     <div class="pbox" onClick={(e: MouseEvent) => e.stopPropagation()}>
-      <div class="pboxhead"><span class="grow">fields</span></div>
+      <div class="pboxhead"><span class="grow">fields · ticked are matched on being there; value matches what they hold too</span></div>
       <ul class="expectfields">
         {Object.keys(leaves).map(path => (
           <li key={path}>
             <label>
               <input type="checkbox" checked={ticked.includes(path)} onChange={() => onToggle(path)} />
               <span class="path">.{path}</span>
-              <span class="quiet">{JSON.stringify(leaves[path])}</span>
+              <span class="quiet">{typeOfLeaf(leaves[path])}</span>
             </label>
+            {ticked.includes(path) && (
+              <label class={valued.includes(path) ? 'fieldvalue on' : 'fieldvalue'}
+                title="match what it holds, not only that it is there">
+                <input type="checkbox" checked={valued.includes(path)} onChange={() => onToggleValue(path)} />
+                value <span class="quiet">{JSON.stringify(leaves[path])}</span>
+              </label>
+            )}
           </li>
         ))}
       </ul>
@@ -496,7 +575,6 @@ export async function rearmRule(
     // or the one picked. Left out, the use stands as it was.
     ...(next.step !== undefined ? { use: next.step === null ? 'all' : [next.step] } : {}),
     ...(next.mode ? { mode: next.mode } : {}),
-    ...(next.wait ? { wait: next.wait } : {}),
   });
 }
 
@@ -540,6 +618,7 @@ export function CrossingBody({ event, base, rule, actions, verdict }: {
   const [ignoring, setIgnoring] = useState(false);
   const [picking, setPicking] = useState(false);
   const [ticked, setTicked] = useState<string[]>([]);
+  const [valued, setValued] = useState<string[]>([]);
   const [draft, setDraft] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
 
@@ -555,34 +634,56 @@ export function CrossingBody({ event, base, rule, actions, verdict }: {
   const stop = (e: MouseEvent) => e.stopPropagation();
   // The step the row is listed on, which a row moved in from the gutter has
   // and its stamp does not; a mark is kept on the step the row is read under.
-  const markStep = actions?.waitStep ?? event.step;
+  const markStep = actions?.rowStep ?? event.step;
   const mark = actions?.expected?.(event, markStep);
   const canMark = !!actions?.expect && markStep !== undefined && payload !== undefined;
+  const stored = event.kind === 'write';
+  const fielded = Object.keys(leavesOf(payload ?? '')).length > 0;
+  // A stored value with no fields is compared on being written, or whole once chosen.
+  const valueButton = canMark && stored && !fielded
+    ? <button class="tool plain" title={mark?.value !== undefined ? 'compare a replay on this being written, whatever it holds' : 'compare a replay on this value exactly'}
+        onClick={() => actions!.expect!(event, mark?.value !== undefined ? undefined : { value: payload! }, markStep)}>
+        {mark?.value !== undefined ? 'Match on being written' : 'Match value'}</button>
+    : null;
   // What a replay is compared on: the whole payload, or the fields ticked.
-  const matchButton = canMark && Object.keys(leavesOf(payload ?? '')).length > 0
-    ? <button class="tool plain" title={mark?.fields ? 'change which fields a replay is compared on' : 'compare a replay on some fields only'}
-        onClick={() => { setReplacing(false); setTicked(Object.keys(mark?.fields ?? {})); setPicking(true); }}>Match Fields</button>
+  const matchButton = canMark && fielded
+    ? <button class="tool plain" title={marksFields(mark) ? 'change which fields a replay is compared on' : 'compare a replay on some fields only'}
+        onClick={() => {
+          setReplacing(false);
+          setTicked([...Object.keys(mark?.shape ?? {}), ...Object.keys(mark?.fields ?? {})]);
+          setValued(Object.keys(mark?.fields ?? {}));
+          setPicking(true);
+        }}>Match Fields</button>
     : null;
   const save = saveWords(verdict);
   // While fields are picked, the box lists them and the line under it holds
   // only what finishes the choice, in the place the row's buttons stand.
   const pickingNow = picking && payload !== undefined;
   const box = pickingNow
-    ? <FieldList payload={payload} ticked={ticked}
-        onToggle={(path) => setTicked(ticked.includes(path) ? ticked.filter(held => held !== path) : [...ticked, path])} />
+    ? <FieldList payload={payload} ticked={ticked} valued={valued}
+        onToggle={(path) => {
+          if (ticked.includes(path)) { setTicked(ticked.filter(held => held !== path)); setValued(valued.filter(held => held !== path)); }
+          else setTicked([...ticked, path]);
+        }}
+        onToggleValue={(path) => setValued(valued.includes(path) ? valued.filter(held => held !== path) : [...valued, path])} />
     : <PayloadBox verdict={verdict} replayed={payload} contentType={event.contentType}
-        compared={Object.keys(mark?.fields ?? {})}
+        shaped={mark?.shape ?? {}} valued={Object.keys(mark?.fields ?? {})}
         served={rule?.verb === 'answer' ? rule.body : undefined} />;
-  const endPicking = () => { setPicking(false); setTicked([]); };
+  const endPicking = () => { setPicking(false); setTicked([]); setValued([]); };
   const pickingFoot = pickingNow && (
     <BodyFoot summary={ticked.length ? 'compared on the fields ticked' : 'nothing ticked: compared whole'}>
       <button class="tool plain" onClick={() => {
         const leaves = leavesOf(payload!);
+        const byValue = ticked.filter(path => valued.includes(path));
+        const byShape = ticked.filter(path => !valued.includes(path));
         actions!.expect!(event, ticked.length
-          ? { fields: Object.fromEntries(ticked.map(path => [path, leaves[path]])) }
-          : undefined, markStep);
+          ? {
+              ...(byValue.length ? { fields: Object.fromEntries(byValue.map(path => [path, leaves[path]])) } : {}),
+              ...(byShape.length ? { shape: Object.fromEntries(byShape.map(path => [path, typeOfLeaf(leaves[path])])) } : {}),
+            }
+          : stored ? { value: payload! } : undefined, markStep);
         endPicking();
-      }}>{ticked.length ? `Match on ${ticked.length} field${ticked.length === 1 ? '' : 's'}` : 'Match whole payload'}</button>
+      }}>{ticked.length ? `Match on ${ticked.length} field${ticked.length === 1 ? '' : 's'}` : stored ? 'Match whole value' : 'Match whole payload'}</button>
       <button class="tool plain" onClick={endPicking}>Cancel</button>
     </BodyFoot>
   );
@@ -596,7 +697,7 @@ export function CrossingBody({ event, base, rule, actions, verdict }: {
     return (
       <div class="body">
         {box}
-        {pickingFoot || <BodyFoot summary={comparison(verdict, mark)}>{saveButton}{matchButton}</BodyFoot>}
+        {pickingFoot || <BodyFoot summary={comparison(verdict, mark, true)}>{saveButton}{matchButton}{valueButton}</BodyFoot>}
       </div>
     );
   }
@@ -605,7 +706,7 @@ export function CrossingBody({ event, base, rule, actions, verdict }: {
   const blocked = rule?.verb === 'block' && !rule.off;
   // The saved responses that would answer this crossing, used here or not:
   // one line each, so the sequence opts into the one it wants.
-  const here = actions.waitStep ?? event.step;
+  const here = actions.rowStep ?? event.step;
   const matching = (actions.responses ?? []).filter(one => one.verb !== 'hide' && !one.foreign && answersEvent(one, event));
   const usedHere = (one: BoundaryRule) => !one.off && (!one.steps || (here !== undefined && one.steps.includes(here)));
   // A replacement applies to crossings of the row's kind, the same key the
@@ -650,11 +751,6 @@ export function CrossingBody({ event, base, rule, actions, verdict }: {
                 <button class="tool plain" title="never let this leave the browser"
                   onClick={() => actions.block(event)}>Block</button>
               </>}
-        {actions.waitFor && actions.waitStep !== undefined && (actions.waiting?.(actions.waitStep, keyOf(event))
-          ? <button class="tool plain chosen" title={`step ${actions.waitStep + 1} holds open until this arrives; press to stop waiting`}
-              onClick={() => actions.unwait?.(actions.waitStep!, keyOf(event))}>Will wait</button>
-          : <button class="tool plain" title={`step ${actions.waitStep + 1} holds open until this arrives`}
-              onClick={() => actions.waitFor!(event, actions.waitStep!)}>Wait</button>)}
         {actions.ignore && (
           <button class={ignoring ? 'tool plain chosen' : 'tool plain'}
             title="leave this traffic out of the list and out of comparisons"
@@ -662,17 +758,8 @@ export function CrossingBody({ event, base, rule, actions, verdict }: {
         )}
       </BodyFoot>}
 
-      {/* What this step waits for, set here where Wait was pressed: a row
-          with no saved response has no editor to carry it. */}
-      {actions.waitStep !== undefined && actions.waiting?.(actions.waitStep, keyOf(event)) && (
-        <WaitSettings
-          wait={actions.waitOf?.(actions.waitStep, keyOf(event))}
-          onChange={(wait) => actions.setWait?.(actions.waitStep!, keyOf(event), wait)}
-        />
-      )}
-
       {ignoring && actions.ignore && (
-        <IgnoreEditor event={event} step={actions.waitStep ?? event.step}
+        <IgnoreEditor event={event} step={actions.rowStep ?? event.step}
           onSave={(rule) => { actions.ignore!(rule); setIgnoring(false); }}
           onCancel={() => setIgnoring(false)} />
       )}
@@ -683,15 +770,15 @@ export function CrossingBody({ event, base, rule, actions, verdict }: {
           rule={served}
           recorded={payload}
           carrying={carrying}
-          stepHere={actions.waitStep ?? event.step}
+          stepHere={actions.rowStep ?? event.step}
           choices={actions.choices}
           base={base}
           onSave={(next) => {
             if (served && actions.set) {
               actions.set(served, { key: served.key, body: next.body, status: next.status, ...next.scope,
-                wait: next.wait, ...(next.payload ? { payload: next.payload } : {}) });
+                ...(next.payload ? { payload: next.payload } : {}) });
             } else {
-              actions.answer(event, next.body, next.status, carrying, next.edited, next.scope, next.payload, next.wait);
+              actions.answer(event, next.body, next.status, carrying, next.edited, next.scope, next.payload);
             }
             setReplacing(false);
           }}
@@ -854,7 +941,7 @@ function ReplaceEditor({ event, rule, recorded, carrying, stepHere, choices, bas
   stepHere?: number;
   choices?: RuleChoices;
   base: string;
-  onSave: (next: { body: string; status: string; edited: boolean; scope: RuleScope; payload?: string; wait: ResponseWait }) => void;
+  onSave: (next: { body: string; status: string; edited: boolean; scope: RuleScope; payload?: string }) => void;
   onStop?: () => void;
   onCancel: () => void;
 }) {
@@ -873,8 +960,6 @@ function ReplaceEditor({ event, rule, recorded, carrying, stepHere, choices, bas
     : { step: null, method: frame ? null : event.method ?? null, url: frame ? event.url : null, direction: frame ? event.direction : null,
         mode: 'local' });
   const set = (next: Partial<RuleScope>) => setScope({ ...scope, ...next });
-  // What a step waiting on this kind waits for; defaults stand until changed.
-  const [wait, setWait] = useState<ResponseWait>(rule?.wait ?? { count: 1, seconds: 10, onFail: 'fail' });
   // The step the row is listed under first: a replacement made from a row
   // with no stamp is staged at step 0, which is where it was made, not where it sits.
   const pickedStep = scope.step ?? stepHere ?? rule?.staged?.step ?? 0;
@@ -905,10 +990,10 @@ function ReplaceEditor({ event, rule, recorded, carrying, stepHere, choices, bas
 
   const save = () => {
     if (source !== null) {
-      onSave({ body: savedText ?? '', status, edited, scope, payload: source, wait });
+      onSave({ body: savedText ?? '', status, edited, scope, payload: source });
       return;
     }
-    onSave({ body: edited ? compact(body) : opened, status, edited, scope, wait });
+    onSave({ body: edited ? compact(body) : opened, status, edited, scope });
   };
   const savePayload = async () => {
     const name = (naming ?? '').trim();
@@ -975,24 +1060,6 @@ function ReplaceEditor({ event, rule, recorded, carrying, stepHere, choices, bas
               <span class="replvalue">{carrying}</span>
             </ScopeRow>
           </>}
-      {/* Read by any step told to Wait on this kind: how many to hold for,
-          how long, and whether a miss fails the step or lets the run on. */}
-      <ScopeRow label="wait for">
-        <input class="replinput" type="number" min={1} value={wait.count}
-          onClick={(e: MouseEvent) => e.stopPropagation()}
-          onInput={(e: Event) => setWait({ ...wait, count: Math.max(1, Number((e.target as HTMLInputElement).value) || 1) })} />
-        <span class="replvalue">within</span>
-        <input class="replinput" type="number" min={1} value={wait.seconds}
-          onClick={(e: MouseEvent) => e.stopPropagation()}
-          onInput={(e: Event) => setWait({ ...wait, seconds: Math.max(1, Number((e.target as HTMLInputElement).value) || 1) })} />
-        <span class="replvalue">s</span>
-      </ScopeRow>
-      <ScopeRow label="on timeout">
-        <Choice on={wait.onFail === 'fail'} onPick={() => setWait({ ...wait, onFail: 'fail' })}
-          title="the waiting step fails and the run stops there">fail the step</Choice>
-        <Choice on={wait.onFail === 'continue'} onPick={() => setWait({ ...wait, onFail: 'continue' })}
-          title="the run goes on without them">carry on</Choice>
-      </ScopeRow>
       <ScopeRow label="payload">
         <Choice on={source === null} onPick={() => setSource(null)}>typed</Choice>
         {saved.length > 0
@@ -1095,8 +1162,8 @@ export function CrossingRow({
 }) {
   // What the proxy did to this crossing, not whether a rule exists: a rule
   // made after it crossed, or one bound to another step, left it as sent.
-  const answered = event.heldAs === 'replaced';
-  const blocked = event.heldAs === 'dropped' || event.heldAs === 'refused';
+  const answered = event.answeredAs === 'replaced';
+  const blocked = event.answeredAs === 'dropped' || event.answeredAs === 'refused';
   const pending = !answered && !blocked && !rule?.off && (rule?.verb === 'answer' || rule?.verb === 'block');
   // A row's own name first, then one given to its kind before rows were named.
   const named = (actions?.nameKey ? actions.names?.[actions.nameKey(event)] : undefined)
@@ -1109,8 +1176,16 @@ export function CrossingRow({
 
   const hidable = actions && event.kind !== 'write';
   const intercepting = !!actions && !!rule && !rule.off && (rule.verb === 'answer' || rule.verb === 'block');
+  // A storage write never reaches the proxy, so no rule can intercept or hide it.
+  const columns: Array<keyof RowSlots> = [
+    ...(hidable ? ['remove', 'hide'] as const : hidden ? ['hide'] as const : []),
+    ...(actions?.rename ? ['rename'] as const : []),
+    ...(actions?.report ? ['send'] as const : []),
+    ...(moves ? ['up', 'down'] as const : []),
+  ];
   return (
     <Row
+      columns={columns}
       id={`crossing-${event.id}`}
       classes={[
         // Not `write`: the step row's hover-only note button already has that
@@ -1128,6 +1203,7 @@ export function CrossingRow({
       sourceTitle={event.url}
       way={event.kind === 'frame' ? (event.direction === 'out' ? '→' : '←') : ''}
       title={attribution(event)}
+      badge={<Badge verdict={verdict} ignored={hidden} />}
       label={<>
         {renaming && actions?.rename
           ? <LabelInput
@@ -1147,7 +1223,7 @@ export function CrossingRow({
                   : (event.preview ?? event.url)}
             </span>}
         {(answered || blocked) && (
-          <span class="tag">{blocked ? (event.heldAs === 'refused' ? 'refused' : 'never sent')
+          <span class="tag">{blocked ? (event.answeredAs === 'refused' ? 'refused' : 'never sent')
             : `Intercepted: ${rule?.mode === 'local' ? 'Local' : 'Global'} Response`}</span>
         )}
         {pending && (
@@ -1180,14 +1256,9 @@ export function CrossingRow({
             ×{repeats}{every ? ` ${every}` : ''}
           </span>
         )}
-        {verdict && (
-          <span class={`verdict ${verdict.verdict}`} title={verdict.reasons.join(' · ') || undefined}>
-            {VERDICT_WORDS[verdict.verdict]}
-          </span>
-        )}
         {/* Not `held`: that class is the held-step panel's, and a size sharing
             it was drawn as a bordered panel. */}
-        <span class={`meta ${event.heldAs || served ? 'served' : ((event.status ?? 0) >= 400 ? 'bad' : '')}`}>
+        <span class={`meta ${event.answeredAs || served ? 'served' : ((event.status ?? 0) >= 400 ? 'bad' : '')}`}>
           {served ?? describe(event, false)}
         </span>
       </>}
@@ -1254,55 +1325,6 @@ export interface RuleScope {
   mode?: 'local' | 'optIn' | 'optOut';
 }
 
-/**
- * How many a step waits for, how long, and what a miss does. The sliders
- * show their value as they move and save on release, so a drag writes the
- * file once rather than at every notch - on the pointer or key coming up,
- * since `onChange` on an input fires at every notch here.
- */
-export function WaitSettings({ wait: held, onChange }: {
-  wait?: ResponseWait;
-  onChange: (wait: ResponseWait) => void;
-}) {
-  const wait = held ?? { count: 1, seconds: 10, onFail: 'fail' as const };
-  const [count, setCount] = useState(wait.count);
-  const [seconds, setSeconds] = useState(wait.seconds);
-  useEffect(() => { setCount(wait.count); setSeconds(wait.seconds); }, [wait.count, wait.seconds]);
-  const change = (next: Partial<ResponseWait>) => onChange({ ...wait, count, seconds, ...next });
-  return (
-    <div class="body waitset" onClick={(e: MouseEvent) => e.stopPropagation()}>
-      <label class="waitslider">
-        <span class="waitlabel">wait for</span>
-        <input type="range" min={1} max={10} step={1} value={count}
-          onInput={(e: Event) => setCount(Number((e.target as HTMLInputElement).value))}
-          onPointerUp={(e: Event) => change({ count: Number((e.target as HTMLInputElement).value) })}
-          onKeyUp={(e: Event) => change({ count: Number((e.target as HTMLInputElement).value) })} />
-        <span class="waitvalue">{count} arrival{count === 1 ? '' : 's'}</span>
-      </label>
-      <label class="waitslider">
-        <span class="waitlabel">within</span>
-        <input type="range" min={1} max={60} step={1} value={seconds}
-          onInput={(e: Event) => setSeconds(Number((e.target as HTMLInputElement).value))}
-          onPointerUp={(e: Event) => change({ seconds: Number((e.target as HTMLInputElement).value) })}
-          onKeyUp={(e: Event) => change({ seconds: Number((e.target as HTMLInputElement).value) })} />
-        <span class="waitvalue">{seconds} s</span>
-      </label>
-      <div class="waitslider">
-        <span class="waitlabel">on timeout</span>
-        <span class="waitchoices">
-          <Choice on={wait.onFail === 'fail'} onPick={() => change({ onFail: 'fail' })}
-            title="the waiting step fails and the run stops there">fail the step</Choice>
-          <Choice on={wait.onFail === 'continue'} onPick={() => change({ onFail: 'continue' })}
-            title="the run goes on without them">carry on</Choice>
-        </span>
-      </div>
-    </div>
-  );
-}
-
-/** What a step waiting on a response's kind waits for. */
-export type ResponseWait = { count: number; seconds: number; onFail: 'fail' | 'continue' };
-
 /** The three response types, as each reads and what it does. */
 const RESPONSE_TYPES: Array<['local' | 'optIn' | 'optOut', string, string]> = [
   ['local', 'Local', 'answers in this sequence only, and is offered to no other'],
@@ -1325,7 +1347,6 @@ export interface RuleEdit {
   url: string | null;
   direction: 'out' | 'in' | null;
   mode?: 'local' | 'optIn' | 'optOut';
-  wait?: ResponseWait;
 }
 
 
@@ -1528,7 +1549,6 @@ export function SavedResponses({
                     key, body: next.body, status: next.status,
                     method: next.scope.method, url: next.scope.url, direction: next.scope.direction,
                     ...(next.scope.mode ? { mode: next.scope.mode } : {}),
-                    wait: next.wait,
                     ...(next.payload ? { payload: next.payload } : {}),
                   });
                 }}

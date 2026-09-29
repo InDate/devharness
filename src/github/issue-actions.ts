@@ -606,7 +606,7 @@ export async function handlePullSequence(
     // would otherwise skip the backstop entirely.
     const known = deps.knownTools?.();
     if (known && known.length > 0) {
-      const unknown = audit.tools.filter(t => !known.includes(t) && t !== 'conditional' && t !== 'forEach');
+      const unknown = audit.tools.filter(t => !known.includes(t) && t !== 'forEach');
       if (unknown.length > 0) {
         return createErrorResponse('ISSUES_SEQUENCE_INVALID', {
           source, reason: `Unknown tool name(s): ${unknown.join(', ')}`,

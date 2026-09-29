@@ -1,5 +1,5 @@
 /**
- * Two gaps that made conditional setup sequences unusable for identity healing:
+ * Two gaps that made guarded setup sequences unusable for identity healing:
  *
  * 1. Conditions could only see selector/url/cookie/localStorage, so a device
  *    identity kept in IndexedDB (the usual home for a non-extractable CryptoKey)
@@ -17,10 +17,12 @@ import { configManager } from '../config.js';
 import { createErrorResponse, getErrorMessage, formatCodeBlock } from '../messages.js';
 import { webStorageMeta } from './storage-tools.js';
 import { ToolError } from '../tool-error.js';
+import { HELD, runsOnPass } from '../test-support/check-steps.js';
 
 function makeHarness(responses: Record<string, any> = {}, nested?: CommandSequence) {
   const calls: Array<{ tool: string; params: Record<string, any> }> = [];
   const executeToolCall = vi.fn(async (tool: string, params: Record<string, any>) => {
+    if (tool === 'check') return HELD;
     calls.push({ tool, params });
     const key = `${tool}.${params.action}`;
     const r = key in responses ? responses[key] : responses[tool];
@@ -104,7 +106,7 @@ describe('indexedDB conditions', () => {
       .toEqual({ met: true });
   });
 
-  // The whole point of a healing conditional: on a wiped profile the database
+  // The whole point of a healing guard: on a wiped profile the database
   // isn't there yet. That has to read as "absent", not as a broken condition,
   // or the setup sequence fails exactly when it's needed.
   it('treats a missing database or store as absent rather than an error', async () => {
@@ -353,7 +355,7 @@ describe('launchChrome inside a nested sequence', () => {
   ]);
 
   const outer = seq('outer', [
-    { tool: 'conditional', params: { if: '{{url:contains:example}}', then: 'setup' } },
+    runsOnPass('setup'),
   ]);
 
   // listConnections has to answer with the session as it IS at the moment of
@@ -395,20 +397,20 @@ describe('launchChrome inside a nested sequence', () => {
   // A setup sequence that is ONLY a launch empties out once the browser
   // exists. Reporting that as "condition not met" would state the opposite of
   // what happened - the condition held, there was simply nothing left to do.
-  it('reports an emptied sub-sequence as met-with-nothing-to-run, not as not-met', async () => {
+  it('reports an emptied sub-sequence as held with nothing run, not as failed', async () => {
     const launchOnly = seq('launch-only', [
       { tool: 'launchChrome', params: { reference: 'member-two' } },
     ]);
     const { ctx } = makeHarness(baseResponses(['device-a', 'member-two']), launchOnly);
 
     const result = await executeSteps({
-      sequence: seq('outer', [{ tool: 'conditional', params: { if: '{{url:contains:example}}', then: 'launch-only' } }]),
+      sequence: seq('outer', [runsOnPass('launch-only')]),
       ctx, startStep: 0, stepTimeout: 2000, totalTimeout: 20_000,
     });
 
-    expect(result.results[0]).toMatchObject({ success: true, conditionMet: true });
+    expect(result.results[0]).toMatchObject({ success: true, check: { outcome: 'held', action: 'run' } });
     expect(result.results[0].substeps).toEqual([]);
-    expect(formatExecutionResults('outer', result.results, 1, 0)).toContain('condition met, no steps left to run');
+    expect(formatExecutionResults('outer', result.results, 1, 0)).toContain('ran launch-only (0 steps)');
   });
 
   // A registered-but-dropped connection is not somewhere a step can run, so it
@@ -432,7 +434,7 @@ describe('launchChrome inside a nested sequence', () => {
     ]));
 
     await executeSteps({
-      sequence: seq('outer', [{ tool: 'conditional', params: { if: '{{url:contains:example}}', then: 'setup' } }]),
+      sequence: seq('outer', [runsOnPass('setup')]),
       ctx, startStep: 0, stepTimeout: 2000, totalTimeout: 20_000,
     });
 
@@ -452,7 +454,7 @@ describe('launchChrome inside a nested sequence', () => {
     const { ctx, calls } = makeHarness(baseResponses(['device-a']), hoisted);
 
     await executeSteps({
-      sequence: seq('outer', [{ tool: 'conditional', params: { if: '{{url:contains:example}}', then: 'setup' } }]),
+      sequence: seq('outer', [runsOnPass('setup')]),
       ctx, startStep: 0, stepTimeout: 2000, totalTimeout: 20_000,
     });
 
@@ -473,7 +475,7 @@ describe('launchChrome inside a nested sequence', () => {
     const { ctx, calls } = makeHarness(baseResponses(['device-a', 'member-two']), hoisted);
 
     await executeSteps({
-      sequence: seq('outer', [{ tool: 'conditional', params: { if: '{{url:contains:example}}', then: 'setup' } }]),
+      sequence: seq('outer', [runsOnPass('setup')]),
       ctx, startStep: 0, stepTimeout: 2000, totalTimeout: 20_000,
     });
 

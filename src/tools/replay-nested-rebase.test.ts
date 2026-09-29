@@ -1,7 +1,7 @@
 /**
  * `baseUrl` must reach a sequence's nested sequences, not just its own steps.
  *
- * handleRun rebases the sequence it loaded. A `conditional`'s `then` and a
+ * handleRun rebases the sequence it loaded. A check's `{ run }` and a
  * `forEach`'s `do` are loaded later, from the recorder, in their recorded
  * form - so before this the parent ran against the target deployment while
  * the helper that logs in or navigates ran against the recorded one, and a
@@ -18,6 +18,7 @@ import type { ExecutionContext } from './replay-executor.js';
 import type { CommandSequence, RecordedCommand } from '../command-recorder.js';
 import { configManager } from '../config.js';
 import { productionShaped } from '../test-support/fake-execute-tool-call.js';
+import { HELD, runsOnPass } from '../test-support/check-steps.js';
 
 const seq = (name: string, commands: RecordedCommand[]): CommandSequence => ({
   id: `seq-${name}`, name, commands, createdAt: 1,
@@ -32,6 +33,7 @@ const pageInfo = (url: string) => ({
 function makeHarness(nested: CommandSequence[], rebaseOrigin?: string) {
   const gotoUrls: string[] = [];
   const executeToolCall = vi.fn(productionShaped(async (tool: string, params: Record<string, any>) => {
+    if (tool === 'check') return HELD;
     if (tool === 'navigate' && params.action === 'goto') {
       gotoUrls.push(String(params.url));
       return { content: [{ type: 'text', text: 'ok' }] };
@@ -77,13 +79,13 @@ const recordedGoto = (url: string): RecordedCommand =>
   ({ tool: 'navigate', params: { action: 'goto', url } });
 
 describe('rebaseOrigin reaches nested sequences', () => {
-  it("retargets a conditional's then sequence", async () => {
+  it("retargets the sequence a check runs", async () => {
     const inner = seq('login', [recordedGoto('http://localhost:5174/login?next=/home')]);
     const { gotoUrls, ctx } = makeHarness([inner], 'https://cue-test.pages.dev');
 
     const result = await executeSteps({
       sequence: seq('outer', [
-        { tool: 'conditional', params: { if: '{{url:contains:cue-test}}', then: 'login' } },
+        runsOnPass('login'),
       ]),
       ctx,
       startStep: 0,
@@ -114,12 +116,12 @@ describe('rebaseOrigin reaches nested sequences', () => {
 
   it('reaches a sequence nested two deep', async () => {
     const deep = seq('deep', [recordedGoto('http://localhost:5174/deep')]);
-    const mid = seq('mid', [{ tool: 'conditional', params: { if: '{{url:contains:cue-test}}', then: 'deep' } }]);
+    const mid = seq('mid', [runsOnPass('deep')]);
     const { gotoUrls, ctx } = makeHarness([mid, deep], 'https://cue-test.pages.dev');
 
     const result = await executeSteps({
       sequence: seq('outer', [
-        { tool: 'conditional', params: { if: '{{url:contains:cue-test}}', then: 'mid' } },
+        runsOnPass('mid'),
       ]),
       ctx,
       startStep: 0,
@@ -138,7 +140,7 @@ describe('rebaseOrigin reaches nested sequences', () => {
 
     await executeSteps({
       sequence: seq('outer', [
-        { tool: 'conditional', params: { if: '{{url:contains:cue-test}}', then: 'login' } },
+        runsOnPass('login'),
       ]),
       ctx,
       startStep: 0,
@@ -153,7 +155,7 @@ describe('rebaseOrigin reaches nested sequences', () => {
 
     await executeSteps({
       sequence: seq('outer', [
-        { tool: 'conditional', params: { if: '{{url:contains:cue-test}}', then: 'login' } },
+        runsOnPass('login'),
       ]),
       ctx,
       startStep: 0,

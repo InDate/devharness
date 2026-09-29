@@ -7,6 +7,7 @@ import { CDPManager } from '../cdp-manager.js';
 import { createTool } from '../validation-helpers.js';
 import { createSuccessResponse, createErrorResponse, formatCodeBlock } from '../messages.js';
 import type { ConnectionManager } from '../connection-manager.js';
+import { hold, isHeld, release } from '../hold.js';
 
 // Consolidated schema with action parameter
 const executionSchema = z.object({
@@ -61,7 +62,11 @@ export function createExecutionTools(
         // Handle each action
         switch (action) {
           case 'pause':
-            await targetCdpManager.pause();
+            if (resolvedConnection?.reference) {
+              await hold(resolvedConnection.reference, { source: 'tool', layers: ['code'] });
+            } else {
+              await targetCdpManager.pause();
+            }
             return createSuccessResponse('EXECUTION_PAUSED');
 
           case 'resume': {
@@ -85,8 +90,13 @@ export function createExecutionTools(
             // Clear acknowledged flag when resuming (auto-unblock)
             clearAcknowledgedFlag();
 
-            // Normal resume
-            await targetCdpManager.resume();
+            // Through the hold record, so a resume of the bench's hold releases
+            // all of it - the animation clock and the step breakpoints with the JS.
+            const reference: string | undefined = resolvedConnection?.reference;
+            if (reference && isHeld(reference, 'code')) {
+              await release(reference, { layers: ['code'] });
+            }
+            if (targetCdpManager.isPaused()) await targetCdpManager.resume();
 
             // A watch-mode restart may have been queued while this
             // connection was paused - give it a chance to fire now.

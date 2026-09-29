@@ -5,6 +5,7 @@
 
 import { CDPManager } from './cdp-manager.js';
 import { getProxy } from './proxy/registry.js';
+import { attachLayer, recordHeld, recordReleased } from './hold.js';
 import { PuppeteerManager } from './puppeteer-manager.js';
 import { ConsoleMonitor } from './console-monitor.js';
 import { NetworkMonitor } from './network-monitor.js';
@@ -37,6 +38,8 @@ interface BrowserInstance {
 
 export class ConnectionManager {
   private connections: Map<string, Connection> = new Map();
+  /** Detaches each connection's debugger from the hold record. */
+  private codeLayers = new Map<string, () => void>();
   private browsers: Map<string, BrowserInstance> = new Map(); // Key: "host:port"
   private activeConnectionId: string | null = null;
   private connectionCounter = 0;
@@ -82,6 +85,7 @@ export class ConnectionManager {
     };
 
     this.connections.set(id, connection);
+    if (reference) this.attachCodeLayer(connection);
 
     // A request's initiator is read on this connection's CDP session and the
     // bytes cross a proxy keyed by the same reference, so this is where the
@@ -166,7 +170,48 @@ export class ConnectionManager {
       return false;
     }
     connection.reference = reference;
+    this.attachCodeLayer(connection);
     return true;
+  }
+
+  /**
+   * The debugger's hold for the hold record under this connection's
+   * reference: a pause from anywhere - a breakpoint, a `debugger` statement,
+   * another CDP session - is recorded as the code layer held, and a resume
+   * from anywhere as released.
+   */
+  private attachCodeLayer(connection: Connection): void {
+    this.codeLayers.get(connection.id)?.();
+    const reference = connection.reference;
+    if (!reference) return;
+    const cdp = connection.cdpManager;
+    const standing = () => {
+      const frame = cdp.getCallStack()?.[0];
+      return frame
+        ? { at: `${frame.url}:${frame.location.lineNumber + 1}`, fn: frame.functionName }
+        : { armed: true };
+    };
+    const detach = attachLayer(reference, 'code', {
+      engage: async () => { await cdp.pause(); return standing(); },
+      disengage: async () => { if (cdp.isPaused()) await cdp.resume(); },
+      step: async () => { await cdp.stepOver(); return standing(); },
+    });
+    const unwatch = cdp.watchPause((paused, event) => {
+      const top = event?.callFrames?.[0];
+      if (paused) {
+        recordHeld(reference, 'code', 'breakpoint', {
+          reason: event?.reason ?? 'other',
+          // A frame in an inline script reports no URL of its own; the script it
+          // runs in was parsed from the page, and carries the page's URL.
+          ...(top ? {
+            at: `${top.url || cdp.scriptUrl(top.location?.scriptId) || ''}:${(top.location?.lineNumber ?? 0) + 1}`,
+            fn: top.functionName || '(anonymous)',
+          } : {}),
+        });
+      }
+      else recordReleased(reference, 'code');
+    });
+    this.codeLayers.set(connection.id, () => { unwatch(); detach(); });
   }
 
   /**
@@ -395,6 +440,8 @@ export class ConnectionManager {
     // connection may already be dead (e.g. the process was killed), and we
     // still need the rest of this cleanup (browser tracking, Chrome kill,
     // registry removal below) to run either way.
+    this.codeLayers.get(id)?.();
+    this.codeLayers.delete(id);
     try {
       await connection.cdpManager.disconnect();
     } catch (error) {

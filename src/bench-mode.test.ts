@@ -17,7 +17,7 @@ import { request } from 'http';
 import { initializePaths, setWorkingDirOverride } from './helpers/paths.js';
 import { getEventStreamPath } from './session-events.js';
 import {
-  setFrozen,
+  setHeld,
   startBench,
   stopBench,
   tickBench,
@@ -234,9 +234,13 @@ function noteSequences() {
     openSiteHidden: async () => [],
     openBoundaryRules: () => ({ rules: [], waits: [], refuseWrites: false }),
     listCatalogue: async () => [],
+    outlineOf: async () => undefined,
+    history: () => [],
+    historyDetail: () => undefined,
+    tools: () => [],
+    callTool: async () => ({ failed: false, result: '' }),
     describe: async () => undefined,
     commentStep: async () => undefined,
-    addConditional: async () => undefined,
     listNames: async () => ['orders'],
     active: () => (open ? { name: 'orders', currentStep: api.at, total: steps.length, steps, variables: [] } : null),
     start: async () => { open = true; return undefined; },
@@ -303,7 +307,7 @@ async function startBare(client: any) {
 async function start(client: any) {
   const state = await startBare(client);
   await setPicker(CONNECTION, true);
-  await setFrozen(CONNECTION, true);
+  await setHeld(CONNECTION, true);
   return state;
 }
 
@@ -462,7 +466,7 @@ describe('picking an element', () => {
 
     await saveAnnotation(CONNECTION, 'flashes empty here');
 
-    const events = readEvents();
+    const events = readEvents().filter(e => e.kind === 'annotation');
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       kind: 'annotation',
@@ -505,7 +509,7 @@ describe('picking an element', () => {
     await discardPick(CONNECTION);
 
     expect(notesIn(noteDriver)).toHaveLength(0);
-    expect(readEvents()).toHaveLength(0);
+    expect(readEvents().filter(e => e.kind === 'annotation')).toHaveLength(0);
     expect(getPendingPick(CONNECTION)).toBeNull();
     expect(getBenchSession(CONNECTION)).toMatchObject({ pickerArmed: true });
   });
@@ -758,7 +762,7 @@ describe('an idle page, where the pause is armed rather than taken', () => {
     client.idle = true;
     await start(client);
 
-    await setFrozen(CONNECTION, false);
+    await setHeld(CONNECTION, false);
 
     // Debugger.resume would fail with "Can only perform operation while paused"
     // and leave the armed pause to stop the page later, with no owner.
@@ -822,7 +826,7 @@ describe('closing the bench tab', () => {
       page: createFakePage(client), connection: CONNECTION, sessionName: SESSION,
       openBench: async () => tab,
     });
-    await setFrozen(CONNECTION, true);
+    await setHeld(CONNECTION, true);
 
     await tab.closedByUser();
     await new Promise(r => setTimeout(r, 10));
@@ -905,9 +909,13 @@ describe('a step and the rest of devharness', () => {
     openSiteHidden: async () => [],
     openBoundaryRules: () => ({ rules: [], waits: [], refuseWrites: false }),
     listCatalogue: async () => [],
+    outlineOf: async () => undefined,
+    history: () => [],
+    historyDetail: () => undefined,
+    tools: () => [],
+    callTool: async () => ({ failed: false, result: '' }),
     describe: async () => undefined,
     commentStep: async () => undefined,
-    addConditional: async () => undefined,
     listNames: async () => ['one-step'],
         active: () => (open ? { name: 'one-step', currentStep: open.currentStep, total: 1, steps, variables: [] } : null),
         start: async () => { open = { name: 'one-step', currentStep: 0 }; return undefined; },
@@ -937,6 +945,7 @@ describe('a step and the rest of devharness', () => {
     cancelRecording: async () => {},
     removeStep: async () => undefined,
     insertTimer: async () => undefined,
+    insertCheck: async () => undefined,
     spliceRecording: async () => undefined,
     labelsOf: () => [],
     editStep: async () => undefined,
@@ -988,9 +997,13 @@ describe('stepping a sequence', () => {
     openSiteHidden: async () => [],
     openBoundaryRules: () => ({ rules: [], waits: [], refuseWrites: false }),
     listCatalogue: async () => [],
+    outlineOf: async () => undefined,
+    history: () => [],
+    historyDetail: () => undefined,
+    tools: () => [],
+    callTool: async () => ({ failed: false, result: '' }),
     describe: async () => undefined,
     commentStep: async () => undefined,
-    addConditional: async () => undefined,
     listNames: async () => [...saved],
       active: () => (open
         ? { name: open.name, description: 'checkout end to end', currentStep: open.currentStep, total: steps.length, steps, variables }
@@ -1011,6 +1024,7 @@ describe('stepping a sequence', () => {
     cancelRecording: async () => {},
     removeStep: async () => undefined,
     insertTimer: async () => undefined,
+    insertCheck: async () => undefined,
     spliceRecording: async () => undefined,
     labelsOf: () => [],
     editStep: async () => undefined,
@@ -1057,7 +1071,7 @@ describe('stepping a sequence', () => {
       page: createFakePage(client), connection: CONNECTION, sessionName: SESSION, sequences,
     });
     await setPicker(CONNECTION, true);
-    await setFrozen(CONNECTION, true);
+    await setHeld(CONNECTION, true);
     return state;
   }
 
@@ -1152,7 +1166,7 @@ describe('stepping a sequence', () => {
     const client = createFakeClient();
     await startWithSequences(client, fakeSequences());
     await selectSequence(CONNECTION, 'checkout-flow');
-    await setFrozen(CONNECTION, false);
+    await setHeld(CONNECTION, false);
 
     await stepSequence(CONNECTION);
 
@@ -1554,7 +1568,7 @@ describe('freeze and picker as independent toggles', () => {
     const client = createFakeClient();
     await startBare(client);
 
-    await setFrozen(CONNECTION, true);
+    await setHeld(CONNECTION, true);
     await setPicker(CONNECTION, true);
 
     expect(getBenchSession(CONNECTION)).toMatchObject({ frozen: true, pickerArmed: true });
@@ -1576,7 +1590,7 @@ describe('freeze and picker as independent toggles', () => {
     await start(client);
 
     await setPicker(CONNECTION, false);
-    const state = await setFrozen(CONNECTION, false);
+    const state = await setHeld(CONNECTION, false);
 
     expect(state).toMatchObject({ frozen: false, pickerArmed: false });
     expect(client.calls('Debugger.resume').length).toBeGreaterThan(0);
@@ -1587,7 +1601,7 @@ describe('freeze and picker as independent toggles', () => {
   it('running + picker armed: picking works without holding the page', async () => {
     const client = createFakeClient();
     await start(client);
-    await setFrozen(CONNECTION, false);
+    await setHeld(CONNECTION, false);
 
     expect(getBenchSession(CONNECTION)).toMatchObject({ frozen: false, pickerArmed: true });
     expect(client.lastCall('Overlay.setInspectMode').params.mode).toBe('searchForNode');
@@ -1599,9 +1613,9 @@ describe('freeze and picker as independent toggles', () => {
   it('re-freezing after running holds it again', async () => {
     const client = createFakeClient();
     await start(client);
-    await setFrozen(CONNECTION, false);
+    await setHeld(CONNECTION, false);
 
-    const state = await setFrozen(CONNECTION, true);
+    const state = await setHeld(CONNECTION, true);
 
     expect(state).toMatchObject({ frozen: true });
     expect(client.calls('Debugger.pause')).toHaveLength(2);
@@ -1611,7 +1625,7 @@ describe('freeze and picker as independent toggles', () => {
     const client = createFakeClient();
     client.stepMs = 30;
     await start(client);
-    await setFrozen(CONNECTION, false);
+    await setHeld(CONNECTION, false);
 
     const tick = await tickBench(CONNECTION, { steps: 2 });
 
@@ -1623,7 +1637,7 @@ describe('freeze and picker as independent toggles', () => {
     const client = createFakeClient();
     await start(client);
 
-    await setFrozen(CONNECTION, true);
+    await setHeld(CONNECTION, true);
 
     expect(client.calls('Debugger.pause')).toHaveLength(1);
   });
@@ -1631,7 +1645,7 @@ describe('freeze and picker as independent toggles', () => {
   it('stops cleanly from the running state', async () => {
     const client = createFakeClient();
     await start(client);
-    await setFrozen(CONNECTION, false);
+    await setHeld(CONNECTION, false);
 
     const state = await stopBench(CONNECTION);
 
@@ -1769,7 +1783,7 @@ describe('stopBench', () => {
       sequences: noteSequences() as any,
     });
     await setPicker(CONNECTION, true);
-    await setFrozen(CONNECTION, true);
+    await setHeld(CONNECTION, true);
     await pick(client);
     await saveAnnotation(CONNECTION, 'one');
 

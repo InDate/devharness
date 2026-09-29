@@ -63,7 +63,7 @@ export function formatExecutionResults(
   if (failed > 0) {
     response += `\n\n**Failed Commands**\n`;
     results.filter(r => !r.success).forEach((r) => {
-      if ((r.tool === 'conditional' || r.tool === 'forEach' || r.tool === 'check') && r.substeps) {
+      if ((r.tool === 'forEach' || r.tool === 'check') && r.substeps) {
         const scope = r.tool === 'forEach'
           ? `${r.sequenceName}, item ${r.iterations} of ${r.itemsFound}`
           : r.tool === 'check' ? `${r.check?.outcome} \`${r.check?.subject}\`, ran ${r.sequenceName}`
@@ -94,27 +94,10 @@ export function formatExecutionResults(
   if (successful > 0) {
     response += `\n\n**Successful Commands**\n`;
     results.filter(r => r.success).forEach((r) => {
-      if (r.tool === 'conditional') {
-        // Format conditional with substeps
-        if (r.conditionMet && r.substeps && r.substeps.length > 0) {
-          response += `${r.step}. **${r.tool}** (${r.sequenceName}) ✓ - ran ${r.substeps.length} substeps\n`;
-          r.substeps.forEach((sub) => {
-            const icon = sub.success ? '✓' : '✗';
-            response += `   ${r.step}.${sub.step}. ${sub.tool} ${icon}\n`;
-          });
-        } else if (r.conditionMet) {
-          // The condition HELD and the sequence still ran nothing - every step
-          // was already satisfied (a launchChrome for a browser that exists).
-          // Reporting this as "condition not met" would describe the opposite
-          // of what happened.
-          response += `${r.step}. **${r.tool}** (${r.sequenceName}) ✓ - condition met, no steps left to run\n`;
-        } else {
-          // Skipped because condition not met (not an error, just false)
-          response += `${r.step}. **${r.tool}** (${r.sequenceName}) ○ - skipped (condition not met)\n`;
-        }
-      } else if (r.tool === 'check' && r.check) {
+      if (r.tool === 'check' && r.check) {
         const answered = r.check.outcome === 'held' ? '✓ held' : '○ failed';
-        const did = r.check.action === 'run' ? ` - ran ${r.sequenceName} (${r.substeps?.length ?? 0} steps)` : '';
+        const ran = r.substeps?.length ?? 0;
+        const did = r.check.action === 'run' ? ` - ran ${r.sequenceName} (${ran} step${ran === 1 ? '' : 's'})` : '';
         response += `${r.step}. **check** ${answered} \`${r.check.subject}\`${did}\n`;
         (r.substeps ?? []).forEach((sub) => {
           response += `   ${r.step}.${sub.step}. ${sub.tool} ${sub.success ? '✓' : '✗'}\n`;
@@ -398,6 +381,8 @@ interface HistoryCommand {
   params: Record<string, any>;
   delay?: number;
   comment?: string;
+  /** The sequence whose run executed this call as a step. */
+  run?: string;
 }
 
 /**
@@ -420,7 +405,8 @@ export function formatHistory(
   history.forEach((cmd) => {
     const paramStr = JSON.stringify(cmd.params);
     const truncatedParams = paramStr.length > 60 ? paramStr.slice(0, 60) + '...' : paramStr;
-    let line = `\n${cmd.index}. **${cmd.tool}** - ${truncatedParams}`;
+    const run = cmd.run ? ` in run \`${cmd.run}\`` : '';
+    let line = `\n${cmd.index}. **${cmd.tool}**${run} - ${truncatedParams}`;
     // Show delay and comment if present
     const extras: string[] = [];
     if (cmd.delay) extras.push(`delay:${cmd.delay}ms`);
@@ -1053,22 +1039,27 @@ export function formatInsertResult(
 }
 
 /**
- * Format the result of adding a `conditional` step.
+ * Format the result of adding a `check` step.
  */
-export function formatConditionalAdded(info: {
+export function formatCheckAdded(info: {
   sequenceName: string;
-  condition: string;
-  thenSequence: string;
+  subject: string;
+  holds?: string | { run: string; resumeAt?: number };
+  fails?: string | { run: string; resumeAt?: number };
   position: number;
   totalSteps: number;
   persistedTo?: string;
 }): string {
+  const said = (outcome: string | { run: string; resumeAt?: number }) => typeof outcome === 'string'
+    ? outcome
+    : `run \`${outcome.run}\`${outcome.resumeAt !== undefined ? `, then resume at step ${outcome.resumeAt + 1}` : ''}`;
   const lines = [
-    `**Conditional added to "${info.sequenceName}"**`,
+    `**Check added to "${info.sequenceName}"**`,
     '',
     `- **Step ${info.position + 1}** of ${info.totalSteps}`,
-    `- **If:** \`${info.condition}\``,
-    `- **Then run:** \`${info.thenSequence}\``,
+    `- **Reads:** \`${info.subject}\``,
+    `- **On pass:** ${said(info.holds ?? 'continue')}`,
+    `- **On fail:** ${said(info.fails ?? 'stop')}`,
   ];
 
   lines.push('');
@@ -1077,7 +1068,6 @@ export function formatConditionalAdded(info: {
   } else {
     lines.push(`In memory only - save with \`replay({ action: 'export', name: '${info.sequenceName}' })\`.`);
   }
-  lines.push(`The condition is evaluated at run time; if it does not hold, the step is skipped and the sequence continues.`);
 
   return lines.join('\n');
 }

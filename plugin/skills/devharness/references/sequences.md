@@ -22,7 +22,7 @@ accepts the bare basename, so moving a file into a folder does not break calls
 that name it.
 
 `replay({ action: 'runAll', folder: 'spine' })` loads the WHOLE tree, then runs
-only that folder. Loading everything matters: `conditional`'s `then` and
+only that folder. Loading everything matters: a check's `{ run }` and
 `forEach`'s `do` resolve by sequence NAME, not by path, so a spine sequence can
 call a helper in `_helpers/` only if that helper was loaded too.
 
@@ -54,7 +54,7 @@ slash command. They are here, once, rather than restated by each of those.
 - **Never hand-write sequence JSON.** Sequences come from recorded tool calls.
   Hand-edited JSON skips the validation the tools apply and does not port.
   The things that cannot be recorded have their own actions rather than being
-  an exception to this: `addConditional` for a guarded branch, `declare` for
+  an exception to this: `addCheck` for a guard, `declare` for
   the browsers and sockets a sequence needs. This covers a value you just
   minted or looked up (a created link's URL, a row's id) too: `create` and
   `insert` compare each step's literal against every earlier included step's
@@ -70,7 +70,7 @@ slash command. They are here, once, rather than restated by each of those.
   the run-level connection points - silently, and the run still passes. This is
   the most common way to produce a sequence that tests nothing.
 - **Check `list` first.** Auth and setup flows often already exist; a
-  `conditional` step can reuse one instead of re-recording it.
+  check that runs it can reuse one instead of re-recording it.
 - **Keep the path minimal.** Skip exploratory calls (source searches, unrelated
   navigation); include only what is needed to reproduce.
 - **Write a specific `expectedOutcome`** - file:line, variable names, expected
@@ -102,17 +102,18 @@ events (coordinates, element and selector per interaction, plus navigations,
 pastes and comments). All three are only available here - raw events are not
 stored with the sequence.
 
-**Build one from calls you already made** - `create`
+**Build one from history** - `create`
 
 ```
 replay({ action: 'create', name: 'login-check', indices: [3, 4, 5] })
 ```
 
-Every tool response footer shows its history index (`**Repeat:**` hint).
+Every tool response footer shows its history index (`Replay: N`).
 `replay({ action: 'history' })` lists them. This is usually faster than
-recording when you've just done the steps yourself.
+recording when the steps have already run - your calls, the person's in the
+bench, a CLI call, or the steps of a sequence run.
 
-**Re-run calls you already made, without building a sequence** - `repeat`
+**Re-run calls from history, without building a sequence** - `repeat`
 
 ```
 replay({ action: 'repeat', indices: [12] })                // one call
@@ -129,6 +130,12 @@ Every tool response carries its own index in the footer, so the numbers are
 already in front of you. `replay({ action: 'history' })` lists them when they
 have scrolled away. If the stretch turns out to be worth keeping, hand the same
 indices to `create`.
+
+History holds calls from every channel - MCP, the bench, the CLI - and each
+step a sequence run makes, listed as `in run \`<name>\``; a step made by a
+sequence that a check's `run` started is listed under that sequence's name.
+The `replay` call itself is not listed. A run started from the bench is read
+from here: which sequence ran, and each step, repeatable by its index.
 
 ## Managing them
 
@@ -169,8 +176,8 @@ replay({ action: 'status', runId: 'run-3-...' })   // progress; full result once
 replay({ action: 'cancel', runId: 'run-3-...' })   // stop it
 ```
 
-`cancel` reaches the step that is in flight (including inside nested
-`conditional` sequences), but what it can do there differs by tool - three
+`cancel` reaches the step that is in flight (including inside sequences
+a check runs), but what it can do there differs by tool - three
 levels, and the difference matters:
 
 - **Genuinely cancelled:** `wait` (all forms, mid-poll) and `request` with
@@ -194,9 +201,11 @@ Several runs can execute concurrently - even of the same sequence - and the
 run id is what tells them apart. Settled runs and their results are kept in
 memory for 30 minutes (max 50); after that, or after a server restart (which
 kills in-flight runs), the id returns `REPLAY_RUN_NOT_FOUND`. Nested sequences
-(`conditional` flows, `replay run` steps) are part of their parent run, never
+(a check's `{ run }`, `replay run` steps) are part of their parent run, never
 separate runs. Pass `wait: true` to block until completion and get the full
-result in one call (the pre-0.7 behaviour).
+result in one call (the pre-0.7 behaviour). `bench: true` plays it instead in
+the bench open on `connectionReason`, from step 1, so its rows, badges and
+check outcomes show there; `replay status` does not track that play.
 
 Useful `run` parameters:
 
@@ -234,7 +243,7 @@ separator and one from the `#`. Read the keys off `replay({ action: 'get' })`
 or off the prompt a `run` returns when typed text is present and `variables`
 is omitted; a key that names no typed-text step is rejected before anything
 runs, with the substitutable keys listed. Substitutions reach nested sequences
-(a `conditional`'s `then`, a `forEach`'s `do`) at every depth, so a key naming
+(a check's `{ run }`, a `forEach`'s `do`) at every depth, so a key naming
 a step in a shared login helper lands there. `runAll` holds one map for the
 whole suite and accepts a key that matches any member. The recorded literal
 stays in the sequence file either way.
@@ -435,7 +444,7 @@ replay({ action: 'run', sequenceId: 'duo',
 Recorded name on the left, a reference from this session on the right. A key
 that matches nothing in the sequence is rejected up front, listing the real
 ones, rather than being ignored - "the sequence" includes the sequences its
-`conditional` steps pull in, so a setup sequence behind a conditional is
+checks run, so a setup sequence behind a guard is
 rebindable too. Mapping two recorded references onto one browser is rejected as
 well - that would collapse the sequence into a single browser and pass.
 `issues({ action: 'workOn' | 'resolve' })` takes `connections` too.
@@ -459,7 +468,7 @@ batch and is refused for a multi-connection one.
 
 **Exported code.** `outputFormat: 'playwright' | 'puppeteer'` gives each recorded
 connection its own page rather than merging them into one. Only `navigate` and
-`input` steps have equivalents; everything else (`conditional`, `launchChrome`,
+`input` steps have equivalents; everything else (`check`, `launchChrome`,
 `inspect`, `storage`, `wait`) becomes a `// [not generated]` comment, and a
 sequence where nothing could be generated exports a test that **throws** instead
 of an empty one that passes. Setup sequences are for `run`, not for export.
@@ -470,64 +479,57 @@ this session **fails the step** - it never falls back to the run-level
 connection. Falling back is what made a two-browser sequence silently replay in
 one browser and report success.
 
-## Conditional steps
+## Check steps
 
-`conditional` is a virtual step tool - it runs another sequence inline when a
-condition holds. It's handled inside the executor and never appears in the tool
-list, which is why it's exempt from tool-name validation.
-
-Not being a tool, it is never recorded, so `create`/`insert` cannot produce
-one. `addConditional` is its authoring route:
+A `check` step reads one thing - an element (`selector` + `condition`), a value
+(`{{var:...}}` + `operator` + `right`), an `expression`, the `url`, a `cookie`,
+a `localStorage` key, an `indexedDB` record, traffic crossing the proxy
+(`traffic: { urlIncludes, method }` or `{ urlIncludes, direction, textIncludes }`
+with `count`), a `socket` open or closed, or time alone (`afterMs`) - and
+answers held, failed or error. `withinMs` reads again until it holds. What the
+run does next is the step's `holds` and `fails`:
 
 ```javascript
-replay({ action: 'addConditional',
+{ tool: 'check', params: {
+    selector: '.login-button', condition: 'present',
+    holds: { run: 'perform-login' },     // run another sequence, then carry on
+    fails: 'continue' } }                // continue | stop | { run, resumeAt }
+```
+
+A guard is a check whose pass runs a sequence - use it for state that varies
+between runs, "log in first, but only if logged out". `resumeAt` (0-based,
+forward only) carries on further down, skipping the steps between. Defaults are
+`holds: 'continue'`, `fails: 'stop'`, so a plain check is an assert.
+
+**Failed and error are different answers.** A check that is legitimately false
+does what `fails` says. A check that cannot be read at all - bad selector,
+paused page, no connection - **stops the run** whatever `fails` says. Don't
+write a guard expecting a malformed selector to fall through quietly.
+
+A recorded `assert` or `wait` becomes a check that continues or stops, so a
+check that runs a sequence has one authoring route, `addCheck`:
+
+```javascript
+replay({ action: 'addCheck',
          name: 'checkout-flow',          // or sequenceId
-         condition: '{{selector:.login-button}}',
-         thenSequence: 'perform-login',  // name of another sequence
+         check: { selector: '.login-button', condition: 'present',
+                  holds: { run: 'perform-login' }, fails: 'continue' },
          insertAfterStep: 0 })           // omit to append
 ```
 
-which stores `{ tool: 'conditional', params: { if, then } }`. Use it for state
-that varies between runs - "log in first, but only if logged out".
-
-Condition syntax and the branch target are checked before the sequence is
-touched. A sequence already saved on disk is rewritten in place; otherwise it
-waits for `export`. The response says which.
-
-| Condition | True when |
-|---|---|
-| `{{selector:CSS}}` / `{{!selector:CSS}}` | element exists / doesn't |
-| `{{url:contains:STRING}}` | current URL contains the string |
-| `{{url:matches:REGEX}}` | current URL matches the regex |
-| `{{url:EXACT}}` | current URL equals the value |
-| `{{cookie:NAME}}` / `{{!cookie:NAME}}` | cookie exists / doesn't |
-| `{{localStorage:KEY}}` / `{{!localStorage:KEY}}` | key exists / doesn't |
-| `{{indexedDB:DB/STORE/KEY}}` / `{{!indexedDB:...}}` | that record exists / doesn't |
-| `{{indexedDB:DB/STORE}}` | the object store holds at least one record |
-
-A database or store that doesn't exist yet counts as **absent**, not as an
-evaluation error - that's the state a wiped profile is in, and the state a
-healing setup sequence exists to fix.
-| `{{indexedDB:DB/STORE/KEY}}` / `{{!indexedDB:...}}` | that record exists / doesn't |
-| `{{indexedDB:DB/STORE}}` | the object store holds at least one record |
+The check's parameters, the sequence it runs and a forward `resumeAt` are
+checked before the sequence is touched. A sequence already saved on disk is
+rewritten in place; otherwise it waits for `export`. The response says which.
 
 A database or store that doesn't exist yet is **absent**, not an error - that's
 the state a wiped profile is in. A value JSON can't represent (a
 non-extractable `CryptoKey`, a `Blob`) still counts as present, so a device
 identity is probeable directly instead of through some UI proxy. An all-digits
 key is tried as a string and then as a number, since IndexedDB keys `42` and
-`"42"` differ.
+`"42"` differ. A check is interpolated like any other parameter, so a captured
+variable can drive one: `indexedDB: 'identity/keys/{{var:deviceId}}'`.
 
-Conditions are interpolated like any other parameter, so a captured variable can
-drive one: `{{indexedDB:identity/keys/{{var:deviceId}}}}`.
-
-**Not met and cannot-evaluate are different outcomes.** A condition that is
-legitimately false skips the nested sequence and the step counts as a
-**success**. A condition that can't be evaluated at all - bad format, unknown
-type, invalid or over-long regex, tool error - **fails the run**. Don't write a
-conditional expecting a malformed condition to fall through quietly.
-
-The nested sequence shares the parent run's captured variables (`saveAs` values
+The sequence a check runs shares the parent run's captured variables (`saveAs` values
 flow both ways) and inherits its remaining timeout budget. A `launchChrome` step
 inside it is skipped when that reference is already connected and run when it
 isn't, so a setup sequence spanning two browsers can create the second one
@@ -557,7 +559,7 @@ Oscillating chains (A->B->A) are allowed up to the depth cap. Full detail:
 
 ## `forEach` steps
 
-A condition asks whether ONE named thing exists, so `conditional` can express
+A check reads ONE thing, so a guard can express
 "add it if it's missing" but never "remove everything that shouldn't be here".
 `forEach` is the other half: enumerate a source, run a sequence per item.
 
@@ -594,7 +596,7 @@ typo look like an empty result set.
 An empty source is a **success**, and the run output says how many items were
 found - a converge loop with nothing left to clean up would otherwise be
 indistinguishable from a broken selector. A body failure stops the run and names
-which item it was on. Depth shares `maxConditionalDepth` with `conditional`.
+which item it was on. Depth shares `maxConditionalDepth` with checks running sequences.
 
 ## `teardown` - steps that always run
 

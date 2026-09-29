@@ -389,6 +389,14 @@ export class ChromeLauncher {
         profile_enabled: false,
         credit_card_enabled: false,
       },
+      // DevTools opens docked to the bottom, whether by F12 or by the bench's
+      // go-to on a code hold. Chrome stores each DevTools setting as a
+      // JSON-encoded string, so the value is quoted twice.
+      devtools: {
+        preferences: {
+          currentDockState: '"bottom"',
+        },
+      },
     };
 
     fs.writeFileSync(prefsPath, JSON.stringify(preferences, null, 2));

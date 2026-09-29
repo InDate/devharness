@@ -8,6 +8,7 @@ import { createReplayTools } from './replay-tools.js';
 import { runRegistry } from './replay-run-registry.js';
 import type { CommandSequence, RecordedCommand } from '../command-recorder.js';
 import { productionShaped } from '../test-support/fake-execute-tool-call.js';
+import { HELD, runsOnPass } from '../test-support/check-steps.js';
 
 function makeReplay(sequences: CommandSequence[], opts: { stepDelayMs?: number } = {}) {
   const byId = new Map(sequences.map(s => [s.id, s]));
@@ -27,6 +28,7 @@ function makeReplay(sequences: CommandSequence[], opts: { stepDelayMs?: number }
 
   const calls: Array<{ tool: string; params: Record<string, any> }> = [];
   const executeToolCall = vi.fn(productionShaped(async (tool: string, params: Record<string, any>) => {
+    if (tool === 'check') return HELD;
     calls.push({ tool, params });
     if (tool === 'dom' && opts.stepDelayMs) {
       await new Promise(r => setTimeout(r, opts.stepDelayMs));
@@ -148,10 +150,10 @@ describe('background run', () => {
     expect(runRegistry.get(id2)!.connectionReason).toBe('conn-2');
   });
 
-  it('a nested conditional flow does not register as a separate run', async () => {
+  it('a sequence a check runs does not register as a separate run', async () => {
     const inner = seq('seq-inner', 'inner-flow', [domStep('#inner')]);
     const outer = seq('seq-outer', 'outer-flow', [
-      { tool: 'conditional', params: { if: '{{selector:.x}}', then: 'inner-flow' } },
+      runsOnPass('inner-flow'),
     ]);
     const { replay, calls } = makeReplay([outer, inner]);
 

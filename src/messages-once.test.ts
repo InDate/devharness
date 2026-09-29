@@ -21,8 +21,8 @@ describe('a template with a once-per-session part', () => {
       connection: 'app', benchUrl: 'http://127.0.0.1:1/t/', eventStreamPath: '/tmp/e.jsonl',
     }));
 
-    expect(first).toContain('FREEZE in the bench');
-    expect(second).not.toContain('FREEZE in the bench');
+    expect(first).toContain('HOLD in the bench');
+    expect(second).not.toContain('HOLD in the bench');
     expect(second.length).toBeLessThan(first.length / 2);
   });
 

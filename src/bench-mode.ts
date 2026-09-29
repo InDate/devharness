@@ -14,8 +14,10 @@
 async function withPageReleased<T>(session: BenchSession, work: () => Promise<T>): Promise<T> {
   const { client } = session;
   const wasFrozen = session.frozen;
-
-  if (wasFrozen) await unfreeze(session);
+  // Every layer the step would otherwise drive into a stop: the queue lets
+  // held traffic cross during the step, so it lands under the step.
+  const restore = holdReading(session.connection).held.filter(stopsDriving);
+  if (restore.length) await release(session.connection, { layers: restore.map(held => held.layer) });
   if (session.heldByOther) {
     debugLog('bench', 'a pause the bench did not request is in play');
   }
@@ -27,11 +29,11 @@ async function withPageReleased<T>(session: BenchSession, work: () => Promise<T>
   // evaluate, and the evaluate never returns - the step then hangs to its
   // 30s timeout and reports the selector as the failure. Clearing it here
   // covers the release that arrives with `frozen` already false, which
-  // unfreeze's own EventBreakpoints.disable never reaches.
+  // releaseScreenHold's own EventBreakpoints.disable never reaches.
   await send(client, 'EventBreakpoints.disable');
 
   // Detaching the agent is what cancels a pause of ours that is armed but has
-  // not landed. `pauseRequested` deliberately stays set until the next freeze
+  // not landed. `pauseRequested` deliberately stays set until the next hold
   // replaces it: clearing it here would misread our own late-landing pause as
   // someone else's, and then nothing would ever release it.
   await send(client, 'Debugger.setSkipAllPauses', { skip: true });
@@ -66,7 +68,10 @@ async function withPageReleased<T>(session: BenchSession, work: () => Promise<T>
   } finally {
     await send(client, 'Debugger.enable');
     await send(client, 'Debugger.setSkipAllPauses', { skip: false });
-    if (wasFrozen) await freeze(session).catch(() => {});
+    for (const source of new Set(restore.map(held => held.source))) {
+      const layers = restore.filter(held => held.source === source).map(held => held.layer);
+      await hold(session.connection, { source, layers }).catch(() => {});
+    }
   }
 }
 
@@ -75,10 +80,10 @@ async function withPageReleased<T>(session: BenchSession, work: () => Promise<T>
  *
  * Prose is the expensive part of reporting a UI bug: the toast has gone by the
  * time it is described, and "the row under the header" stays ambiguous. This
- * takes a click on the element in place of the description, and freezes time so
+ * takes a click on the element in place of the description, and holds time still so
  * a state that only exists mid-interaction is still on screen to be clicked.
  *
- * Freezing is two clocks, not one. Debugger.pause stops the page's JS, and with
+ * Holding the screen is two clocks, not one. Debugger.pause stops the page's JS, and with
  * it every timer and rAF callback; CSS animations run on the compositor and
  * keep going until Animation.setPlaybackRate(0) stops them separately.
  *
@@ -106,20 +111,26 @@ import { getMessage } from './messages.js';
 import { CANCELLED } from './tools/bench-tools.js';
 import { parseExtendedSelector } from './utils/selector-resolver.js';
 import { debugLog } from './debug-logger.js';
+import { attachLayer, hold, holdableLayers, holdReading, isHeld, recordReleased, release, step, type HoldLayer, type HoldSource, type LayerHold, type LayerStanding } from './hold.js';
 import { startBenchServer, type BenchServer } from './bench-control.js';
-import { currentCursor, getProxy, checkOutcomesFor, setStepWaits, waitOutcomesFor, type StepWait } from './proxy/registry.js';
+import { currentCursor, getProxy, checkOutcomesFor } from './proxy/registry.js';
 import { levelOf, causeOf, type ProxyEvent } from './proxy/intercept-proxy.js';
 import type { Annotation, AnnotationTarget, StepTraffic } from './annotation.js';
 import type {
   BenchView, BoundaryEvent, BoundaryRule, BoundaryState, BoundaryTotals, CallbackEntry, RuleCatalogueEntry, HiddenKind,
   CaptureComparison, CaptureKind, CapturePause, CaptureRecord, CaptureRect, CaptureVersion,
-  FactKind, HeldStep, PendingShot, SequenceCard, SequenceState, SequenceStep, SequenceVariable,
+  FactKind, HeldStep, HistoryDetail, HistoryEntry, ToolGroup, ToolRun, PendingShot, SequenceCard, SequenceOutline, SequenceState, SequenceStep, SequenceVariable,
   TickResult,
 } from './bench/wire.js';
 import { cropPixels, decodePng } from './png.js';
 import { diffPixels, sideBySide, strokeDashed } from './pixel-diff.js';
 import { indexCapture, readCapture, readRecord, seriesIndex, versionsOf, writeCapture } from './capture-file.js';
-import { WriteWatch, writeLine } from './write-watch.js';
+import { WriteWatch, writeKey, writeLine } from './write-watch.js';
+import { appendRun, listSuites, readRuns } from './run-log.js';
+import { runRegistry } from './tools/replay-run-registry.js';
+import type { RunRow, RunsView, StepCheck, StepTally } from './bench/wire.js';
+import { renameSequence } from './sequence-rename.js';
+import type { CheckOutcome } from './proxy/registry.js';
 import { countKinds, kindOf, type ActivityMove, type ExpectedValue, type KindCount } from './bench/kinds.js';
 import { readPayload, savePayload } from './saved-payloads.js';
 import { diffFacts, readFacts, trackStyleSheets, type ElementFacts, type StyleSheets } from './element-facts.js';
@@ -138,18 +149,18 @@ export interface BenchReport {
   connection: string;
   session: string;
   startedAt: number;
-  /** Milliseconds the page has been allowed to run since the freeze began. */
+  /** Milliseconds the page has been allowed to run since the hold began. */
   tickMs: number;
-  /** Callbacks run since the freeze began. */
+  /** Callbacks run since the hold began. */
   totalSteps: number;
-  /** Every callback stepped through since the freeze, oldest first, capped. */
+  /** Every callback stepped through since the hold, oldest first, capped. */
   callbacks: CallbackEntry[];
   /** What the last step did, for the bench to report. */
   lastTick?: TickResult;
   picks: number;
   annotations: number;
   pickerArmed: boolean;
-  /** Whether the page is held. The bench outlives an unfreeze: the picker
+  /** Whether the screen is held. The bench outlives a release: the picker
    *  stays available so the app can be driven up to the moment worth holding. */
   frozen: boolean;
   /** Where the person types. Open this if the tab was closed. */
@@ -244,6 +255,10 @@ interface BenchSession extends BenchReport {
   } | null;
   /** Raw events captured up to the last kept step, for a drop to rewind to. */
   keptEvents?: number;
+  /** Detaches the bench's UI hold from the hold record when the bench closes. */
+  detachUi?: () => void;
+  /** The bench's JS pause, left in place by a screen released on its own, until the code is released. */
+  jsKept?: boolean;
   /** Set when the page was frozen to hold a step, so only that freeze is undone. */
   heldForStep?: boolean;
   /** Drives nested inside the one that brought the app's tab to the front. */
@@ -285,12 +300,6 @@ interface BenchSession extends BenchReport {
    * they ask for it.
    */
   boundaryRules?: Map<string, BoundaryRule>;
-  /**
-   * Steps told to hold open, by step and the kind each waits for. How many,
-   * how long and what a miss does are read off the response on that kind;
-   * `count` stands in where no response is kept for it.
-   */
-  boundaryWaits?: Map<string, StoredWait>;
   /** A person's names for kinds of traffic, by rule key. */
   boundaryNames?: Map<string, string>;
   /** The proxy pin each answering rule armed, so clearing one releases it. */
@@ -328,6 +337,10 @@ interface BenchSession extends BenchReport {
   sequencePaused?: boolean;
   /** Set while a play walks the steps, and not for a single step. */
   sequencePlaying?: boolean;
+  /** When the play in progress began, for the runs the home page lists. */
+  playStartedAt?: number;
+  /** When each step of that play started, by position. */
+  playStepStarts?: Array<number | undefined>;
   /**
    * The drive in flight, so it can be stopped part-way.
    *
@@ -413,6 +426,16 @@ export interface SequenceDriver {
   listNames: () => Promise<string[]>;
   /** The same list with what each one holds, for choosing between them. */
   listCatalogue: () => Promise<SequenceCard[]>;
+  /** One sequence's steps by name, or undefined where no sequence has that name. */
+  outlineOf: (name: string) => Promise<SequenceOutline | undefined>;
+  /** Every tool call held in history, newest first. */
+  history: () => HistoryEntry[];
+  /** One call by its history index, or undefined once history has dropped it. */
+  historyDetail: (index: number) => HistoryDetail | undefined;
+  /** Every tool this devharness serves, by the toolset that built it. */
+  tools: () => ToolGroup[];
+  /** Run one tool with `args`, as a call arriving from the bench. */
+  callTool: (tool: string, args: Record<string, unknown>) => Promise<ToolRun>;
   /** The open step-through session, or null. */
   active: () => {
     name: string;
@@ -432,6 +455,7 @@ export interface SequenceDriver {
       annotations?: Annotation[];
       traffic?: StepTraffic;
       expected?: Record<string, ExpectedValue>;
+      addedAt?: number;
     }>;
     placements?: Record<string, number>;
     variables: SequenceVariable[];
@@ -524,6 +548,8 @@ export interface SequenceDriver {
   editStep: (index: number, params: Record<string, unknown>) => Promise<string | undefined>;
   /** Put a fixed pause of `ms` straight after one step, and write the file back. */
   insertTimer: (after: number, ms: number) => Promise<string | undefined>;
+  /** Put a check step, with these parameters, straight after a step. */
+  insertCheck: (after: number, params: Record<string, unknown>, comment?: string) => Promise<string | undefined>;
   /** Move one step to another position and write the file back. */
   /** Moves `count` steps from `from` on, together, so the first lands at `to`. */
   moveStep: (from: number, to: number, count?: number) => Promise<string | undefined>;
@@ -537,16 +563,6 @@ export interface SequenceDriver {
   describe: (description: string, expectedOutcome: string) => Promise<string | undefined>;
   /** Why one step is here, against the step. */
   commentStep: (index: number, words: string) => Promise<string | undefined>;
-  /**
-   * Insert a step that runs `thenSequence` when `condition` holds.
-   *
-   * `rejoinAt` names the step of this sequence the run resumes at once the
-   * branch has run, for a branch that replaces the steps between. Left out,
-   * the run resumes at the step after the conditional.
-   */
-  addConditional: (
-    index: number, condition: string, thenSequence: string, rejoinAt?: number
-  ) => Promise<string | undefined>;
   /** Remove the step that defines a variable. */
   removeVariable: (name: string) => Promise<string | undefined>;
   /**
@@ -555,7 +571,6 @@ export interface SequenceDriver {
    */
   saveBoundaryRules: (
     rules: Array<Record<string, unknown>>,
-    waits: Array<{ step: number; count: number; key?: string; seconds?: number; onFail?: 'fail' | 'continue' }>,
     refuseWrites: boolean,
     names?: Record<string, string>,
     /** What changed, for the announcement of the write. */
@@ -588,7 +603,6 @@ export interface SequenceDriver {
    */
   openBoundaryRules: () => {
     rules: Array<Record<string, unknown>>;
-    waits: Array<{ step: number; count: number; key?: string; seconds?: number; onFail?: 'fail' | 'continue' }>;
     refuseWrites: boolean;
     names?: Record<string, string>;
     off?: string[];
@@ -938,7 +952,7 @@ async function pageTime(client: CDPSession): Promise<number> {
  * into it - but the two states are released differently, so which one happened
  * has to be remembered.
  */
-async function freeze(session: BenchSession): Promise<void> {
+async function holdScreen(session: BenchSession): Promise<void> {
   if (session.frozen) return;
   const { client } = session;
   // Debugger.pause does nothing against a disabled agent or one set to skip
@@ -946,10 +960,16 @@ async function freeze(session: BenchSession): Promise<void> {
   await send(client, 'Debugger.enable');
   await send(client, 'Debugger.setSkipAllPauses', { skip: false });
   await send(client, 'Animation.setPlaybackRate', { playbackRate: 0 });
-  const paused = nextPause(client, 1000);
   session.pauseRequested = true;
-  await send(client, 'Debugger.pause');
-  session.pauseTaken = !!(await paused);
+  // The JS is still stopped where a screen was released on its own; a second
+  // pause raises no event, and waiting on one would read the stop as armed.
+  if (session.jsKept) {
+    session.jsKept = false;
+  } else {
+    const paused = nextPause(client, 1000);
+    await send(client, 'Debugger.pause');
+    session.pauseTaken = !!(await paused);
+  }
   session.frozen = true;
 }
 
@@ -957,25 +977,42 @@ async function freeze(session: BenchSession): Promise<void> {
  * Let the page run again without closing the bench. The step breakpoints
  * go first, or the resume would pause on the very next callback.
  */
-async function unfreeze(session: BenchSession): Promise<void> {
+async function releaseScreenHold(session: BenchSession): Promise<void> {
   if (!session.frozen) return;
-  const { client } = session;
-  const attempt = (method: string, params?: any) => send(client, method, params);
-  await attempt('EventBreakpoints.disable');
-  session.stepBreakpointsSet = false;
+  await releaseScreen(session);
+  await releaseJs(session);
+}
 
+/**
+ * The screen's half of a release: the step breakpoints come off and CSS
+ * animation runs again, and the page's JS stays paused where it stands. The
+ * step breakpoints go first, or a later resume would stop on the very next
+ * callback.
+ */
+async function releaseScreen(session: BenchSession): Promise<void> {
+  if (!session.frozen) return;
+  await send(session.client, 'EventBreakpoints.disable');
+  session.stepBreakpointsSet = false;
+  await send(session.client, 'Animation.setPlaybackRate', { playbackRate: 1 });
+  session.frozen = false;
+  session.jsKept = true;
+}
+
+/** The JS half: the bench's pause resumed, or discarded where it was armed and never taken. */
+async function releaseJs(session: BenchSession): Promise<void> {
+  const { client } = session;
   if (session.pauseTaken) {
-    await attempt('Debugger.resume');
+    await send(client, 'Debugger.resume');
     session.pauseTaken = false;
   } else {
     // Nothing is stopped, so there is nothing to resume - the pause is armed and
     // waiting. Only disabling the debugger discards it; leaving it would stop
     // the page the next time it did anything, with no one left holding it.
-    await attempt('Debugger.disable');
-    await attempt('Debugger.enable');
+    await send(client, 'Debugger.disable');
+    await send(client, 'Debugger.enable');
   }
-  await attempt('Animation.setPlaybackRate', { playbackRate: 1 });
-  session.frozen = false;
+  session.pausedEvent = undefined;
+  session.jsKept = false;
 }
 
 /** Leave the page as it was found: running, with no debugger attached. */
@@ -987,8 +1024,9 @@ async function unfreeze(session: BenchSession): Promise<void> {
  * resuming it would throw away what they stopped to look at and they would have
  * no way to know the bench did it.
  */
-async function release(session: BenchSession): Promise<void> {
-  await unfreeze(session);
+async function releaseBench(session: BenchSession): Promise<void> {
+  await releaseHolds(session.connection);
+  session.detachUi?.();
   if (session.heldByOther) {
     debugLog('bench', 'leaving a pause that is not ours in place');
   }
@@ -1013,26 +1051,233 @@ export function benchHold(connection?: string): { connection: string; why: strin
     if (session.sequenceBusy) {
       return { connection: name, why: 'the bench is running a sequence on it', release: 'let the run finish, or stop it in the bench' };
     }
-    if (session.frozen) {
-      return { connection: name, why: 'its page is frozen, with its JS stopped', release: `bench({ action: 'unfreeze', connectionReason: '${name}' }), or the freeze button in the bench` };
+    // Held traffic leaves the page drivable: a tool that drives it meets a
+    // network that is slow or gone, which is what the hold stands for.
+    const held = holdReading(name).held.filter(layer => !layer.via && layer.layer !== 'network' && HOLDING_SOURCES.has(layer.source));
+    if (held.length) {
+      return {
+        connection: name,
+        why: `its ${held.map(layer => layer.layer).join(' and ')} ${held.length > 1 ? 'are' : 'is'} held by the ${held[0].source}`,
+        release: `bench({ action: 'release', connectionReason: '${name}' }), or the hold button in the bench`,
+      };
     }
   }
   return undefined;
 }
 
 /**
- * Hold the page, or let it run. Driving the app needs an unfrozen page - under
- * a freeze its JS is stopped, so a click reaches nothing - and picking works
- * either way, since Chrome's picker is browser-side.
+ * Hold every layer the connection has - code, screen, traffic - or let them
+ * all run. Driving the app needs a running page - under a hold its JS is
+ * stopped, so a click reaches nothing - and picking works either way, since
+ * Chrome's picker is browser-side. A breakpoint's pause is left where it stopped.
  */
-export async function setFrozen(connection: string, frozen: boolean): Promise<BenchReport | undefined> {
+export async function setHeld(connection: string, frozen: boolean, source: HoldSource = 'bench'): Promise<BenchReport | undefined> {
   const session = sessions.get(connection);
   if (!session) return undefined;
-  if (frozen) await freeze(session);
-  else await unfreeze(session);
-  // The picker survives the transition either way.
-  await setInspectMode(session, session.pickerArmed).catch(() => {});
+  if (frozen && source !== 'sequence' && runGoing(session)) {
+    await haltSequence(connection);
+    return getBenchSession(connection);
+  }
+  const before = holdReading(connection).held.map(held => held.layer);
+  // The picker survives the transition either way, set before a hold for the
+  // reason changeHold sets it there: Chrome's helper would be what the pause stops in.
+  if (frozen) {
+    await setInspectMode(session, session.pickerArmed).catch(() => {});
+    await hold(connection, { source });
+  } else {
+    await releaseHolds(connection);
+    await setInspectMode(session, session.pickerArmed).catch(() => {});
+  }
+  await announceHold(session, before, frozen, source);
   return getBenchSession(connection);
+}
+
+/** Holds a tool may not drive through: the person's, a paused sequence's, a trigger's. */
+const HOLDING_SOURCES = new Set<HoldSource>(['bench', 'sequence', 'trigger']);
+
+function holdUi(session: BenchSession): Promise<unknown> {
+  return hold(session.connection, { source: 'bench', layers: ['ui'] });
+}
+
+function releaseUi(session: BenchSession): Promise<unknown> {
+  return release(session.connection, { layers: ['ui'] });
+}
+
+/** Release every layer held on the connection, leaving a breakpoint's pause where it stopped. */
+async function releaseHolds(connection: string): Promise<void> {
+  const layers = holdReading(connection).held
+    .filter(held => held.source !== 'breakpoint')
+    .map(held => held.layer);
+  if (layers.length) await release(connection, { layers });
+}
+
+/** The bench's own UI hold, attached to the hold record for as long as the bench is open. */
+function attachUiLayer(session: BenchSession): void {
+  session.detachUi = attachLayer(session.connection, 'ui', {
+    covers: ['code'],
+    engage: async () => {
+      await holdScreen(session);
+      return uiStanding(session);
+    },
+    disengage: () => releaseScreenHold(session),
+    disengageKeeping: () => releaseScreen(session),
+    releaseKept: () => releaseJs(session),
+    step: async () => {
+      await tickBench(session.connection, { steps: 1 });
+      return uiStanding(session);
+    },
+  });
+}
+
+function uiStanding(session: BenchSession): LayerStanding {
+  const last = session.lastTick?.ran.at(-1);
+  return {
+    pageMs: session.tickMs,
+    callbacks: session.totalSteps,
+    ...(last ? { callback: `${last.kind ?? 'callback'} ${last.fn ?? ''}`.trim() } : {}),
+  };
+}
+
+/**
+ * Let go of every hold before a run drives the page. Pressing play is the
+ * request to run: a hold left in place would be released by every step for
+ * its own duration and taken again after, and the run would flicker through
+ * the hold instead of either stopping for it or running. A breakpoint's stop
+ * is left where it is.
+ */
+async function letGoForRun(session: BenchSession): Promise<void> {
+  const reading = holdReading(session.connection).held;
+  const layers = reading.filter(stopsDriving).map(held => held.layer);
+  if (layers.length === 0) return;
+  await release(session.connection, { layers });
+  await announceHold(session, reading.map(held => held.layer), false, 'bench');
+}
+
+/**
+ * Whether a hold has to be let go for a step to drive the page.
+ *
+ * A held screen or held code stops the page's JS, so a click reaches nothing
+ * and a step waits on it to its timeout: those go, a breakpoint's excepted,
+ * which is left where it stopped. Held traffic stops nothing the page does -
+ * it stands for a network that is slow or gone, which is a condition to drive
+ * the app under - so a person's traffic hold stays. The traffic a sequence's
+ * own pause took goes, so what crosses lands under the step that let it
+ * through.
+ */
+function stopsDriving(held: LayerHold): boolean {
+  if (held.source === 'breakpoint') return false;
+  return held.layer !== 'network' || held.source === 'sequence';
+}
+
+/**
+ * Whether a run is driving the page. A hold pressed then halts the run first:
+ * every step releases the hold for its duration and takes it again after, so
+ * a run left going walks through the hold, and a hold landing inside a step
+ * stops the page under the step's own queries until the step times out.
+ */
+function runGoing(session: BenchSession): boolean {
+  return !!session.sequences && !session.recordingSequence && (session.sequencePlaying === true || session.sequenceBusy);
+}
+
+/**
+ * Write a hold or release the bench made to the session's event stream, so the
+ * agent reads the moment the person stopped on while it is still held.
+ */
+async function announceHold(session: BenchSession, before: HoldLayer[], held: boolean, source: HoldSource): Promise<void> {
+  const after = holdReading(session.connection).held.map(layer => layer.layer);
+  const changed = held ? after.filter(layer => !before.includes(layer)) : before.filter(layer => !after.includes(layer));
+  if (changed.length === 0) return;
+  await appendEvent(session.session, 'hold', {
+    connection: session.connection,
+    change: held ? 'held' : 'released',
+    layers: changed,
+    source,
+    detail: `${changed.join(', ')} ${held ? `held by the ${source}` : 'released'} on ${session.connection}`,
+  });
+}
+
+/**
+ * Hold, release or step the named layers from the bench's hold panel, all of
+ * them where none is named. A release here reaches every hold on those layers,
+ * a breakpoint's included: the person asked for that layer to run.
+ */
+export async function changeHold(connection: string, action: 'hold' | 'release' | 'step', layers?: HoldLayer[]): Promise<void> {
+  const session = sessions.get(connection);
+  if (!session) return;
+  // Holding the screen or the code stops the page under the run, so the run
+  // pauses first. Holding only the traffic leaves the run driving a page whose
+  // network is held, which is the condition being set up.
+  if (action === 'hold' && runGoing(session) && (!layers || layers.some(layer => layer !== 'network'))) {
+    await haltSequence(connection);
+    return;
+  }
+  if (action === 'step') {
+    for (const layer of layers ?? []) {
+      if (isHeld(connection, layer)) await step(connection, layer);
+    }
+    return;
+  }
+  const before = holdReading(connection).held.map(held => held.layer);
+  // The picker's mode is set before a hold and after a release: setting it
+  // runs a helper of Chrome's in the page, and set after a hold on an idle
+  // page, that helper is the first JS to run and the armed pause stops in it
+  // rather than in the app.
+  if (action === 'hold') {
+    await setInspectMode(session, session.pickerArmed).catch(() => {});
+    await hold(connection, { source: 'bench', ...(layers ? { layers } : {}) });
+  } else {
+    await release(connection, layers ? { layers } : {});
+    await setInspectMode(session, session.pickerArmed).catch(() => {});
+  }
+  await announceHold(session, before, action === 'hold', 'bench');
+  if (action === 'release') resumePausedRun(connection);
+}
+
+/**
+ * Carry on a run paused by a hold once nothing holds the page any more. A
+ * pause is a hold on every layer, so letting every layer run is letting the
+ * run go on, as Play does. A layer still held - the traffic kept back while
+ * the screen runs, a breakpoint's stop - leaves the run where it paused.
+ * Started rather than awaited: a play lasts as long as its steps.
+ */
+function resumePausedRun(connection: string): void {
+  const session = sessions.get(connection);
+  if (!session?.sequencePaused || session.sequencePlaying || session.sequenceBusy) return;
+  if (holdReading(connection).held.some(held => held.layer !== 'network' || held.source === 'sequence')) return;
+  void playSequence(connection).catch(error => debugLog('bench', `resuming the paused run failed: ${error}`));
+}
+
+/**
+ * Open Chrome's built-in DevTools on the driven page, docked as F12 docks it,
+ * so a code hold is read where the call stack, scopes and source live. A page
+ * already paused reports that pause to DevTools as it attaches, so it opens on
+ * Sources at the stopped line.
+ *
+ * `Target.openDevTools` is a browser-level CDP command. Measured on Chrome 154:
+ * it opens the docked DevTools, where the frontend served on the debugging
+ * port opened in a tab lost its socket, because that socket crossed the proxy.
+ * Docked to the bottom by the profile's own DevTools setting, which the
+ * launcher seeds.
+ */
+async function openDevtools(connection: string): Promise<string> {
+  const session = sessions.get(connection);
+  if (!session) return 'no bench on this connection';
+  const targetId = (session.page.target() as unknown as { _targetId?: string })._targetId;
+  if (!targetId) return 'the page names no target to open DevTools on';
+  const browserSession = await session.page.browser().target().createCDPSession();
+  try {
+    await browserSession.send('Target.openDevTools' as any, { targetId } as any);
+    return 'DevTools opened on the page';
+  } catch (error) {
+    return `DevTools did not open: ${error instanceof Error ? error.message : String(error)}`;
+  } finally {
+    await browserSession.detach().catch(() => {});
+  }
+}
+
+/** Let the oldest crossing kept at the proxy through, and keep the rest held. */
+export async function stepTraffic(connection: string): Promise<void> {
+  if (isHeld(connection, 'network')) await step(connection, 'network');
 }
 
 /** Pause on every scheduled callback, which is what makes a step land on one. */
@@ -1050,7 +1295,7 @@ async function ensureStepBreakpoints(session: BenchSession): Promise<void> {
  * Whether another bench session already holds this page.
  *
  * Two sessions on one tab drive the same page from two panes: a navigate for
- * one takes the other off the page it was watching, and a freeze by one blocks
+ * one takes the other off the page it was watching, and a hold by one blocks
  * the other's own reads.
  */
 export function pageHeldElsewhere(page: Page, exceptConnection: string): boolean {
@@ -1336,15 +1581,6 @@ function nameOf(session: BenchSession): string | undefined {
   return session.recordingSequence ? session.recordingName : session.sequences?.active()?.name;
 }
 
-/** A response's wait as a file or the bench gives it; nothing for anything else. */
-function waitFrom(raw: unknown): BoundaryRule['wait'] | undefined {
-  if (raw === null || typeof raw !== 'object') return undefined;
-  const { count, seconds, onFail } = raw as Record<string, unknown>;
-  const n = Math.max(1, Math.floor(Number(count) || 1));
-  const s = Math.max(1, Number(seconds) || 10);
-  return { count: n, seconds: s, onFail: onFail === 'continue' ? 'continue' : 'fail' };
-}
-
 /** A use as the bench sends it; nothing for anything else. */
 function useFrom(raw: unknown): ResponseUse | undefined {
   if (raw === 'none' || raw === 'all') return raw;
@@ -1372,7 +1608,6 @@ function ruleFrom(raw: Record<string, unknown>): BoundaryRule | undefined {
     ...(typeof raw.url === 'string' ? { url: raw.url } : {}),
     ...(raw.direction === 'out' || raw.direction === 'in' ? { direction: raw.direction } : {}),
     ...(raw.mode === 'local' || raw.mode === 'optIn' || raw.mode === 'optOut' ? { mode: raw.mode } : {}),
-    ...(waitFrom(raw.wait) ? { wait: waitFrom(raw.wait)! } : {}),
     ...(typeof raw.owner === 'string' && raw.owner ? { owner: raw.owner } : {}),
     // Dropped here, a saved rule comes back without the values its dropped
     // constraints were recorded with, so the round trip through the file
@@ -1432,8 +1667,8 @@ const RECORDED_BODY_CAP = 64 * 1024;
 /**
  * A step's traffic with the storage writes its window holds.
  *
- * The network log counts local and session storage writes and none of
- * IndexedDB or cookies; the watch holds all four, so its count replaces the
+ * The network log counts local and session storage writes and nothing else
+ * the page changes; the watch holds every store, so its count replaces the
  * log's, and a few of its lines join the requests', which is what a later run
  * of the sequence is compared against.
  */
@@ -1478,7 +1713,7 @@ function writeEvents(connection: string, after = 0): BoundaryEvent[] {
   return watch.writes.filter(write => write.at > after).map(write => {
     const row = {
       id: write.id, at: write.at, kind: 'write' as const, direction: 'out' as const,
-      url: `${write.store}:${write.key ?? ''}`, method: write.store,
+      url: writeKey(write), method: write.store,
       preview: writeLine(write).slice(write.store.length + 1),
       size: write.value?.length ?? 0, level: 'unprompted' as const, owned: false,
     };
@@ -1530,33 +1765,6 @@ export function setBoundaryName(connection: string, key: string, name: string): 
   const names = session.boundaryNames ??= new Map();
   if (name.trim()) names.set(key, name.trim());
   else names.delete(key);
-}
-
-/** A step's wait as kept: what it set for itself, over the response's settings. */
-type StoredWait = { step: number; key?: string; count?: number; seconds?: number; onFail?: 'fail' | 'continue' };
-
-/**
- * Each wait with what it waits for: what the step set for itself, then the
- * settings of the response on its kind, then one within 10 seconds, failing.
- */
-function waitsOf(connection: string): StepWait[] {
-  const session = sessions.get(connection);
-  return [...(session?.boundaryWaits?.values() ?? [])]
-    .map(({ step, key, count, seconds, onFail }) => {
-      const given = key ? session?.boundaryRules?.get(key)?.wait : undefined;
-      return {
-        step, ...(key ? { key } : {}),
-        count: count ?? given?.count ?? 1,
-        seconds: seconds ?? given?.seconds ?? 10,
-        onFail: onFail ?? given?.onFail ?? 'fail' as const,
-      };
-    })
-    .sort((a, b) => a.step - b.step);
-}
-
-/** Hand the waits to the registry, which holds each replay step open for its own. */
-function armWaits(connection: string): void {
-  setStepWaits(connection, waitsOf(connection));
 }
 
 /**
@@ -1636,7 +1844,6 @@ export function setBoundaryRule(connection: string, rule: BoundaryRule): Boundar
   }
 
   rules.set(rule.key, { ...rule, hits: 0 });
-  armWaits(connection);
   return rulesOf(connection);
 }
 
@@ -1815,17 +2022,13 @@ async function persistRules(connection: string, force = false, change?: string):
   const off = held.filter(([, use]) => use === 'none').map(([key]) => key);
   const on = held.filter(([, use]) => use !== 'none')
     .map(([key, use]) => (Array.isArray(use) ? { key, steps: use } : { key }));
-  const waits = [...(session.boundaryWaits?.values() ?? [])].map(({ step, key, count, seconds, onFail }) => ({
-    step, count: count ?? 1, ...(key ? { key } : {}),
-    ...(seconds !== undefined ? { seconds } : {}), ...(onFail ? { onFail } : {}),
-  }));
   const refuseWrites = getProxy(connection)?.refusesWrites ?? false;
   const names = namesOf(connection);
-  const any = waits.length > 0 || refuseWrites || Object.keys(names).length > 0 || held.length > 0
+  const any = refuseWrites || Object.keys(names).length > 0 || held.length > 0
     || (session.hiddenUses?.size ?? 0) > 0;
   if (!force && !any && !session.rulesWritten) return undefined;
   const hiddenUses = [...(session.hiddenUses?.entries() ?? [])].filter(([key]) => session.hiddenKinds?.has(key));
-  const failure = await session.sequences.saveBoundaryRules([], waits, refuseWrites, names, change, off, on, {
+  const failure = await session.sequences.saveBoundaryRules([], refuseWrites, names, change, off, on, {
     on: hiddenUses.filter(([, hid]) => hid).map(([key]) => key),
     off: hiddenUses.filter(([, hid]) => !hid).map(([key]) => key),
   });
@@ -1835,38 +2038,7 @@ async function persistRules(connection: string, force = false, change?: string):
   }
   session.rulesWritten = any;
   return `${held.length} response use${held.length === 1 ? '' : 's'}`
-    + ` and ${waits.length} wait${waits.length === 1 ? '' : 's'}`
     + `${refuseWrites ? ', refusing unmatched writes,' : ''} written onto the sequence`;
-}
-
-/**
- * Hold a step open until `count` things have crossed under it.
- *
- * A count of 0 clears it. Stored rather than applied here: what consumes it is
- * the run, and a step told to wait while nothing runs has nothing to wait for.
- */
-export function setBoundaryWait(
-  connection: string,
-  step: number,
-  count: number,
-  key?: string,
-  details: { seconds?: number; onFail?: 'fail' | 'continue' } = {},
-): StepWait[] {
-  const session = sessions.get(connection);
-  if (!session) return [];
-  const waits = session.boundaryWaits ??= new Map();
-  const id = `${step}|${key ?? ''}`;
-  if (count > 0) {
-    waits.set(id, {
-      ...waits.get(id), step, ...(key ? { key } : {}), count,
-      ...(details.seconds !== undefined ? { seconds: details.seconds } : {}),
-      ...(details.onFail ? { onFail: details.onFail } : {}),
-    });
-  } else {
-    waits.delete(id);
-  }
-  armWaits(connection);
-  return waitsOf(connection);
 }
 
 /** What the pane shows for the sequence card, whether or not one is running. */
@@ -1983,6 +2155,7 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
       ...(step.annotations?.length ? { annotations: step.annotations } : {}),
       ...(step.traffic ? { traffic: step.traffic } : {}),
       ...(step.expected ? { expected: step.expected } : {}),
+      ...(step.addedAt !== undefined ? { addedAt: step.addedAt } : {}),
       done: index < active.currentStep,
       current: index === active.currentStep,
       ...(active.failedStep === index ? { failed: true } : {}),
@@ -1994,9 +2167,9 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
  * Run part of a sequence against a held page.
  *
  * The page has to be running for a step to land at all - input is discarded
- * while V8 is stopped - so each step unfreezes, drives, and freezes again. The
+ * while V8 is stopped - so each step releases, drives, and holds again. The
  * gap measured about 6ms against a state that lasts 600ms, which is what makes
- * this worth doing by hand: the freeze is issued by the runner rather than by
+ * this worth doing by hand: the hold is issued by the runner rather than by
  * someone noticing a state and reaching for a button.
  */
 /**
@@ -2117,11 +2290,10 @@ export const selectSequence = async (connection: string, name: string) => {
 async function armSavedRules(connection: string): Promise<void> {
   const session = sessions.get(connection);
   if (!session?.sequences) return;
-  session.boundaryWaits?.clear();
 
   const held = session.sequences.openBoundaryRules();
   session.boundaryNames = new Map(Object.entries(held.names ?? {}));
-  session.rulesWritten = held.rules.length > 0 || held.refuseWrites || (held.waits?.length ?? 0) > 0
+  session.rulesWritten = held.rules.length > 0 || held.refuseWrites
     || session.boundaryNames.size > 0 || (held.off?.length ?? 0) > 0 || (held.on?.length ?? 0) > 0;
   getProxy(connection)?.refuseUnmatchedWrites(held.refuseWrites);
   const uses = new Map<string, ResponseUse>([
@@ -2145,16 +2317,9 @@ async function armSavedRules(connection: string): Promise<void> {
     setBoundaryRule(connection, { ...rule, mode: 'local' });
     setResponseUse(connection, rule.key, rule.step !== undefined ? [rule.step] : 'all');
   }
-  // A wait names the kind it counts; one saved before waits did counted
-  // every crossing under its step, which no step means, so it is dropped.
   // Old hides moved out of the responses are written back at once, so the
   // site file stops holding a hide where an answer belongs.
   if (session.siteWritten === 'moved') await persistRules(connection, false, 'hidden kinds moved to their own list');
-  for (const wait of held.waits.filter(one => one.key)) {
-    setBoundaryWait(connection, wait.step, wait.count, wait.key, {
-      ...(wait.seconds !== undefined ? { seconds: wait.seconds } : {}), ...(wait.onFail ? { onFail: wait.onFail } : {}),
-    });
-  }
 }
 
 /**
@@ -2280,22 +2445,6 @@ export async function commentSequenceStep(
   return getSequenceState(connection);
 }
 
-/** Put a guarded jump into the run, after the step it is added against. */
-export async function addSequenceConditional(
-  connection: string,
-  index: number,
-  condition: string,
-  thenSequence: string,
-  rejoinAt?: number
-): Promise<SequenceState | undefined> {
-  const session = sessions.get(connection);
-  if (!session?.sequences) return undefined;
-  session.sequenceFailure = await session.sequences
-    .addConditional(index, condition, thenSequence, rejoinAt)
-    .catch(error => String(error));
-  return getSequenceState(connection);
-}
-
 /**
  * Keep one step's note against its position until the recording lands.
  *
@@ -2323,35 +2472,313 @@ export async function playSequence(connection: string): Promise<SequenceState | 
 
   session.sequenceHalt = false;
   session.sequencePaused = false;
+  await letGoForRun(session);
   session.sequencePlaying = true;
+  const startedAt = session.playStartedAt = Date.now();
+  session.playStepStarts = [];
   let state = await getSequenceState(connection);
   const total = state?.total ?? 0;
 
-  // The app stays in front for the whole run, so the tabs switch once.
-  await withAppInFront(session, async () => {
-    // Bounded by the step count: a step that fails ends the run, and one that
-    // does not advance would otherwise loop forever.
-    for (let guard = 0; guard <= total; guard++) {
-      const before = state?.currentStep ?? 0;
-      state = await stepSequence(connection);
-      // Asked for part-way through: the step in flight is allowed to finish, so
-      // the run stops on a step rather than inside one.
-      if (session.sequenceHalt) {
-        session.sequenceHalt = false;
-        session.sequencePaused = true;
-        // Interrupted, not failed: the step stopped because someone asked, and
-        // a failure line here puts a red box in front of what they chose.
-        session.sequenceFailure = undefined;
-        state = await getSequenceState(connection);
-        break;
+  // The app stays in front for the whole run, so the tabs switch once. The
+  // play flag holds `busy` across the gaps between steps, so it clears in a
+  // finally: left set by a throw, it would bar every control until a restart.
+  try {
+    await withAppInFront(session, async () => {
+      // Bounded by the step count: a step that fails ends the run, and one that
+      // does not advance would otherwise loop forever.
+      for (let guard = 0; guard <= total; guard++) {
+        const before = state?.currentStep ?? 0;
+        (session.playStepStarts ??= [])[before] = Date.now();
+        state = await stepSequence(connection);
+        // Asked for part-way through: the step in flight is allowed to finish, so
+        // the run stops on a step rather than inside one.
+        if (session.sequenceHalt) {
+          session.sequenceHalt = false;
+          session.sequencePaused = true;
+          // Interrupted, not failed: the step stopped because someone asked, and
+          // a failure line here puts a red box in front of what they chose.
+          session.sequenceFailure = undefined;
+          state = await getSequenceState(connection);
+          break;
+        }
+        if (!state || state.failure) break;
+        if (state.currentStep >= state.total) break;
+        if (state.currentStep === before) break;
       }
-      if (!state || state.failure) break;
-      if (state.currentStep >= state.total) break;
-      if (state.currentStep === before) break;
-    }
+    });
+  } finally {
+    session.sequencePlaying = false;
+  }
+  const playEnded = Date.now();
+  const ended = await getSequenceState(connection);
+  if (ended?.name) {
+    const reached = ended.currentStep >= ended.total;
+    void appendRun({
+      sequence: ended.name, connection, via: 'bench',
+      status: ended.failure ? 'failed' : reached ? 'completed' : 'stopped',
+      startedAt, endedAt: Date.now(),
+      step: ended.failure ? ended.currentStep + 1 : ended.currentStep, total: ended.total,
+      ...(ended.failure ? { failure: ended.failure } : {}),
+      ...withTallies(connection, startedAt, ended.total, benchReadings(ended), stepTimes(session.playStepStarts ?? [], playEnded)),
+    });
+  }
+  return ended;
+}
+
+/**
+ * The pass a run produced on a browser: a replay stamps what it caused with
+ * `run-<start time>`, taken as it starts, which is at or after the run's own
+ * start and before its end. The earliest such pass is the run's own; a nested
+ * sequence shares it.
+ */
+function passOf(connection: string, startedAt: number, endedAt: number): string | undefined {
+  const ids = new Set<string>();
+  for (const event of getProxy(connection)?.eventsIn(startedAt) ?? []) if (event.runId) ids.add(event.runId);
+  for (const outcome of checkOutcomesFor(connection)) ids.add(outcome.runId);
+  for (const write of writeEvents(connection, startedAt - 1)) if (write.runId) ids.add(write.runId);
+  let best: { id: string; at: number } | undefined;
+  for (const id of ids) {
+    const at = /^run-([0-9a-z]+)$/.exec(id) ? parseInt(id.slice(4), 36) : NaN;
+    if (!(at >= startedAt && at <= endedAt)) continue;
+    if (!best || at < best.at) best = { id, at };
+  }
+  return best?.id;
+}
+
+/** A check step's stored outcome as a step's reading. */
+function readingOf(outcome: CheckOutcome): StepCheck {
+  const ran = outcome.ran
+    ? { name: outcome.ran, steps: outcome.ranSteps?.length ?? outcome.steps ?? 0, failed: (outcome.ranSteps ?? []).filter(step => !step.success).length }
+    : undefined;
+  return {
+    outcome: outcome.outcome, action: outcome.action, subject: outcome.subject,
+    ...(outcome.found !== undefined ? { found: outcome.found } : {}),
+    ...(outcome.waitedMs !== undefined ? { waitedMs: outcome.waitedMs } : {}),
+    ...(outcome.limitMs !== undefined ? { limitMs: outcome.limitMs } : {}),
+    ...(ran ? { ran } : {}),
+    ...(outcome.error ? { error: outcome.error } : {}),
+  };
+}
+
+/**
+ * What each step of a run did on its browser, counted by category. A check
+ * step's reading comes from the outcomes the run stored; `readings`, by
+ * position, replaces them where the caller holds the run's own results.
+ */
+export function stepTallies(
+  connection: string, startedAt: number, endedAt: number, total: number,
+  readings?: Array<StepCheck | undefined>,
+  times?: Array<number | undefined>,
+): StepTally[] | undefined {
+  if (total <= 0) return undefined;
+  // A run that stamped nothing crossed nothing, wrote nothing and read no
+  // check: its counts are zeros, and its times and readings still stand.
+  const pass = passOf(connection, startedAt, endedAt);
+  const watched = !!sessions.get(connection)?.writeWatch;
+  const tallies: StepTally[] = Array.from({ length: total }, () => ({ requests: 0, frames: 0, intercepted: 0, ...(watched ? { state: 0 } : {}) }));
+  for (const event of getProxy(connection)?.eventsIn(startedAt) ?? []) {
+    const tally = event.runId === pass && event.step !== undefined ? tallies[event.step] : undefined;
+    if (!tally) continue;
+    if (event.kind === 'request') tally.requests += 1;
+    else tally.frames += 1;
+    if (event.answeredAs) tally.intercepted += 1;
+  }
+  for (const write of writeEvents(connection, startedAt - 1)) {
+    const tally = write.runId === pass && write.step !== undefined ? tallies[write.step] : undefined;
+    if (tally && tally.state !== undefined) tally.state += 1;
+  }
+  for (const outcome of checkOutcomesFor(connection)) {
+    const tally = outcome.runId === pass ? tallies[outcome.step] : undefined;
+    if (tally) tally.check = readingOf(outcome);
+  }
+  readings?.forEach((reading, index) => { if (reading && tallies[index]) tallies[index].check = reading; });
+  times?.forEach((ms, index) => { if (ms !== undefined && tallies[index]) tallies[index].ms = ms; });
+  return tallies;
+}
+
+/**
+ * Every run going now - each replay run in the registry and each bench's own
+ * play - the suites, and the runs the log holds as ended.
+ */
+export async function runsView(): Promise<RunsView> {
+  const running: RunRow[] = runRegistry.active().map(record => ({
+    runId: record.runId, sequence: record.sequenceName,
+    ...(record.connectionReason ? { connection: record.connectionReason } : {}),
+    via: 'replay' as const, status: record.status, step: record.currentStep, total: record.totalSteps,
+    ...(record.currentTool ? { tool: record.currentTool } : {}),
+    startedAt: record.startedAt,
+    ...(record.suite ? { suite: record.suite } : {}),
+    ...withTallies(record.connectionReason, record.startedAt, record.totalSteps, undefined, stepTimes(record.stepStarts ?? [], Date.now())),
+  }));
+  for (const [connection, session] of sessions) {
+    const active = session.sequencePlaying ? session.sequences?.active() : null;
+    if (!active) continue;
+    running.push({
+      sequence: active.name, connection, via: 'bench', status: 'running',
+      step: Math.min(active.currentStep + 1, active.total), total: active.total,
+      ...(active.steps[active.currentStep]?.tool ? { tool: active.steps[active.currentStep].tool } : {}),
+      startedAt: session.playStartedAt ?? Date.now(),
+      ...withTallies(connection, session.playStartedAt ?? Date.now(), active.total, undefined,
+        stepTimes(session.playStepStarts ?? [], Date.now())),
+    });
+  }
+  return { running, suites: listSuites(), finished: await readRuns(50) };
+}
+
+function withTallies(
+  connection: string | undefined, startedAt: number, total: number,
+  readings?: Array<StepCheck | undefined>, times?: Array<number | undefined>,
+): { steps?: StepTally[] } {
+  const steps = connection ? stepTallies(connection, startedAt, Date.now(), total, readings, times) : undefined;
+  return steps ? { steps } : {};
+}
+
+/**
+ * Each step's time from when each step started: up to the next step's start,
+ * and the last one started up to `until`, the run's end or now.
+ */
+export function stepTimes(starts: Array<number | undefined>, until: number): Array<number | undefined> {
+  return starts.map((start, index) => {
+    if (start === undefined) return undefined;
+    const next = starts.slice(index + 1).find(at => at !== undefined);
+    return (next ?? until) - start;
   });
-  session.sequencePlaying = false;
+}
+
+/**
+ * A bench play's assert and wait steps, which store no reading: each one
+ * passed held, and the one the play failed on failed and stopped it.
+ */
+function benchReadings(ended: SequenceState): Array<StepCheck | undefined> {
+  return ended.steps.map((step, index) => {
+    if (step.tool !== 'assert' && step.tool !== 'wait') return undefined;
+    if (step.failed) return { outcome: 'failed', action: 'stop', ...(ended.failure ? { error: ended.failure } : {}) };
+    return index < ended.currentStep ? { outcome: 'held', action: 'continue' } : undefined;
+  });
+}
+
+/** Headless browsers the home page has started runs in, for a reference each one does not share. */
+let homeRuns = 0;
+
+/**
+ * Run a sequence from the home page in a browser of its own: headless, through
+ * a proxy so its traffic is counted, and closed when the run ends. The bench's
+ * own browser stays on what it holds, and several runs go at once. Answers
+ * with the failure text, or nothing once the run has started.
+ */
+export async function runFromHome(connection: string, name: string): Promise<string | undefined> {
+  const sequences = sessions.get(connection)?.sequences;
+  if (!sequences) return 'this bench holds no replay side to run with';
+  const reference = `home-run-${++homeRuns}`;
+  const launched = await sequences.callTool('launchChrome', { reference, headless: true, proxy: true, forceNewInstance: true });
+  if (launched.failed) return launched.result;
+  const started = await sequences.callTool('replay', { action: 'run', name, connectionReason: reference, killChromeOnFinish: true });
+  return started.failed ? started.result : undefined;
+}
+
+/**
+ * Play a sequence in the bench's own browser from the home page, from step 1,
+ * as the bench's Replay does: the bench opens the sequence and plays it there.
+ */
+export async function playHere(connection: string, name: string): Promise<void> {
+  const session = sessions.get(connection);
+  if (session) await letGoForRun(session);
+  await selectSequence(connection, name);
+  void (async () => {
+    await gotoSequenceStep(connection, 0);
+    await playSequence(connection);
+  })().catch(error => debugLog('bench', `playing ${name} here failed: ${error}`));
+}
+
+/**
+ * Rename a saved sequence, its activity file and every step that runs it, and
+ * drop the copy held in memory under the old name. Answers with the failure
+ * text, or with how many steps elsewhere now name it.
+ */
+export async function renameFromHome(connection: string, from: string, to: string): Promise<{ failure?: string; references: number }> {
+  const renamed = await renameSequence(
+    [getOutputPath('sequences', { global: false }), getOutputPath('sequences', { global: true })], from, to.trim(),
+  ).catch(error => ({ failure: String(error), references: 0 }));
+  if (!renamed.failure) await sessions.get(connection)?.sequences?.callTool('replay', { action: 'delete', name: from }).catch(() => undefined);
+  return renamed;
+}
+
+/** Stop one run going now: a replay run by its id, a bench play by its connection. */
+export async function stopRun(target: { runId?: string; connection?: string }): Promise<void> {
+  if (target.runId) {
+    const record = runRegistry.get(target.runId);
+    if (record && (record.status === 'running' || record.status === 'cancelling')) {
+      record.status = 'cancelling';
+      record.controller.abort();
+    }
+    return;
+  }
+  if (target.connection) await haltSequence(target.connection);
+}
+
+/**
+ * Play the open sequence from its first step and keep what crossed under each
+ * step as that step's recorded traffic, replacing what it held: the baseline
+ * later plays are compared against.
+ *
+ * Taken by the step each crossing and storage write was stamped with in this
+ * play, not by a window of time, since a play knows which step each belongs
+ * to. A step that caused nothing is kept as having caused nothing, so traffic
+ * on it later reads as new. A play that fails or stops short leaves the
+ * baseline before it standing: half a baseline would read the unreached steps
+ * as having caused nothing.
+ */
+export async function baselineSequence(connection: string): Promise<SequenceState | undefined> {
+  const session = sessions.get(connection);
+  if (!session?.sequences) return undefined;
+  const proxy = getProxy(connection);
+  if (!proxy) {
+    session.sequenceFailure = 'a baseline keeps what crosses the proxy, and this browser was not launched through one';
+    return getSequenceState(connection);
+  }
+  const passesBefore = new Set([...proxy.eventsIn(), ...writeEvents(connection)].map(event => event.runId));
+  await letGoForRun(session);
+  await gotoSequenceStep(connection, 0);
+  const played = await playSequence(connection);
+  if (!played || played.failure || played.currentStep < played.total) {
+    const why = played?.failure ?? `the run stopped at step ${(played?.currentStep ?? 0) + 1} of ${played?.total ?? 0}`;
+    session.sequenceFailure = `baseline not taken, and the one before it stands: ${why}`;
+    return getSequenceState(connection);
+  }
+
+  const all = [...proxy.eventsIn(), ...writeEvents(connection)];
+  const pass = [...all].reverse().find(event => event.runId && !passesBefore.has(event.runId))?.runId;
+  const values = new Map((session.writeWatch?.writes ?? []).map(write => [write.id, write.value]));
+  const at = Date.now();
+  const entries = Array.from({ length: played.total }, (_, index) => {
+    const crossed = pass ? all.filter(event => event.runId === pass && event.step === index) : [];
+    const kinds = countKinds(crossed);
+    // The payload of the last of each kind, which a later play's row is compared against.
+    for (const event of crossed) {
+      const count = kinds[kindOf(event)];
+      if (!count || count.presence) continue;
+      const body = event.kind === 'write' ? values.get(event.id) : proxy.bodyOf(event.id);
+      if (body !== undefined) count.body = body.slice(0, RECORDED_BODY_CAP);
+    }
+    const requests = crossed.filter(event => event.kind === 'request');
+    const traffic: StepTraffic = {
+      requests: requests.length,
+      failed: requests.filter(event => (event.status ?? 0) >= 400).length,
+      opened: requests.filter(event => event.status === 101).length,
+      writes: crossed.filter(event => event.kind === 'write').length,
+      lines: requests.slice(0, 8).map(event => `${event.method ?? 'GET'} ${pathOf(event.url)} ${event.status ?? 'pending'}`),
+      kinds,
+      recordedAt: at,
+    };
+    return { index, traffic };
+  });
+  session.sequenceFailure = await session.sequences.saveStepTraffic(entries).catch(error => String(error));
   return getSequenceState(connection);
+}
+
+/** A URL's path, or the URL where it does not parse as one. */
+function pathOf(url: string): string {
+  try { return new URL(url).pathname; } catch { return url; }
 }
 
 /**
@@ -2404,7 +2831,6 @@ export async function recordSequence(
     session.recordingInto = into;
     // A new sequence answers with the site's rules and nothing else: the open
     // sequence's own are its decisions, not this one's.
-    session.boundaryWaits?.clear();
     await armSiteRules(connection, originOf(session.recordingStartUrl) ?? session.sequences.siteOf(), new Map(), new Map());
     session.recordingStartedAt = Date.now();
     session.recordingEndedAt = undefined;
@@ -2620,7 +3046,7 @@ async function gateNewStep(
   // The page is held as well as the capture: left running, it re-renders while
   // the step is read, and the element the step names moves underneath it.
   session.heldForStep = !session.frozen;
-  if (session.heldForStep) await freeze(session);
+  if (session.heldForStep) await holdUi(session);
 
   await appendEvent(session.session, 'sequence', {
     connection,
@@ -2786,7 +3212,7 @@ async function announceSettled(
 async function releaseForStep(session: BenchSession): Promise<void> {
   if (!session.heldForStep) return;
   session.heldForStep = false;
-  await unfreeze(session);
+  await releaseUi(session);
 }
 
 /**
@@ -2903,6 +3329,18 @@ export async function editSequenceStep(connection: string, index: number, params
 }
 
 /**
+ * Put a check after a step of a saved sequence: what crossed under the step,
+ * turned into a condition the run has to meet there.
+ */
+export async function insertSequenceCheck(connection: string, after: number, params: Record<string, unknown>, comment?: string): Promise<SequenceState | undefined> {
+  const session = sessions.get(connection);
+  if (!session?.sequences || session.recordingSequence) return undefined;
+  session.sequenceFailure = await session.sequences.insertCheck(after, params, comment).catch(error => String(error));
+  if (!session.sequenceFailure) await armSavedRules(connection);
+  return getSequenceState(connection);
+}
+
+/**
  * Put a fixed pause after a step: into the file for a saved sequence, and
  * for one being recorded, after its latest action, which is the only place a
  * recording can take one.
@@ -2977,7 +3415,7 @@ export async function haltSequence(connection: string): Promise<SequenceState | 
   // for those seconds the screen reports a run that has already stopped.
   session.driving?.abort();
   await session.sequences.halt().catch(() => {});
-  await setFrozen(connection, true);
+  await setHeld(connection, true, 'sequence');
   session.sequenceFailure = undefined;
   return getSequenceState(connection);
 }
@@ -2987,6 +3425,7 @@ export async function cancelSequence(connection: string): Promise<SequenceState 
   if (!session?.sequences) return undefined;
   await session.sequences.cancel().catch(() => {});
   session.sequenceFailure = undefined;
+  await armSavedRules(connection);
   return getSequenceState(connection);
 }
 
@@ -3095,7 +3534,7 @@ function pauseOf(session: BenchSession): CapturePause {
 /**
  * Open the capture dialog: hold the page and arm the picker for a capture.
  *
- * A freeze already on is recorded, so closing the dialog releases only the
+ * A hold already on is recorded, so closing the dialog releases only the
  * hold the dialog made. Opened from a note, the capture taken joins that note.
  */
 export async function beginCapture(connection: string, annotationId?: string): Promise<void> {
@@ -3104,7 +3543,7 @@ export async function beginCapture(connection: string, annotationId?: string): P
   const heldBefore = session.shotArmed?.heldBefore ?? session.frozen;
   session.pendingShot = null;
   session.pendingCapture = undefined;
-  await freeze(session);
+  await holdUi(session);
   session.shotArmed = { heldBefore, ...(annotationId ? { annotationId } : {}) };
   await setInspectMode(session, true);
 }
@@ -3116,12 +3555,12 @@ export async function cancelCapture(connection: string): Promise<void> {
   const { heldBefore } = session.shotArmed;
   session.shotArmed = undefined;
   await setInspectMode(session, false).catch(() => {});
-  if (!heldBefore) await unfreeze(session);
+  if (!heldBefore) await releaseUi(session);
 }
 
 /** Release a hold the capture dialog made, once its capture is saved or dropped. */
 async function endCaptureHold(session: BenchSession, heldBefore: boolean | undefined): Promise<void> {
-  if (heldBefore === false) await unfreeze(session);
+  if (heldBefore === false) await releaseUi(session);
 }
 
 export function setFactChoice(connection: string, kinds: FactKind[]): void {
@@ -3534,7 +3973,7 @@ export async function retakeCapture(
       // with, so the size changes while it runs and it is held again after.
       if (session.frozen) {
         ranToResize = true;
-        await unfreeze(session);
+        await releaseUi(session);
       }
       await request(pageSession(session), 'Emulation.setDeviceMetricsOverride', {
         width, height, deviceScaleFactor: dpr, mobile: false,
@@ -3548,7 +3987,7 @@ export async function retakeCapture(
         };
       }
     }
-    if (recipe.frozen || heldBefore) await freeze(session);
+    if (recipe.frozen || heldBefore) await holdUi(session);
     if (recipe.kind === 'screen' && recipe.scroll) {
       await request(session.client, 'Runtime.evaluate', {
         expression: `scrollTo(${recipe.scroll.x}, ${recipe.scroll.y})`,
@@ -3694,7 +4133,7 @@ export async function retakeCapture(
       });
     }
     if (resize) {
-      if (session.frozen) await unfreeze(session);
+      if (session.frozen) await releaseUi(session);
       // Back to the size Puppeteer holds, or to none, so a window-sized page
       // keeps following its window.
       if (pinned) {
@@ -3705,8 +4144,8 @@ export async function retakeCapture(
       }
       await settleLayout(session);
     }
-    if (heldBefore) await freeze(session);
-    else if (session.frozen) await unfreeze(session);
+    if (heldBefore) await holdUi(session);
+    else if (session.frozen) await releaseUi(session);
   }
 }
 
@@ -3943,6 +4382,7 @@ export async function startBench(params: {
     stepBreakpointsSet: false,
   };
   sessions.set(connection, session);
+  attachUiLayer(session);
   // The site's rules answer from the start, before any sequence is opened.
   await armSavedRules(connection).catch(error => debugLog('bench', `site rules not armed: ${error}`));
 
@@ -4012,17 +4452,23 @@ export async function startBench(params: {
     }
   });
 
-  // Navigation drops the freeze with the old document.
+  // Navigation drops the hold with the old document.
   client.on('Page.frameNavigated', async (event: any) => {
     if (event.frame?.parentId) return;
     // Not while a sequence is being driven. A step that navigates would other-
     // wise be frozen the instant it lands, so nothing after it in the run can
-    // render or be clicked - the drive re-freezes when it is done.
+    // render or be clicked - the drive holds it again when it is done.
     if (session.sequenceBusy) return;
     try {
+      // Only a hold the navigation took away is put back. A page that was
+      // running when it navigated lands running: held here, it would stop a
+      // run that navigates between two of its steps, and stop a person
+      // following a link.
+      const wasHeld = session.frozen;
       session.stepBreakpointsSet = false;
       session.frozen = false;
-      await freeze(session);
+      recordReleased(connection, 'ui');
+      if (wasHeld) await holdUi(session);
       session.tickMs = 0;
       session.totalSteps = 0;
       session.lastTick = undefined;
@@ -4054,6 +4500,9 @@ export async function startBench(params: {
         connection,
         pageUrl: page.url(),
         frozen: session.frozen,
+        held: holdReading(connection).held,
+        queued: getProxy(connection)?.queue.list() ?? [],
+        holdable: holdableLayers(connection),
         pickerArmed: session.pickerArmed,
         tickMs: session.tickMs,
         totalSteps: session.totalSteps,
@@ -4071,8 +4520,15 @@ export async function startBench(params: {
     save: async (comment: string) => { await saveAnnotation(connection, comment); },
     discard: async () => { await discardPick(connection); },
     tick: async (request: { steps?: number; budgetMs?: number }) => { await tickBench(connection, request); },
+    stepTraffic: async () => { await stepTraffic(connection); },
+    releaseWaiting: async (id: number) => { getProxy(connection)?.queue.releaseOne(id); },
+    openDevtools: async () => openDevtools(connection),
+    changeHold: async (action, layers) => { await changeHold(connection, action, layers); },
     setPicker: async (armed: boolean) => { await setPicker(connection, armed); },
-    setFrozen: async (frozen: boolean) => { await setFrozen(connection, frozen); },
+    setHeld: async (held: boolean, resume?: boolean) => {
+      await setHeld(connection, held);
+      if (!held && resume) resumePausedRun(connection);
+    },
     selectSequence: async (name: string) => { await selectSequence(connection, name); },
     describeSequence: async (description: string, expectedOutcome: string) => {
       await describeSequence(connection, description, expectedOutcome);
@@ -4080,14 +4536,10 @@ export async function startBench(params: {
     commentSequenceStep: async (index: number, words: string) => {
       await commentSequenceStep(connection, index, words);
     },
-    addSequenceConditional: async (
-      index: number, condition: string, thenSequence: string, rejoinAt?: number
-    ) => {
-      await addSequenceConditional(connection, index, condition, thenSequence, rejoinAt);
-    },
     gotoSequenceStep: async (step: number) => { await gotoSequenceStep(connection, step); },
     stepSequence: async () => { await stepSequence(connection); },
     playSequence: async () => { await playSequence(connection); },
+    baselineSequence: async () => { await baselineSequence(connection); },
     haltSequence: async () => { await haltSequence(connection); },
     cancelSequence: async () => { await cancelSequence(connection); },
     removeSequence: async (name: string) => { await removeSequence(connection, name); },
@@ -4202,13 +4654,27 @@ export async function startBench(params: {
     },
 
     ruleCatalogue: async () => (await sessions.get(connection)?.sequences?.catalogueRules().catch(() => [])) ?? [],
+    sequenceOutline: async (name: string) => sessions.get(connection)?.sequences?.outlineOf(name).catch(() => undefined),
+    runs: () => runsView(),
+    runFromHome: (name: string) => runFromHome(connection, name),
+    playHere: (name: string) => playHere(connection, name),
+    renameFromHome: (from: string, to: string) => renameFromHome(connection, from, to),
+    stopRun: (target: { runId?: string; connection?: string }) => stopRun(target),
+    history: async () => sessions.get(connection)?.sequences?.history() ?? [],
+    historyDetail: async (index: number) => sessions.get(connection)?.sequences?.historyDetail(index),
+    tools: async () => sessions.get(connection)?.sequences?.tools() ?? [],
+    callTool: async (tool: string, args: Record<string, unknown>) => {
+      const sequences = sessions.get(connection)?.sequences;
+      if (!sequences) throw new Error('This bench holds no replay side to run tools through');
+      return sequences.callTool(tool, args);
+    },
     proxyEvents: async (sinceId: string | null): Promise<BoundaryState> => {
       const proxy = getProxy(connection);
       if (!proxy) {
         return {
           running: false, allowed: [], refused: 0, refusals: [],
           refusesWrites: false, refusedWrites: 0,
-          rules: rulesOf(connection), waits: waitsOf(connection), names: namesOf(connection),
+          rules: rulesOf(connection), names: namesOf(connection),
           checkOutcomes: checkOutcomesFor(connection),
           events: writeEvents(connection), totals: null, steps: openSteps(connection),
           ...(sessions.get(connection)?.site ? { site: sessions.get(connection)!.site } : {}),
@@ -4230,10 +4696,8 @@ export async function startBench(params: {
         refusedWrites: proxy.refusedWrites,
         rules: rulesOf(connection),
         ...(sessions.get(connection)?.site ? { site: sessions.get(connection)!.site } : {}),
-        waitOutcomes: waitOutcomesFor(connection),
         checkOutcomes: checkOutcomesFor(connection),
         hidden: hiddenOf(connection),
-        waits: waitsOf(connection),
         names: namesOf(connection),
         // The level and whether any step owns it are read here rather than
         // recomputed in the pane: both are policy over stored evidence, and a
@@ -4256,6 +4720,8 @@ export async function startBench(params: {
         totals: summariseBoundary(all, rules, proxy.socketShapes(), proxy.openSockets(),
           proxy.listPins().length + proxy.listFramePins().length),
         steps: openSteps(connection),
+        queued: proxy.queue.list(),
+        holding: proxy.queue.held,
         ...(openSequence(connection) ? { forSequence: openSequence(connection) } : {}),
       };
     },
@@ -4284,6 +4750,7 @@ export async function startBench(params: {
     cancelRecordingSequence: async () => { await cancelRecordingSequence(connection); },
     removeSequenceStep: async (index: number) => { await removeSequenceStep(connection, index); },
     insertSequenceTimer: async (after: number, ms: number) => { await insertSequenceTimer(connection, after, ms); },
+    insertSequenceCheck: async (after: number, params: Record<string, unknown>, comment?: string) => { await insertSequenceCheck(connection, after, params, comment); },
     editSequenceStep: async (index: number, params: unknown) => { await editSequenceStep(connection, index, params); },
     moveSequenceStep: async (from: number, to: number, count: number) => { await moveSequenceStep(connection, from, to, count); },
     setSequenceVariable: async (name: string, value: string) => { await setSequenceVariable(connection, name, value); },
@@ -4385,12 +4852,6 @@ export async function startBench(params: {
         : mode === 'optIn' ? 'answers where a sequence opts in' : 'answers unless a sequence opts out';
       await persistRules(connection, false, `${key} ${said}`);
     },
-    setWait: async (step: number, count: number, key?: string, details?: { seconds?: number; onFail?: 'fail' | 'continue' }) => {
-      setBoundaryWait(connection, step, count, key, details);
-      await persistRules(connection, false, count > 0
-        ? `step ${step + 1} waits for ${key ?? 'what crosses'}`
-        : `step ${step + 1} no longer waits${key ? ` for ${key}` : ''}`);
-    },
     setName: async (key: string, name: string) => {
       setBoundaryName(connection, key, name);
       await persistRules(connection, false, name.trim() ? `${nameTarget(key)} named "${name.trim()}"` : `name taken off ${nameTarget(key)}`);
@@ -4483,7 +4944,7 @@ export async function tickBench(
 
   const { client } = session;
   // Stepping only means anything against a held page.
-  await freeze(session);
+  if (!session.frozen) await holdUi(session);
   await ensureStepBreakpoints(session);
 
   // Neither given means the smallest possible move: one callback.
@@ -4492,7 +4953,7 @@ export async function tickBench(
 
   // Only the resume windows count. performance.now() keeps running while V8 is
   // paused - the clock is wall-clock based, and pausing stops execution, not
-  // time - so measuring from the start of the freeze would charge the page for
+  // time - so measuring from the start of the hold would charge the page for
   // however long someone spent looking at it.
   let elapsed = 0;
   let steps = 0;
@@ -4517,7 +4978,7 @@ export async function tickBench(
     const event = await paused;
     if (!event) {
       // Nothing was scheduled within the window - the page has gone quiet, so
-      // there is nothing to step to. Re-freeze where it stands.
+      // there is nothing to step to. Hold again where it stands.
       quiet = true;
       await client.send('Debugger.pause').catch(() => {});
       await nextPause(client, stepTimeoutMs);
@@ -4569,7 +5030,7 @@ export async function stopBench(connection: string): Promise<BenchReport | undef
   const { client } = session;
   try {
     await client.send('Overlay.setInspectMode', { mode: 'none', highlightConfig: HIGHLIGHT_CONFIG } as any);
-    await release(session);
+    await releaseBench(session);
     await client.send('Overlay.disable');
     await client.detach();
   } catch (error) {

@@ -8,7 +8,7 @@ import { setWorkingDirOverride } from '../helpers/paths.js';
 /**
  * A sequence saved back to disk must land in the folder it came from.
  *
- * addConditional persists through saveSequenceToDisk. If that always wrote to
+ * addCheck persists through saveSequenceToDisk. If that always wrote to
  * the sequences root, editing spine/spine-04.json would leave the foldered
  * original stale and drop a second copy at the top level — which runAll then
  * runs twice and a basename load matches ambiguously.

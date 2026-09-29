@@ -108,6 +108,8 @@ export class CDPManager {
   private scriptIdToUrl: Map<string, string> = new Map();
   private urlToScriptId: Map<string, string[]> = new Map(); // Support multiple scripts per URL (inline HTML scripts)
   private pauseResolvers: Array<() => void> = [];
+  /** Callers of resume() waiting for Chrome's Debugger.resumed event. */
+  private resumeWaiters: Array<() => void> = [];
   private scriptWaitResolvers: Array<{ pattern: string | RegExp; resolve: (url: string) => void }> = [];
   private sourceMapHandler: SourceMapHandler | null = null;
   private logpointLimitExceeded: {
@@ -122,6 +124,7 @@ export class CDPManager {
   private consoleMessageCallback: ConsoleMessageCallback | null = null;
   private pauseCallback: (() => void) | null = null;
   private resumeCallback: (() => void) | null = null;
+  private pauseWatchers = new Set<(paused: boolean, event?: any) => void>();
 
   // DOMDebugger state for advanced breakpoints
   private domBreakpoints: Map<string, DOMBreakpointInfo> = new Map();
@@ -153,6 +156,23 @@ export class CDPManager {
    */
   setResumeCallback(callback: (() => void) | null): void {
     this.resumeCallback = callback;
+  }
+
+  /** The URL a parsed script was loaded from; an inline script carries its page's URL. */
+  scriptUrl(scriptId: string): string | undefined {
+    return this.scriptIdToUrl.get(scriptId);
+  }
+
+  /** Receive every pause and resume of this connection's page, for as long as the returned stop is not called. */
+  watchPause(watcher: (paused: boolean, event?: any) => void): () => void {
+    this.pauseWatchers.add(watcher);
+    return () => { this.pauseWatchers.delete(watcher); };
+  }
+
+  private notePause(paused: boolean, event?: any): void {
+    for (const watcher of this.pauseWatchers) {
+      try { watcher(paused, event); } catch { /* one watcher's failure leaves the others fed */ }
+    }
   }
 
   /**
@@ -302,16 +322,19 @@ export class CDPManager {
         if (this.pauseCallback) {
           this.pauseCallback();
         }
+        this.notePause(true, params);
       });
 
       Debugger.resumed(() => {
         this.state.paused = false;
         this.state.currentCallFrames = undefined;
+        for (const resolve of this.resumeWaiters.splice(0)) resolve();
 
         // Notify resume callback (e.g., to resume port monitoring)
         if (this.resumeCallback) {
           this.resumeCallback();
         }
+        this.notePause(false);
       });
 
       // Listen for breakpoint resolution - updates pending breakpoints when script loads
@@ -383,6 +406,7 @@ export class CDPManager {
         if (wasPaused && this.resumeCallback) {
           this.resumeCallback();
         }
+        if (wasPaused) this.notePause(false);
       }
     }
   }
@@ -761,7 +785,18 @@ export class CDPManager {
     }
 
     const { Debugger } = this.client;
+    // Chrome acknowledges the command before its Debugger.resumed event can
+    // arrive, and until that event the connection still reads as paused, so a
+    // step run straight after a resume was refused as reading a paused page.
+    // Bounded: a resumed event that never comes leaves the flag as it stands.
+    const resumed = this.state.paused
+      ? new Promise<void>(resolve => {
+          this.resumeWaiters.push(resolve);
+          setTimeout(resolve, 1000);
+        })
+      : Promise.resolve();
     await Debugger.resume();
+    await resumed;
   }
 
   /**

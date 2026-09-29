@@ -9,13 +9,15 @@ Read it with `proxy({ action, connectionReason })`.
 
 | action | answers |
 |---|---|
-| `status` | is a proxy running, what is refused, how many holds stand |
+| `status` | is a proxy running, what is refused, how many answers stand |
 | `events` | what crossed, newest last (`since`, `until`, `urlIncludes`) |
 | `sockets` | what each socket did, and whether arrival on it names a cause |
 | `body` | one event's kept payload (`id`) |
-| `hold` / `holdFrame` | answer a URL, or replace or drop a socket message; `step` bounds either to one replay step |
-| `release` / `holds` | remove one, list what stands |
-| `refuse` | `unmatchedWrites: 'refuse'` answers every POST, PUT, PATCH or DELETE no hold covers with 403, recorded as `refused`; `'forward'` sends them on |
+| `answer` / `answerFrame` | answer a URL, or replace or drop a socket message; `step` bounds either to one replay step |
+| `withdraw` / `answers` | remove one, list what stands |
+| `refuse` | `unmatchedWrites: 'refuse'` answers every POST, PUT, PATCH or DELETE no answer covers with 403, recorded as `refused`; `'forward'` sends them on |
+
+Stopping traffic in time is the `hold` tool: `hold({ action: 'hold', layers: ['network'] })` keeps each frame and response at the proxy, and they cross in arrival order on release, or one per `step`. An event is recorded as it crosses to the page, so traffic kept through a hold lands under the step that let it through.
 
 ## Reading an event row
 
@@ -90,7 +92,7 @@ arrived unasked, so arrival on that socket names no cause.
 ## Ruling a shape
 
 Where the wire cannot separate an answer from a push, a person watching can.
-The bench's BOUNDARY tab assigns a verdict to a **payload shape** — the
+The bench's Traffic tab assigns a verdict to a **payload shape** — the
 class of message, not one frame:
 
 `step` · `send` · `background` · `unknown`

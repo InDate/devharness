@@ -462,9 +462,9 @@ export function createInputTools(
 
             // If paused at breakpoint, return immediately - don't try any more page interactions
             if (result.pausedAtBreakpoint || result.result?.pausedDuringClick) {
-              // Stop observing without waiting
+              // The page is paused, so the observer is left in it rather than collected
               if (shouldDetectChanges) {
-                await domChangeMonitor.stopObserving(connectionReason, { settleTimeout: 0 });
+                domChangeMonitor.drop(connectionReason);
               }
 
               // Get pause info if we detected pause inside the action
@@ -716,7 +716,7 @@ export function createInputTools(
             // If paused at breakpoint, return immediately - don't try any more page interactions
             if (result.pausedAtBreakpoint) {
               if (shouldDetectChanges) {
-                await domChangeMonitor.stopObserving(connectionReason, { settleTimeout: 0 });
+                domChangeMonitor.drop(connectionReason);
               }
               return createSuccessResponse('ACTION_PAUSED_AT_BREAKPOINT', {
                 action: 'type',
@@ -902,7 +902,7 @@ export function createInputTools(
             // If paused at breakpoint, return immediately - don't try any more page interactions
             if (result.pausedAtBreakpoint) {
               if (shouldDetectChanges) {
-                await domChangeMonitor.stopObserving(connectionReason, { settleTimeout: 0 });
+                domChangeMonitor.drop(connectionReason);
               }
               return createSuccessResponse('ACTION_PAUSED_AT_BREAKPOINT', {
                 action: 'hover',

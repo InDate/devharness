@@ -49,6 +49,9 @@ const NAMING_KEYS = ['tag', 'type', 'event', 'kind', 'op', 'action', 'cmd', 'met
  */
 const MOVING_VALUE = /^(?:\d+|[0-9a-f]{8,}|[0-9a-f-]{16,}|\d{4}-\d\d-\d\d[T ]\S*|[^@\s]+@[^@\s]+\.[^@\s]+|[A-Za-z0-9+/_=.-]{24,})$/i;
 
+/** Whether a key carries a per-run value, so rows keyed by it are grouped under one kind. */
+export const movesPerRun = (value: string) => MOVING_VALUE.test(value);
+
 const names = (value: unknown): value is string =>
   typeof value === 'string' && value.length > 0 && !MOVING_VALUE.test(value);
 
@@ -134,7 +137,7 @@ export interface KindCount {
 }
 
 type Countable = Pick<BoundaryEvent, 'kind' | 'url' | 'direction'>
-  & Partial<Pick<BoundaryEvent, 'method' | 'preview' | 'status' | 'heldAs'>>;
+  & Partial<Pick<BoundaryEvent, 'method' | 'preview' | 'status' | 'answeredAs'>>;
 
 /** One kind's name as it reads on a step: `POST /draft`, `← "tag":"big"`, `localStorage socket-app:draft`. */
 export function kindOf(event: Countable): string {
@@ -151,7 +154,7 @@ export function countKinds(events: Countable[]): Record<string, KindCount> {
     const held = counts[kind] ??= { n: 0 };
     held.n += 1;
     if (event.kind === 'frame' && event.direction === 'in') held.presence = true;
-    if (event.kind === 'request' && event.status !== undefined && event.heldAs !== 'replaced') {
+    if (event.kind === 'request' && event.status !== undefined && event.answeredAs !== 'replaced') {
       const statuses = held.statuses ??= [];
       if (!statuses.includes(event.status)) statuses.push(event.status);
     }
@@ -208,7 +211,24 @@ export function missingPushes(recordedSteps: Array<Record<string, KindCount> | u
  */
 export interface ExpectedValue {
   value?: string;
+  /** Fields whose value has to be the same, by dotted path. */
   fields?: Record<string, unknown>;
+  /**
+   * Fields that have to be there with the same JSON type, by dotted path,
+   * whatever they hold: a token or an id that is new on every run is matched
+   * on being there rather than on its value.
+   */
+  shape?: Record<string, string>;
+}
+
+/** A leaf's JSON type, as a shape compares it. */
+export function typeOfLeaf(value: unknown): string {
+  return value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
+}
+
+/** Whether a mark compares fields, by value or by shape, rather than the payload whole. */
+export function marksFields(mark: ExpectedValue | undefined): boolean {
+  return !!mark && (Object.keys(mark.fields ?? {}).length > 0 || Object.keys(mark.shape ?? {}).length > 0);
 }
 
 const LEAF_LIMIT = 60;
@@ -234,6 +254,14 @@ export function leavesOf(payload: string): Record<string, unknown> {
   return leaves;
 }
 
+/**
+ * A JSON payload's leaves by path with their types, or nothing for a payload
+ * that is not a JSON object or array.
+ */
+export function shapeOf(payload: string): Record<string, string> {
+  return Object.fromEntries(Object.entries(leavesOf(payload)).map(([path, leaf]) => [path, typeOfLeaf(leaf)]));
+}
+
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
 const cut = (text: string, limit: number) => text.length > limit ? `${text.slice(0, limit)}…` : text;
@@ -242,11 +270,15 @@ const shown = (value: unknown) => value === undefined ? 'absent' : cut(JSON.stri
 
 /** How a replayed payload differs from what was marked on its kind, one line each; empty when it holds. */
 export function compareExpected(kind: string, expected: ExpectedValue, payload: string): string[] {
-  if (expected.fields) {
+  if (marksFields(expected)) {
     const leaves = leavesOf(payload);
-    return Object.entries(expected.fields)
+    const byValue = Object.entries(expected.fields ?? {})
       .filter(([path, value]) => !same(leaves[path], value))
       .map(([path, value]) => `${kind} .${path}: ${shown(leaves[path])}, expected ${shown(value)}`);
+    const byShape = Object.entries(expected.shape ?? {})
+      .filter(([path, type]) => !(path in leaves) || typeOfLeaf(leaves[path]) !== type)
+      .map(([path, type]) => `${kind} .${path}: ${path in leaves ? `a ${typeOfLeaf(leaves[path])}` : 'absent'}, expected a ${type}`);
+    return [...byValue, ...byShape];
   }
   if (expected.value === undefined) return [];
   let equal = payload === expected.value;
@@ -280,17 +312,24 @@ export type Verdict = 'match' | 'mismatch' | 'unexpected';
  * so a payload carrying a clock can match.
  * `body` undefined while the replayed payload is still being read returns no
  * verdict for a kind whose payload is compared.
+ *
+ * `byShape` compares an unmarked payload on its fields and their types. A
+ * stored value holds tokens, ids and clocks that differ on every run, so
+ * compared whole it differs every time; a value that is not a JSON object or
+ * array is then compared on being written at all. A mark's `value` compares
+ * the payload whole.
  */
 export function verdictOf(
   recorded: KindCount | undefined,
   observed: KindCount,
   body: string | undefined,
   mark?: ExpectedValue,
+  byShape = false,
 ): { verdict: Verdict; reasons: string[] } | undefined {
   if (!recorded) return { verdict: 'unexpected', reasons: [] };
   // A pushed kind arrives on the server's schedule, so its count and status
   // say nothing; it is judged on arriving, and on ticked fields where some are.
-  if (recorded.presence && !mark?.fields) return { verdict: 'match', reasons: [] };
+  if (recorded.presence && !marksFields(mark)) return { verdict: 'match', reasons: [] };
   const reasons: string[] = [];
   if (!recorded.presence) {
     if (observed.n !== recorded.n) reasons.push(`×${observed.n}, recorded ×${recorded.n}`);
@@ -298,10 +337,14 @@ export function verdictOf(
     const after = (observed.statuses ?? []).slice().sort().join('/');
     if (before !== after) reasons.push(`status ${after || '—'}, recorded ${before || '—'}`);
   }
-  const compared = mark?.fields ? mark : recorded.body !== undefined ? { value: recorded.body } : undefined;
+  const shape = byShape && recorded.body !== undefined ? shapeOf(recorded.body) : {};
+  const compared = marksFields(mark) ? mark
+    : mark?.value !== undefined ? { value: mark.value }
+    : byShape ? (Object.keys(shape).length ? { shape } : undefined)
+    : recorded.body !== undefined ? { value: recorded.body } : undefined;
   if (compared) {
     if (body === undefined) return undefined;
-    if (compared.fields) {
+    if (marksFields(compared)) {
       reasons.push(...compareExpected('', compared, body).map(line => line.trim()));
     } else if (!samePayload(body, compared.value ?? '')) {
       reasons.push('payload differs');

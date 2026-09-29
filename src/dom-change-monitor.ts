@@ -81,8 +81,12 @@ export class DOMChangeMonitor {
     }
 
     try {
-      // Inject MutationObserver into page
+      // Inject MutationObserver into page. One left by a session that was
+      // dropped while the page was paused is still attached, so it is
+      // disconnected first rather than left recording beside the new one.
       await page.evaluate(() => {
+        // @ts-ignore - runs in browser context
+        window.__cdpChangeObserver?.observer?.disconnect();
         // @ts-ignore - runs in browser context
         window.__cdpChangeObserver = {
           startTime: Date.now(),
@@ -448,6 +452,18 @@ export class DOMChangeMonitor {
     } catch {
       // Ignore cleanup errors (page may have navigated)
     }
+    this.sessions.delete(connectionRef);
+  }
+
+  /**
+   * Forget a connection's session without touching the page.
+   *
+   * Collecting or removing the observer runs page JS, and a page held at a
+   * breakpoint never answers it, so an action that paused would wait there
+   * until something resumed the page. The observer stays in the page until
+   * the next startObserving disconnects it.
+   */
+  drop(connectionRef: string): void {
     this.sessions.delete(connectionRef);
   }
 

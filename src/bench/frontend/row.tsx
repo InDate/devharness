@@ -10,11 +10,17 @@ import { Glyph } from './glyph.js';
  * Every column sits at the same place on every row - where it went, which
  * way, what it was, and at the right end what came of it - so a column reads
  * down the list. The actions take the right end's place on pointing, in fixed
- * slots: an action a row does not have leaves its slot empty rather than
+ * slots: an action a row does not have is drawn dimmed in its slot rather than
  * closing up, so each action is found at the same place on every row. The
  * swap changes what is visible and nothing's size, so no line moves.
  */
 export interface RowSlots {
+  /** Play this in the bench's own browser. */
+  here?: () => void;
+  /** Start this in a browser of its own, or stop it while it runs. */
+  run?: () => void;
+  /** Open this where it is worked on. */
+  open?: () => void;
   /** Keep this kind out of the list, or list it again where it is hidden. */
   hide?: () => void;
   rename?: () => void;
@@ -28,6 +34,9 @@ export interface RowSlots {
 
 /** What each slot says on pointing, for the rows whose remove means something narrower. */
 export interface RowSlotTitles {
+  here?: string;
+  run?: string;
+  open?: string;
   remove?: string;
   send?: string;
   rename?: string;
@@ -37,28 +46,33 @@ export interface RowSlotTitles {
   hide?: string;
 }
 
-/** The slots in their order; a mark is a glyph's name, or the text drawn in its place. */
-const SLOTS: Array<{ key: keyof RowSlots; glyph?: string; text?: string; title: string }> = [
-  { key: 'remove', glyph: 'cross', title: 'remove this' },
-  { key: 'hide', glyph: 'eyeoff', title: 'hide this kind of traffic from the list' },
-  { key: 'rename', glyph: 'pen', title: 'name this' },
-  { key: 'capture', glyph: 'capture', title: 'take a capture for this' },
-  { key: 'send', glyph: 'arrow', title: 'hand this to the session' },
-  { key: 'up', glyph: 'up', title: 'list this under the step above, on every run' },
-  { key: 'down', glyph: 'down', title: 'list this under the step below, on every run' },
+/**
+ * The slots in their order; a mark is a glyph's name, or the text drawn in its
+ * place. `off` is the tooltip of a slot this row does not have, drawn dimmed.
+ */
+const SLOTS: Array<{ key: keyof RowSlots; glyph?: string; text?: string; title: string; off: string }> = [
+  { key: 'here', glyph: 'play', title: 'play this in this browser', off: 'this row cannot be played here' },
+  { key: 'run', glyph: 'headless', title: 'run this in a headless browser of its own', off: 'this row cannot be run' },
+  { key: 'open', glyph: 'arrow', title: 'open this', off: 'this row cannot be opened' },
+  { key: 'remove', glyph: 'cross', title: 'remove this', off: 'nothing on this row to remove' },
+  { key: 'hide', glyph: 'eyeoff', title: 'hide this kind of traffic from the list', off: 'this row cannot be hidden' },
+  { key: 'rename', glyph: 'pen', title: 'name this', off: 'this row cannot be named' },
+  { key: 'capture', glyph: 'capture', title: 'take a capture for this', off: 'this row cannot carry a capture' },
+  { key: 'send', glyph: 'arrow', title: 'hand this to the session', off: 'nothing on this row to hand to the session' },
+  { key: 'up', glyph: 'up', title: 'list this under the step above, on every run', off: 'no step above to list this under' },
+  { key: 'down', glyph: 'down', title: 'list this under the step below, on every run', off: 'no step below to list this under' },
 ];
 
 export function Row({
-  id, classes, source, sourceTitle, way, label, title, reading, slots, titles, open, onOpen,
+  id, classes, source, sourceTitle, way, badge, label, title, reading, slots, titles, open, onOpen,
   onMenu, onEnter, onLeave, extra, more, columns, glyphs, children,
 }: {
   /** A slot's mark where this row's differs, such as an open eye on a hidden row. */
   glyphs?: Partial<Record<keyof RowSlots, string>>;
   /**
-   * The slots this row's list uses, in their fixed order. A list whose rows
-   * only ever remove has one slot, not six with five empty beside the one in
-   * use; a list whose rows differ keeps every slot any of them uses, so each
-   * action stays in one column down the list. All six when absent.
+   * The slots this row can ever use in the list it sits in, in their fixed
+   * order. One it can use and does not have at the moment is drawn dimmed; one
+   * it can never use is not drawn. The slots it has now when absent.
    */
   columns?: Array<keyof RowSlots>;
   /** Actions a row has beyond the fixed slots, drawn ahead of them on pointing. */
@@ -74,6 +88,12 @@ export function Row({
   sourceTitle?: string;
   /** The direction a frame went, or nothing. */
   way?: string;
+  /**
+   * How the row stands against its step's recording, in a column of its own
+   * after the source, so the badges line up down the list and the labels
+   * after them. The list sets that column's width, 0 where nothing is compared.
+   */
+  badge?: preact.ComponentChildren;
   /** What it was, and any tags on it, which take the width left over. */
   label: preact.ComponentChildren;
   title?: string;
@@ -97,6 +117,7 @@ export function Row({
   const [sent, setSent] = useState(false);
   const sentTimer = useRef<ReturnType<typeof setTimeout>>();
   useEffect(() => () => clearTimeout(sentTimer.current), []);
+  const shown = SLOTS.filter(slot => (columns ? columns.includes(slot.key) : slots[slot.key] !== undefined));
   const run = (key: keyof RowSlots) => () => {
     slots[key]?.();
     if (key !== 'send') return;
@@ -118,16 +139,25 @@ export function Row({
         onClick={onOpen} title={title}>
         {(source !== undefined || way !== undefined) && <>
           <span class="dir" title={sourceTitle}>{source}</span>
+          <span class="badgecol">{badge}</span>
           <span class="way">{way ?? ''}</span>
         </>}
         <span class="rowlabel">{label}</span>
-        <span class="rowright" style={{ minWidth: `${(columns ? columns.length : SLOTS.length) * 22}px` }}>
+        <span class="rowright" style={{ minWidth: `${shown.length * 22}px` }}>
           <span class="rowreading">{reading}</span>
           <span class="rowactions" onClick={stop}
-            style={{ gridTemplateColumns: `repeat(${columns ? columns.length : SLOTS.length}, 22px)` }}>
+            style={{ gridTemplateColumns: `repeat(${shown.length}, 22px)` }}>
             {more}
-            {SLOTS.filter(slot => !columns || columns.includes(slot.key)).map(slot => {
-              if (!slots[slot.key]) return <span key={slot.key} class="slot" />;
+            {shown.map(slot => {
+              // Marked rather than disabled: a disabled button takes no mouse
+              // events, so its tooltip would never show.
+              if (!slots[slot.key]) {
+                return (
+                  <span key={slot.key} class="tool off" role="button" aria-disabled="true" aria-label={slot.key} title={slot.off}>
+                    {slot.glyph ? <Glyph of={glyphs?.[slot.key] ?? slot.glyph} /> : <span>{slot.text}</span>}
+                  </span>
+                );
+              }
               const done = slot.key === 'send' && sent;
               return (
                 <button key={slot.key} class={done ? 'tool done' : 'tool'} aria-label={slot.key}

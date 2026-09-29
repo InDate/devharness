@@ -47,18 +47,16 @@ describe('auto-launch failure', () => {
   });
 });
 
-describe('debug state for an unpaused connection', () => {
+describe('debug state', () => {
   const ctx = (executeToolCall: any): ExecutionContext =>
     ({ executeToolCall, connectionReason: 'device-a', logPrefix: 'test' } as any);
+  const status = (debuggerState: Record<string, unknown>) => ({
+    ...createSuccessResponse('CONNECTION_STATUS', {}, debuggerState),
+    _meta: { tool: 'getDebuggerStatus', timestamp: 0, debugger: { reference: 'device-a', connected: true, ...debuggerState } },
+  });
 
-  // getCallStack answers "not paused" with an ERROR response, so the whole
-  // probe used to be abandoned - discarding the breakpoint count it had
-  // already read, for the ordinary unpaused run this exists to describe.
-  it('reports the breakpoint count when the debugger is simply not paused', async () => {
-    const executeToolCall = harness({
-      'breakpoint.list': { content: [{ type: 'text', text: '## Breakpoints\n\n**Total:** 2' }] },
-      'inspect.getCallStack': createErrorResponse('NOT_PAUSED'),
-    });
+  it('reports the breakpoint count when the debugger is not paused', async () => {
+    const executeToolCall = harness({ getDebuggerStatus: status({ paused: false, totalBreakpoints: 2 }) });
 
     expect(await getDebugState(ctx(executeToolCall))).toEqual({
       isPaused: false,
@@ -67,10 +65,12 @@ describe('debug state for an unpaused connection', () => {
     });
   });
 
-  it('reports the pause location when it IS paused', async () => {
+  it('reports the pause location when it is paused', async () => {
     const executeToolCall = harness({
-      'breakpoint.list': { content: [{ type: 'text', text: '**Total:** 1' }] },
-      'inspect.getCallStack': { content: [{ type: 'text', text: 'Paused at: app.js:42\n{"callFrameId":"f1"}' }] },
+      getDebuggerStatus: status({
+        paused: true, totalBreakpoints: 1,
+        pausedAt: { url: 'app.js', lineNumber: 42, callFrameId: 'f1' },
+      }),
     });
 
     expect(await getDebugState(ctx(executeToolCall))).toMatchObject({
@@ -80,11 +80,10 @@ describe('debug state for an unpaused connection', () => {
     });
   });
 
-  // A failure that is NOT "not paused" still means the state is unknown.
-  it('gives up on any other call-stack failure', async () => {
+  // A connection that cannot be read leaves the state unknown.
+  it('gives up when the connection cannot be read', async () => {
     const executeToolCall = harness({
-      'breakpoint.list': { content: [{ type: 'text', text: '**Total:** 1' }] },
-      'inspect.getCallStack': createErrorResponse('CONNECTION_NOT_FOUND', { connectionReason: 'device-a' }),
+      getDebuggerStatus: createErrorResponse('CONNECTION_NOT_FOUND', { reference: 'device-a' }),
     });
 
     expect(await getDebugState(ctx(executeToolCall))).toBeNull();

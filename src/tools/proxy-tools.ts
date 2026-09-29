@@ -38,22 +38,22 @@ function stampOf(e: ProxyEvent): string {
 }
 
 const proxySchema = z.object({
-  action: z.enum(['status', 'events', 'sockets', 'body', 'hold', 'holdFrame', 'release', 'holds', 'refuse'])
-    .describe('status (is a proxy running for this browser), events (what crossed the boundary, newest last), sockets (what each socket did, and whether arrival names a cause on it), body (one event\'s kept payload), hold (answer a URL with a value instead of reaching the server), holdFrame (replace or drop a socket message), release (remove a hold), holds (what is held), refuse (answer every unmatched write with 403, or forward it)'),
+  action: z.enum(['status', 'events', 'sockets', 'body', 'answer', 'answerFrame', 'withdraw', 'answers', 'refuse'])
+    .describe('status (is a proxy running for this browser), events (what crossed the boundary, newest last), sockets (what each socket did, and whether arrival names a cause on it), body (one event\'s kept payload), answer (answer a URL with a value instead of reaching the server), answerFrame (replace or drop a socket message), withdraw (remove an answer), answers (what is answered), refuse (answer every unmatched write with 403, or forward it). Stopping traffic in time is the hold tool'),
   connectionReason: z.string()
     .describe('The browser, as named at launchChrome({ proxy: true })'),
   since: z.number().optional().describe('events: epoch ms, at or after'),
   until: z.number().optional().describe('events: epoch ms, before'),
-  id: z.string().optional().describe('body: the event id. release: the hold id'),
-  urlIncludes: z.string().optional().describe('events: only what crossed to a URL containing this - Chrome talks to Google constantly through the same proxy and those are not the app. hold/holdFrame: substring of the URL the hold applies to'),
-  method: z.string().optional().describe('hold: only this HTTP method'),
-  step: z.coerce.number().int().min(0).optional().describe('hold/holdFrame: only while this replay step (0-based) is in flight, so the hold answers at one position in a run and the same call at another position reaches the server'),
+  id: z.string().optional().describe('body: the event id. withdraw: the answer id'),
+  urlIncludes: z.string().optional().describe('events: only what crossed to a URL containing this - Chrome talks to Google constantly through the same proxy and those are not the app. answer/answerFrame: substring of the URL the answer applies to'),
+  method: z.string().optional().describe('answer: only this HTTP method'),
+  step: z.coerce.number().int().min(0).optional().describe('answer/answerFrame: only while this replay step (0-based) is in flight, so the answer applies at one position in a run and the same call at another position reaches the server'),
   unmatchedWrites: z.enum(['refuse', 'forward']).optional().describe('refuse: what an unmatched POST/PUT/PATCH/DELETE meets - refuse answers it 403 and records it as refused; forward is the default'),
-  status: z.number().optional().describe('hold: status to answer with (default 200)'),
-  contentType: z.string().optional().describe('hold: content-type to answer with (default application/json)'),
-  value: z.string().optional().describe('hold: the body to answer with. holdFrame: what to send in the message\'s place - omit to drop it so nothing arrives'),
-  textIncludes: z.string().optional().describe('holdFrame: substring of the message payload that selects it'),
-  direction: z.enum(['sent', 'received']).optional().describe('holdFrame: only messages going this way'),
+  status: z.number().optional().describe('answer: status to answer with (default 200)'),
+  contentType: z.string().optional().describe('answer: content-type to answer with (default application/json)'),
+  value: z.string().optional().describe('answer: the body to answer with. answerFrame: what to send in the message\'s place - omit to drop it so nothing arrives'),
+  textIncludes: z.string().optional().describe('answerFrame: substring of the message payload that selects it'),
+  direction: z.enum(['sent', 'received']).optional().describe('answerFrame: only messages going this way'),
 }).strict();
 
 export function createProxyTools() {
@@ -89,7 +89,7 @@ export function createProxyTools() {
               proxy.refusesWrites
                 ? `Unmatched writes are refused: ${proxy.refusedWrites} answered 403.`
                 : 'Unmatched writes are forwarded to the server.',
-              `${proxy.listPins().length} response hold(s), ${proxy.listFramePins().length} message hold(s).`,
+              `${proxy.listPins().length} response answer(s), ${proxy.listFramePins().length} message answer(s).`,
             ];
             return {
               content: [{ type: 'text', text: lines.join('\n') }],
@@ -122,8 +122,8 @@ export function createProxyTools() {
               // what backs it reads as attribution whatever it was built from.
               const sure = ` (${levelOf(e)})`;
               return e.kind === 'request'
-                ? `${e.id}  ${cmd}${e.method} ${e.url} ${e.status ?? 'pending'}${sure}${e.evidence?.initiator ? ` <${e.evidence.initiator}>` : ''}${e.heldAs ? ` [${e.heldAs}]` : ''}`
-                : `${e.id}  ${cmd}${e.direction === 'out' ? '->' : '<-'} ${e.url} ${e.size}b${sure}${e.evidence?.initiator ? ` <${e.evidence.initiator}>` : ''}${e.heldAs ? ` [${e.heldAs}]` : ''}`;
+                ? `${e.id}  ${cmd}${e.method} ${e.url} ${e.status ?? 'pending'}${sure}${e.evidence?.initiator ? ` <${e.evidence.initiator}>` : ''}${e.answeredAs ? ` [${e.answeredAs}]` : ''}`
+                : `${e.id}  ${cmd}${e.direction === 'out' ? '->' : '<-'} ${e.url} ${e.size}b${sure}${e.evidence?.initiator ? ` <${e.evidence.initiator}>` : ''}${e.answeredAs ? ` [${e.answeredAs}]` : ''}`;
             });
             return {
               content: [{ type: 'text', text: events.length === 0
@@ -161,7 +161,7 @@ export function createProxyTools() {
             };
           }
 
-          case 'hold': {
+          case 'answer': {
             const pin = proxy.pin({
               urlIncludes: args.urlIncludes ?? '',
               ...(args.method ? { method: args.method } : {}),
@@ -171,12 +171,12 @@ export function createProxyTools() {
               body: args.value ?? '',
             });
             return {
-              content: [{ type: 'text', text: `Holding ${pin.method ?? 'any'} *${pin.urlIncludes}*${pin.step !== undefined ? ` under step ${pin.step}` : ''} as ${pin.id}.` }],
+              content: [{ type: 'text', text: `Answering ${pin.method ?? 'any'} *${pin.urlIncludes}*${pin.step !== undefined ? ` under step ${pin.step}` : ''} as ${pin.id}.` }],
               _meta: meta({ proxy: { pin } }),
             };
           }
 
-          case 'holdFrame': {
+          case 'answerFrame': {
             const pin = proxy.pinFrame({
               textIncludes: args.textIncludes ?? '',
               ...(args.urlIncludes ? { urlIncludes: args.urlIncludes } : {}),
@@ -191,15 +191,15 @@ export function createProxyTools() {
             };
           }
 
-          case 'release': {
+          case 'withdraw': {
             const gone = args.id ? proxy.unpin(args.id) : false;
             return {
-              content: [{ type: 'text', text: gone ? `Released ${args.id}.` : `No hold called "${args.id}".` }],
-              _meta: meta({ proxy: { released: gone } }),
+              content: [{ type: 'text', text: gone ? `Withdrew ${args.id}.` : `No answer called "${args.id}".` }],
+              _meta: meta({ proxy: { withdrawn: gone } }),
             };
           }
 
-          case 'holds': {
+          case 'answers': {
             const pins = proxy.listPins();
             const frames = proxy.listFramePins();
             const lines = [
@@ -207,7 +207,7 @@ export function createProxyTools() {
               ...frames.map(p => `${p.id}  message ${p.field ? `field ${p.field.key} = ${JSON.stringify(p.field.value)}` : `text *${p.textIncludes}*`}${p.step !== undefined ? ` step ${p.step}` : ''} -> ${p.replaceWith === undefined ? 'dropped' : 'replaced'}, ${p.hits} hit(s)`),
             ];
             return {
-              content: [{ type: 'text', text: lines.length ? lines.join('\n') : 'Nothing held.' }],
+              content: [{ type: 'text', text: lines.length ? lines.join('\n') : 'Nothing answered.' }],
               _meta: meta({ proxy: { pins, framePins: frames } }),
             };
           }

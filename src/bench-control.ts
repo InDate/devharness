@@ -9,7 +9,7 @@
  *
  * Served from 127.0.0.1 while apps are typically on localhost - a different
  * site, so Chrome gives the bench its own renderer process and a hard
- * freeze on the app pane cannot take it down with it.
+ * hold on the app pane cannot take it down with it.
  *
  * Every route is behind a random token in the path. The server accepts writes
  * (an annotation, a tick), and any page in any browser can reach a localhost
@@ -17,6 +17,7 @@
  */
 
 import { runAs } from './session-events.js';
+import { arriveOn } from './call-origin.js';
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'http';
 import { randomBytes } from 'crypto';
 import { readFile } from 'fs/promises';
@@ -27,7 +28,8 @@ import { readCapture } from './capture-file.js';
 import { deletePayload, listPayloads, readPayload } from './saved-payloads.js';
 import { decodePng, encodePng } from './png.js';
 import { diffPixels, sideBySide } from './pixel-diff.js';
-import type { BenchView, BoundaryState, CaptureKind, CaptureRect, FactKind, RuleCatalogueEntry } from './bench/wire.js';
+import type { BenchView, BoundaryState, CaptureKind, CaptureRect, FactKind, RuleCatalogueEntry, SequenceOutline, HistoryEntry, HistoryDetail, ToolGroup, ToolRun } from './bench/wire.js';
+import type { RunsView } from './bench/wire.js';
 import type { ActivityMove, ExpectedValue, KindCount } from './bench/kinds.js';
 
 const FACT_KINDS: FactKind[] = ['events', 'css', 'html', 'a11y'];
@@ -40,17 +42,20 @@ export interface BenchHandlers {
   save: (comment: string) => Promise<void>;
   discard: () => Promise<void>;
   tick: (request: { steps?: number; budgetMs?: number }) => Promise<void>;
+  stepTraffic: () => Promise<void>;
+  releaseWaiting: (id: number) => Promise<void>;
+  openDevtools: () => Promise<string>;
+  changeHold: (action: 'hold' | 'release' | 'step', layers?: Array<'code' | 'ui' | 'network'>) => Promise<void>;
   setPicker: (armed: boolean) => Promise<void>;
-  setFrozen: (frozen: boolean) => Promise<void>;
+  setHeld: (held: boolean, resume?: boolean) => Promise<void>;
   selectSequence: (name: string) => Promise<void>;
   describeSequence: (description: string, expectedOutcome: string) => Promise<void>;
   commentSequenceStep: (index: number, words: string) => Promise<void>;
-  addSequenceConditional: (
-    index: number, condition: string, thenSequence: string, rejoinAt?: number
-  ) => Promise<void>;
   gotoSequenceStep: (step: number) => Promise<void>;
   stepSequence: () => Promise<void>;
   playSequence: () => Promise<void>;
+  /** Play from the first step and keep what crossed under each step as its recorded traffic. */
+  baselineSequence: () => Promise<void>;
   /** Stop the run at the step it reached, leaving the sequence open. */
   haltSequence: () => Promise<void>;
   cancelSequence: () => Promise<void>;
@@ -60,6 +65,22 @@ export interface BenchHandlers {
   proxyEvents: (sinceId: string | null) => Promise<BoundaryState>;
   /** Every response kept on disk, across every site and sequence. */
   ruleCatalogue: () => Promise<RuleCatalogueEntry[]>;
+  /** One sequence's steps, for its row on the list of sequences. */
+  sequenceOutline: (name: string) => Promise<SequenceOutline | undefined>;
+  /** Every tool call this devharness holds in history, newest first. */
+  history: () => Promise<HistoryEntry[]>;
+  /** Runs going now, suites, and runs that ended. */
+  runs: () => Promise<RunsView>;
+  stopRun: (target: { runId?: string; connection?: string }) => Promise<void>;
+  /** Start a sequence in a headless browser of its own; the failure text, or nothing. */
+  runFromHome: (name: string) => Promise<string | undefined>;
+  /** Open a sequence and play it in the bench's own browser. */
+  playHere: (name: string) => Promise<void>;
+  renameFromHome: (from: string, to: string) => Promise<{ failure?: string; references: number }>;
+  historyDetail: (index: number) => Promise<HistoryDetail | undefined>;
+  /** Every tool this devharness serves, by the toolset that built it. */
+  tools: () => Promise<ToolGroup[]>;
+  callTool: (tool: string, args: Record<string, unknown>) => Promise<ToolRun>;
   /** The payload kept for one event, for reading and for holding. */
   proxyBody: (id: string) => Promise<string | null>;
   /** Answer this from now on with what it answered here. */
@@ -100,7 +121,6 @@ export interface BenchHandlers {
   /** Which sequences a response answers in by default. */
   setResponseMode: (key: string, mode: 'local' | 'optIn' | 'optOut') => Promise<void>;
   /** Hold a step open until `count` things have crossed under it. 0 clears. */
-  setWait: (step: number, count: number, key?: string, details?: { seconds?: number; onFail?: 'fail' | 'continue' }) => Promise<void>;
   /** Name a kind of traffic; an empty name drops it. */
   setName: (key: string, name: string) => Promise<void>;
   /** Mark what one kind on one step has to carry on replay; none unmarks it. */
@@ -123,6 +143,7 @@ export interface BenchHandlers {
   editSequenceStep: (index: number, params: unknown) => Promise<void>;
   /** Put a fixed pause of `ms` after a step. */
   insertSequenceTimer: (after: number, ms: number) => Promise<void>;
+  insertSequenceCheck: (after: number, params: Record<string, unknown>, comment?: string) => Promise<void>;
   moveSequenceStep: (from: number, to: number, count: number) => Promise<void>;
   setSequenceVariable: (name: string, value: string) => Promise<void>;
   removeSequenceVariable: (name: string) => Promise<void>;
@@ -174,13 +195,18 @@ export interface BenchServer {
   close: () => Promise<void>;
 }
 
-/** A posted mark: the whole value as text, or fields as an object; anything else unmarks. */
+/**
+ * A posted mark: the whole value as text, or fields by value and fields by
+ * shape as objects; anything else unmarks.
+ */
 function expectedIn(raw: unknown): ExpectedValue | undefined {
   if (raw === null || typeof raw !== 'object') return undefined;
-  const { value, fields } = raw as { value?: unknown; fields?: unknown };
-  if (fields !== null && typeof fields === 'object' && Object.keys(fields).length) {
-    return { fields: fields as Record<string, unknown> };
-  }
+  const { value, fields, shape } = raw as { value?: unknown; fields?: unknown; shape?: unknown };
+  const byValue = fields !== null && typeof fields === 'object' && Object.keys(fields).length
+    ? fields as Record<string, unknown> : undefined;
+  const byShape = shape !== null && typeof shape === 'object' && Object.keys(shape).length
+    ? Object.fromEntries(Object.entries(shape as Record<string, unknown>).map(([path, type]) => [path, String(type)])) : undefined;
+  if (byValue || byShape) return { ...(byValue ? { fields: byValue } : {}), ...(byShape ? { shape: byShape } : {}) };
   return typeof value === 'string' ? { value } : undefined;
 }
 
@@ -259,7 +285,7 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
 
   const server: Server = createServer((req, res) => {
     // The bench page is a person's; a request the agent sends marks itself.
-    void runAs(req.headers['x-devharness-by'] === 'agent' ? 'agent' : 'person', async () => {
+    void arriveOn('bench', () => runAs(req.headers['x-devharness-by'] === 'agent' ? 'agent' : 'person', async () => {
       const path = (req.url ?? '/').split('?')[0].replace(/\/$/, '');
       if (!path.startsWith(prefix)) return send(res, 404, 'Not found', 'text/plain');
       const route = path.slice(prefix.length) || '/';
@@ -305,6 +331,36 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
           }
         }
 
+        if (req.method === 'GET' && route === '/runs') {
+          return send(res, 200, JSON.stringify(await handlers.runs()), 'application/json');
+        }
+        if (req.method === 'GET' && route === '/history') {
+          return send(res, 200, JSON.stringify(await handlers.history()), 'application/json');
+        }
+        if (req.method === 'GET' && route === '/history/entry') {
+          const index = Number(new URL(req.url ?? '/', 'http://127.0.0.1').searchParams.get('index'));
+          const detail = Number.isInteger(index) ? await handlers.historyDetail(index) : undefined;
+          return detail
+            ? send(res, 200, JSON.stringify(detail), 'application/json')
+            : send(res, 404, 'No such call in history', 'text/plain');
+        }
+        if (req.method === 'GET' && route === '/tools') {
+          return send(res, 200, JSON.stringify(await handlers.tools()), 'application/json');
+        }
+        if (req.method === 'POST' && route === '/tools/call') {
+          const body = await readJson(req);
+          const args = body.args && typeof body.args === 'object' && !Array.isArray(body.args)
+            ? body.args as Record<string, unknown>
+            : {};
+          return send(res, 200, JSON.stringify(await handlers.callTool(String(body.tool ?? ''), args)), 'application/json');
+        }
+        if (req.method === 'GET' && route === '/sequence/outline') {
+          const name = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams.get('name') ?? '';
+          const outline = await handlers.sequenceOutline(name);
+          return outline
+            ? send(res, 200, JSON.stringify(outline), 'application/json')
+            : send(res, 404, 'No such sequence', 'text/plain');
+        }
         if (req.method === 'GET' && route === '/boundary/catalogue') {
           return send(res, 200, JSON.stringify(await handlers.ruleCatalogue()), 'application/json');
         }
@@ -415,6 +471,20 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
           switch (route) {
             case '/save': await handlers.save(String(body.comment ?? '')); break;
             case '/discard': await handlers.discard(); break;
+            case '/step-traffic': await handlers.stepTraffic(); break;
+            case '/hold/let': await handlers.releaseWaiting(Number(body.id)); break;
+            case '/devtools': {
+              const said = await handlers.openDevtools();
+              return send(res, 200, said, 'text/plain; charset=utf-8');
+            }
+            case '/hold': {
+              const action = ['hold', 'release', 'step'].includes(String(body.action)) ? body.action as 'hold' | 'release' | 'step' : undefined;
+              const layers = Array.isArray(body.layers)
+                ? body.layers.filter((layer: unknown): layer is 'code' | 'ui' | 'network' => layer === 'code' || layer === 'ui' || layer === 'network')
+                : undefined;
+              if (action) await handlers.changeHold(action, layers);
+              break;
+            }
             case '/tick':
               await handlers.tick(
                 body.steps !== undefined
@@ -423,7 +493,7 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
               );
               break;
             case '/picker': await handlers.setPicker(!!body.armed); break;
-            case '/freeze': await handlers.setFrozen(!!body.frozen); break;
+            case '/hold/page': await handlers.setHeld(!!body.held, body.resume === true); break;
             case '/sequence/select': await handlers.selectSequence(String(body.name ?? '')); break;
             case '/sequence/describe':
               await handlers.describeSequence(
@@ -433,21 +503,22 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
               await handlers.commentSequenceStep(
                 Math.max(0, Number(body.step) || 0), String(body.words ?? ''));
               break;
-            case '/sequence/step/conditional':
-              await handlers.addSequenceConditional(
-                Math.max(0, Number(body.step) || 0),
-                String(body.condition ?? ''),
-                String(body.thenSequence ?? ''),
-                body.rejoinAt === undefined || body.rejoinAt === null
-                  ? undefined
-                  : Math.max(0, Number(body.rejoinAt) || 0));
-              break;
             case '/sequence/goto': await handlers.gotoSequenceStep(Math.max(0, Number(body.step) || 0)); break;
             case '/sequence/step': await handlers.stepSequence(); break;
             case '/sequence/play': await handlers.playSequence(); break;
+            case '/sequence/baseline': await handlers.baselineSequence(); break;
             case '/sequence/halt': await handlers.haltSequence(); break;
+            case '/runs/stop': await handlers.stopRun({
+              ...(typeof body.runId === 'string' ? { runId: body.runId } : {}),
+              ...(typeof body.connection === 'string' ? { connection: body.connection } : {}),
+            }); break;
             case '/sequence/cancel': await handlers.cancelSequence(); break;
             case '/sequence/delete': await handlers.removeSequence(String(body.name ?? '')); break;
+            case '/runs/here': await handlers.playHere(String(body.name ?? '')); break;
+            case '/runs/start':
+              return send(res, 200, JSON.stringify({ failure: (await handlers.runFromHome(String(body.name ?? ''))) ?? null }), 'application/json');
+            case '/sequence/rename':
+              return send(res, 200, JSON.stringify(await handlers.renameFromHome(String(body.from ?? ''), String(body.to ?? ''))), 'application/json');
             case '/sequence/failure/dismiss': await handlers.dismissFailure(); break;
             case '/sequence/record':
               await handlers.recordSequence(
@@ -463,6 +534,12 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
               break;
             case '/sequence/step/timer':
               await handlers.insertSequenceTimer(Math.max(0, Number(body.after) || 0), Math.min(600000, Math.max(0, Number(body.ms) || 0)));
+              break;
+            case '/sequence/step/check':
+              if (body.params && typeof body.params === 'object') {
+                await handlers.insertSequenceCheck(Math.max(0, Number(body.after) || 0), body.params as Record<string, unknown>,
+                  typeof body.comment === 'string' ? body.comment : undefined);
+              }
               break;
             case '/sequence/step/remove':
               await handlers.removeSequenceStep(Math.max(0, Number(body.index) || 0));
@@ -568,14 +645,6 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
                 await handlers.setResponseMode(String(body.key ?? ''), body.mode);
               }
               break;
-            case '/boundary/wait':
-              await handlers.setWait(
-                Math.max(0, Number(body.step) || 0), Math.max(0, Number(body.count) || 0),
-                typeof body.key === 'string' && body.key ? body.key : undefined, {
-                  ...(Number(body.seconds) > 0 ? { seconds: Number(body.seconds) } : {}),
-                  ...(body.onFail === 'fail' || body.onFail === 'continue' ? { onFail: body.onFail } : {}),
-                });
-              break;
             case '/boundary/name':
               await handlers.setName(String(body.key ?? ''), String(body.name ?? '').slice(0, 80));
               break;
@@ -604,7 +673,7 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
       } catch (error) {
         send(res, 500, JSON.stringify({ error: String(error) }), 'application/json');
       }
-    });
+    }));
   });
 
   await new Promise<void>((resolve, reject) => {

@@ -30,7 +30,7 @@ keystroke, which is why the UI cannot live inside it.
 
 While the page is held, anything waiting on a timer stops, including a
 navigation's load timers, so other devharness tools report it as paused at a
-breakpoint. `bench({ action: 'unfreeze' })` or `stop` clears that — **not**
+breakpoint. `bench({ action: 'release' })` or `stop` clears that — **not**
 `execution({ action: 'resume' })`, which leaves the bench holding a page it no
 longer has.
 
@@ -52,10 +52,10 @@ and that only exists while stepping: a freely running page is never paused.
 The run bar appears only while a sequence is open: position, RESTART, REPLAY,
 STEP, PLAY, and PAUSE while a play is walking the steps.
 
-**PAUSE stops on the step it reached and freezes the page there.** The step in
+**PAUSE stops on the step it reached and holds the page there.** The step in
 flight is cut short by its abort signal rather than left to run out its settle,
 so what is on screen is the state at the moment of the press. PLAY carries on
-from that step and releases the freeze the pause put there.
+from that step and releases the hold the pause put there.
 
 That one step is taken again on resume. An input whose settle was cut may or
 may not have reached the page, and re-running it is the only certain answer —
@@ -75,7 +75,7 @@ sequence file** — so it travels with the sequence rather than beside it.
 - CAPTURE holds the page and opens a dialog: click an element in the app tab,
   or take **Screen** (the window), **Page** (the whole document) or **Page w/
   VP** (the document with the window's place marked). Cancel releases a hold
-  the dialog made; a freeze already on stays.
+  the dialog made; a hold already on stays.
 - An element capture can also record its `events` (handlers on it and every
   ancestor), `css` (rules that apply with their source, computed values, box,
   what covers it, rendered font), `html` and `a11y`, read at the frozen moment.

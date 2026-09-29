@@ -1,0 +1,229 @@
+{
+  "_comment": "CDP Tools replay sequence. Load with: replay({ action: \"load\", filename: \"<this-file>\" }), then run with: replay({ action: \"run\", name: \"<this-file>\" }). Needs a browser launched with proxy: true.",
+  "id": "seq-1790600000000-1",
+  "name": "hold-traffic",
+  "description": "The network layer of a hold: what crosses the proxy while held, one message per step, and the rest in arrival order on release",
+  "expectedOutcome": "Nothing sent or received crosses while the traffic is held; each step lets one message through; release delivers the rest in the order the server sent them",
+  "startUrl": "http://localhost:7788/",
+  "commands": [
+    {
+      "tool": "navigate",
+      "params": {
+        "action": "goto",
+        "url": "http://localhost:7788/"
+      }
+    },
+    {
+      "tool": "check",
+      "params": {
+        "selector": "[data-testid=\"whats-new\"]",
+        "condition": "present",
+        "holds": {
+          "run": "dismiss-whats-new"
+        },
+        "fails": "continue"
+      }
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"conn-connect\"]"
+      }
+    },
+    {
+      "tool": "wait",
+      "params": {
+        "selector": "[data-testid=\"conn-state\"]:has-text(\"open\")",
+        "timeoutMs": 15000
+      }
+    },
+    {
+      "tool": "check",
+      "params": {
+        "expression": "document.querySelector('[data-testid=\"log\"]').textContent.includes('\"tag\":\"ready\"')",
+        "withinMs": 3000,
+        "fails": "stop"
+      },
+      "comment": "the server's greeting has reached the page, so nothing from before the hold is still in flight"
+    },
+    {
+      "tool": "hold",
+      "params": {
+        "action": "hold",
+        "layers": ["network"]
+      },
+      "comment": "only the traffic: the page keeps running, so it can still be clicked and read"
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"conn-pull3\"]"
+      },
+      "comment": "the page sends {cmd: push, n: 3}; the proxy keeps it"
+    },
+    {
+      "tool": "check",
+      "params": {
+        "afterMs": 600
+      },
+      "comment": "longer than the server takes to send three pushes 60ms apart, had the ask reached it"
+    },
+    {
+      "tool": "check",
+      "params": {
+        "traffic": {
+          "urlIncludes": "/live",
+          "direction": "sent",
+          "textIncludes": "\"cmd\":\"push\""
+        },
+        "count": 0,
+        "operator": "equals",
+        "stepsBack": 2,
+        "fails": "stop"
+      },
+      "comment": "the page's ask has not crossed to the server"
+    },
+    {
+      "tool": "check",
+      "params": {
+        "expression": "(document.querySelector('[data-testid=\"log\"]').textContent.match(/\"tag\":\"push\"/g) || []).length === 0",
+        "fails": "stop"
+      },
+      "comment": "and so no push has reached the page"
+    },
+    {
+      "tool": "hold",
+      "params": {
+        "action": "step",
+        "layer": "network"
+      },
+      "comment": "the oldest waiting message crosses: the ask reaches the server, and its three pushes come back into the queue"
+    },
+    {
+      "tool": "check",
+      "params": {
+        "afterMs": 600
+      }
+    },
+    {
+      "tool": "check",
+      "params": {
+        "traffic": {
+          "urlIncludes": "/live",
+          "direction": "sent",
+          "textIncludes": "\"cmd\":\"push\""
+        },
+        "count": 1,
+        "operator": "equals",
+        "stepsBack": 2,
+        "fails": "stop"
+      },
+      "comment": "the ask crossed under the step that let it through"
+    },
+    {
+      "tool": "check",
+      "params": {
+        "traffic": {
+          "urlIncludes": "/live",
+          "direction": "received",
+          "textIncludes": "\"tag\":\"push\""
+        },
+        "count": 0,
+        "operator": "equals",
+        "stepsBack": 3,
+        "fails": "stop"
+      },
+      "comment": "the server has answered, and every push is still waiting at the proxy"
+    },
+    {
+      "tool": "check",
+      "params": {
+        "expression": "(document.querySelector('[data-testid=\"log\"]').textContent.match(/\"tag\":\"push\"/g) || []).length === 0",
+        "fails": "stop"
+      }
+    },
+    {
+      "tool": "hold",
+      "params": {
+        "action": "step",
+        "layer": "network"
+      },
+      "comment": "one push crosses"
+    },
+    {
+      "tool": "check",
+      "params": {
+        "expression": "(document.querySelector('[data-testid=\"log\"]').textContent.match(/\"tag\":\"push\"/g) || []).length === 1",
+        "withinMs": 1000,
+        "fails": "stop"
+      },
+      "comment": "exactly one push on the page"
+    },
+    {
+      "tool": "check",
+      "params": {
+        "traffic": {
+          "urlIncludes": "/live",
+          "direction": "received",
+          "textIncludes": "\"tag\":\"push\""
+        },
+        "count": 1,
+        "operator": "equals",
+        "stepsBack": 2,
+        "fails": "stop"
+      },
+      "comment": "and one recorded, under the step that let it through"
+    },
+    {
+      "tool": "hold",
+      "params": {
+        "action": "release",
+        "layers": ["network"]
+      },
+      "comment": "the two left cross, in the order they arrived"
+    },
+    {
+      "tool": "check",
+      "params": {
+        "expression": "(document.querySelector('[data-testid=\"log\"]').textContent.match(/\"tag\":\"push\"/g) || []).length === 3",
+        "withinMs": 2000,
+        "fails": "stop"
+      },
+      "comment": "all three on the page"
+    },
+    {
+      "tool": "check",
+      "params": {
+        "expression": "JSON.stringify([...document.querySelector('[data-testid=\"log\"]').textContent.matchAll(/\"tag\":\"push\",\"i\":(\\d)/g)].map(m => Number(m[1]))) === '[1,2,3]'",
+        "fails": "stop"
+      },
+      "comment": "in the order the server sent them"
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"conn-bye\"]"
+      },
+      "comment": "the page's own traffic crosses again with nothing held"
+    },
+    {
+      "tool": "assert",
+      "params": {
+        "selector": "[data-testid=\"conn-state\"]",
+        "condition": "text",
+        "operator": "equals",
+        "right": "disconnected",
+        "timeoutMs": 5000,
+        "message": "after release the page's disconnect reaches the server and its close comes back"
+      }
+    }
+  ],
+  "createdAt": 1790600000000,
+  "tags": [
+    "socket-app",
+    "hold"
+  ]
+}

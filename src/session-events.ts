@@ -21,7 +21,7 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { getOutputPath } from './helpers/paths.js';
 
-export type EventKind = 'block' | 'message' | 'annotation' | 'sequence' | 'screenshot' | 'comparison' | 'investigate' | 'proxy';
+export type EventKind = 'block' | 'message' | 'annotation' | 'sequence' | 'screenshot' | 'comparison' | 'investigate' | 'proxy' | 'hold';
 
 export interface SessionEvent {
   ts: string;

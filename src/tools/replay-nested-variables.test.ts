@@ -6,7 +6,7 @@
  * the call read as an override. A recorded credential therefore reached the
  * live app with the run reporting success - the shape that makes it worse than
  * a plain failure, because nothing in the output says the substitution did not
- * happen. A shared login helper reached by a `conditional` is exactly where a
+ * happen. A shared login helper a check runs is exactly where a
  * supplied password has to land, so the top-level-only substitution missed the
  * one case that matters.
  */
@@ -16,6 +16,7 @@ import type { ExecutionContext } from './replay-executor.js';
 import type { CommandSequence, RecordedCommand } from '../command-recorder.js';
 import { configManager } from '../config.js';
 import { productionShaped } from '../test-support/fake-execute-tool-call.js';
+import { HELD, runsOnPass } from '../test-support/check-steps.js';
 
 const seq = (name: string, commands: RecordedCommand[]): CommandSequence =>
   ({ id: `seq-${name}`, name, commands, createdAt: 1 });
@@ -31,6 +32,7 @@ function makeHarness(nested: CommandSequence[]) {
   const logged: string[] = [];
 
   const executeToolCall = vi.fn(productionShaped(async (tool: string, params: Record<string, any>) => {
+    if (tool === 'check') return HELD;
     if (tool === 'input' && params.action === 'type') {
       typed.push({ selector: params.selector, text: String(params.text) });
       if (params.selector) fieldValues.set(String(params.selector), String(params.text));
@@ -81,13 +83,13 @@ const login = () => seq('login', [
 ]);
 
 describe('variables reach nested sequences', () => {
-  it("substitutes inside a conditional's then sequence", async () => {
+  it("substitutes inside the sequence a check runs", async () => {
     const { typed, ctx } = makeHarness([login()]);
     ctx.variables = { var_0__password: 'supplied-secret' };
 
     const result = await executeSteps({
       sequence: seq('outer', [
-        { tool: 'conditional', params: { if: '{{url:contains:example}}', then: 'login' } },
+        runsOnPass('login'),
       ]),
       ctx,
       startStep: 0,
@@ -118,13 +120,13 @@ describe('variables reach nested sequences', () => {
   });
 
   it('reaches a sequence nested two deep', async () => {
-    const mid = seq('mid', [{ tool: 'conditional', params: { if: '{{url:contains:example}}', then: 'login' } }]);
+    const mid = seq('mid', [runsOnPass('login')]);
     const { typed, ctx } = makeHarness([mid, login()]);
     ctx.variables = { var_0__password: 'supplied-secret' };
 
     await executeSteps({
       sequence: seq('outer', [
-        { tool: 'conditional', params: { if: '{{url:contains:example}}', then: 'mid' } },
+        runsOnPass('mid'),
       ]),
       ctx,
       startStep: 0,
@@ -138,7 +140,7 @@ describe('variables reach nested sequences', () => {
 
     await executeSteps({
       sequence: seq('outer', [
-        { tool: 'conditional', params: { if: '{{url:contains:example}}', then: 'login' } },
+        runsOnPass('login'),
       ]),
       ctx,
       startStep: 0,

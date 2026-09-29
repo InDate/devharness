@@ -31,6 +31,7 @@ const files = {
   '/index.html': ['index.html', 'text/html'],
   '/second.html': ['second.html', 'text/html'],
   '/socket-worker.js': ['socket-worker.js', 'text/javascript'],
+  '/app-sw.js': ['app-sw.js', 'text/javascript'],
   // Asked for by every page load; unanswered it is a 404 in every console read.
   '/favicon.svg': ['favicon.svg', 'image/svg+xml'],
   '/favicon.ico': ['favicon.svg', 'image/svg+xml'],

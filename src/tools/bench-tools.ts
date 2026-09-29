@@ -1,7 +1,7 @@
 /**
  * Bench tool - hold the page still, click what is wrong, keep working.
  *
- * Mode control only; the freeze, the picker and the annotation store live in
+ * Mode control only; the hold, the picker and the annotation store live in
  * `src/bench-mode.ts`, and the page it is driven from in `src/bench-control.ts`.
  * Nothing here blocks: `start` returns as soon as the bench tab is open, and
  * each saved annotation arrives on the session's event stream instead of on
@@ -38,7 +38,7 @@ import {
   startBench,
   stopBench,
   tickBench,
-  setFrozen,
+  setHeld,
   setPicker,
   type SequenceDriver,
   getBenchSession,
@@ -54,15 +54,16 @@ import {
   capturesInFlight,
   retakeCapture,
 } from '../bench-mode.js';
-import type { BoundaryRule, HiddenKind, RuleCatalogueEntry } from '../bench/wire.js';
+import type { BoundaryRule, HiddenKind, RuleCatalogueEntry, ToolGroup } from '../bench/wire.js';
+import { unlisted } from '../call-origin.js';
 
 const benchSchema = z.object({
-  action: z.enum(['start', 'stop', 'tick', 'freeze', 'unfreeze', 'picker', 'list', 'status', 'keepStep', 'dropStep', 'flagStep', 'sweep', 'retake', 'capture'])
-    .describe('start (open the bench with the page running and the picker idle), freeze/unfreeze (hold the page or let it run, without closing the bench - driving the app needs it running), picker (arm or disarm, via armed), tick (run forward by steps or budgetMs), stop (release the page and close), keepStep/dropStep (settle the recorded step capture is held on), sweep (report the note captures no sequence refers to, and with remove:true delete them), retake (take a capture\'s region again and compare), capture (read a capture file\'s record and element facts), list, status'),
+  action: z.enum(['start', 'stop', 'tick', 'hold', 'release', 'picker', 'list', 'status', 'keepStep', 'dropStep', 'flagStep', 'sweep', 'retake', 'capture'])
+    .describe('start (open the bench with the page running and the picker idle), hold/release (hold every layer of the page or let it all run, without closing the bench - driving the app needs it running), picker (arm or disarm, via armed), tick (run forward by steps or budgetMs), stop (release the page and close), keepStep/dropStep (settle the recorded step capture is held on), sweep (report the note captures no sequence refers to, and with remove:true delete them), retake (take a capture\'s region again and compare), capture (read a capture file\'s record and element facts), list, status'),
   connectionReason: z.string()
     .describe('Connection reference (use the reference from launchChrome output)'),
   steps: z.number().int().positive().max(1000).optional()
-    .describe('tick: callbacks to run before freezing again (default 1). The exact unit - one callback is one thing the page does'),
+    .describe('tick: callbacks to run before holding again (default 1). The exact unit - one callback is one thing the page does'),
   budgetMs: z.number().int().positive().max(60000).optional()
     .describe('tick: instead of steps, run callbacks until at least this much page time has been spent. Reports where it landed, which is rarely the number asked for'),
   armed: z.boolean().optional()
@@ -302,27 +303,27 @@ function subjectOf(params: Record<string, any>): string {
   return String(subject ?? '');
 }
 
+/** The text parts of a tool response joined; an image part is named, since its bytes are not text. */
+function textOf(result: any): string {
+  return (result?.content ?? [])
+    .map((part: any) => (part?.type === 'text' ? String(part.text ?? '') : `[${part?.type ?? 'part'}]`))
+    .join('\n');
+}
+
 /** One line per recorded command, enough to recognise it in a list. */
 function labelFor(command: { tool: string; params: Record<string, any> }): string {
   const { tool, params } = command;
-  // A conditional carries no selector or url, so the general subject is empty
-  // and the row reads only "conditional" - the one step whose whole behaviour
-  // is the two fields it holds.
-  if (tool === 'conditional') {
-    const rejoin = params?.rejoinAt !== undefined
-      ? `, then step ${Number(params.rejoinAt) + 1}`
-      : '';
-    return `conditional when ${params?.if ?? '?'} run ${params?.then ?? '?'}${rejoin}`;
-  }
   // A check reads as what it checks, the same words its row and the run's
   // report use.
   // A check that reads nothing is a timer, and reads as the wait it is.
   if (tool === 'check' && formOf(checkSpecOf(params ?? {})) === 'time') return `wait for ${params?.afterMs ?? 0}ms`;
-  if (tool === 'check') return `check ${subjectOfCheck(checkSpecOf(params ?? {}))}`;
+  if (tool === 'check') return `check ${subjectOfCheck(checkSpecOf(params ?? {})).replace(/"(\{\{var:[^}]+\}\})"/g, '$1')}`;
   // An assert's selector alone leaves out what it compares, and a timed wait
   // has no subject at all; both read in the check's words instead, which is
   // what the step's marker needs once its row carries only the answer.
-  if (tool === 'assert') return `assert ${subjectOfCheck(assertAsCheck(params ?? {}))}`;
+  // A value that is a lone variable is shown with the variable's own value,
+  // which carries its quotes when it is a string, so the token is not quoted again.
+  if (tool === 'assert') return `assert ${subjectOfCheck(assertAsCheck(params ?? {})).replace(/"(\{\{var:[^}]+\}\})"/g, '$1')}`;
   if (tool === 'wait' && params?.ms !== undefined) return `wait for ${params.ms}ms`;
   if (tool === 'wait' && params?.selectorGone !== undefined) return `wait ${params.selectorGone} absent`;
   const head = params?.action ? `${tool}.${params.action}` : tool;
@@ -389,7 +390,8 @@ export function createSequenceDriver(
   commandRecorder: CommandRecorder,
   executeToolCall: (
     tool: string, args: Record<string, unknown>, abortSignal?: AbortSignal,
-  ) => Promise<any>
+  ) => Promise<any>,
+  catalogue: () => ToolGroup[],
 ): SequenceDriver {
   /** The human-readable text of a tool response, wherever it is carried. */
   const textOf = (value: any): string => {
@@ -655,7 +657,7 @@ export function createSequenceDriver(
     listCatalogue: async () => {
       const saved = await commandRecorder.listSavedSequencesOnDisk().catch(() => []);
       const cards = new Map<string, {
-        name: string; steps: number; notes: number; description?: string; expectedOutcome?: string;
+        name: string; steps: number; notes: number; description?: string; expectedOutcome?: string; tags?: string[];
       }>();
       for (const entry of saved) {
         const name = String(entry.name ?? entry.filename).replace(/\.json$/, '');
@@ -665,6 +667,7 @@ export function createSequenceDriver(
           notes: entry.noteCount,
           ...(entry.description ? { description: entry.description } : {}),
           ...(entry.expectedOutcome ? { expectedOutcome: entry.expectedOutcome } : {}),
+          ...(entry.tags?.length ? { tags: entry.tags } : {}),
         });
       }
       // One held in memory and not yet written is still a sequence to open,
@@ -680,6 +683,60 @@ export function createSequenceDriver(
         });
       }
       return [...cards.values()].sort((a, b) => a.name.localeCompare(b.name));
+    },
+
+    history: () => commandRecorder.getHistory(Number.MAX_SAFE_INTEGER).map(command => {
+      const text = textOf(command.result);
+      const connection = command.params?.connectionReason ?? command.params?.reference;
+      return {
+        index: command.index,
+        at: command.timestamp,
+        tool: command.tool,
+        label: labelFor(command).slice(command.tool.length).replace(/^[. ]/, ''),
+        ...(typeof connection === 'string' ? { connection } : {}),
+        from: command.from,
+        ...(command.run !== undefined ? { run: command.run } : {}),
+        ...(command.result !== undefined ? { failed: command.result?.isError === true } : {}),
+        ...(text ? { said: text.split('\n').find(line => line.trim())?.slice(0, 160) } : {}),
+      };
+    }),
+
+    historyDetail: (index: number) => {
+      const command = commandRecorder.getCommand(index);
+      if (!command) return undefined;
+      return {
+        params: command.params,
+        ...(command.result !== undefined ? { result: textOf(command.result) } : {}),
+      };
+    },
+
+    tools: catalogue,
+
+    callTool: async (tool: string, args: Record<string, unknown>) => {
+      try {
+        return { failed: false, result: textOf(await executeToolCall(tool, args)) };
+      } catch (error) {
+        return { failed: true, result: textOf(error) };
+      }
+    },
+
+    outlineOf: async (name: string) => {
+      let sequence: any = loadedByName(name);
+      if (!sequence) {
+        const onDisk = (await commandRecorder.listSavedSequencesOnDisk().catch(() => [] as any[]))
+          .find((entry: any) => entry.name === name || entry.filename === `${name}.json`);
+        if (!onDisk) return undefined;
+        sequence = JSON.parse(await fs.readFile(onDisk.fullPath, 'utf-8'));
+      }
+      const commands: Array<{ tool: string; params: Record<string, any>; annotations?: unknown[] }> = sequence.commands ?? [];
+      return {
+        ...(sequence.startUrl ? { startUrl: String(sequence.startUrl) } : {}),
+        steps: commands.map(command => ({
+          label: labelFor(command), tool: command.tool, notes: command.annotations?.length ?? 0,
+          ...(['check', 'assert', 'wait'].includes(command.tool) ? { params: command.params } : {}),
+        })),
+        teardown: (sequence.teardown ?? []).map(labelFor),
+      };
     },
 
     active: () => {
@@ -729,6 +786,7 @@ export function createSequenceDriver(
             ...(command.annotations?.length ? { annotations: command.annotations } : {}),
             ...(command.traffic ? { traffic: command.traffic } : {}),
             ...(command.expected ? { expected: command.expected } : {}),
+            ...(command.addedAt !== undefined ? { addedAt: command.addedAt } : {}),
           };
         }),
         ...(sequence.boundaryPlacements ? { placements: sequence.boundaryPlacements } : {}),
@@ -989,7 +1047,10 @@ export function createSequenceDriver(
       if (!recorded || !target) return `"${recorded ? into : recordedName}" is not loaded`;
       // The recording ran on the page the run stood on, so its steps follow
       // on from that step with nothing of their own to open.
-      const steps = (recorded.commands ?? []).filter((command, index) => !(index === 0 && command.tool === 'navigate'));
+      const addedAt = Date.now();
+      const steps = (recorded.commands ?? [])
+        .filter((command, index) => !(index === 0 && command.tool === 'navigate'))
+        .map(command => ({ ...command, addedAt }));
       const commands = [...(target.commands ?? [])];
       const at = Math.min(Math.max(after + 1, 0), commands.length);
       renumberSteps(target, (old) => (old >= at ? old + steps.length : old));
@@ -1011,7 +1072,6 @@ export function createSequenceDriver(
 
     saveBoundaryRules: async (
       rules: Array<Record<string, unknown>>,
-      waits: Array<{ step: number; count: number; key?: string; seconds?: number; onFail?: 'fail' | 'continue' }>,
       refuseWrites: boolean,
       names: Record<string, string> = {},
       change?: string,
@@ -1023,7 +1083,6 @@ export function createSequenceDriver(
       if (!sequence) return 'no sequence is open';
       const held = sequence as {
         boundaryRules?: Array<Record<string, unknown>>;
-        boundaryWaits?: Array<{ step: number; count: number; key?: string; seconds?: number; onFail?: 'fail' | 'continue' }>;
         boundaryRefuse?: 'writes';
         boundaryNames?: Record<string, string>;
         boundaryRulesOff?: string[];
@@ -1032,7 +1091,6 @@ export function createSequenceDriver(
         boundaryHiddenOff?: string[];
       };
       if (rules.length) held.boundaryRules = rules; else delete held.boundaryRules;
-      if (waits.length) held.boundaryWaits = waits; else delete held.boundaryWaits;
       if (refuseWrites) held.boundaryRefuse = 'writes'; else delete held.boundaryRefuse;
       if (Object.keys(names).length) held.boundaryNames = names; else delete held.boundaryNames;
       if (off.length) held.boundaryRulesOff = off; else delete held.boundaryRulesOff;
@@ -1099,10 +1157,9 @@ export function createSequenceDriver(
 
     openBoundaryRules: () => {
       const sequence = openSequence();
-      if (!sequence) return { rules: [], waits: [], refuseWrites: false, names: {}, off: [], on: [], hiddenOn: [], hiddenOff: [] };
+      if (!sequence) return { rules: [], refuseWrites: false, names: {}, off: [], on: [], hiddenOn: [], hiddenOff: [] };
       const held = sequence as {
         boundaryRules?: Array<Record<string, unknown>>;
-        boundaryWaits?: Array<{ step: number; count: number; key?: string; seconds?: number; onFail?: 'fail' | 'continue' }>;
         boundaryRefuse?: 'writes';
         boundaryNames?: Record<string, string>;
         boundaryRulesOff?: string[];
@@ -1112,7 +1169,6 @@ export function createSequenceDriver(
       };
       return {
         rules: held.boundaryRules ?? [],
-        waits: held.boundaryWaits ?? [],
         refuseWrites: held.boundaryRefuse === 'writes',
         names: held.boundaryNames ?? {},
         off: held.boundaryRulesOff ?? [],
@@ -1207,12 +1263,15 @@ export function createSequenceDriver(
       if (!sequence) return 'no sequence is open';
       const commands = sequence.commands ?? [];
       for (const { index, traffic } of entries) {
-        if (index >= 0 && index < commands.length) commands[index].traffic = traffic;
+        if (index < 0 || index >= commands.length) continue;
+        commands[index].traffic = traffic;
+        // A baseline takes the step in, so it no longer reads as new.
+        delete commands[index].addedAt;
       }
       return persist(sequence, `traffic recorded for ${entries.length} step${entries.length === 1 ? '' : 's'}`);
     },
 
-    trafficIn: async (connection: string, from: number, to: number) => {
+    trafficIn: (connection: string, from: number, to: number) => unlisted(async () => {
       const empty = { requests: 0, failed: 0, opened: 0, writes: 0, lines: [] as string[] };
       const http = await executeToolCall('network', {
         action: 'list', connectionReason: connection, since: from, until: to, limit: 50,
@@ -1252,7 +1311,7 @@ export function createSequenceDriver(
           ...written.slice(0, 4).map((w: any) => `${w.area}Storage ${w.operation} ${w.key ?? ''}`.trim()),
         ],
       };
-    },
+    }),
 
     recordedSoFar: (eventsJson: string, startUrl: string, edits?: Map<number, Record<string, unknown>>) => {
       let events: any[] = [];
@@ -1341,31 +1400,6 @@ export function createSequenceDriver(
       return persist(sequence, `reason for step ${index + 1} changed`);
     },
 
-    /**
-     * Insert a step that runs another sequence when its guard holds.
-     *
-     * Replay reads this one: a `conditional` step is executed, where a note
-     * against a step is not. The guard and the target are validated by replay
-     * itself, so a bad selector type or a missing sequence is reported here
-     * rather than failing halfway through a later run.
-     */
-    addConditional: async (
-      index: number, condition: string, thenSequence: string, rejoinAt?: number
-    ) => {
-      const sequence = openSequence();
-      if (!sequence) return 'no sequence is open';
-      const failure = await replay({
-        action: 'addConditional',
-        name: sequence.name,
-        condition,
-        thenSequence,
-        insertAfterStep: index + 1,
-        ...(rejoinAt !== undefined ? { rejoinAt } : {}),
-      });
-      if (failure) return failure;
-      return persist(sequence, `fork added after step ${index + 1}`);
-    },
-
     removeVariable: async (name: string) => {
       const sequence = openSequence();
       if (!sequence) return 'no sequence is open';
@@ -1397,6 +1431,17 @@ export function createSequenceDriver(
       renumberSteps(sequence, stepMap(sequence.commands ?? [], commands));
       sequence.commands = commands;
       return persist(sequence, `a ${ms / 1000}s pause after step ${after + 1}`);
+    },
+
+    insertCheck: async (after: number, params: Record<string, unknown>, comment?: string) => {
+      const sequence = openSequence();
+      if (!sequence) return 'no sequence is open';
+      const commands = [...(sequence.commands ?? [])];
+      if (after < 0 || after >= commands.length) return `step ${after + 1} is not in "${sequence.name}"`;
+      commands.splice(after + 1, 0, { tool: 'check', params, addedAt: Date.now(), ...(comment ? { comment } : {}) } as any);
+      renumberSteps(sequence, stepMap(sequence.commands ?? [], commands));
+      sequence.commands = commands;
+      return persist(sequence, `a check after step ${after + 1}`);
     },
 
     removeStep: async (index: number) => {
@@ -1484,7 +1529,8 @@ export function createBenchTools(
   sourceMapHandler: SourceMapHandler,
   commandRecorder: CommandRecorder,
   executeToolCall: (tool: string, args: Record<string, unknown>) => Promise<any>,
-  resolveConnectionFromReason: (connectionReason: string) => Promise<any>
+  resolveConnectionFromReason: (connectionReason: string) => Promise<any>,
+  catalogue: () => ToolGroup[],
 ) {
   const bench = createTool(
       'Open the bench beside a driven app: hold the page still, read what crossed its boundary and what caused each thing, record and step sequences, and collect element-level comments. Actions: start (open the bench, arm Chrome\'s element picker), tick (advance frozen time by budgetMs to walk into a transient state), stop (release the page), list, status.',
@@ -1625,7 +1671,7 @@ export function createBenchTools(
               connection,
               sessionName,
               sourceMapHandler,
-              sequences: createSequenceDriver(commandRecorder, executeToolCall),
+              sequences: createSequenceDriver(commandRecorder, executeToolCall, catalogue),
               // A tab in the same browser, so it can be dragged into Chrome's
               // split view beside the frozen app.
               openBench: async (url: string) => {
@@ -1747,9 +1793,9 @@ export function createBenchTools(
             };
           }
 
-          case 'freeze':
-          case 'unfreeze': {
-            const state = await setFrozen(connection, action === 'freeze');
+          case 'hold':
+          case 'release': {
+            const state = await setHeld(connection, action === 'hold');
             if (!state) {
               return createErrorResponse('BENCH_NOT_ACTIVE', { connection, action });
             }
@@ -1758,7 +1804,7 @@ export function createBenchTools(
               held: state.frozen ? 'held' : 'running',
               detail: state.frozen
                 ? 'The page is held: its JS is stopped, so it cannot be driven until it runs again.'
-                : 'The page is running. Drive it to the moment worth holding, then freeze.',
+                : 'The page is running. Drive it to the moment worth holding, then hold it.',
               pickerState: state.pickerArmed ? 'armed' : 'idle',
             });
             return { ...response, _meta: buildMeta(action, { active: true, connection, state }) };

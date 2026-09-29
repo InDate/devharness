@@ -73,7 +73,11 @@ lines arrives reassembled with the newline the spec puts between them.
 ## Egress that never reaches the network
 
 `write localStorage`, `write sessionStorage`, `write a cookie`,
-`write IndexedDB` each leave a record in the page and cross no boundary.
+`write IndexedDB`, `write Cache Storage`, `write a file` (the origin-private
+file system) and `register a service worker` each leave a record in the page
+and cross no boundary. `remove all of these` undoes every one, and the
+`stored:` readout lists which the page holds, as one attribute each, for a
+synchronous check to read.
 A network record of these holds nothing - measured: after a localStorage write
 and an IndexedDB write, it held the document and a favicon 404.
 
@@ -83,7 +87,8 @@ and the value replaced. IndexedDB emits no write event and stays outside it.
 
 `write a draft, then POST it` writes the same record and sends it, so the two
 cases are separable: one click produces a boundary crossing, the other produces
-none while changing what the app holds.
+none while changing what the app holds. It sends the session token, so it needs
+`POST /session` first.
 
 `DRAFT_FAILS=1` makes `POST /draft` answer 500, for checking what a replay does
 with an endpoint that has regressed. Note what happens: the 500 logs a console
@@ -103,7 +108,8 @@ comparison is reached. Boundary drift covers the class that logs nothing.
 
 ## Sequences
 
-`sequences/` holds three that exercise every kind of check a sequence carries.
+`sequences/` holds three that exercise every kind of check a sequence carries,
+and one that takes every store the page keeps through its lifecycle.
 Copy them, with `activity/`, into the project's `.devharness/` to run them.
 
 - **checks-lifecycle** — the /live connection end to end: a guard that runs
@@ -117,5 +123,14 @@ Copy them, with `activity/`, into the project's `.devharness/` to run them.
   refuses the first reconnect after a drop, so a run goes two levels deep;
   the replay's nesting limit bounds a server that never lets it back in.
 - **dismiss-whats-new** — closes the banner.
+- **hold-traffic** — holds the network layer on an open /live connection. The
+  page's ask for three pushes waits at the proxy, the server sees nothing and
+  the page receives nothing. One step lets the ask through and the three
+  pushes wait in its place; the next lets one push through; release delivers
+  the other two in the order the server sent them. Needs `proxy: true`.
+- **state-lifecycle** — writes each store once, writes two again, reloads with
+  a worker running, opens and closes a worker with its own socket, removes
+  every write, then removes them again on an empty app. A baseline of it holds
+  each store's set, changed and removed rows, and none under the second clear.
 
 The first run in a browser runs `dismiss-whats-new`; the second skips it.

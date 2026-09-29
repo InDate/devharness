@@ -33,7 +33,7 @@ export function CaptureDialog({ heldBefore, facts, post, note }: {
     <div class="scrim capturescrim">
       <div class="report capturedialog" role="dialog" aria-label="screenshot">
         <h2 class="capturetitle">Screenshot active</h2>
-        <p class="hint capturestate">{heldBefore ? 'page was already frozen' : 'page is frozen'}</p>
+        <p class="hint capturestate">{heldBefore ? 'page was already held' : 'page is held'}</p>
         {note !== undefined && <p class="capturenote">{note || '(no words)'}</p>}
 
         <section class="capturepick">

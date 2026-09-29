@@ -22,6 +22,9 @@ import { getIssue } from '../issue-tracker.js';
 import { deriveConnectionReference, sanitizeReference } from '../reference-validator.js';
 import { normalizeProfileName } from '../chrome-launcher.js';
 import { runRegistry, type RunRecord } from './replay-run-registry.js';
+import { appendRun, beginSuite } from '../run-log.js';
+import type { StepResult } from './replay-executor.js';
+import type { StepCheck } from '../bench/wire.js';
 
 import {
   loadSequence,
@@ -39,6 +42,7 @@ import {
   showClickEffect,
   showKeyPress,
   removeReplayCursor,
+  checkIfPaused,
   autoLaunchChrome,
   commandNeedsBrowserConnection,
   analyzeRecordedStepConnections,
@@ -46,7 +50,6 @@ import {
   normalizeStepConnections,
   sanitizeConnectionMap,
   parseConnectionList,
-  validateConditionSyntax,
   type ExecutionContext,
   type LoadSequenceResult,
 } from './replay-executor.js';
@@ -60,7 +63,7 @@ import {
  * through the MCP tool map (see replay-executor.ts). These are always valid
  * step names even though they are not registered tools.
  */
-const VIRTUAL_STEP_TOOLS = new Set(['conditional', 'forEach']);
+const VIRTUAL_STEP_TOOLS = new Set(['forEach']);
 
 /** Levenshtein distance, used only to suggest a likely intended tool name. */
 function editDistance(a: string, b: string): number {
@@ -205,7 +208,7 @@ import {
   formatStepResults,
   formatInsertPrompt,
   formatInsertResult,
-  formatConditionalAdded,
+  formatCheckAdded,
   formatDeclarations,
   formatEventsForReview,
 } from './replay-formatters.js';
@@ -231,6 +234,8 @@ import { hasTemplateToken } from './interpolation.js';
 import { parseEnvFile } from '../helpers/env-file.js';
 import { getProjectDir } from '../helpers/paths.js';
 import { isAbsolute } from 'path';
+import { checkSchema, checkSpecOf, type CheckOutcome } from './check-tools.js';
+import { subjectOf as subjectOfCheck } from './check-engine.js';
 
 // =============================================================================
 // Schema Definition
@@ -240,7 +245,7 @@ const replaySchema = z.object({
   action: z.enum([
     'history', 'create', 'list', 'get', 'delete',
     'export', 'load', 'listSaved', 'deleteSaved',
-    'run', 'runAll', 'step', 'finish', 'insert', 'addConditional', 'declare', 'status', 'cancel',
+    'run', 'runAll', 'step', 'finish', 'insert', 'addCheck', 'declare', 'status', 'cancel',
     'repeat', 'runFromLog',
     'recordInteraction'
   ]),
@@ -250,11 +255,12 @@ const replaySchema = z.object({
   expectedOutcome: z.string().optional(),
   startUrl: z.string().optional().describe('create: sequence start URL. run: replace the stored startUrl for this run only (e.g. a freshly minted link)'),
   envFile: z.string().optional().describe("run/runAll: a KEY=value file supplying the {{env:NAME}} tokens this run resolves. A relative path resolves against the project directory (the one holding .devharness); absolute is used as-is. Its values WIN over the server's own environment, and the server's environment is never modified - two runs may name different files. A missing file, or a line that is neither blank, a # comment, nor NAME=value, fails before anything runs. Keeps a credential out of the sequence file and out of this call, and changing it needs no client restart"),
-  baseUrl: z.string().optional().describe('run/runAll: retarget at another deployment — every absolute URL (startUrl, command params, a declared connection\u2019s launch url) keeps its path/query but takes this origin, in the sequence itself and in every sequence it reaches through a conditional or forEach. On runAll it applies to every sequence in the suite. Not preserved across a mid-run pause/step resume'),
+  baseUrl: z.string().optional().describe('run/runAll: retarget at another deployment — every absolute URL (startUrl, command params, a declared connection\u2019s launch url) keeps its path/query but takes this origin, in the sequence itself and in every sequence it reaches through a check that runs one or a forEach. On runAll it applies to every sequence in the suite. Not preserved across a mid-run pause/step resume'),
   indices: z.array(z.number()).optional().describe('Command indices'),
   lines: z.array(z.number()).optional().describe('Log line numbers'),
   sequenceId: z.string().optional(),
   runId: z.string().optional().describe('status/cancel: address a specific background run by the id that run returned'),
+  bench: z.boolean().optional().describe('run: play in the bench open on connectionReason, as its Replay button does, so it shows there'),
   wait: z.boolean().optional().describe('run: block until the run completes and return the full result (pre-0.7 behaviour). Default false: return a runId immediately and execute in the background'),
   global: z.boolean().optional().describe('Use ~/.devharness/'),
   format: z.enum(['sequence', 'playwright', 'puppeteer']).optional(),
@@ -272,7 +278,7 @@ const replaySchema = z.object({
   requiredSockets: z.array(z.string()).optional().describe("declare: URL substrings of the WebSockets this sequence's assertions ride on, e.g. ['/api/sync/socket']. Match the app's own path, not the origin, so it survives baseUrl. Replaces the whole list; [] clears it"),
   connections: z.record(z.string()).optional().describe("run: rebind a multi-connection sequence's recorded references onto this session - { \"<recorded reference>\": \"<reference here>\" }. Only needed when steps carry their own connectionReason (replay({action:'get', outputFormat:'commands'}) shows which)"),
   record: z.boolean().optional(),
-  variables: z.record(z.string()).optional().describe("run/runAll: replace the text of recorded input-type steps. Keys are BUILT from the selector - var_<0-based step index>_<selector, non-alphanumerics replaced by _> - so '#password' at step 3 is 'var_3__password', two underscores; read them off `get` or off the prompt a run returns rather than composing them. A key naming no typed-text step is rejected (runAll checks against the whole suite's union). Reaches sequences a conditional or forEach nests into. For a credential prefer {{env:NAME}} in the step itself, which keeps the value out of the sequence file and out of this call; an explicit value here still wins over the environment"),
+  variables: z.record(z.string()).optional().describe("run/runAll: replace the text of recorded input-type steps. Keys are BUILT from the selector - var_<0-based step index>_<selector, non-alphanumerics replaced by _> - so '#password' at step 3 is 'var_3__password', two underscores; read them off `get` or off the prompt a run returns rather than composing them. A key naming no typed-text step is rejected (runAll checks against the whole suite's union). Reaches sequences a check's run or a forEach nests into. For a credential prefer {{env:NAME}} in the step itself, which keeps the value out of the sequence file and out of this call; an explicit value here still wins over the environment"),
   stepTimeout: z.number().optional().describe('Per-step ms (default 30000). A step exceeding min(stepTimeout, remaining totalTimeout) fails the run at that step. wait steps are exempt (own timeoutMs) but still capped by totalTimeout'),
   totalTimeout: z.number().optional().describe('Total ms'),
   startFrom: z.number().optional().describe('Start step (1-indexed)'),
@@ -280,10 +286,8 @@ const replaySchema = z.object({
   stepCount: z.number().optional().describe('Steps to run'),
   insertIndices: z.array(z.number()).optional(),
   insertAfterStep: z.number().optional(),
-  condition: z.string().optional().describe("addConditional: the guard, e.g. '{{selector:.cookie-banner}}' or '{{!localStorage:token}}'"),
-  thenSequence: z.string().optional().describe('addConditional: name of the sequence to run when the condition holds'),
-  rejoinAt: z.number().int().optional().describe('addConditional: 0-based step of THIS sequence to resume at once the branch has run, for a branch that replaces the steps between. Forward only - must be after the conditional itself. Omitted, the run resumes at the step after the conditional'),
-  comment: z.string().optional().describe('addConditional: note stored on the step'),
+  check: z.record(z.any()).optional().describe("addCheck: the check step's parameters, as the check tool takes them - what it reads (selector + condition, value + operator + right, url, cookie, localStorage, indexedDB, expression, or afterMs alone for a timer), withinMs to read again until it holds, and holds/fails: 'continue' | 'stop' | { run: '<sequence>', resumeAt }. resumeAt is a 0-based step of THIS sequence as it stands before the check goes in, forward only. A guard: { selector: '.cookie-banner', condition: 'present', holds: { run: 'dismiss-cookies' }, fails: 'continue' }"),
+  comment: z.string().optional().describe('addCheck: note stored on the step'),
   overwrite: z.boolean().optional(),
   newName: z.string().optional(),
   showOverlay: z.boolean().optional(),
@@ -302,7 +306,7 @@ const replaySchema = z.object({
   showAll: z.boolean().optional().describe('Show all sequences including completed/fixed issues'),
   requireSockets: z.boolean().optional().describe("run/runAll: fail the run if any WebSocket CLOSED or hit frame errors while it executed. Diffed against the start, so a socket already down is not blamed on this sequence, and it catches a drop that recovered before the last step - which a final assertion cannot see. Usually unnecessary: a sequence that sets `requiredSockets` (URL substrings of the sockets its assertions ride on) is checked without asking, and that check also fails when a declared socket is missing or never opened, which no closure count can detect"),
   strict: z.enum(['errors', 'warnings']).optional().describe("run/runAll: fail the run when it PRODUCES console output - 'errors' fails on new console errors, 'warnings' also fails on new warnings. Counted per connection and diffed against the start of the run, so pre-existing noise is not blamed on this sequence. A sequence can be functionally correct and still be logging; strict is how you separate those questions"),
-  folder: z.string().optional().describe("runAll: sequences subfolder to run, relative to the sequences dir (e.g. 'spine'). Omit to run every sequence outside folders whose name starts with '_'. The whole tree is always LOADED first so name references (a conditional's then, a forEach's do) resolve wherever the helper lives"),
+  folder: z.string().optional().describe("runAll: sequences subfolder to run, relative to the sequences dir (e.g. 'spine'). Omit to run every sequence outside folders whose name starts with '_'. The whole tree is always LOADED first so name references (a check's run, a forEach's do) resolve wherever the helper lives"),
   continueOnFailure: z.boolean().optional().describe('runAll: keep going after a sequence fails and report every result (default true). false stops at the first failure'),
   killChromeOnFinish: z.boolean().optional().describe("run/runAll: after finishing (skipped on pause/abort), kill the browsers this run owns - its own connection plus any a launchChrome step actually created. A step that reached an already-bound reference only borrowed that browser and it is left running, so an instance you launched yourself survives. Also skipped for any browser whose port another live connection shares (a launchChrome step usually opens a tab in the same instance), and the run reports which connection kept it alive. On runAll only the LAST sequence carries it, so a preamble's browser survives between sequences and a suite that stops early leaves the browsers up."),
 }).strict();
@@ -1030,11 +1034,10 @@ async function connectionsSharingPort(
   }
 }
 
-/** The sequences a run can reach by name: a conditional's `then`, a check's `{ run }` on either answer. */
+/** The sequences a run can reach by name: a check's `{ run }` on either answer. */
 function branchTargets(commands: RecordedCommand[]): string[] {
   const names: string[] = [];
   for (const cmd of commands) {
-    if (cmd.tool === 'conditional' && typeof cmd.params?.then === 'string') names.push(cmd.params.then);
     if (cmd.tool === 'check') {
       for (const answer of [cmd.params?.holds, cmd.params?.fails]) {
         if (typeof answer?.run === 'string') names.push(answer.run);
@@ -1045,7 +1048,7 @@ function branchTargets(commands: RecordedCommand[]): string[] {
 }
 
 /**
- * References that sequences reached through `conditional` steps name, for
+ * References that sequences reached through a check's `{ run }` name, for
  * validating `connections`. Resolution is memory-only and best-effort: a
  * sequence that lives on disk isn't loaded here (that would register it as a
  * side effect of validation), so `complete: false` says "this list may be
@@ -1121,8 +1124,8 @@ async function loadRunEnv(
 
 /**
  * Every `variables` key a run could substitute on: this sequence's typed-text
- * steps plus those of every sequence it reaches through a `conditional`'s
- * `then` or a `forEach`'s `do`.
+ * steps plus those of every sequence it reaches through a check's `{ run }`
+ * or a `forEach`'s `do`.
  *
  * Resolution is memory-only and best-effort, the same rule
  * collectNestedRebindableReferences follows: a helper that lives on disk and
@@ -1194,7 +1197,7 @@ function unmatchedVariableKeys(
  *
  * Two behaviours make this usable as a suite runner rather than a loop:
  *  - the ENTIRE tree is loaded before anything runs, so a sequence in spine/
- *    can still reference a helper in _helpers/ by name (conditional `then`,
+ *    can still reference a helper in _helpers/ by name (a check's `{ run }`,
  *    forEach `do`) — those resolve by sequence NAME, not by path;
  *  - a failure is recorded and the run continues (continueOnFailure, default
  *    true). A suite that stops at the first red tells you far less than one
@@ -1306,6 +1309,10 @@ async function handleRunAll(
 
   const keepGoing = args.continueOnFailure !== false;
   const results: Array<{ filename: string; name: string; ok: boolean; detail: string }> = [];
+  const suite = beginSuite(
+    [folder ? `folder ${folder}` : 'all sequences', wantTags.length ? `tagged ${wantTags.join(' or ')}` : ''].filter(Boolean).join(', '),
+    selected.map(entry => entry.name),
+  );
 
   for (const [index, entry] of selected.entries()) {
     // killChromeOnFinish means the SUITE's finish here, not each sequence's: a
@@ -1348,7 +1355,7 @@ async function handleRunAll(
           startUrl: undefined,
         },
         recorder, executeToolCall, getPageForConnection, abortSignal, getConnectionPort,
-        { validateVariableKeys: false }
+        { validateVariableKeys: false, suite: { id: suite.id, label: suite.label } }
       );
       const text = (res?.content || []).map((c: any) => c?.text || '').join('\n');
       // performRun stamps _meta.replay on every terminal response, so trust that
@@ -1376,8 +1383,11 @@ async function handleRunAll(
       detail = `threw: ${err?.message || String(err)}`;
     }
     results.push({ filename: entry.filename, name: entry.name, ok, detail });
+    suite.done += 1;
+    if (!ok) suite.failed += 1;
     if (!ok && !keepGoing) break;
   }
+  suite.endedAt = Date.now();
 
   const passed = results.filter(r => r.ok).length;
   const failed = results.length - passed;
@@ -1799,6 +1809,96 @@ function socketFailures(
   return { settled: out, absent };
 }
 
+/**
+ * How a check, assert or wait step read, from the run's own result: a check's
+ * reading and the steps of any sequence it ran; an assert or wait held, or
+ * failed and stopped the run.
+ */
+function checkReadingOf(result: StepResult): StepCheck | undefined {
+  if (result.check) {
+    const ran = result.sequenceName && result.substeps
+      ? { name: result.sequenceName, steps: result.substeps.length, failed: result.substeps.filter(step => !step.success).length }
+      : undefined;
+    return {
+      outcome: result.check.outcome, action: result.check.action, subject: result.check.subject,
+      ...(result.check.found !== undefined ? { found: result.check.found } : {}),
+      ...(result.check.waitedMs !== undefined ? { waitedMs: result.check.waitedMs } : {}),
+      ...(result.check.limitMs !== undefined ? { limitMs: result.check.limitMs } : {}),
+      ...(ran ? { ran } : {}),
+      ...(result.error ? { error: result.error } : {}),
+    };
+  }
+  if (result.tool !== 'assert' && result.tool !== 'wait') return undefined;
+  return {
+    outcome: result.success ? 'held' : 'failed',
+    action: result.success ? 'continue' : 'stop',
+    ...(result.error ? { error: result.error } : {}),
+  };
+}
+
+/** A run that ended, into the run log, with what each step did. A paused run is logged when it ends. */
+function logRun(record: RunRecord): void {
+  const failed = record.results.find(result => !result.success);
+  void (async () => {
+    const bench = await import('../bench-mode.js');
+    const readings: Array<StepCheck | undefined> = [];
+    for (const result of record.results) readings[result.step - 1] = checkReadingOf(result);
+    const steps = record.connectionReason
+      ? bench.stepTallies(record.connectionReason, record.startedAt, record.endedAt ?? Date.now(), record.totalSteps, readings,
+          bench.stepTimes(record.stepStarts ?? [], record.endedAt ?? Date.now()))
+      : undefined;
+    await appendRun({
+      runId: record.runId,
+      sequence: record.sequenceName,
+      ...(record.connectionReason ? { connection: record.connectionReason } : {}),
+      via: 'replay',
+      status: record.status,
+      startedAt: record.startedAt,
+      endedAt: record.endedAt ?? Date.now(),
+      step: failed?.step ?? record.currentStep,
+      total: record.totalSteps,
+      ...(record.currentTool ? { tool: record.currentTool } : {}),
+      ...(failed?.error || record.error ? { failure: failed?.error ?? record.error } : {}),
+      ...(record.suite ? { suite: record.suite } : {}),
+      ...(steps ? { steps } : {}),
+    });
+  })();
+}
+
+/**
+ * Play a sequence in the bench open on the connection, from step 1, as the
+ * bench's own Replay button does: the rows, badges and check outcomes land in
+ * the bench while it plays. The bench drives from the file alone, so a
+ * run-time retarget or variable has nothing to reach it through and is refused.
+ */
+async function runInBench(args: ReplayArgs) {
+  const bench = await import('../bench-mode.js');
+  const connection = args.connectionReason;
+  if (!connection || !bench.isBenchOpen(connection)) {
+    return createErrorResponse('REPLAY_BENCH_NOT_OPEN', { connectionReason: connection ?? '(none given)' });
+  }
+  const carried = (['baseUrl', 'startUrl', 'variables', 'envFile', 'connections', 'startFrom', 'stepTo'] as const)
+    .filter(key => args[key] !== undefined);
+  if (carried.length) return createErrorResponse('REPLAY_BENCH_UNSUPPORTED', { params: carried.join(', ') });
+  const name = String(args.name ?? '');
+  await bench.selectSequence(connection, name);
+  const play = (async () => {
+    await bench.gotoSequenceStep(connection, 0);
+    return bench.playSequence(connection);
+  })();
+  const benchUrl = bench.getBenchSession(connection)?.benchUrl ?? '';
+  if (!args.wait) {
+    play.catch(() => {});
+    return createSuccessResponse('REPLAY_BENCH_PLAYING', { name, connectionReason: connection, benchUrl });
+  }
+  const state = await play;
+  return createSuccessResponse('REPLAY_BENCH_PLAYED', {
+    name, benchUrl,
+    reached: state?.currentStep ?? 0, total: state?.total ?? 0,
+    failure: state?.failure ? `\n\nStopped: ${state.failure}` : '',
+  });
+}
+
 async function handleRun(
   args: ReplayArgs,
   recorder: CommandRecorder,
@@ -1811,8 +1911,10 @@ async function handleRun(
    * `runAll` validates the one map it holds against the whole suite's keys and
    * a per-sequence check would reject a key meant for a different member.
    */
-  opts?: { validateVariableKeys?: boolean }
+  opts?: { validateVariableKeys?: boolean; suite?: { id: string; label: string } }
 ) {
+  if (args.bench) return runInBench(args);
+
   // Load sequence
   const loadResult = await loadSequence({ name: args.name, sequenceId: args.sequenceId }, recorder);
   if (!loadResult.success) {
@@ -1903,8 +2005,8 @@ async function handleRun(
   const connectionMap = sanitizeConnectionMap(args.connections);
   if (connectionMap) {
     const recorded = analyzeRecordedStepConnections(commands);
-    // A `conditional` step's sequence inherits this map, and a setup sequence
-    // normally lives BEHIND the conditional - so its references have to count as
+    // A sequence a check runs inherits this map, and a setup sequence
+    // normally lives BEHIND the check - so its references have to count as
     // rebindable too, or the only rebindable ones are those needing no rebind.
     const nested = collectNestedRebindableReferences(commands, recorder);
     const launchRefs = commands
@@ -2195,6 +2297,7 @@ async function handleRun(
     currentStep: 0,
     results: [],
     controller,
+    ...(opts?.suite ? { suite: opts.suite } : {}),
   };
   runRegistry.register(record);
 
@@ -2204,6 +2307,7 @@ async function handleRun(
   const finished = performRun(deps, controller.signal, runId, (ev) => {
     record.currentStep = ev.step;
     record.currentTool = ev.tool;
+    (record.stepStarts ??= [])[ev.step - 1] ??= Date.now();
   }).then(async ({ response, outcome, results }) => {
     // A background run is read through its record, so the verdicts have to land
     // there too - otherwise the same sequence passes or fails on `wait` alone.
@@ -2217,12 +2321,14 @@ async function handleRun(
     // Still not derived by parsing the response: the check reports its own
     // verdict, and a run whose transport died did not complete successfully.
     record.status = !healthy && outcome === 'completed' ? 'failed' : outcome;
+    if (outcome !== 'paused') logRun(record);
   }).catch(async (error: any) => {
     // A run that blew up still launched what it launched.
     await closeDeclared().catch(() => '');
     record.error = error?.message || String(error);
     record.endedAt = Date.now();
     record.status = 'failed';
+    logRun(record);
   });
 
   // A wait is bounded: a step that never finishes - a page held frozen, an
@@ -2299,7 +2405,7 @@ async function performRun(
     // Carried on the context so nested sequences inherit the retarget; the
     // top-level sequence was already rebased in handleRun.
     ...(args.baseUrl && { rebaseOrigin: args.baseUrl }),
-    // Same reason: a shared login helper reached by a conditional is exactly
+    // Same reason: a shared login helper a check runs is exactly
     // where a supplied credential has to land.
     ...(args.variables && { variables: args.variables }),
     // Held on the context rather than written into process.env: concurrent
@@ -2374,11 +2480,15 @@ async function performRun(
 
   // Helper to clean up cursor, overlay, and optionally close tab
   const cleanup = async (closeTab = false) => {
+    // Removing the cursor and the overlay runs page JS, which a page held at a
+    // breakpoint never answers, and the run's report would wait on it. Both
+    // stay until the next run on a running page replaces them.
+    const paused = !!(cursorPage || cleanupReplayOverlay) && !!(await checkIfPaused(ctx));
     if (cursorPage) {
-      await removeReplayCursor(cursorPage).catch(() => {});
+      if (!paused) await removeReplayCursor(cursorPage).catch(() => {});
       setReplayCursorCallbacks({});
     }
-    if (cleanupReplayOverlay) {
+    if (cleanupReplayOverlay && !paused) {
       await cleanupReplayOverlay().catch(() => {});
     }
     if (closeTab && didAutoLaunch && connectionReason) {
@@ -2646,6 +2756,7 @@ async function cancelRunRecord(record: RunRecord, recorder: CommandRecorder) {
     }
     record.status = 'cancelled';
     record.endedAt = record.endedAt ?? Date.now();
+    logRun(record);
     // Cancelling ends the run, so it cleans up like any other terminal outcome.
     const closedNote = await drainDeclaredCleanup(record.runId, record.sequenceId);
     const response = createSuccessResponse('REPLAY_RUN_CANCELLED', {
@@ -3015,84 +3126,39 @@ async function handleInsert(args: ReplayArgs, recorder: CommandRecorder) {
 }
 
 /**
- * Add a `conditional` step to a sequence.
+ * Add a `check` step to a sequence.
  *
- * `conditional` is a virtual step, never a registered tool, so it cannot be
- * recorded and cannot come out of `create`/`insert`. This is its only
- * authoring route.
+ * A check from history comes in through `create` or `insert` as a recorded
+ * assert or wait. This writes one from its parameters directly, which is the
+ * only way to write one that runs another sequence.
  */
-async function handleAddConditional(args: ReplayArgs, recorder: CommandRecorder) {
-  if (!args.condition) {
+async function handleAddCheck(args: ReplayArgs, recorder: CommandRecorder) {
+  if (!args.check) {
     return createErrorResponse('MISSING_PARAMETER', {
-      action: 'addConditional',
-      missing: 'condition',
-      message: 'The "addConditional" action requires a "condition" parameter, e.g. "{{selector:.cookie-banner}}"'
+      action: 'addCheck',
+      missing: 'check',
+      message: 'The "addCheck" action requires a "check" parameter: the check step\'s parameters, e.g. { selector: ".cookie-banner", condition: "present", holds: { run: "dismiss-cookies" }, fails: "continue" }'
     });
   }
-  if (!args.thenSequence) {
-    return createErrorResponse('MISSING_PARAMETER', {
-      action: 'addConditional',
-      missing: 'thenSequence',
-      message: 'The "addConditional" action requires a "thenSequence" parameter naming the sequence to run when the condition holds'
+  // The step's parameters are the check tool's, so the tool's own schema
+  // refuses what a run would refuse, while the sequence is being written.
+  const parsed = checkSchema.safeParse(args.check);
+  if (!parsed.success) {
+    return createErrorResponse('INVALID_PARAMETER', {
+      parameter: 'check',
+      value: JSON.stringify(args.check),
+      message: parsed.error.issues.map((issue: { path: (string | number)[]; message: string }) => `${issue.path.join('.') || 'check'}: ${issue.message}`).join('; ')
     });
   }
+  const check = parsed.data;
 
   const loadResult = await loadSequence({ name: args.name, sequenceId: args.sequenceId }, recorder);
   if (!loadResult.success) {
-    return handleLoadSequenceError(loadResult, 'addConditional');
+    return handleLoadSequenceError(loadResult, 'addCheck');
   }
   const sequence = loadResult.sequence;
-
-  const syntax = validateConditionSyntax(args.condition);
-  if (!syntax.ok) {
-    return createErrorResponse('INVALID_PARAMETER', {
-      parameter: 'condition',
-      value: args.condition,
-      message: syntax.reason
-    });
-  }
-
-  // Self-reference recurses until the depth cap truncates it.
-  if (args.thenSequence === sequence.name) {
-    return createErrorResponse('INVALID_PARAMETER', {
-      parameter: 'thenSequence',
-      value: args.thenSequence,
-      message: `A conditional cannot branch to its own sequence ("${sequence.name}") - that recurses until maxConditionalDepth stops it.`
-    });
-  }
-
-  // The target resolves by name at run time, so an unchecked typo fails
-  // halfway through a run.
-  const inMemory = recorder.listSequences().some(s => s.name === args.thenSequence);
-  const onDisk = await recorder.listSavedSequencesOnDisk();
-  if (!inMemory && !onDisk.some(s => s.name === args.thenSequence)) {
-    // A disk sequence is in memory once loaded, so the lists overlap.
-    const available = [...new Set([
-      ...recorder.listSequences().map(s => s.name),
-      ...onDisk.map(s => s.name)
-    ])];
-    return createErrorResponse('SEQUENCE_NOT_FOUND', {
-      message: `No sequence named "${args.thenSequence}" to branch to. Available: ${available.join(', ') || 'none'}`
-    });
-  }
-
   const commands = sequence.commands;
   const insertAfter = args.insertAfterStep !== undefined ? args.insertAfterStep : commands.length;
-  // Checked here as well as at run time: a rejoin that cannot hold is worth
-  // refusing while the person is writing it, not halfway through a later run.
-  if (args.rejoinAt !== undefined) {
-    // The conditional lands at `insertAfter`, so every later step shifts by one.
-    const landsAt = insertAfter;
-    const after = args.rejoinAt >= landsAt ? args.rejoinAt + 1 : args.rejoinAt;
-    if (after <= landsAt || after > commands.length) {
-      return createErrorResponse('INVALID_PARAMETER', {
-        parameter: 'rejoinAt',
-        value: String(args.rejoinAt),
-        message: `A conditional inserted at step ${landsAt + 1} can rejoin at a step after it, `
-          + `up to ${commands.length + 1}. Rejoining at or before itself re-runs it forever.`
-      });
-    }
-  }
   if (insertAfter < 0 || insertAfter > commands.length) {
     return createErrorResponse('INVALID_PARAMETER', {
       parameter: 'insertAfterStep',
@@ -3101,17 +3167,57 @@ async function handleAddConditional(args: ReplayArgs, recorder: CommandRecorder)
     });
   }
 
+  const onDisk = await recorder.listSavedSequencesOnDisk();
+  // Stored against the list this step goes into, so a resume point still
+  // names the same step once every later one has shifted by one.
+  const outcomes: Partial<Record<'holds' | 'fails', CheckOutcome>> = {};
+  for (const answer of ['holds', 'fails'] as const) {
+    const outcome = check[answer];
+    if (outcome === undefined || typeof outcome === 'string') {
+      if (outcome !== undefined) outcomes[answer] = outcome;
+      continue;
+    }
+    // Self-reference recurses until the depth cap truncates it.
+    if (outcome.run === sequence.name) {
+      return createErrorResponse('INVALID_PARAMETER', {
+        parameter: `check.${answer}.run`,
+        value: outcome.run,
+        message: `A check cannot run its own sequence ("${sequence.name}") - that recurses until maxConditionalDepth stops it.`
+      });
+    }
+    // The target resolves by name at run time, so an unchecked typo fails
+    // halfway through a run.
+    const inMemory = recorder.listSequences().some(one => one.name === outcome.run);
+    if (!inMemory && !onDisk.some(one => one.name === outcome.run)) {
+      // A disk sequence is in memory once loaded, so the lists overlap.
+      const available = [...new Set([...recorder.listSequences().map(one => one.name), ...onDisk.map(one => one.name)])];
+      return createErrorResponse('SEQUENCE_NOT_FOUND', {
+        message: `No sequence named "${outcome.run}" to run on ${answer}. Available: ${available.join(', ') || 'none'}`
+      });
+    }
+    if (outcome.resumeAt !== undefined) {
+      const resumeAt = outcome.resumeAt >= insertAfter ? outcome.resumeAt + 1 : outcome.resumeAt;
+      // Checked here as well as at run time: a resume point that cannot hold
+      // is worth refusing while the sequence is written, not halfway through a run.
+      // The run accepts a resume point up to the end of the list, which ends it.
+      if (resumeAt <= insertAfter || resumeAt > commands.length + 1) {
+        return createErrorResponse('INVALID_PARAMETER', {
+          parameter: `check.${answer}.resumeAt`,
+          value: String(outcome.resumeAt),
+          message: `resumeAt counts from 0 in the sequence as it stands: a check inserted after step `
+            + `${insertAfter} can resume at ${insertAfter} to ${commands.length}, and ${commands.length} ends the run. `
+            + `Resuming at or before the check runs it again forever.`
+        });
+      }
+      outcomes[answer] = { ...outcome, resumeAt };
+    } else {
+      outcomes[answer] = outcome;
+    }
+  }
+
   const step: RecordedCommand = {
-    tool: 'conditional',
-    params: {
-      if: args.condition,
-      then: args.thenSequence,
-      // Stored against the list this step is being inserted into, so it still
-      // names the same step once every later one has shifted by one.
-      ...(args.rejoinAt !== undefined
-        ? { rejoinAt: args.rejoinAt >= insertAfter ? args.rejoinAt + 1 : args.rejoinAt }
-        : {}),
-    },
+    tool: 'check',
+    params: { ...check, ...outcomes },
     ...(args.comment ? { comment: args.comment } : {})
   };
 
@@ -3125,23 +3231,28 @@ async function handleAddConditional(args: ReplayArgs, recorder: CommandRecorder)
   // Write back to the file this came from; a memory-only sequence waits for
   // `export`, which is where it gets its filename.
   let persisted: string | undefined;
-  const existingFile = onDisk.find(s => s.name === sequence.name);
+  const existingFile = onDisk.find(one => one.name === sequence.name);
   if (existingFile) {
-    const saved = await recorder.saveSequenceToDisk(
-      sequence.id,
-      existingFile.location === 'global',
-      true
-    );
+    const saved = await recorder.saveSequenceToDisk(sequence.id, existingFile.location === 'global', true);
+    // The step is in the sequence in memory either way; a file that did not
+    // take it is an error to report, not a sequence that was never saved.
+    if (saved && !saved.success) {
+      return {
+        content: [{ type: 'text', text: `## Error\n\nThe check was added to "${sequence.name}" in memory, but writing the file failed: ${saved.error}` }],
+        isError: true,
+      };
+    }
     if (saved?.success) persisted = saved.filepath;
   }
 
   return {
     content: [{
       type: 'text',
-      text: formatConditionalAdded({
+      text: formatCheckAdded({
         sequenceName: sequence.name,
-        condition: args.condition,
-        thenSequence: args.thenSequence,
+        subject: subjectOfCheck(checkSpecOf(check)),
+        holds: outcomes.holds,
+        fails: outcomes.fails,
         position: insertAfter,
         totalSteps: sequence.commands.length,
         persistedTo: persisted
@@ -3892,7 +4003,7 @@ function generatePlaywrightCode(commands: Array<{ tool: string; params: Record<s
       }
     }
 
-    // A step with no Playwright equivalent (conditional, launchChrome, inspect,
+    // A step with no Playwright equivalent (check, launchChrome, inspect,
     // storage, wait, breakpoint...) must leave a visible hole. Dropping it
     // silently is how a sequence turns into a test that passes without doing
     // anything it was recorded to do.
@@ -3914,9 +4025,8 @@ function generatePlaywrightCode(commands: Array<{ tool: string; params: Record<s
 /** Names a step the generators have no equivalent for, for the emitted comment. */
 function describeUngeneratedStep(cmd: { tool: string; params: Record<string, any> }): string {
   const action = typeof cmd.params?.action === 'string' ? `({ action: '${cmd.params.action}' })` : '';
-  const extra = cmd.tool === 'conditional' && cmd.params?.then
-    ? ` — runs the sequence "${cmd.params.then}" when ${cmd.params.if}`
-    : '';
+  const runs = [cmd.params?.holds, cmd.params?.fails].find(answer => typeof answer?.run === 'string')?.run;
+  const extra = cmd.tool === 'check' && runs ? ` — runs the sequence "${runs}"` : '';
   return `${cmd.tool}${action}${extra}`;
 }
 
@@ -3954,7 +4064,7 @@ export function createReplayTools(
 ) {
   return {
     replay: createTool(
-      'Record and replay command sequences for testing and automation. Actions: repeat (immediately re-execute commands by history index - use this to repeat recent actions), history (view command history), recordInteraction (record real mouse/keyboard/navigation via a browser overlay - BLOCKS until the person finishes, so do not call it unattended; tune the capture with simplifyEvents/includeHovers/preferCoordinates/preferSelectors, and add outputFormat: events|commands|review|playwright|puppeteer to dump the recording - review is a human-readable walkthrough of the captured events), create (create sequence from history indices), list (every sequence reachable: those in memory and those saved on disk), get (get sequence details; outputFormat: commands|playwright|puppeteer returns the raw command JSON or generated test code), delete (delete from memory), export (write a sequence to disk as sequence/playwright/puppeteer), load (load sequence from disk), listSaved (the saved files alone), deleteSaved (delete saved file), run (start executing a sequence in the background - returns a runId immediately; poll progress/results with status, stop it with cancel; wait: true blocks until completion and returns the full result), runAll (run every sequence in a folder of the sequences dir, or only those carrying a given tag - loads the whole tree first so cross-folder name references resolve, runs only the chosen folder, skips folders whose name starts with an underscore unless named explicitly, and reports a pass/fail line per sequence; continueOnFailure defaults true), runFromLog (execute commands from log lines), step (execute next N commands in a paused sequence), finish (complete remaining commands), insert (insert recorded commands into a sequence), addConditional (add a guarded branch step: condition + thenSequence, optionally insertAfterStep), declare (set what the sequence needs and what it is: requiredConnections - the browsers, optionally each on a persistent profile - requiredSockets - URL substrings of the WebSockets its assertions ride on - and tags, which runAll selects on; each list replaces the field, [] clears it, and the sequence is written back to its file), status (with runId: one run\'s progress or final result; without: paused session + recent runs), cancel (with runId: stop that run; without: drop the paused session, or the only executing run)',
+      'Record and replay command sequences for testing and automation. Actions: repeat (immediately re-execute commands by history index - use this to repeat recent actions), history (view command history), recordInteraction (record real mouse/keyboard/navigation via a browser overlay - BLOCKS until the person finishes, so do not call it unattended; tune the capture with simplifyEvents/includeHovers/preferCoordinates/preferSelectors, and add outputFormat: events|commands|review|playwright|puppeteer to dump the recording - review is a human-readable walkthrough of the captured events), create (create sequence from history indices), list (every sequence reachable: those in memory and those saved on disk), get (get sequence details; outputFormat: commands|playwright|puppeteer returns the raw command JSON or generated test code), delete (delete from memory), export (write a sequence to disk as sequence/playwright/puppeteer), load (load sequence from disk), listSaved (the saved files alone), deleteSaved (delete saved file), run (start executing a sequence in the background - returns a runId immediately; poll progress/results with status, stop it with cancel; wait: true blocks until completion and returns the full result), runAll (run every sequence in a folder of the sequences dir, or only those carrying a given tag - loads the whole tree first so cross-folder name references resolve, runs only the chosen folder, skips folders whose name starts with an underscore unless named explicitly, and reports a pass/fail line per sequence; continueOnFailure defaults true), runFromLog (execute commands from log lines), step (execute next N commands in a paused sequence), finish (complete remaining commands), insert (insert recorded commands into a sequence), addCheck (add a check step: check holds its parameters, optionally insertAfterStep - a guard is a check whose pass runs another sequence), declare (set what the sequence needs and what it is: requiredConnections - the browsers, optionally each on a persistent profile - requiredSockets - URL substrings of the WebSockets its assertions ride on - and tags, which runAll selects on; each list replaces the field, [] clears it, and the sequence is written back to its file), status (with runId: one run\'s progress or final result; without: paused session + recent runs), cancel (with runId: stop that run; without: drop the paused session, or the only executing run)',
       replaySchema,
       async (args, abortSignal) => {
         switch (args.action) {
@@ -3988,8 +4098,8 @@ export function createReplayTools(
             return handleFinish(commandRecorder, executeToolCall);
           case 'insert':
             return handleInsert(args, commandRecorder);
-          case 'addConditional':
-            return handleAddConditional(args, commandRecorder);
+          case 'addCheck':
+            return handleAddCheck(args, commandRecorder);
           case 'declare':
             return handleDeclare(args, commandRecorder);
           case 'cancel':

@@ -1,6 +1,6 @@
 /**
  * An HTTP/HTTPS/WS/WSS proxy Chrome is launched through, so a value can be
- * held and served back in place of what the server would say.
+ * stored and served back in place of what the server would say.
  *
  * Observation stays on CDP, which sees what the renderer receives including
  * cache hits and service-worker replies. This exists for intervention only.
@@ -17,8 +17,9 @@ import { request as httpsRequest } from 'https';
 import { connect as netConnect, type Socket } from 'net';
 import { WebSocketServer, WebSocket } from 'ws';
 import { mintProxyCertificate, type ProxyCertificate } from './certificate.js';
+import { TrafficQueue } from './traffic-queue.js';
 
-/** A value held in place of what the server would answer. */
+/** A value served in place of what the server would answer. */
 export interface Pin {
   id: string;
   /** Matched as a substring of the full URL. */
@@ -60,7 +61,7 @@ export interface SocketFrame {
   /** Text frames only, truncated by the caller's own rule. */
   text?: string;
   /** What the proxy did with it. Absent means it went through unchanged. */
-  heldAs?: 'replaced' | 'dropped';
+  answeredAs?: 'replaced' | 'dropped';
 }
 
 /**
@@ -103,7 +104,7 @@ export interface ProxyEvent {
   /** First characters of the payload, for a list. The whole body is kept
    *  separately and only up to BODY_CAP. */
   preview?: string;
-  heldAs?: 'replaced' | 'dropped' | 'refused';
+  answeredAs?: 'replaced' | 'dropped' | 'refused';
   /**
    * The history command in flight when this crossed, while a person drives.
    *
@@ -293,6 +294,73 @@ export function carries(object: Record<string, unknown>, field: FrameField): boo
   const held = object[field.key];
   if (held === null || typeof held !== 'object') return held === field.value;
   return JSON.stringify(held) === JSON.stringify(field.value);
+}
+
+/**
+ * What a request pin, a frame pin and a traffic check match a crossing on.
+ *
+ * One definition for all three, so a check counts exactly the crossings a pin
+ * with the same fields would answer.
+ */
+export interface CrossingMatch {
+  /** Substring of the request's URL, or of the socket's URL for a frame. */
+  urlIncludes?: string;
+  /** A request: only this method. */
+  method?: string;
+  /** A frame: only this way. */
+  direction?: 'sent' | 'received';
+  /** A frame: what its payload carries; a lone `"key":value` compares that top-level field. */
+  textIncludes?: string;
+}
+
+/** Whether a request matches: its method, then its URL. */
+export function requestMatches(match: CrossingMatch, url: string, method: string): boolean {
+  if (match.method && match.method.toUpperCase() !== method.toUpperCase()) return false;
+  return !match.urlIncludes || url.includes(match.urlIncludes);
+}
+
+/**
+ * Whether a frame matches, and whether its payload was compared by field.
+ *
+ * `field` is the match text's field, read once when the match was set up;
+ * `objectOfFrame` parses the frame's top-level object on first call, so a
+ * frame is parsed at most once however many matches it is tried against. A
+ * binary frame never matches.
+ */
+export function frameMatches(
+  match: CrossingMatch, field: FrameField | undefined,
+  url: string, direction: 'sent' | 'received', text: string | undefined,
+  objectOfFrame: () => Record<string, unknown> | undefined,
+): { matched: boolean; byField: boolean } {
+  if (text === undefined) return { matched: false, byField: false };
+  if (match.urlIncludes && !url.includes(match.urlIncludes)) return { matched: false, byField: false };
+  if (match.direction && match.direction !== direction) return { matched: false, byField: false };
+  const object = field ? objectOfFrame() : undefined;
+  const byField = field !== undefined && object !== undefined;
+  return { matched: byField ? carries(object!, field!) : text.includes(match.textIncludes ?? ''), byField };
+}
+
+/** A frame's top-level object, parsed on the first call and remembered. */
+function objectOnce(text: string | undefined): () => Record<string, unknown> | undefined {
+  let parsed: Record<string, unknown> | undefined | null = null;
+  return () => {
+    if (parsed === null) parsed = text === undefined ? undefined : objectOf(text);
+    return parsed;
+  };
+}
+
+/**
+ * A traffic check's count: a match that changes nothing, and how many
+ * crossings met it since it was set. Frames are counted when the match names a
+ * direction or payload text, requests otherwise.
+ */
+interface Counter {
+  match: CrossingMatch;
+  field?: FrameField;
+  frames: boolean;
+  hits: number;
+  /** The record no longer reached back to the counter's start, so the count before it was set is short. */
+  partial: boolean;
 }
 
 /** The key set of a JSON object, or the event name of a JSON array. */
@@ -751,16 +819,38 @@ function ledgerFor(
     ledger.sentCount < sequence && ledger.sent.length === ledger.sentCount);
   return fitting.length === 0 && waiting.length === 1 ? waiting[0] : undefined;
 }
+/**
+ * The headers of a page's upgrade that belong to its own handshake. The
+ * upstream socket runs a handshake of its own, and `ws` writes these for it.
+ */
+const HANDSHAKE_HEADERS = new Set([
+  'host', 'connection', 'upgrade', 'keep-alive', 'proxy-connection', 'transfer-encoding', 'content-length',
+  'sec-websocket-key', 'sec-websocket-version', 'sec-websocket-extensions', 'sec-websocket-protocol',
+]);
+
+/**
+ * What the page sent on its upgrade, carried onto the upstream socket: a server
+ * that admits a socket by its cookie or authorization reads them there, and a
+ * handshake carrying the origin alone is refused as nobody.
+ */
+function carriedUpgradeHeaders(headers: IncomingMessage['headers']): Record<string, string | string[]> {
+  const carried: Record<string, string | string[]> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    if (value !== undefined && !HANDSHAKE_HEADERS.has(name)) carried[name] = value;
+  }
+  return carried;
+}
+
 /** Sockets profiled before the oldest is discarded. */
 const MAX_PROFILES = 200;
 /** Events held before the oldest is discarded. */
 const MAX_EVENTS = 2000;
-/** Response body kept per exchange, for turning one into a held value later. */
+/** Response body kept per exchange, for turning one into an answer later. */
 const BODY_CAP = 64 * 1024;
 const PREVIEW_CHARS = 200;
 
 /**
- * A frame held in place of what would have crossed.
+ * A frame served in place of what would have crossed, or dropped.
  *
  * Matched on the payload rather than on position: a socket carries no method,
  * URL or status, so the only durable handle on one message is what is in it.
@@ -817,6 +907,10 @@ export class InterceptProxy {
   });
   private pins = new Map<string, Pin>();
   private framePins = new Map<string, FramePin>();
+  /** Crossings kept while the network layer is held. */
+  readonly queue = new TrafficQueue();
+  private counters = new Map<string, Counter>();
+  private counterSeq = 0;
   private events: ProxyEvent[] = [];
   private bodies = new Map<string, string>();
   private profiles: SocketProfile[] = [];
@@ -1223,22 +1317,6 @@ export class InterceptProxy {
   }
 
   /** What the proxy saw in a window, oldest first. */
-  /**
-   * Resolve met once `count` crossings of a kind have landed under one step
-   * of one pass, or unmet at `timeoutMs`, with how many had landed. A kind is matched as a rule matches
-   * it: its key in the payload text or the URL; with no key, anything counts.
-   */
-  async awaitCrossings(want: { runId: string; step: number; key?: string; count: number; timeoutMs: number }): Promise<{ met: boolean; arrived: number }> {
-    const until = Date.now() + want.timeoutMs;
-    const landed = () => this.events.filter(e => e.runId === want.runId && e.step === want.step
-      && (!want.key || (e.preview ?? '').includes(want.key) || e.url.includes(want.key))).length;
-    while (landed() < want.count) {
-      if (Date.now() >= until) return { met: false, arrived: landed() };
-      await new Promise(done => setTimeout(done, 100));
-    }
-    return { met: true, arrived: landed() };
-  }
-
   eventsIn(since?: number, until?: number): ProxyEvent[] {
     return this.events.filter(e =>
       (since === undefined || e.at >= since) && (until === undefined || e.at < until));
@@ -1402,30 +1480,88 @@ export class InterceptProxy {
     url: string, direction: SocketFrame['direction'], text: string | undefined,
   ): FramePin | undefined {
     if (text === undefined) return undefined;
-    let held: FramePin | undefined;
+    let answer: FramePin | undefined;
     let narrowest = -1;
     // Parsed once, on the first pin that compares a field, and never for a
     // pin set holding none.
-    let object: Record<string, unknown> | undefined | null = null;
+    const object = objectOnce(text);
     for (const pin of this.framePins.values()) {
-      if (pin.urlIncludes && !url.includes(pin.urlIncludes)) continue;
-      if (pin.direction && pin.direction !== direction) continue;
       if (pin.step !== undefined && !this.underStep(pin.step)) continue;
       if (pin.steps && !pin.steps.some(step => this.underStep(step))) continue;
-      if (pin.field && object === null) object = objectOf(text);
-      const byField = pin.field !== undefined && object !== undefined && object !== null;
-      const matched = byField ? carries(object!, pin.field!) : text.includes(pin.textIncludes);
+      const { matched, byField } = frameMatches(pin, pin.field, url, direction, text, object);
       if (!matched) continue;
       const narrowness = (pin.urlIncludes ? 1 : 0) + (pin.direction ? 1 : 0)
         + (pin.step !== undefined || pin.steps ? 1 : 0) + (byField ? 1 : 0);
       if (narrowness < narrowest) continue;
       if (narrowness === narrowest
-        && held !== undefined
-        && pin.textIncludes.length <= held.textIncludes.length) continue;
-      held = pin;
+        && answer !== undefined
+        && pin.textIncludes.length <= answer.textIncludes.length) continue;
+      answer = pin;
       narrowest = narrowness;
     }
-    return held;
+    return answer;
+  }
+
+  /**
+   * Count the crossings that match from `since` until released, changing none
+   * of them: those already on the record from that moment, read with the text
+   * each crossing carried, then each one as it crosses. With no `since` the
+   * count starts now.
+   */
+  count(match: CrossingMatch, since?: number): string {
+    const id = `count-${++this.counterSeq}`;
+    const frames = match.direction !== undefined || match.textIncludes !== undefined;
+    const field = match.textIncludes !== undefined ? fieldOf(match.textIncludes) : undefined;
+    const counter: Counter = { match, frames, hits: 0, partial: false, ...(field ? { field } : {}) };
+    if (since !== undefined) {
+      const oldest = this.events[0];
+      counter.partial = this.events.length >= MAX_EVENTS && oldest !== undefined && (oldest.startedAt ?? oldest.at) > since;
+      counter.hits = this.events.filter(event => (event.startedAt ?? event.at) >= since && this.recordedMatch(counter, event)).length;
+    }
+    this.counters.set(id, counter);
+    return id;
+  }
+
+  /** Whether a crossing already on the record matches a counter, as it would have as it crossed. */
+  private recordedMatch(counter: Counter, event: ProxyEvent): boolean {
+    if (!counter.frames) return event.kind === 'request' && requestMatches(counter.match, event.url, event.method ?? 'GET');
+    if (event.kind !== 'frame') return false;
+    const text = event.binary ? undefined : this.bodies.get(event.id) ?? event.preview;
+    return frameMatches(counter.match, counter.field, event.url,
+      event.direction === 'out' ? 'sent' : 'received', text, objectOnce(text)).matched;
+  }
+
+  /** How many crossings a counter has matched; undefined once released. */
+  hitsOf(id: string): number | undefined {
+    return this.counters.get(id)?.hits;
+  }
+
+  /** Whether a counter's count from before it was set is short, the record having been trimmed past its start. */
+  isPartial(id: string): boolean {
+    return this.counters.get(id)?.partial ?? false;
+  }
+
+  release(id: string): void {
+    this.counters.delete(id);
+  }
+
+  /** Whether a socket whose URL carries this is open now. */
+  socketOpen(urlIncludes: string): boolean {
+    return [...this.ledgers].some(ledger => ledger.url.includes(urlIncludes));
+  }
+
+  private countRequest(url: string, method: string): void {
+    for (const counter of this.counters.values()) {
+      if (!counter.frames && requestMatches(counter.match, url, method)) counter.hits += 1;
+    }
+  }
+
+  private countFrame(url: string, direction: 'sent' | 'received', text: string | undefined): void {
+    if (!this.counters.size) return;
+    const object = objectOnce(text);
+    for (const counter of this.counters.values()) {
+      if (counter.frames && frameMatches(counter.match, counter.field, url, direction, text, object).matched) counter.hits += 1;
+    }
   }
 
   listPins(): Pin[] {
@@ -1455,22 +1591,21 @@ export class InterceptProxy {
    * a shorter one it contains.
    */
   private matchPin(url: string, method: string): Pin | undefined {
-    let held: Pin | undefined;
+    let answer: Pin | undefined;
     let narrowest = -1;
     for (const pin of this.pins.values()) {
-      if (pin.method && pin.method !== method.toUpperCase()) continue;
       if (pin.step !== undefined && !this.underStep(pin.step)) continue;
       if (pin.steps && !pin.steps.some(step => this.underStep(step))) continue;
-      if (!url.includes(pin.urlIncludes)) continue;
+      if (!requestMatches(pin, url, method)) continue;
       const narrowness = (pin.method ? 1 : 0) + (pin.step !== undefined || pin.steps ? 1 : 0);
       if (narrowness < narrowest) continue;
       if (narrowness === narrowest
-        && held !== undefined
-        && pin.urlIncludes.length <= held.urlIncludes.length) continue;
-      held = pin;
+        && answer !== undefined
+        && pin.urlIncludes.length <= answer.urlIncludes.length) continue;
+      answer = pin;
       narrowest = narrowness;
     }
-    return held;
+    return answer;
   }
 
   /** Answer from a pin, or forward and pipe the bytes back untouched. */
@@ -1494,6 +1629,8 @@ export class InterceptProxy {
       return;
     }
 
+    const quiet = this.isQuiet(host);
+    if (!quiet) this.countRequest(url, req.method ?? 'GET');
     const pin = this.matchPin(url, req.method ?? 'GET');
 
     if (pin) {
@@ -1506,7 +1643,7 @@ export class InterceptProxy {
         size: Buffer.byteLength(pin.body), preview: pin.body.slice(0, PREVIEW_CHARS),
         durationMs: 0, startedAt: requestedAt,
         ...(pin.headers['content-type'] ? { contentType: pin.headers['content-type'].split(';')[0] } : {}),
-        heldAs: 'replaced',
+        answeredAs: 'replaced',
       }, pin.body, issuedUnder);
       return;
     }
@@ -1535,7 +1672,7 @@ export class InterceptProxy {
         method, status: 403, evidence: { protocolPaired: true },
         size: Buffer.byteLength(body), preview: body.slice(0, PREVIEW_CHARS),
         durationMs: 0, startedAt: requestedAt, contentType: 'application/json',
-        heldAs: 'refused',
+        answeredAs: 'refused',
       }, body, issuedUnder);
       return;
     }
@@ -1553,13 +1690,23 @@ export class InterceptProxy {
       headers: req.headers,
       ...(secure ? { rejectUnauthorized: false } : {}),
     }, (answer) => {
+      // devharness's own servers - the bench among them - are never held: a
+      // bench whose polls wait in the queue shows the state from before the hold.
+      const queued = !quiet && this.queue.offer({
+        kind: 'response', url, preview: `${req.method ?? 'GET'} ${answer.statusCode ?? 0}`,
+        deliver: () => { respond(answer); answer.resume(); },
+      });
+      if (queued) answer.pause();
+      else respond(answer);
+    });
+    const respond = (answer: IncomingMessage) => {
       res.writeHead(answer.statusCode ?? 502, answer.headers);
       const startedAt = Date.now();
       const contentType = typeof answer.headers['content-type'] === 'string'
         ? (answer.headers['content-type'] as string).split(';')[0]
         : undefined;
       // Tapped rather than buffered: the bytes still pipe through untouched and
-      // a copy is kept up to the cap, so an exchange can become a held value
+      // a copy is kept up to the cap, so an exchange can become an answer
       // later without the proxy having to parse anything now.
       let kept = '';
       let size = 0;
@@ -1602,24 +1749,25 @@ export class InterceptProxy {
             .filter(line => line.startsWith('data:'))
             .map(line => line.slice(5).trim())
             .join('\n');
-          const held = data ? this.matchFramePin(url, 'received', data) : undefined;
-          if (held) held.hits += 1;
+          const answer = data ? this.matchFramePin(url, 'received', data) : undefined;
+          if (answer) answer.hits += 1;
+          if (data) this.countFrame(url, 'received', data);
           if (data) {
             this.record({
               at: Date.now(), kind: 'frame', direction: 'in', url,
               size: Buffer.byteLength(data),
               evidence: { shape: payloadShape(data, false, Buffer.byteLength(data)) },
               preview: data.slice(0, PREVIEW_CHARS),
-              ...(held ? { heldAs: held.replaceWith === undefined ? 'dropped' as const : 'replaced' as const } : {}),
+              ...(answer ? { answeredAs: answer.replaceWith === undefined ? 'dropped' as const : 'replaced' as const } : {}),
             }, data);
           }
-          if (!held) {
+          if (!answer) {
             out += block + end;
-          } else if (held.replaceWith !== undefined) {
+          } else if (answer.replaceWith !== undefined) {
             // The event name and id stay, so the page's listener for that
             // event still receives it; only what it carries is replaced.
             const kept = lines.filter(line => !line.startsWith('data:'));
-            const served = held.replaceWith.split(/\r\n|\r|\n/).map(line => `data: ${line}`);
+            const served = answer.replaceWith.split(/\r\n|\r|\n/).map(line => `data: ${line}`);
             out += [...kept, ...served].join('\n') + '\n\n';
           }
           cut = pending.search(MESSAGE_END);
@@ -1641,12 +1789,17 @@ export class InterceptProxy {
           opened.durationMs = Date.now() - startedAt;
           if (events) {
             const out = takeMessages(chunk.toString('utf8'));
-            if (out) res.write(out);
+            if (out && (quiet || !this.queue.offer({ kind: 'frame', url, direction: 'received', preview: out.slice(0, PREVIEW_CHARS), deliver: () => res.write(out) }))) {
+              res.write(out);
+            }
           }
         }
       });
       answer.on('end', () => {
-        if (events) res.end(pending);
+        if (events) {
+          const tail = pending;
+          if (quiet || !this.queue.offer({ kind: 'response', url, preview: 'stream end', deliver: () => res.end(tail) })) res.end(tail);
+        }
         if (opened) {
           opened.size = size;
           opened.durationMs = Date.now() - startedAt;
@@ -1665,7 +1818,7 @@ export class InterceptProxy {
         }, kept, issuedUnder);
       });
       if (!events) answer.pipe(res);
-    });
+    };
     upstream.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end(); });
     req.pipe(upstream);
   }
@@ -1678,6 +1831,9 @@ export class InterceptProxy {
     // opening belongs to however long the handshake takes.
     const issuedUnder = this.cursor;
     const requestedAt = Date.now();
+    const quiet = this.isQuiet(host);
+    // Recorded as the GET it is, so counted as one as it crosses too.
+    if (!quiet) this.countRequest(url, 'GET');
 
     this.upgrades.handleUpgrade(req, socket, head, (client) => {
       client.on('error', () => { /* handled by the close pairing below */ });
@@ -1685,7 +1841,7 @@ export class InterceptProxy {
         .split(',').map(p => p.trim()).filter(Boolean);
       const upstream = new WebSocket(url, requested, {
         rejectUnauthorized: false,
-        headers: { ...(req.headers.origin ? { origin: req.headers.origin } : {}) },
+        headers: carriedUpgradeHeaders(req.headers),
       });
       const pending: Array<[any, boolean]> = [];
 
@@ -1734,14 +1890,25 @@ export class InterceptProxy {
       let paired = false;
 
       const forward = (from: WebSocket, to: WebSocket, direction: SocketFrame['direction']) => {
+        // Recorded as it crosses rather than as it arrives, so a frame kept
+        // through a hold lands under the step whose release let it through.
         from.on('message', (data: any, binary: boolean) => {
+          const queued = !quiet && this.queue.offer({
+            kind: 'frame', url, direction,
+            ...(binary ? {} : { preview: (Buffer.isBuffer(data) ? data : Buffer.from(String(data))).toString('utf8', 0, PREVIEW_CHARS) }),
+            deliver: () => cross(data, binary),
+          });
+          if (!queued) cross(data, binary);
+        });
+        const cross = (data: any, binary: boolean) => {
           const buf = Buffer.isBuffer(data) ? data : Buffer.from(String(data));
           const text = binary ? undefined : buf.toString('utf8');
-          const held = this.matchFramePin(url, direction, text);
-          if (held) held.hits += 1;
+          const answer = this.matchFramePin(url, direction, text);
+          if (answer) answer.hits += 1;
+          this.countFrame(url, direction, text);
 
-          const heldAs = held
-            ? (held.replaceWith === undefined ? 'dropped' as const : 'replaced' as const)
+          const answeredAs = answer
+            ? (answer.replaceWith === undefined ? 'dropped' as const : 'replaced' as const)
             : undefined;
           const id = pairingId(text);
           // Measurements, not a verdict: the level is read off these later.
@@ -1829,13 +1996,13 @@ export class InterceptProxy {
           this.announce({
             at: Date.now(), url, direction, binary, size: buf.length,
             ...(text !== undefined ? { text } : {}),
-            ...(heldAs ? { heldAs } : {}),
+            ...(answeredAs ? { answeredAs } : {}),
           });
           const recorded = this.record({
             at: Date.now(), kind: 'frame', direction: direction === 'sent' ? 'out' : 'in',
             url, binary, size: buf.length, evidence,
             ...(text !== undefined ? { preview: text.slice(0, PREVIEW_CHARS) } : {}),
-            ...(heldAs ? { heldAs } : {}),
+            ...(answeredAs ? { answeredAs } : {}),
           }, text);
           // Held so a report arriving after this frame reaches the frame it
           // names rather than whichever one shares its length.
@@ -1849,12 +2016,12 @@ export class InterceptProxy {
             }
           }
 
-          if (held && held.replaceWith === undefined) return;
-          const payload = held?.replaceWith !== undefined ? held.replaceWith : data;
-          const asBinary = held?.replaceWith !== undefined ? false : binary;
+          if (answer && answer.replaceWith === undefined) return;
+          const payload = answer?.replaceWith !== undefined ? answer.replaceWith : data;
+          const asBinary = answer?.replaceWith !== undefined ? false : binary;
           if (to.readyState === WebSocket.OPEN) to.send(payload, { binary: asBinary });
           else if (to === upstream) pending.push([payload, asBinary]);
-        });
+        };
       };
 
       forward(client, upstream, 'sent');

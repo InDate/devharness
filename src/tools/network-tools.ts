@@ -668,18 +668,26 @@ export function createNetworkTools(
             }
 
             const page = targetPuppeteerManager.getPage() as Page;
-            const cdpSession = await page.createCDPSession();
 
-            const presets: Record<string, any> = {
-              'offline': { offline: true, downloadThroughput: 0, uploadThroughput: 0, latency: 0 },
-              'slow-3g': { offline: false, downloadThroughput: 50 * 1024 / 8, uploadThroughput: 50 * 1024 / 8, latency: 2000 },
-              'fast-3g': { offline: false, downloadThroughput: 1.6 * 1024 * 1024 / 8, uploadThroughput: 750 * 1024 / 8, latency: 562.5 },
-              'fast-4g': { offline: false, downloadThroughput: 4 * 1024 * 1024 / 8, uploadThroughput: 3 * 1024 * 1024 / 8, latency: 170 },
-              'online': { offline: false, downloadThroughput: -1, uploadThroughput: -1, latency: 0 },
+            // Through the page's own session. Chrome keeps emulated conditions
+            // per debugging session, so conditions set from a session opened
+            // for the call stayed in force after a later call set others from
+            // a session of its own: `online` reported success while every
+            // request still failed offline.
+            const throttles: Record<string, { download: number; upload: number; latency: number }> = {
+              'slow-3g': { download: 50 * 1024 / 8, upload: 50 * 1024 / 8, latency: 2000 },
+              'fast-3g': { download: 1.6 * 1024 * 1024 / 8, upload: 750 * 1024 / 8, latency: 562.5 },
+              'fast-4g': { download: 4 * 1024 * 1024 / 8, upload: 3 * 1024 * 1024 / 8, latency: 170 },
             };
-
-            const conditions = presets[preset];
-            await cdpSession.send('Network.emulateNetworkConditions', conditions);
+            const throttle = throttles[preset];
+            await page.setOfflineMode(preset === 'offline');
+            await page.emulateNetworkConditions(throttle ?? null);
+            const conditions = {
+              offline: preset === 'offline',
+              downloadThroughput: throttle?.download ?? (preset === 'offline' ? 0 : -1),
+              uploadThroughput: throttle?.upload ?? (preset === 'offline' ? 0 : -1),
+              latency: throttle?.latency ?? 0,
+            };
 
             return createSuccessResponse('NETWORK_CONDITIONS_SET', {
               preset

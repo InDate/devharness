@@ -13,11 +13,14 @@ export function Glyph({ of }: { of: string }) {
     restart: <><path d="M3.5 3v10" /><path d="M13 3 6 8l7 5z" /></>,
     replay: <><path d="M13 8a5 5 0 1 1-1.6-3.6" /><path d="M13.2 2.2v3h-3" /></>,
     step: <><path d="M3 3l7 5-7 5z" /><path d="M12.5 3v10" /></>,
+    steps: <><path d="M1.5 3l5 5-5 5z" /><path d="M7 3l5 5-5 5z" /><path d="M14 3v10" /></>,
     play: <path d="M4 3l9 5-9 5z" />,
+    headless: <><path d="M3 2.5l8 4.5-8 4.5z" /><rect x="10.6" y="10.6" width="3.8" height="3.8" rx="0.6" /></>,
     stop: <rect x="4" y="4" width="8" height="8" rx="1" />,
     held: <><path d="M6 4v8" /><path d="M10 4v8" /></>,
     running: <path d="M5 3l8 5-8 5z" />,
-    freeze: <><path d="M8 1.5v13" /><path d="M2.2 4.8 13.8 11.2" /><path d="M2.2 11.2 13.8 4.8" /><path d="M5.4 3.2 8 5.1l2.6-1.9" /><path d="M5.4 12.8 8 10.9l2.6 1.9" /></>,
+    // A raised open hand, palm out: the gesture for stop and hold.
+    hold: <><path d="M5.6 8.4V3.6a1.1 1.1 0 0 1 2.2 0V7.6" /><path d="M7.8 7.4V2.6a1.1 1.1 0 0 1 2.2 0v4.8" /><path d="M10 7.6V4a1.1 1.1 0 0 1 2.2 0v5.2a5 5 0 0 1-5 5h-.5a4 4 0 0 1-3-1.4L1.9 10.3a1.1 1.1 0 0 1 1.6-1.5l2.1 1.8" /></>,
     // Two shapes, not two colours: the hub is hollow while nothing is
     // carried and solid once something is, which reads at 13px where a
     // change of hue does not.
@@ -40,8 +43,14 @@ export function Glyph({ of }: { of: string }) {
     up: <><path d="M8 13V3.5" /><path d="M4.5 7 8 3.5 11.5 7" /></>,
     down: <><path d="M8 3v9.5" /><path d="M4.5 9 8 12.5 11.5 9" /></>,
     record: <circle cx="8" cy="8" r="4.2" fill="currentColor" />,
+    baseline: <><circle cx="8" cy="8" r="5.6" /><circle cx="8" cy="8" r="1.8" fill="currentColor" /></>,
     before: <><path d="M3.5 3.5h9" /><path d="M4.5 11l3.5-3.5 3.5 3.5" /></>,
     after: <><path d="M3.5 12.5h9" /><path d="M4.5 5l3.5 3.5 3.5-3.5" /></>,
+    // Out and back: a request and its response.
+    request: <><path d="M2.5 5.5h10" /><path d="M10 3l2.5 2.5L10 8" /><path d="M13.5 10.5h-10" /><path d="M6 8l-2.5 2.5L6 13" /></>,
+    // A message on an open connection.
+    frame: <><path d="M2.5 3.5h11v7h-6.2l-3 2.6v-2.6H2.5z" /></>,
+    store: <><ellipse cx="8" cy="4" rx="5" ry="1.8" /><path d="M3 4v8c0 1 2.2 1.8 5 1.8s5-.8 5-1.8V4" /><path d="M3 8c0 1 2.2 1.8 5 1.8s5-.8 5-1.8" /></>,
     timer: <><circle cx="8" cy="9" r="5.2" /><path d="M8 6.2V9l1.8 1.4" /><path d="M6.4 1.8h3.2" /></>,
     eye: <><path d="M1.5 8s2.4-4.2 6.5-4.2S14.5 8 14.5 8s-2.4 4.2-6.5 4.2S1.5 8 1.5 8z" /><circle cx="8" cy="8" r="2" /></>,
     eyeoff: <><path d="M1.5 8s2.4-4.2 6.5-4.2S14.5 8 14.5 8s-2.4 4.2-6.5 4.2S1.5 8 1.5 8z" /><path d="M2.5 13.5 13.5 2.5" /></>,

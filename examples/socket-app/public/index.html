@@ -90,6 +90,11 @@
   <button data-testid="write-session">write sessionStorage</button>
   <button data-testid="write-cookie">write a cookie</button>
   <button data-testid="write-idb">write IndexedDB</button>
+  <button data-testid="write-cache">write Cache Storage</button>
+  <button data-testid="write-file">write a file</button>
+  <button data-testid="register-sw">register a service worker</button>
+  <button data-testid="clear-state">remove all of these</button>
+  <p>stored: <output data-testid="stored"></output></p>
   <button data-testid="save-draft">write a draft, then POST it</button>
 </fieldset>
 
@@ -181,6 +186,7 @@ $('[data-testid=open-worker]').addEventListener('click', () => {
   worker.addEventListener('message', (e) => log(`worker ${e.data}`));
   worker.postMessage(`ws://${location.host}/small?ms=800`);
   log('worker started');
+  showStored();
 });
 
 $('[data-testid=open-worker-boot]').addEventListener('click', () => {
@@ -298,16 +304,19 @@ $('[data-testid=close-sse]').addEventListener('click', () => {
 $('[data-testid=write-local]').addEventListener('click', () => {
   localStorage.setItem('socket-app:draft', JSON.stringify({ at: Date.now(), body: 'unsent' }));
   log('wrote localStorage socket-app:draft');
+  showStored();
 });
 
 $('[data-testid=write-session]').addEventListener('click', () => {
   sessionStorage.setItem('socket-app:step', String(Date.now()));
   log('wrote sessionStorage socket-app:step');
+  showStored();
 });
 
 $('[data-testid=write-cookie]').addEventListener('click', () => {
   document.cookie = `socket-app-seen=${Date.now()}; path=/; SameSite=Lax`;
   log('wrote cookie socket-app-seen');
+  showStored();
 });
 
 $('[data-testid=write-idb]').addEventListener('click', () => {
@@ -316,9 +325,97 @@ $('[data-testid=write-idb]').addEventListener('click', () => {
   open.addEventListener('success', () => {
     const tx = open.result.transaction('drafts', 'readwrite');
     tx.objectStore('drafts').put({ id: 'draft-1', body: 'unsent', at: Date.now() });
-    tx.addEventListener('complete', () => log('wrote IndexedDB socket-app/drafts/draft-1'));
+    tx.addEventListener('complete', () => {
+      open.result.close();
+      log('wrote IndexedDB socket-app/drafts/draft-1');
+      showStored();
+    });
   });
 });
+
+$('[data-testid=write-cache]').addEventListener('click', async () => {
+  const cache = await caches.open('socket-app');
+  await cache.put('/cached/draft', new Response(JSON.stringify({ body: 'unsent', at: Date.now() }), {
+    headers: { 'content-type': 'application/json' },
+  }));
+  log('wrote Cache Storage socket-app /cached/draft');
+  await showStored();
+});
+
+$('[data-testid=write-file]').addEventListener('click', async () => {
+  const root = await navigator.storage.getDirectory();
+  const file = await root.getFileHandle('draft.txt', { create: true });
+  const writable = await file.createWritable();
+  await writable.write(`unsent ${Date.now()}`);
+  await writable.close();
+  log('wrote file draft.txt');
+  await showStored();
+});
+
+$('[data-testid=register-sw]').addEventListener('click', async () => {
+  await navigator.serviceWorker.register('/app-sw.js');
+  log('registered service worker /app-sw.js');
+  await showStored();
+});
+
+// Undoes every write above, so each store's removal is a change of its own.
+$('[data-testid=clear-state]').addEventListener('click', async () => {
+  localStorage.removeItem('socket-app:draft');
+  sessionStorage.removeItem('socket-app:step');
+  document.cookie = 'socket-app-seen=; path=/; max-age=0';
+  if (await hasDraftsDatabase()) await new Promise((resolve) => {
+    const open = indexedDB.open('socket-app', 1);
+    open.addEventListener('upgradeneeded', () => open.result.createObjectStore('drafts', { keyPath: 'id' }));
+    open.addEventListener('success', () => {
+      const tx = open.result.transaction('drafts', 'readwrite');
+      tx.objectStore('drafts').delete('draft-1');
+      tx.addEventListener('complete', () => { open.result.close(); resolve(); });
+    });
+  });
+  await caches.delete('socket-app');
+  const root = await navigator.storage.getDirectory();
+  await root.removeEntry('draft.txt').catch(() => {});
+  const registration = await navigator.serviceWorker.getRegistration('/');
+  await registration?.unregister();
+  log('removed every local write');
+  await showStored();
+});
+
+// Opening a database that does not exist creates it, which is itself a write.
+async function hasDraftsDatabase() {
+  return (await indexedDB.databases()).some(db => db.name === 'socket-app');
+}
+
+/**
+ * Which of the writes above the page holds now, as one attribute each on the
+ * readout: Cache Storage, the file system and service workers are read only
+ * through promises, and a synchronous check reads the attributes instead.
+ */
+async function showStored() {
+  const idb = await hasDraftsDatabase() && await new Promise((resolve) => {
+    const open = indexedDB.open('socket-app', 1);
+    open.addEventListener('success', () => {
+      const get = open.result.transaction('drafts').objectStore('drafts').get('draft-1');
+      get.addEventListener('success', () => { open.result.close(); resolve(!!get.result); });
+    });
+    open.addEventListener('error', () => resolve(false));
+  });
+  const root = await navigator.storage.getDirectory();
+  const held = {
+    local: localStorage.getItem('socket-app:draft') !== null,
+    session: sessionStorage.getItem('socket-app:step') !== null,
+    cookie: document.cookie.split('; ').some(pair => pair.startsWith('socket-app-seen=')),
+    idb,
+    cache: await caches.has('socket-app'),
+    file: await root.getFileHandle('draft.txt').then(() => true, () => false),
+    sw: !!(await navigator.serviceWorker.getRegistration('/')),
+    worker: !!worker,
+  };
+  const out = $('[data-testid=stored]');
+  for (const [name, present] of Object.entries(held)) out.toggleAttribute(`data-${name}`, present);
+  out.textContent = Object.keys(held).filter(name => held[name]).join(' ') || 'nothing';
+}
+showStored();
 
 // The pair that separates the two cases: the same record written locally, then
 // sent. One click produces a boundary crossing, the other produces none.
@@ -328,7 +425,7 @@ $('[data-testid=save-draft]').addEventListener('click', async () => {
   log('wrote localStorage, now posting');
   const res = await fetch('/draft', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(sessionToken ? { 'x-session': sessionToken } : {}) },
     body: JSON.stringify(draft),
   });
   log(`POST /draft -> ${res.status}`);
@@ -338,6 +435,7 @@ $('[data-testid=close-all]').addEventListener('click', () => {
   if (sse) { sse.close(); sse = null; }
   for (const s of sockets) { try { s.close(); } catch {} }
   if (worker) { worker.terminate(); worker = null; }
+  showStored();
   log('closed all');
   refresh();
 });

@@ -16,7 +16,7 @@
   --own: var(--caused);
   --alert: #b8443a;
   --frost: #2f7fb8;
-  --store: #7a55c7;
+  --store: #b3643c;
   --note: #a88419;
   --intercept: #b4407e;
   --sequence: #5a5fd1;
@@ -36,7 +36,7 @@
     --own: var(--caused);
     --alert: #e8776c;
     --frost: #7fc7ef;
-    --store: #b69cf0;
+    --store: #e39a6f;
     --note: #e2c15a;
     --intercept: #e57fb6;
     --sequence: #a3a7f5;
@@ -50,8 +50,10 @@
 body {
   margin: 0;
   /* The foot clears the fixed footing bar, which would otherwise cover the
-     last row of whatever the tab is listing. */
-  padding: 18px 20px 112px;
+     last row of whatever the tab is listing; the top clears the hold strip
+     while it is open. */
+  padding: calc(18px + var(--holdbar, 0px)) 20px 112px;
+  transition: padding-top .18s ease-out;
   background: var(--bg);
   color: var(--fg);
   font: 13px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -62,11 +64,15 @@ body {
    pass under it rather than showing at its sides. */
 header {
   display: flex; align-items: baseline; gap: 18px;
-  position: sticky; top: 0; z-index: 20;
+  position: sticky; top: var(--holdbar, 0px); z-index: 20;
   margin: -18px -20px 14px; padding: 18px 20px 10px;
   background: var(--bg); border-bottom: 1px solid var(--line);
 }
 h1 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: 0.08em; color: var(--muted); }
+h1.home { cursor: pointer; }
+h1.home:hover { color: var(--fg); }
+h1.home[aria-disabled] { cursor: default; }
+h1.home[aria-disabled]:hover { color: var(--muted); }
 nav { display: flex; gap: 2px; }
 nav button {
   padding: 4px 10px; border: 0; border-radius: 6px; background: none; cursor: pointer;
@@ -111,6 +117,10 @@ nav button.on { background: var(--panel); color: var(--fg); }
 /* Repeats sit above the stream and hold their place, so a heartbeat ticking
    every two seconds stops shoving the traffic a step caused down the page. */
 .repeating { margin-bottom: 14px; }
+/* What the proxy is keeping while the traffic is held, in the hold's colour. */
+.waiting { margin-bottom: 14px; }
+.waiting > .sectionhead { color: var(--frost); }
+.waitrow .dir { color: var(--frost); }
 .sectionhead {
   display: flex; gap: 10px; align-items: baseline; padding: 0 0 4px 2px;
   font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted);
@@ -231,19 +241,6 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
 }
 .menu textarea.why:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-/* The notes tab.
- *
- * The step list is the page: it is what was driven, in order, and a note
- * belongs on a step. Everything else - which sequence, where the run is, the
- * page's own hold - is one line of chrome above it.
- */
-.runbar {
-  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
-  padding-bottom: 10px; margin-bottom: 12px; border-bottom: 1px solid var(--line);
-}
-.runbar .rule { width: 1px; height: 18px; background: var(--line); margin: 0 2px; }
-.runbar .at { color: var(--muted); font-size: 12px; }
-.runbar .at b { color: var(--fg); font-variant-numeric: tabular-nums; }
 .seqpick {
   padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px;
   background: var(--bg); color: var(--fg); font: 12px/1.4 inherit; max-width: 280px;
@@ -270,55 +267,6 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
   font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
-.steps { list-style: none; margin: 0; padding: 0; }
-.step { padding: 2px 0; border-top: 1px solid var(--line); }
-.step:last-child { border-bottom: 1px solid var(--line); }
-.stephead {
-  display: flex; gap: 10px; align-items: baseline; padding: 7px 8px 7px 0;
-  font: 11px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-/* Where the run stands, marked on the step rather than stated above the list. */
-.step.now { box-shadow: inset 2px 0 0 var(--accent); }
-.step.writing { background: var(--panel); }
-.step.done .label { color: var(--muted); }
-.step.failed .label { color: var(--alert); }
-.step .num {
-  flex: 0 0 26px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums;
-}
-.step .label { flex: 1; min-width: 0; word-break: break-all; }
-.step .captures { flex: 0 0 auto; color: var(--caused); }
-.step .tally {
-  flex: 0 0 auto; min-width: 18px; padding: 0 5px; border-radius: 9px;
-  background: var(--panel); color: var(--muted); text-align: center; font-size: 10px;
-}
-/* Quiet until the row is under the pointer: the list is for reading first. */
-.step .write {
-  flex: 0 0 auto; padding: 2px 8px; border: 1px solid transparent; border-radius: 5px;
-  background: none; color: var(--muted); cursor: pointer; font: 10px/1.6 inherit;
-  opacity: 0;
-}
-.step:hover .write, .step.writing .write { opacity: 1; }
-.step .write:hover { border-color: var(--accent); color: var(--accent); }
-
-.stepwhat { margin: 0 8px 6px 36px; color: var(--muted); font-size: 11px; }
-
-.note {
-  display: flex; gap: 8px; align-items: baseline; padding: 4px 8px 6px 36px;
-  font: 12px/1.5 -apple-system, sans-serif;
-}
-.note .notewords { flex: 1; min-width: 0; }
-.note .notewhere {
-  flex: 0 1 auto; min-width: 0; max-width: 40%; color: var(--muted);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font: 10px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-.note .drop {
-  flex: 0 0 auto; padding: 0 3px; border: 0; background: none; cursor: pointer;
-  color: var(--muted); font: 13px/1 inherit;
-}
-.note .drop:hover { color: var(--alert); }
-
-.composer { padding: 2px 8px 10px 36px; }
 .picked {
   display: flex; gap: 8px; align-items: baseline; padding: 6px 8px; margin-bottom: 7px;
   border-radius: 6px; background: var(--bg); border: 1px solid var(--line);
@@ -326,13 +274,6 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
 }
 .picked .tag { color: var(--accent); font-weight: 600; }
 .picked .selector { flex: 1; min-width: 0; word-break: break-all; }
-.composer .hint { margin: 0 0 7px; }
-.composer textarea.why {
-  width: 100%; padding: 9px 11px; resize: vertical;
-  border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg);
-  font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-.composerfoot { display: flex; gap: 10px; align-items: center; margin-top: 8px; }
 
 /* Walking a held page forward. Appears with the hold, because ticking a
    running page means nothing, and goes when the hold is released. */
@@ -367,26 +308,6 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
 .callbacks .where { flex: 0 1 auto; min-width: 0; overflow: hidden;
                     text-overflow: ellipsis; white-space: nowrap; }
 
-/* What the run is carrying, above the steps that read it. One wrapping line,
-   because a value is usually short and the steps are what the page is for. */
-.vars {
-  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
-  padding-bottom: 10px; margin-bottom: 10px; border-bottom: 1px solid var(--line);
-}
-.varslabel { color: var(--muted); font-size: 11px; }
-.var {
-  display: inline-flex; align-items: baseline; gap: 7px; padding: 3px 8px;
-  border: 1px solid var(--line); border-radius: 999px; cursor: pointer;
-  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-.var:hover { border-color: var(--accent); }
-.var b { color: var(--accent); font-weight: 600; }
-.var .varvalue { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.var .varfrom { color: var(--muted); font-size: 10px; }
-.var.open { border-radius: 10px; }
-.var .varfields { display: flex; flex-wrap: wrap; gap: 4px 10px; width: 100%; padding: 4px 0 2px; }
-.var .varfield { font-size: 10px; }
-.varadd { display: inline-flex; gap: 6px; align-items: center; }
 .vname, .vvalue {
   padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px;
   background: var(--bg); color: var(--fg);
@@ -399,11 +320,6 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
   background: none; color: var(--muted); cursor: pointer; font: 11px/1.5 inherit;
 }
 .varnew:hover { border-color: var(--accent); color: var(--accent); }
-
-/* A name whose step has not run yet: it is going to be carried, and saying so
-   beats a control that looks like it did nothing. */
-.var.waiting { border-style: dashed; cursor: default; }
-.var.waiting b { color: var(--muted); }
 
 /* Working on a UI.
  *
@@ -454,12 +370,19 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
   column-gap: 8px; align-items: center; height: 1.7em;
 }
 .listrow > .rowhead > .dir { min-width: 0; max-width: none; }
+/* The badge column is laid out only in a list compared against a recording;
+   anywhere else it takes no column and no gap, and the row reads as before. */
+.crossedhead .badgecol { display: none; }
+/* The source column narrows beside it: sources here are a method or a short
+   path, and a longer one ends in an ellipsis with its full name on pointing. */
+.compared .listrow > .rowhead { grid-template-columns: 7ch 8ch 10px minmax(0, 1fr) auto; }
+.compared .listrow > .rowhead > .badgecol { display: block; }
 .rowlabel { display: flex; gap: 8px; align-items: center; min-width: 0; }
 .rowlabel > .what { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rowlabel > .tag, .rowlabel > .stale { flex: 0 0 auto; }
 /* The reading and the actions share the right end. The actions sit over it,
-   right-aligned, in five fixed slots - an action a row lacks leaves its slot
-   empty - so each is at the same place on every row; pointing swaps which of
+   right-aligned, in fixed slots - an action a row lacks is drawn dimmed in
+   its slot - so each is at the same place on every row; pointing swaps which of
    the two is visible and changes no size. */
 .rowright { position: relative; display: flex; justify-content: flex-end; }
 .rowreading { display: flex; gap: 8px; align-items: center; white-space: nowrap; }
@@ -471,7 +394,8 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
   width: 22px; height: 18px; padding: 0; border: 0;
   display: inline-flex; align-items: center; justify-content: center;
 }
-.rowactions .tool:hover:not(:disabled) { color: var(--accent); }
+.rowactions .tool:hover:not(:disabled):not(.off) { color: var(--accent); }
+.rowactions .tool.off, .rowactions .tool.off:hover { opacity: 0.25; cursor: default; color: var(--muted); border-color: transparent; }
 .rowactions .tool svg { display: block; }
 .listrow:hover > .rowhead .rowactions { visibility: visible; }
 .listrow:hover > .rowhead .rowreading { visibility: hidden; }
@@ -669,24 +593,67 @@ textarea.notewords::placeholder { color: var(--muted); }
   border: 1px solid var(--line); border-radius: 6px;
 }
 
-/* Choosing a sequence. Stacked tiles rather than a row of cards: the names run
-   long and the description is the part that decides it, so each one gets the
-   column's width and is read down the page. */
-.tiles { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
-.tile {
-  display: flex; flex-direction: column; gap: 5px; width: 100%; padding: 13px 15px;
-  border: 1px solid var(--line); border-radius: 10px; background: var(--bg);
-  color: var(--fg); text-align: left; cursor: pointer; font: inherit;
+/* Choosing a sequence: one row each, in the colour a sequence carries
+   everywhere else, opening to what it is for and the steps it takes. */
+.crossed.seqrow { border-left: 2px solid var(--sequence); }
+.seqrow .rowhead .dir { color: var(--sequence); }
+.seqrow .rowlabel .seqname { flex: 0 0 auto; color: var(--fg); font-weight: 600; }
+.seqrow .rowlabel .seqwhat { color: var(--muted); font-family: -apple-system, sans-serif; }
+.seqnotes { color: var(--note); }
+.seqreadme { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.seqreadme p { margin: 0; }
+.seqpurpose { white-space: pre-wrap; }
+.seqexpect { color: var(--muted); font-size: 11px; }
+.seqsteps {
+  list-style: none; margin: 4px 0 0; padding: 0;
+  font: 11px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace;
 }
-.tile:hover { border-color: var(--accent); background: var(--panel); }
-.tilename { font: 600 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
-.tilewhat { color: var(--fg); font-size: 12px; opacity: 0.85; }
-.tileexpect { color: var(--muted); font-size: 11px; }
-.tilecounts {
-  display: flex; gap: 12px; margin-top: 2px; color: var(--muted);
-  font: 10px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+.seqsteps li { display: flex; gap: 10px; min-width: 0; }
+.seqstepno { flex: 0 0 4ch; color: var(--sequence); text-align: right; }
+.seqsteplabel { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.seqsteps li.teardown { color: var(--muted); }
+
+/* One tool call this devharness ran. No hue of its own: every other colour
+   names a kind of thing in a sequence, and a call is any of them. */
+.crossed.historyrow { border-left: 2px solid var(--line); }
+.crossed.historyrow.failed { border-left-color: var(--alert); }
+.crossed.historyrow.running { border-left-style: dashed; }
+.historyrow .rowhead .dir { color: var(--fg); }
+.historybody { display: flex; flex-direction: column; gap: 8px; }
+.historyrow .where { color: var(--muted); font: 11px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.historyrow .whererun { color: var(--sequence); }
+.historyfacts { margin: 0; color: var(--muted); font: 11px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+/* The tools tab: one fold per toolset, one row per tool, the same rows as History. */
+.toolsets .panelsec h3 .secsummary { min-width: 0; overflow: hidden; }
+.toolmarks { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-end; }
+.toolmark { display: inline-flex; align-items: center; color: var(--muted); }
+.toolmark svg { display: block; }
+.toolrow .rowlabel > .toolmark { flex: 0 0 auto; }
+.crossed.toolrow { border-left: 2px solid var(--line); }
+.crossed.toolrow.failed { border-left-color: var(--alert); }
+.toolrow .rowlabel > .what { flex: 0 0 auto; font-weight: 600; }
+.toolrow .rowlabel > .toolgist {
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--muted); font: 12px/1.5 -apple-system, sans-serif;
 }
-.tilenotes { color: var(--accent); }
+.tooldescription { margin: 0; white-space: pre-wrap; font: 12px/1.55 -apple-system, sans-serif; color: var(--fg); }
+.toolparams { margin: 0; padding: 6px 10px; max-height: 240px; overflow: auto; }
+.toolparam + .toolparam { margin-top: 6px; }
+.toolparam dt { display: flex; gap: 8px; align-items: baseline; font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.toolparam .paramname { color: var(--fg); }
+.toolparam .paramneeded { color: var(--alert); }
+.toolparam .paramtype { color: var(--muted); overflow-wrap: anywhere; }
+.toolparam dd { margin: 0; color: var(--muted); font: 11px/1.5 -apple-system, sans-serif; }
+textarea.toolargs {
+  display: block; width: 100%; box-sizing: border-box; margin: 0; padding: 8px 10px;
+  border: 0; outline: none; resize: vertical; background: var(--bg); color: var(--fg);
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.toolbody .bodyfoot { margin-top: 0; }
+.toolactions { margin: 4px 0 0; }
+.crossed.toolrow.actionrow .rowlabel > .what { font-weight: 500; }
+.toolbody .bodyfoot .tool[disabled] { opacity: 0.4; cursor: default; }
 
 /* Recording a sequence. The steps land on their own; what the page asks for is
    the part only the person driving knows - what it is for, and where the run
@@ -864,55 +831,6 @@ textarea.notewords::placeholder { color: var(--muted); }
 .aboutfoot { display: flex; gap: 10px; align-items: center; margin-top: 12px; }
 .chip-toggle.bad, .tool.bad { border-color: var(--alert); color: var(--alert); }
 
-/* Editing one step: why it is there, and whether the run forks at it. */
-/* The per-step controls appear under the pointer and hold no width until they
-   do. Faded in place they still occupied the line: measured at a 500px pane,
-   the note button and this group held 256px of a 460px row at zero opacity,
-   and the label wrapped mid-token into the 140px left over. Taken out of the
-   flow they cost nothing, and taken out absolutely rather than by display the
-   label does not reflow as the pointer crosses the row. */
-.stephead { position: relative; }
-.stepedit {
-  display: flex; gap: 2px; opacity: 0;
-  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
-  z-index: 20; padding-left: 10px; background: var(--panel); border-radius: 6px;
-}
-.step:hover .stepedit, .stepedit:focus-within { opacity: 1; }
-/* Writing a note holds the group open, so the button that closes it stays
-   reachable without the pointer resting on the row. */
-.step.writing .stepedit { opacity: 1; }
-.stepedbox { display: flex; gap: 8px; align-items: flex-end; margin-top: 8px; }
-.stepedbox .why { flex: 1; }
-/* Editing one step, lined up with the step's own text rather than the gutter
-   its number sits in. Without a scoped rule the box falls back to the browser
-   default and breaks white and full-bleed across the row. */
-.stepedbox { margin: 2px 8px 10px 36px; }
-.stepedbox textarea.why {
-  flex: 1; min-width: 0; padding: 8px 10px; resize: vertical;
-  border: 1px solid var(--line); border-radius: 8px;
-  background: var(--bg); color: var(--fg);
-  font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-.stepedbox textarea.why:focus { outline: none; border-color: var(--accent); }
-/* A guarded jump, laid out as the thing it builds: when <guard> <value>, run
-   <sequence>. Reading the row left to right is reading the step it writes. */
-.fork {
-  display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
-  margin: 2px 8px 10px 36px; padding: 8px 10px;
-  border: 1px solid var(--line); border-radius: 8px; background: var(--bg);
-}
-.fork .asklabel { padding: 0; }
-.fork .namebox { margin: 0; padding: 5px 8px; font-size: 11px; }
-.fork .namebox.grow { flex: 1 1 140px; min-width: 0; }
-.fork .seqpick { padding: 4px 6px; font-size: 11px; }
-.fork .seqpick.narrow { flex: 0 0 auto; }
-.fork .save { padding: 5px 12px; }
-
-/* Offered from a failure: the guard belongs to the step that failed, so it
-   sits against the failure line rather than down in the list. */
-.fork.guarding { margin-left: 0; border-color: var(--alert); }
-.asklabel.wide { flex: 0 0 auto; white-space: nowrap; }
-
 /* ---------------------------------------------------------------------------
    What crossed the boundary, under the step that caused it.
 
@@ -940,7 +858,6 @@ textarea.notewords::placeholder { color: var(--muted); }
 .scopecounts .key i.caused { border-color: var(--caused); }
 .scopecounts .key i.unowned { border-color: var(--own); border-top-style: dashed; }
 
-.crossedlist { list-style: none; margin: 6px 0 2px; padding: 0 0 0 26px; }
 .crossed {
   border-left: 2px solid var(--caused);
   padding: 2px 8px; border-radius: 0 6px 6px 0;
@@ -1062,12 +979,11 @@ textarea.notewords::placeholder { color: var(--muted); }
      split across two lines and which line a control sits on is set by the
      length of the sequence name beside it, which moves as the sequence
      changes. */
-  .runbar .grow, .topbar .grow { flex: 1 0 100%; height: 0; margin: 0; }
+  .topbar .grow { flex: 1 0 100%; height: 0; margin: 0; }
   /* Takes the line it shares with the position, minus what the position needs:
      a zero basis that grows, so the name is what gives way when it is long
      rather than the position being pushed onto a line of its own. */
-  .runbar .seqpick, .topbar .seqpick { flex: 1 1 0; min-width: 0; max-width: none; }
-  .runbar .rule { display: none; }
+  .topbar .seqpick { flex: 1 1 0; min-width: 0; max-width: none; }
 
 }
 
@@ -1193,6 +1109,10 @@ textarea.notewords::placeholder { color: var(--muted); }
 .expectfields label { display: flex; gap: 8px; align-items: baseline; cursor: pointer; }
 .expectfields .path { color: var(--fg); }
 .expectfields .quiet { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.expectfields li { display: flex; gap: 14px; align-items: baseline; }
+/* The second choice on a ticked field: its value as well as its being there. */
+.expectfields .fieldvalue { color: var(--muted); font-size: 11px; min-width: 0; }
+.expectfields .fieldvalue.on { color: var(--fg); }
 /* One loud button: the one that commits what is in the box. */
 .crossed .bodyrow .tool.done, .saved .rules li .bodyrow .tool.done {
   border-style: dashed; color: var(--muted); cursor: default;
@@ -1243,10 +1163,6 @@ textarea.notewords::placeholder { color: var(--muted); }
 .crossedhead .seen.moves { color: var(--fg); font-weight: 600; }
 .crossedhead .seen.moves::after { content: ' ~'; }
 
-/* A run in flight: the position says so, and the list it is filling says so. */
-.runbar .at.running { color: var(--accent); }
-ol.steps.running > li.step.now > .stephead { box-shadow: inset 2px 0 0 var(--accent); }
-
 /* ---------------------------------------------------------------------------
    Traffic arriving.
 
@@ -1262,14 +1178,6 @@ ol.steps.running > li.step.now > .stephead { box-shadow: inset 2px 0 0 var(--acc
 }
 .crossed { animation: land 200ms ease-out; }
 
-/* The step being driven. The rule breathes while the run is in flight, so a
-   step waiting on traffic reads as waiting rather than as stalled. */
-@keyframes driving {
-  0%, 100% { box-shadow: inset 2px 0 0 var(--accent); }
-  50%      { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent) 35%, transparent); }
-}
-ol.steps.running > li.step.now > .stephead { animation: driving 1.4s ease-in-out infinite; }
-
 /* A payload opening under its row, rather than appearing whole. */
 @keyframes unfold {
   from { opacity: 0; transform: translateY(-2px); }
@@ -1281,8 +1189,7 @@ ol.steps.running > li.step.now > .stephead { animation: driving 1.4s ease-in-out
    asked for less of it loses nothing by having none. */
 @media (prefers-reduced-motion: reduce) {
   .crossed,
-  .crossed.open > .body,
-  ol.steps.running > li.step.now > .stephead { animation: none; }
+  .crossed.open > .body { animation: none; }
 }
 
 /* ---------------------------------------------------------------------------
@@ -1549,14 +1456,17 @@ ol.steps.running > li.step.now > .stephead { animation: driving 1.4s ease-in-out
 .crossed.storewrite .dir { color: var(--store); }
 .crossedhead .tag.nexttime { color: var(--muted); font-style: italic; }
 
-/* A replayed step against its recording: quiet when it matched, the alert hue
-   where it did not, one line per difference. */
-.crossedhead .verdict { flex: 0 0 auto; font: 11px/1.6 -apple-system, sans-serif; }
-.crossedhead .verdict.match { color: var(--muted); }
-.crossedhead .verdict.mismatch, .crossedhead .verdict.missing { color: var(--alert); font-weight: 600; }
-.crossedhead .verdict.unexpected { color: var(--own); font-weight: 600; }
-.gutter { margin: 14px 0 0; padding-top: 8px; border-top: 1px dashed var(--line); }
-.gutterhead { margin: 0 0 4px; font: 12px/1.5 -apple-system, sans-serif; color: var(--muted); }
+/* A replayed step against its recording, as a badge after the row's source:
+   quiet when it matched or is ignored, the alert hue where it differs or is
+   missing, and the hue new traffic already reads in. */
+.badgecol .badge {
+  flex: 0 0 auto; padding: 0 6px; border: 1px solid currentColor; border-radius: 8px;
+  font: 9px/1.5 -apple-system, sans-serif; letter-spacing: 0.02em; opacity: 0.85;
+}
+.badgecol .badge.match, .badgecol .badge.ignored { color: var(--muted); }
+.badgecol .badge.ignored { border-style: dashed; }
+.badgecol .badge.mismatch, .badgecol .badge.missing { color: var(--alert); }
+.badgecol .badge.unexpected { color: var(--own); }
 .crossed.missing .crossedhead { opacity: 0.6; }
 .crossed.missing .crossedhead .verdict { opacity: 1; }
 .delta { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
@@ -1573,8 +1483,6 @@ ol.steps.running > li.step.now > .stephead { animation: driving 1.4s ease-in-out
 .pbox .diff.side .pair { display: grid; grid-template-columns: 1fr 1fr; }
 .pbox .diff.side pre { margin: 0; min-width: 0; }
 .pbox .diff.side pre:first-child { border-right: 1px solid var(--line); }
-.comparesummary { margin: 8px 0; font: 12px/1.5 -apple-system, sans-serif; color: var(--muted); }
-.comparesummary.differs { color: var(--own); }
 /* Each column headed with what it holds, so the two read as two panes. */
 .pbox .diff.side .pair.head > span {
   padding: 0 8px 4px; margin-bottom: 4px; border-bottom: 1px solid var(--line); color: var(--muted);
@@ -1648,12 +1556,86 @@ pre.growbox.saved { white-space: pre-wrap; overflow-wrap: anywhere; color: var(-
   position: fixed; inset: 4px; z-index: 50; pointer-events: none;
   border: 2px solid transparent;
 }
+/* A held layer something is waiting on - messages at the proxy, a code hold
+   not yet landed - pulses, and holds steady once nothing waits on it. */
+.stateframe.waiting { animation: frame-waiting 1.2s ease-in-out infinite; }
+@keyframes frame-waiting { 50% { opacity: .25; } }
 .statedisc {
   display: block;
   width: 12px; height: 12px; border-radius: 50%;
   background: var(--line); transition: background-color .3s, box-shadow .3s;
 }
 .statedisc.on { box-shadow: 0 0 0 3px color-mix(in srgb, var(--fg) 12%, transparent); }
+button.statedisc { position: relative; padding: 0; border: 0; cursor: pointer; }
+/* The colour something waits on floods the whole disc on each pulse, in step
+   with its frame, and gives the slices back between. */
+.statedisc.attention::after {
+  content: ''; position: absolute; inset: 0; border-radius: 50%;
+  background: var(--attention); animation: disc-attention 1.2s ease-in-out infinite;
+}
+@keyframes disc-attention { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+button.statedisc:hover { box-shadow: 0 0 0 3px color-mix(in srgb, var(--frost) 35%, transparent); }
+
+/* The hold strip: fixed above the page, which `--holdbar` pushes down by the
+   strip's height, so the state frame starts below it. One column per layer,
+   dotted in the hold's colour while held, outlined while running, faded
+   where the page cannot hold it. */
+.holdbar {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 55;
+  padding: 4px 12px; background: var(--panel); border-bottom: 1px solid var(--line);
+  animation: holdbar-in .18s ease-out;
+}
+@keyframes holdbar-in { from { transform: translateY(-100%); } to { transform: none; } }
+.holdrow {
+  display: flex; gap: 8px; align-items: center; height: 26px;
+  border-bottom: 1px solid var(--line);
+}
+.holdrow:last-child { border-bottom: 0; }
+/* The strip's heading row stands a little taller than the rows it heads. */
+.holdrow.holdtop { height: 32px; }
+.holdrow.layer-absent { opacity: .55; }
+.layerdot { width: 8px; height: 8px; border-radius: 50%; flex: none; border: 1px solid var(--muted); }
+.layerdot.on { background: var(--frost); border-color: var(--frost); }
+/* Wide enough for the longest name, Sequence, so every badge starts at one place. */
+.layername { flex: 0 0 72px; font-size: 12px; white-space: nowrap; }
+/* Each row in its own hue while it stands: the page held in frost, the
+   traffic in the traffic green, the sequence in its indigo while it plays
+   or pauses. One meaning per hue, as the rest of the bench keeps them. */
+.holdrow { --hold-tone: var(--frost); }
+.holdrow.row-network { --hold-tone: var(--caused); }
+.holdrow.row-sequence { --hold-tone: var(--sequence); }
+.holdrow.row-recording { --hold-tone: var(--alert); }
+.holdrow.row-recording .holdreading .n-step { color: var(--alert); }
+.holdrow.layer-held .layername { color: var(--hold-tone); }
+/* What holds each area, as the badge a compared row carries after its source:
+   the holder in the hold's colour, running quiet, a missing mechanism dashed. */
+.holdbadges { flex: 0 0 76px; display: flex; gap: 4px; min-width: 0; }
+.holdbadges .badge {
+  padding: 0 6px; border: 1px solid currentColor; border-radius: 8px; white-space: nowrap;
+  font: 9px/1.5 -apple-system, sans-serif; letter-spacing: 0.02em; opacity: 0.85;
+}
+.holdbadges .badge.holder { color: var(--hold-tone); }
+.holdbadges .badge.running { color: var(--muted); }
+.holdbadges .badge.absent { color: var(--muted); border-style: dashed; }
+/* The counts at the right end, as a sequence row puts its notes. */
+.holdreading { flex: none; display: flex; gap: 8px; font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.holdreading .n-waiting { color: var(--caused); }
+.holdreading .n-callbacks, .holdreading .n-ms { color: var(--hold-tone); }
+.holdreading .n-step { color: var(--sequence); }
+.holdreading .n-where { color: var(--hold-tone); }
+.layerstate {
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 11px; color: var(--muted);
+}
+
+.holdslots { display: flex; flex: none; }
+.holdslots .tool {
+  width: 24px; height: 20px; padding: 0; border: 0; background: none; color: var(--muted); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.holdslots .tool:hover:not(.off) { color: var(--accent); }
+.holdslots .tool.off, .holdslots .tool.off:hover { opacity: .25; cursor: default; }
+.holdslots .tool svg { display: block; }
 /* In the header, centred on the tabs' line rather than their baseline, and
    in from the right edge past the frame's lines. */
 .statedisc-slot { align-self: center; display: flex; margin-right: 4px; }
@@ -1764,6 +1746,15 @@ pre.growbox.saved { white-space: pre-wrap; overflow-wrap: anywhere; color: var(-
 .crossed.waitrow { border-left: 2px solid var(--wait); opacity: 0.6; }
 .crossed.waitrow.active, .crossed.waitrow.open { opacity: 1; }
 .crossed.waitrow .dir { color: var(--wait); }
+/* A check in the colour of what it reads: traffic green, storage purple, a
+   captured value lime. A timer, an element or an expression keeps the wait
+   colour. A failure's red, below, still wins. */
+.crossed.waitrow.area-traffic { border-left-color: var(--caused); }
+.crossed.waitrow.area-traffic .dir, .crossed.waitrow.area-traffic.wait-met .meta { color: var(--caused); }
+.crossed.waitrow.area-store { border-left-color: var(--store); }
+.crossed.waitrow.area-store .dir, .crossed.waitrow.area-store.wait-met .meta { color: var(--store); }
+.crossed.waitrow.area-variable { border-left-color: var(--variable); }
+.crossed.waitrow.area-variable .dir, .crossed.waitrow.area-variable.wait-met .meta { color: var(--variable); }
 
 /* Under the last recorded action: a line across the list with what can be
    put there - a timer in the wait colour, a variable in the variable colour. */
@@ -1884,6 +1875,8 @@ pre.growbox.saved { white-space: pre-wrap; overflow-wrap: anywhere; color: var(-
 .mark.stepsmark .tally.unexpected { color: var(--own); font-weight: 600; }
 .marknote:disabled { opacity: 0.3; cursor: default; }
 .marknote.markremove:hover, .marknote.markremove.sure { color: var(--alert); }
+/* Baseline armed to replace the one standing: the second click replaces it. */
+.chip-toggle.sure { color: var(--alert); border-color: var(--alert); }
 
 /* A step's instructions open to change, under its marker. */
 .stepeditor { margin: 0 0 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; }
@@ -2028,7 +2021,7 @@ pre.growbox.saved { white-space: pre-wrap; overflow-wrap: anywhere; color: var(-
 .foldcount.traffic { color: var(--caused); }
 .foldcount.intercepted { color: var(--intercept); }
 .foldcount.missing { color: var(--alert); }
-.foldcount.waits { color: var(--wait); }
+.foldcount.checks { color: var(--wait); }
 .foldcount.notes { color: var(--note); }
 .foldcount.variables { color: var(--variable); }
 
@@ -2085,3 +2078,83 @@ pre.growbox.saved { white-space: pre-wrap; overflow-wrap: anywhere; color: var(-
 .ignoreeditor .footactions { display: inline-flex; gap: 6px; }
 .ignoreeditor .chip-toggle.keep:hover { color: var(--accent); border-color: var(--accent); }
 .ignoreeditor .chip-toggle.bin:hover { color: var(--alert); border-color: var(--alert); }
+/* The step editor's actions as the rows draw theirs: bare marks, no border,
+   in the colour of what they do under the pointer. */
+.stepeditorfoot .footactions .tool {
+  width: 22px; height: 18px; padding: 0; border: 0; background: none; color: var(--muted); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; font: 13px/1 inherit;
+}
+.stepeditorfoot .footactions .tool:hover { color: var(--accent); }
+.stepeditorfoot .footactions .tool.bin:hover { color: var(--alert); }
+.stepeditorfoot .footactions .tool svg { display: block; }
+/* Which of the step editor's starting points is in the box, between its
+   arrows, in a fixed width so the arrows stay put as the count changes. */
+.stepeditorfoot .optionat {
+  display: inline-block; min-width: 8ch; text-align: center;
+  color: var(--muted); font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.stepedittext.fixed { overflow: auto; resize: none; white-space: pre; }
+
+/* Runs on the home page: going now in the sequence colour, ended ones by how they ended. */
+.runs { margin-bottom: 16px; }
+.runs section, .activitycards + section { margin-bottom: 10px; }
+.crossed.runrow { border-left: 2px solid var(--sequence); }
+.crossed.runrow.run-passed { border-left-color: var(--caused); }
+.crossed.runrow.run-failed { border-left-color: var(--alert); }
+.crossed.runrow.run-stopped { border-left-color: var(--muted); }
+.runrow .rowlabel .seqname { flex: 0 0 auto; color: var(--fg); font-weight: 600; }
+.runrow .rowlabel .what { color: var(--muted); }
+.runrow .runstate { color: var(--muted); white-space: nowrap; }
+.runrow.run-running .runstate { color: var(--sequence); }
+.runrow.run-failed .runstate, .runfailure { color: var(--alert); }
+.seqsteps li.runpast .seqsteplabel { color: var(--muted); }
+.seqsteps li.runnow .seqsteplabel { color: var(--sequence); font-weight: 600; }
+.seqsteps li.runend.run-failed .seqsteplabel { color: var(--alert); font-weight: 600; }
+.seqsteps li.runahead { opacity: 0.55; }
+
+/* Per-step counts on an opened run: one narrow column each, zero as a faint dot. */
+.runsteps .tally { flex: 0 0 5ch; text-align: center; font-variant-numeric: tabular-nums; }
+.runsteps .tally.requests, .runsteps .tally.frames { color: var(--caused); }
+.runsteps .tally.intercepted { color: var(--intercept); }
+.runsteps .tally.state { color: var(--store); }
+.runsteps .tally.check { color: var(--wait); }
+.runsteps .tally.none { opacity: 0.45; }
+.runsteps .tally.check { flex: 0 0 11ch; text-align: left; padding-left: 1ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.runsteps .tally.check-held { color: var(--wait); }
+.runsteps .tally.check-passed-over { color: var(--muted); }
+.runsteps .tally.check-stopped, .runsteps .tally.ranfailed { color: var(--alert); font-weight: 600; }
+.runsteps li.tallyhead .tally.ms { color: var(--muted); }
+.runsteps li.tallyhead .tally { display: inline-flex; align-items: center; justify-content: center; }
+/* The run card is a crossing row, and `.crossed .state` lays a traffic row's
+   state out as flex; the storage column shares the name, so it is set back to
+   a centred cell like the columns beside it. */
+.runsteps li:not(.tallyhead) .tally.state { display: block; }
+/* The header's icons stand apart from the first step they head. */
+.runsteps li.tallyhead { margin-bottom: 6px; }
+.runsteps li.tallyhead .tally.check { justify-content: flex-start; padding-left: 1ch; }
+.runsteps .tally.ms { flex: 0 0 8ch; }
+.runsteps .tally.ms.slow { color: var(--fg); }
+.runsteps li.runahead .tally { opacity: 0.4; }
+.removearmed .rowactions [aria-label="remove"] { color: var(--alert); }
+.runnotice { margin: 0 0 8px; }
+
+/* A step's command cut short by the columns reads in full over them while its label is pointed at. */
+.runsteps li { position: relative; }
+.runsteps .fullcommand {
+  display: none; position: absolute; z-index: 2; left: calc(4ch + 10px); top: 0;
+  /* As wide as the command and no wider, so a short one covers only what
+     it needs; one longer than the row wraps at the row's end. */
+  width: max-content; max-width: calc(100% - 4ch - 10px); box-sizing: border-box; padding-right: 1ch;
+  white-space: normal; overflow-wrap: anywhere; background: var(--panel);
+}
+.runsteps .seqsteplabel:hover + .fullcommand, .runsteps .fullcommand:hover { display: block; }
+/* A reading cut short at the row's end reads in full leftward over the columns while pointed at. */
+.runsteps .fullcheck {
+  display: none; position: absolute; z-index: 2; right: 0; top: 0; max-width: calc(100% - 4ch - 10px);
+  min-width: 11ch; box-sizing: border-box;
+  padding-left: 1ch; white-space: normal; overflow-wrap: anywhere; background: var(--panel); color: var(--wait);
+}
+.runsteps .fullcheck.check-passed-over { color: var(--muted); }
+.runsteps .fullcheck.check-stopped, .runsteps .fullcheck.ranfailed { color: var(--alert); font-weight: 600; }
+.runsteps .tally.check:hover + .fullcheck, .runsteps .fullcheck:hover { display: block; }

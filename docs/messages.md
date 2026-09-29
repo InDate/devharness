@@ -900,6 +900,15 @@ URL: {{url}}, Title: {{title}}
 
 ---
 
+## PAGE_INFO_PAUSED
+
+**Type:** success
+**Summary:** Page information
+
+URL: {{url}} - paused at a breakpoint, so the title was not read: reading it runs page JS
+
+---
+
 ## PAGE_RELOAD_SUCCESS
 
 **Type:** success
@@ -1925,6 +1934,48 @@ Run id: `{{runId}}`
 - Stop it: `replay({ action: 'cancel', runId: '{{runId}}' })`
 
 Results are kept in memory for 30 minutes after the run settles. Pass `wait: true` to `run` to block until completion instead.
+
+---
+
+## REPLAY_BENCH_PLAYING
+
+**Type:** success
+**Summary:** Playing {{name}} in the bench
+
+**Playing in the bench on {{connectionReason}}:** {{name}}, from step 1.
+
+Bench: `{{benchUrl}}`
+
+The run is the bench's own play, so `replay status` does not track it; its rows, badges and check outcomes are in the bench. Pass `wait: true` to block until it ends.
+
+---
+
+## REPLAY_BENCH_PLAYED
+
+**Type:** success
+**Summary:** {{name}} played in the bench: {{reached}}/{{total}}
+
+**Played in the bench:** {{name}}, reached step {{reached}} of {{total}}.{{failure}}
+
+Bench: `{{benchUrl}}`
+
+---
+
+## REPLAY_BENCH_NOT_OPEN
+
+**Type:** error
+**Summary:** No bench open on {{connectionReason}}
+
+No bench is open on `{{connectionReason}}`, so there is nothing to play the sequence in. Open one with `bench({ action: 'start', connectionReason: '{{connectionReason}}' })`, or run without `bench`.
+
+---
+
+## REPLAY_BENCH_UNSUPPORTED
+
+**Type:** error
+**Summary:** Not carried into a bench play: {{params}}
+
+A bench play runs the sequence file as saved, so {{params}} would be ignored. Run without `bench` to use them.
 
 ---
 
@@ -4281,7 +4332,7 @@ Bench: `{{benchUrl}}` - the page runs and the picker is idle.
 
 **Once per session:**
 
-FREEZE in the bench stops the page's JS and its CSS animations, holding a state that only exists mid-interaction; PICKER turns the next click into a pick. They are independent: driving the app needs the picker disarmed *and* the page running, because a held page has its JS stopped and a click reaches nothing. Picking works in either state - the picker is Chrome's, not the page's. While held, other devharness tools report the page as blocked at a breakpoint; `bench({ action: 'unfreeze' })` or `stop` clears that, not `execution({ action: 'resume' })`, which leaves the bench holding a page it no longer has.
+HOLD in the bench stops the page's JS and its CSS animations and, for a browser launched with `proxy: true`, keeps what crosses its boundary waiting at the proxy, so a state that only exists mid-interaction is read with the traffic that produced it; PICKER turns the next click into a pick. They are independent: driving the app needs the picker disarmed *and* the page running, because a held page has its JS stopped and a click reaches nothing. Picking works in either state - the picker is Chrome's, not the page's. While held, a tool that drives the page is refused, naming the hold. `bench({ action: 'release' })`, `hold({ action: 'release' })`, `execution({ action: 'resume', connectionReason })` and `stop` each release every layer of it.
 
 Nothing is injected into the page. The bench is served from `127.0.0.1` while apps sit on `localhost` - a different site, so Chrome gives it its own renderer process. Drag it into Chrome's split view to work side by side.
 
@@ -4297,7 +4348,7 @@ The person picks a step in the bench's step list, clicks the element in the app 
 **Type:** success
 **Summary:** Ran {{steps}} callback(s), {{actualMs}}ms
 
-Asked for {{asked}}; ran {{steps}} callback(s) over {{actualMs}}ms of page time and froze again. Totals since the freeze: {{totalSteps}} callback(s), {{tickMs}}ms.
+Asked for {{asked}}; ran {{steps}} callback(s) over {{actualMs}}ms of page time and held again. Totals since the hold: {{totalSteps}} callback(s), {{tickMs}}ms.
 
 The callback is the unit - one is one thing the page does, and the only amount a step can deliver exactly. A time target runs as many callbacks as it takes to cover it, so it lands past the number asked for rather than on it.
 

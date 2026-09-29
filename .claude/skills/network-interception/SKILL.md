@@ -27,9 +27,10 @@ record for the identity function is `docs/landscapes/match-identity.md`.
 | Event-stream messages | `takeMessages` in the HTTP answer path, `src/proxy/intercept-proxy.ts` | each `text/event-stream` message is matched as a received frame and passed, replaced (its `event:`/`id:` lines kept) or dropped; a message is held until its blank line arrives; a compressed stream is piped unread |
 | Frame match | `matchFramePin`, `:1362` | narrowest accepted pin: constraints (url, direction, step, field-on-a-parsed-frame) first, then text length; parses the frame once (`objectOf`, `:266`; `carries`, `:278`) |
 | Step binding | `underStep`, `src/proxy/intercept-proxy.ts` | a pin with `step`, or with `steps`, answers only while that replay step (or one of those) is the cursor (`src/tools/replay-executor.ts:2359`) |
-| Refuse mode | `refuseUnmatchedWrites`, `:880`; branch at `:1474` | an unmatched request outside `GET`/`HEAD`/`OPTIONS` (`SAFE_METHODS`, `:46`) is answered 403, recorded `heldAs: 'refused'`, counted |
+| Refuse mode | `refuseUnmatchedWrites`, `:880`; branch at `:1474` | an unmatched request outside `GET`/`HEAD`/`OPTIONS` (`SAFE_METHODS`, `:46`) is answered 403, recorded `answeredAs: 'refused'`, counted |
 | Host scope | `allowOnly`, `:858`; `BROWSER_SERVICE_HOSTS`, `:532` | hosts outside the list are destroyed and counted; the app's host is on the list by construction (`src/tools/bench-tools.ts:423`) |
-| Tool surface | `src/tools/proxy-tools.ts:41` | `hold`, `holdFrame` (with `step`, `:50`), `release`, `holds`, `refuse` (`unmatchedWrites`, `:51`), `status`, `events`, `sockets`, `body` |
+| Tool surface | `src/tools/proxy-tools.ts:41` | `answer`, `answerFrame` (with `step`, `:50`), `withdraw`, `answers`, `refuse` (`unmatchedWrites`, `:51`), `status`, `events`, `sockets`, `body` |
+| Traffic hold | `TrafficQueue`, `src/proxy/traffic-queue.ts`; the network layer of `src/hold.ts` | while the network is held, each frame, response and event-stream message waits at the proxy and crosses in arrival order on release, one per step; a frame is recorded as it crosses, so it lands under the step that let it through. An answer changes what crosses; a hold changes when |
 | Bench rules | `setBoundaryRule`, `src/bench-mode.ts:1079` | a row's `answer` / `block` / `hide` becomes a pin; `block` is a 204 pin or a dropped frame; `hide` arms nothing |
 | Responses on the file | `responses` in `activity/_site/<host>-<port>.json` (`SiteActivity`, `src/sequence-activity.ts`), each with `mode` `optIn` / `optOut`; `responsesOn` (`{key, steps?}`) and `responsesOff` in `activity/<name>.json`; `boundaryRefuse` on the sequence | key, verb, method, url, direction, body, status, mode; a sequence's opt-ins with their steps, and its opt-outs |
 | Arming from the file | `armSavedRules`, `armSiteRules`, `setResponseUse`, `setResponseMode` in `src/bench-mode.ts` | opening a sequence arms each site response its use covers: `optOut` unless the sequence opts out, `optIn` only where it opts in; a use of a set of steps arms one pin with `steps` |
@@ -55,7 +56,7 @@ cannot do.
   starts after its step released carries the next step or none.
 - The bench holds one armed rule per key (`boundaryRules` is a `Map` keyed by
   `key`; a sequence rule on a key replaces the site rule on it), so two bodies at two positions of one path is expressible from the
-  `proxy` tool (two holds with two steps) and not from the bench.
+  `proxy` tool (two answers with two steps) and not from the bench.
 - The refuse mode bounds the browser's HTTP. A `request` step with
   `destination: "node"` runs `fetch` from the server process
   (`src/tools/request-tools.ts:79`, `:114`) and passes through no proxy; a

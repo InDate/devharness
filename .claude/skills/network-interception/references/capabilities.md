@@ -49,7 +49,7 @@ devharness follows MSW here through `keyOf`.
 | `disableSortingHarEntries` - on-disk order chosen for diff readability | Polly | rules are written in staging order onto `boundaryRules` (`src/command-recorder.ts:73`) |
 | Persister behind an interface: filesystem, localStorage, REST, custom | Polly | the sequence file (`saveBoundaryRules`, `src/tools/bench-tools.ts:757`) |
 | Adapter per transport: fetch, XHR, node http, Playwright, Puppeteer | Polly | one proxy for the browser's HTTP and WebSocket; a node-side `request` step is outside it (`src/tools/request-tools.ts:79`) |
-| A decision bound to one position in a run | Polly's `order` (by count) | `step` on a pin (by replay step), from the bench's STEPS view or `proxy({ action: 'hold', step })` (`src/tools/proxy-tools.ts:50`) |
+| A decision bound to one position in a run | Polly's `order` (by count) | `step` on a pin (by replay step), from the bench's STEPS view or `proxy({ action: 'answer', step })` (`src/tools/proxy-tools.ts:50`) |
 
 `expiresIn` is the answer to stub drift. A stored double is one moment's
 payload, and without expiry a sequence passing against it establishes that the

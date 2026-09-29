@@ -34,7 +34,7 @@ function recorderWith(runningName: string | null) {
 describe('whose run a bench reads', () => {
   it('ignores a run belonging to a sequence it did not open', async () => {
     const recorder = recorderWith('other-bench-run');
-    const driver = createSequenceDriver(recorder, async () => ({ content: [{ type: 'text', text: 'ok' }] }));
+    const driver = createSequenceDriver(recorder, async () => ({ content: [{ type: 'text', text: 'ok' }] }), () => []);
 
     await driver.start('socket-live-lifecycle', 'app');
 
@@ -48,14 +48,14 @@ describe('whose run a bench reads', () => {
     // A bench opened beside a run someone else started picks it up, which is
     // how `bench start` lands on a sequence already being stepped.
     const recorder = recorderWith('other-bench-run');
-    const driver = createSequenceDriver(recorder, async () => ({ content: [{ type: 'text', text: 'ok' }] }));
+    const driver = createSequenceDriver(recorder, async () => ({ content: [{ type: 'text', text: 'ok' }] }), () => []);
 
     expect(driver.active()?.name).toBe('other-bench-run');
   });
 
   it('reads its own run once that sequence is the one in flight', async () => {
     const recorder = recorderWith('socket-live-lifecycle');
-    const driver = createSequenceDriver(recorder, async () => ({ content: [{ type: 'text', text: 'ok' }] }));
+    const driver = createSequenceDriver(recorder, async () => ({ content: [{ type: 'text', text: 'ok' }] }), () => []);
 
     await driver.start('socket-live-lifecycle', 'app');
 

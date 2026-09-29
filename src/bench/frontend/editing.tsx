@@ -2,16 +2,21 @@
 import { Fragment } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { Draft } from './markup.js';
-import { Held } from './sequence.js';
 import { ActivityRows, listedKinds, stepTally, useActivity } from './activity.js';
 import { RecordingRow } from './recorder.js';
 import { Recording } from './recording.js';
 import { LabelInput, Row } from './row.js';
+import { RunsPanel, byTag, startRun, useRuns } from './runs.js';
 import { Glyph } from './glyph.js';
 import type {
-  Annotation, BenchView, CaptureRect, CaptureVersion, FactKind, RanStep, SequenceCard, SequenceStep, SequenceVariable,
+  Annotation, BenchView, BoundaryEvent, CaptureRect, CaptureVersion, FactKind, RanStep, RunRow, SequenceCard, SequenceOutline, SequenceStep, SequenceVariable,
 } from '../wire.js';
 import { useEscape } from './escape.js';
+import { useGoToAnyTarget } from './goto.js';
+import { comparisonOf } from '../check-words.js';
+import { keyOf, kindOf, type KindCount } from '../kinds.js';
+import { socketName } from './crossing.js';
+import { useVariablesHidden } from './variables-shown.js';
 import { moveShift, spliceIn, spliceShift, useStepMotion } from './step-motion.js';
 
 const CLIENT_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -40,21 +45,29 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
   returnsFromShot: boolean;
 }): preact.JSX.Element {
   const [state, setState] = useState<BenchView | null>(null);
+  useGoToAnyTarget();
   const [ended, setEnded] = useState(false);
   const [writingAt, setWritingAt] = useState<number | null>(null);
   // The step a timer is being put after, with its slider open under it.
   const [timerAt, setTimerAt] = useState<number | null>(null);
   // The step whose instructions are open to change.
   const [editAt, setEditAt] = useState<number | null>(null);
+  // What the session answered when asked to relaunch through a proxy.
+  const [proxyAsked, setProxyAsked] = useState<string | null>(null);
   // The step whose bin has been clicked once; a second click removes it.
   const [removingAt, setRemovingAt] = useState<number | null>(null);
   // Steps whose rows are folded under their marker, by position.
   const [folded, setFolded] = useState<ReadonlySet<number>>(new Set());
+  // The variables button in the footing lists or hides the variables at the
+  // head of the steps, and brings the head of the list into view either way.
+  const variablesHidden = useVariablesHidden(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
   // Sequences a check ran, opened by hand, by where they ran: the check's step and the path inside it.
   const [openRuns, setOpenRuns] = useState<ReadonlySet<string>>(new Set());
+  // Folding a run folds the runs inside it too, so opening it again shows it folded to one level.
   const toggleRun = (key: string) => setOpenRuns(was => {
     const next = new Set(was);
     if (!next.delete(key)) next.add(key);
+    else for (const open of was) if (open.startsWith(`${key}.`)) next.delete(open);
     return next;
   });
   const motion = useStepMotion(setFolded);
@@ -73,6 +86,8 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
   // them all. A step outside it moves on its own.
   const [selection, setSelection] = useState<{ start: number; count: number } | null>(null);
   const anchor = useRef<number | null>(null);
+  // Set while the selection's own move lands, so the list changing under it keeps it.
+  const selectionMoving = useRef(false);
   const reachedAt = useRef<{ step: number; at: number } | null>(null);
   const within = (run: { start: number; count: number } | null, index: number) =>
     !!run && index >= run.start && index < run.start + run.count;
@@ -94,7 +109,7 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
     const to = run.start + by;
     const passed = by < 0 ? run.start - 1 : run.start + run.count;
     setFolded(was => new Set([...was, passed, ...Array.from({ length: run.count }, (_, k) => run.start + k)]));
-    if (selection === run) setSelection({ start: to, count: run.count });
+    if (selection === run) { selectionMoving.current = true; setSelection({ start: to, count: run.count }); }
     void motion.play({
       shift: moveShift(run.start, to, run.count), fold: 'none',
       apply: async () => { await post('/sequence/step/move', { from: run.start, to, count: run.count }); await refresh(); },
@@ -153,7 +168,7 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
     setDragging(null);
     setDropAt(null);
     if (to === run.start) return;
-    if (selection === run) setSelection({ start: to, count: run.count });
+    if (selection === run) { selectionMoving.current = true; setSelection({ start: to, count: run.count }); }
     await motion.play({
       shift: moveShift(run.start, to, run.count), fold: 'hold', part: { from: dragging, above, below },
       apply: async () => { await post('/sequence/step/move', { from: run.start, to, count: run.count }); await refresh(); },
@@ -239,6 +254,17 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
       setWritingAt(target);
     }
   }, [picked, state?.primary, target]);
+
+  // A selection and the opened runs name steps by position, so a list that
+  // changes under them - a step put in or taken out, a move other than the
+  // selection's own, another sequence opened - would leave them on other steps.
+  const stepsKey = [state?.sequence?.name, ...(state?.sequence?.steps ?? []).map(step => step.label)].join('\u0001');
+  useEffect(() => {
+    setOpenRuns(new Set());
+    if (selectionMoving.current) { selectionMoving.current = false; return; }
+    setSelection(null);
+    anchor.current = null;
+  }, [stepsKey]);
 
   if (ended) return <p class="hint">the bench has been closed on this connection</p>;
   if (!state) return <p class="hint">reading the session…</p>;
@@ -336,7 +362,7 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
                         ? doneOf(one.check.action === 'run' ? { run: one.branch?.name } : one.check.action)
                         : one.success ? 'continued' : 'stopped sequence'}</span>}
                     reading={<span class="meta">{one.check
-                      ? verdictOf(one.check.subject ?? one.line, one.check.outcome, one.check.action)
+                      ? verdictOf(comparisonOf(one.tool, one.params ?? {}), one.check.outcome, one.check.action)
                       : one.success ? '✓ pass' : '✗ fail · stopped'}</span>}
                     slots={{}} open={false} onOpen={() => {}} />
                 </ol>
@@ -363,8 +389,11 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
     const within = sequence?.busy && sequence.runningAt?.step === step.index ? sequence.runningAt.within : undefined;
     if (!within?.length) return null;
     const params = (step.params ?? {}) as Record<string, any>;
-    const name = [params.holds, params.fails].find(one => typeof one === 'object' && one?.run)?.run
-      ?? (typeof params.then === 'string' ? params.then : undefined);
+    // Which answer's sequence runs is not in the running position, so a name
+    // is given only when both answers that run one run the same.
+    const runs = [...new Set([params.holds, params.fails]
+      .filter(one => typeof one === 'object' && typeof one?.run === 'string').map(one => one.run as string))];
+    const name = runs.length === 1 ? runs[0] : undefined;
     return (
       <RunMark classes="mark switch runfold running">
         running step {within.map(at => at + 1).join(' › ')}{name ? <> from <span class="seqname">{name}</span></> : ''}
@@ -462,25 +491,34 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
         <div class="dropline" style={{ top: `${dropAt.top}px`, left: `${dropAt.left}px`, width: `${dropAt.width}px` }} />
       )}
 
+      {/* A traffic or socket check reads what crosses the proxy, so on a
+          browser launched without one it can only answer an error. Said on
+          opening the sequence rather than at the step that errors. */}
+      {activity.boundary && !activity.boundary.running
+        && steps.some(step => step.tool === 'check' && (step.params?.traffic !== undefined || step.params?.socket !== undefined)) && (
+        <div class="noproxy">
+          <span class="grow">
+            This sequence checks traffic, which is read through the proxy, and this browser was
+            not launched through one. A running browser cannot gain one.
+          </span>
+          {proxyAsked
+            ? <span class="asked">{proxyAsked}</span>
+            : <button class="save" onClick={async () => {
+                const res = await fetch(`${base}/proxy/relaunch`, { method: 'POST' }).catch(() => null);
+                setProxyAsked(res ? await res.text() : 'the bench did not answer');
+              }}>Ask the session to relaunch with a proxy</button>}
+        </div>
+      )}
+
       {sequence?.failure && (
         <div class="failure">
           <span class="bad grow">{sequence.failure}</span>
-          {(() => {
-            // A wait that failed its step: the row that says how is under the
-            // step, which may be off screen.
-            const failed = (activity.boundary?.waitOutcomes ?? []).find(one => one.state === 'failed');
-            return failed && (
-              <button class="chip-toggle" onClick={() => document.getElementById(`wait-${failed.step}-${failed.key ?? ''}`)
-                ?.scrollIntoView({ block: 'center', behavior: 'smooth' })}>Show</button>
-            );
-          })()}
           <button class="chip-toggle" onClick={() => void post('/sequence/failure/dismiss')}>
             Dismiss
           </button>
         </div>
       )}
 
-      {state.frozen && <Held state={state} post={post} />}
 
       {/* Naming a new sequence, with none recording yet: the open sequence's
           steps belong to another run, so the form stands alone. */}
@@ -496,7 +534,9 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
           under each the findings taken while standing there. A sidecar beside
           it would put the place and the finding in two columns the eye has to
           join up. */}
-      {!(starting && !sequence?.recording) && <main class="reel">
+      {/* A recording on any step is what rows are compared against, and the
+          badge column is laid out only then. */}
+      {!(starting && !sequence?.recording) && <main class={steps.some(step => Object.keys(step.traffic?.kinds ?? {}).length > 0) ? 'reel compared' : 'reel'}>
         {/* A capture or a pick taken with no step standing - nothing selected,
             or the run finished - leads the column. Placed after the catalogue
             it would sit below every tile, off the bottom of the screen, which
@@ -523,14 +563,12 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
         )}
 
         {!sequence?.name && (
-          <Catalogue
-            cards={sequence?.catalogue ?? []}
-            onOpen={(name) => void post('/sequence/select', { name })}
-          />
+          <HomeLists base={base} post={post} cards={sequence?.catalogue ?? []}
+            onOpen={(name) => void post('/sequence/select', { name })} />
         )}
 
         {sequence?.name && (
-          <VariablesBlock defined={defined} post={post} recording={!!sequence.recording}
+          <VariablesBlock defined={defined} post={post} recording={!!sequence.recording} hidden={variablesHidden}
             captured={steps.filter(step => step.captures && step.stores === undefined)
               .filter((step, k, all) => all.findIndex(one => one.captures === step.captures) === k)
               .map(step => ({
@@ -562,6 +600,7 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
                 setDragging(step.index);
               }}
               data-step={step.index}
+              id={step.current ? 'step-here' : undefined}
               onDragEnd={() => { setDragging(null); setDropAt(null); }}
               // Shift with a click would select the marker's words as text.
               onMouseDown={(e: MouseEvent) => { if (e.shiftKey) e.preventDefault(); }}
@@ -583,11 +622,15 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
                 </span> · <span>{reachedAt.current?.step === step.index && timerLength(step) !== undefined
                   ? <Countdown ms={timerLength(step)!} from={reachedAt.current.at} />
                   : withVariables(step.label, valueOf)}</span>
-                {into && <span class="newtag"> · new</span>}
-                {step.current ? ' · standing here' : ''}
+                {(into || step.addedAt !== undefined) && (
+                  <span class="newtag" title={step.addedAt !== undefined
+                    ? `added ${new Date(step.addedAt).toLocaleString()} - new until a baseline takes it in`
+                    : undefined}> · new</span>
+                )}
               </span>
               {folded.has(step.index) && <FoldTally counts={{
                 ...stepTally(activity, step.index),
+                checks: isCheck(step) ? 1 : 0,
                 notes: (step.annotations ?? []).length,
                 variables: step.captures ? 1 : 0,
               }} />}
@@ -643,10 +686,10 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
               {(!sequence?.recording || step.index === lastShown) && (
                 <button
                   class="marknote"
-                  title="wait a fixed time after this step"
-                  aria-label={timerAt === step.index ? 'close the timer' : 'add a timer'}
+                  title="add a check after this step: a wait, or what crossed under it"
+                  aria-label={timerAt === step.index ? 'close the checks' : 'add a check'}
                   onClick={(e: Event) => { e.stopPropagation(); setTimerAt(timerAt === step.index ? null : step.index); }}
-                >{timerAt === step.index ? <Glyph of="cross" /> : <Glyph of="timer" />}</button>
+                >{timerAt === step.index ? <Glyph of="cross" /> : <Glyph of="tick" />}</button>
               )}
               {/* Both routes renumber whatever is tied to step numbers. */}
               {!sequence?.recording && (
@@ -688,12 +731,7 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
                   if (why !== (step.comment ?? '')) await post('/sequence/step/comment', { step: step.index, words: why });
                 }} />
             )}
-            {timerAt === step.index && (
-              <TimerForm onCancel={() => setTimerAt(null)}
-                onAdd={(ms) => { void post('/sequence/step/timer', { after: step.index, ms }); setTimerAt(null); }} />
-            )}
             <ActivityRows activity={activity} step={step.index} base={base} recording={!!sequence?.recording}
-              running={step.current && !!sequence?.busy}
               notesAt={notesAt(step)} />
             {isCheck(step) && checkRow(step)}
             {step.captures && (
@@ -707,6 +745,18 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
             {isCheck(step) && (ranBy(step)
               ? branchSteps(step.index, ranBy(step)!.outcome === 'held', ranBy(step)!.ran ?? '', sequence?.name ?? '', ranBy(step)!.ranSteps!, [])
               : runningIn(step))}
+            {/* After every row the step holds: the check goes in after all of it. */}
+            {timerAt === step.index && (
+              <NewCheckRow
+                variables={defined.map(one => one.name)}
+                options={withoutPresent(checkShapes(sequence?.recording ? [] : (activity.crossed.get(step.index) ?? [])
+                  .filter(event => !activity.isHidden(event)), step.traffic?.kinds), checksAfter(steps, step.index))}
+                onCancel={() => setTimerAt(null)}
+                onSave={(params, why) => {
+                  void post('/sequence/step/check', { after: step.index, params, ...(why ? { comment: why } : {}) });
+                  setTimerAt(null);
+                }} />
+            )}
             </div></div>
 
 
@@ -834,7 +884,7 @@ function isCheck(step: SequenceStep): boolean {
 }
 
 function isCheckTool(tool: string): boolean {
-  return tool === 'check' || tool === 'assert' || tool === 'wait' || tool === 'conditional';
+  return tool === 'check' || tool === 'assert' || tool === 'wait';
 }
 
 /**
@@ -843,35 +893,9 @@ function isCheckTool(tool: string): boolean {
  * The marker above names what was read and against what, so a longer answer
  * repeats it. ✗ is a fail that stopped the run, ○ one it carried on past.
  */
-function verdictOf(phrase: string, outcome: 'held' | 'failed', action: 'continue' | 'stop' | 'run'): string {
-  const [held, failed] = comparisonIn(phrase);
+function verdictOf([held, failed]: [string, string], outcome: 'held' | 'failed', action: 'continue' | 'stop' | 'run'): string {
   if (outcome === 'held') return `✓ ${held}`;
   return `${action === 'stop' ? '✗' : '○'} ${failed}`;
-}
-
-/** Each comparison as its answer reads on a pass, and on a fail. */
-const COMPARISONS: Record<string, [string, string]> = {
-  notEquals: ['not equal', 'equal'], equals: ['equals', 'not equal'],
-  contains: ['contains', 'missing'], matches: ['matches', 'no match'],
-  notExists: ['missing', 'exists'], exists: ['exists', 'missing'],
-  gte: ['at least', 'below'], gt: ['greater', 'not greater'],
-  lte: ['at most', 'above'], lt: ['less', 'not less'],
-  present: ['present', 'absent'], absent: ['absent', 'present'],
-  visible: ['visible', 'hidden'], hittable: ['hittable', 'covered'], enabled: ['enabled', 'disabled'],
-};
-
-/**
- * The comparison a check's words make. Quoted values and attribute
- * selectors are dropped first, so a selector such as `[data-testid="visible"]`
- * or a value such as `"present"` is not read as the comparison itself.
- */
-function comparisonIn(phrase: string): [string, string] {
-  const bare = phrase.replace(/"(?:[^"\\]|\\.)*"/g, '').replace(/\[[^\]]*\]/g, '');
-  const word = bare.match(new RegExp(`\\b(${Object.keys(COMPARISONS).join('|')})\\b`))?.[1];
-  if (word) return COMPARISONS[word];
-  if (/:has-text\(/.test(phrase)) return ['found', 'not found'];
-  if (/\d+ms passed|wait for \d+ms|\bms\b/.test(bare)) return ['waited', 'waited'];
-  return ['passed', 'failed'];
 }
 
 /** How long a timer step pauses: a check that reads nothing, or a wait with a length. */
@@ -924,7 +948,7 @@ function limitOf(tool: string, params: Record<string, any>): number {
 
 /** Whether a check's settings read anything; a check that reads nothing is a timer. */
 function checkSubject(params: Record<string, any>): boolean {
-  return ['selector', 'value', 'expression', 'url', 'cookie', 'localStorage', 'indexedDB'].some(key => params[key] !== undefined);
+  return ['selector', 'value', 'expression', 'url', 'cookie', 'localStorage', 'indexedDB', 'traffic', 'socket'].some(key => params[key] !== undefined);
 }
 
 type CheckAnswer = {
@@ -936,13 +960,13 @@ type CheckAnswer = {
  * A check as a row inside its step's marker, which names what it reads: the
  * row carries what it does on an answer where that differs from carrying on
  * on a pass and stopping on a fail, and how the last run went. Opened, it is edited as the
- * step it is. Older assert, wait and conditional steps read here the same way.
+ * step it is. Older assert and wait steps read here the same way.
  */
 function CheckRow({ step, outcome, number, variables, waiting, onRemove, onSave }: {
   step: SequenceStep;
   /** The run is on this check now, reading it until it holds or its time runs out. */
   waiting: boolean;
-  /** How the last run went, where replay recorded it: check and conditional steps. */
+  /** How the last run went, as replay recorded it. */
   outcome?: CheckAnswer;
   number: number;
   variables: string[];
@@ -954,36 +978,44 @@ function CheckRow({ step, outcome, number, variables, waiting, onRemove, onSave 
   const [sure, setSure] = useState(false);
   const params = (step.params ?? {}) as Record<string, any>;
   // What the run does next on each answer, pass first: a check's own
-  // settings, a conditional's sequence, and carry on or stop for the rest.
+  // settings, and carry on or stop for an assert or a wait.
   // A timer only ever passes, so it has the one.
   const timer = (step.tool === 'check' && !checkSubject(params)) || (step.tool === 'wait' && params.ms !== undefined);
   const onPass = step.tool === 'check' ? params.holds ?? 'continue'
-    : step.tool === 'conditional' ? { run: params.then, resumeAt: params.rejoinAt } : 'continue';
-  const onFail = step.tool === 'check' ? params.fails ?? 'stop' : step.tool === 'conditional' ? 'continue' : 'stop';
+    : 'continue';
+  const onFail = step.tool === 'check' ? params.fails ?? 'stop' : 'stop';
   const options = timer ? nextOf(onPass) : `${nextOf(onPass)} or ${nextOf(onFail)}`;
-  // A pass from before assert and wait recorded answers: the step ran, or stopped the run.
+  // A step reads as done a poll before its recorded answer arrives; a guessed
+  // answer in that gap showed "continued" and was then replaced. A step that
+  // failed without an answer - a check that could not be read records none -
+  // stopped the run.
   const answer: CheckAnswer | undefined = outcome && (step.done || step.failed) ? outcome
     : step.failed ? { outcome: 'failed', action: 'stop' }
-    : step.done && (step.tool === 'assert' || step.tool === 'wait') ? { outcome: 'held', action: 'continue' }
     : undefined;
+  const settling = !answer && !!step.done;
   // A check that reads again until it holds is a wait: before a run it says
   // how long it may take, after it how long it took of that. A timer's limit
   // is its whole length, so it says that alone.
   const limitMs = answer?.limitMs ?? limitOf(step.tool ?? '', params);
   const ran = answer && answer.action === 'run' ? ` · ${doneOf(answer.outcome === 'held' ? onPass : onFail)}` : '';
-  const middle = !limitMs ? (answer ? doneOf(answer.outcome === 'held' ? onPass : onFail) : options)
+  // A check that reads again is about what it reads, not about waiting: the
+  // row names that first, as the step's marker does, and the time after it.
+  const subject = step.label.replace(/^(check|assert|wait)\s+/, '');
+  const within = limitMs ? (limitMs % 1000 === 0 ? `${limitMs / 1000}s` : `${limitMs}ms`) : '';
+  const middle = settling ? ''
     : timer ? (answer ? `waited ${limitMs}ms` : `wait ${limitMs}ms`)
-    : answer?.waitedMs !== undefined ? `waited ${answer.waitedMs}ms/${limitMs}ms${ran}`
-    : answer ? doneOf(answer.outcome === 'held' ? onPass : onFail)
-    : `wait up to ${limitMs}ms`;
+    : !limitMs ? (answer ? doneOf(answer.outcome === 'held' ? onPass : onFail) : options)
+    : answer?.waitedMs !== undefined ? `${subject} · ${answer.waitedMs}ms of ${within}${ran}`
+    : answer ? `${subject} · ${doneOf(answer.outcome === 'held' ? onPass : onFail)}`
+    : `${subject} · within ${within}`;
   const state = !answer ? 'pending'
     : answer.outcome === 'held' ? 'met'
     : answer.action === 'stop' ? 'failed' : 'carried';
   // A sequence it ran is read off the markers either side of it, so the row keeps the answer alone.
-  const reading = !answer ? 'not run yet' : verdictOf([step.label, params.condition ?? (step.tool === 'wait' && params.selector && !params.selector.includes(':has-text(') ? 'present' : undefined), params.operator].filter(Boolean).join(' '), answer.outcome, answer.action);
+  const reading = settling ? '' : !answer ? 'not run yet' : verdictOf(comparisonOf(step.tool ?? '', params), answer.outcome, answer.action);
   return (
     <Row
-      classes={['waitrow', 'checkrow', `wait-${state}`, step.current ? 'here' : '', sure ? 'removing' : '']}
+      classes={['waitrow', 'checkrow', `wait-${state}`, areaOf(params), step.current ? 'here' : '', sure ? 'removing' : '']}
       columns={['remove']}
       source="check"
       title={`step ${number}${answer?.found ? ` · found ${answer.found}` : ''}${answer?.error ? ` · ${answer.error}` : ''}`}
@@ -995,10 +1027,56 @@ function CheckRow({ step, outcome, number, variables, waiting, onRemove, onSave 
       open={open}
       onOpen={() => setOpen(!open)}
     >
-      <StepEditor step={step} variables={variables}
+      <StepEditor step={step} variables={variables} inRow
         onCancel={() => setOpen(false)}
         onSave={(next, why) => { setOpen(false); onSave(next, why); }} />
     </Row>
+  );
+}
+
+/**
+ * The area a check reads, as the class that colours its row: traffic and
+ * sockets, storage, a captured value. A timer, an element, the URL or any
+ * other expression gives none and keeps the wait colour.
+ */
+function areaOf(params: Record<string, unknown>): string {
+  if (params.traffic !== undefined || params.socket !== undefined) return 'area-traffic';
+  if (params.localStorage !== undefined || params.cookie !== undefined || params.indexedDB !== undefined) return 'area-store';
+  if (typeof params.expression === 'string' && /\b(localStorage|sessionStorage)\b/.test(params.expression)) return 'area-store';
+  if (params.value !== undefined) return 'area-variable';
+  return '';
+}
+
+/**
+ * A check not yet in the sequence, drawn as the check row it will become:
+ * the row names the option the arrows stand on, and the editor under it holds
+ * that option's parameters to change before it is saved after the step.
+ */
+function NewCheckRow({ options, variables, onSave, onCancel }: {
+  options: Array<{ label: string; params: Record<string, unknown> }>;
+  variables: string[];
+  onSave: (params: Record<string, unknown>, why: string) => void;
+  onCancel: () => void;
+}) {
+  const [at, setAt] = useState(0);
+  return (
+    <ol class="activitycards">
+      <Row
+        classes={['waitrow', 'checkrow', 'wait-pending', areaOf(options[at]?.params ?? {})]}
+        columns={[]}
+        source="check"
+        label={<span class="what checkdoes">{options[at]?.label}</span>}
+        reading={<span class="meta">new</span>}
+        slots={{}}
+        open
+        onOpen={onCancel}
+      >
+        <StepEditor
+          step={{ index: 0, label: 'check', tool: 'check', params: {}, done: false, current: false }}
+          variables={variables} options={options} inRow onOption={setAt}
+          onCancel={onCancel} onSave={onSave} />
+      </Row>
+    </ol>
   );
 }
 
@@ -1007,7 +1085,9 @@ function CheckRow({ step, outcome, number, variables, waiting, onRemove, onSave 
  * first time a step stores it. A step storing it again later is a change
  * partway through, and stays where it runs.
  */
-function VariablesBlock({ defined, captured, post, recording, readers, tallied, passes }: {
+function VariablesBlock({ defined, captured, post, recording, readers, tallied, passes, hidden }: {
+  /** The rows are hidden, by the footing's variables button; the heading and the steps divider stay. */
+  hidden: boolean;
   defined: Array<{ name: string; step: SequenceStep }>;
   /** Variables a step captures from the page, listed here too; they change with their step, not here. */
   captured: Array<{ name: string; step: SequenceStep; variable?: SequenceVariable }>;
@@ -1046,7 +1126,7 @@ function VariablesBlock({ defined, captured, post, recording, readers, tallied, 
         ><Glyph of={adding ? 'cross' : 'new'} /></button>
         </span>
       </div>
-      {(defined.length > 0 || captured.length > 0) && (
+      {!hidden && (defined.length > 0 || captured.length > 0) && (
         <ol class="activitycards">
           {captured.map(({ name: named, step, variable }) => (
             <VariableRow key={`captured|${named}`} name={named} step={step.index} variable={variable}
@@ -1093,14 +1173,17 @@ function VariablesBlock({ defined, captured, post, recording, readers, tallied, 
 }
 
 /** A folded step's rows, as a count per colour; a colour with none is left out. */
-function FoldTally({ counts }: { counts: Record<'traffic' | 'intercepted' | 'missing' | 'waits' | 'notes' | 'variables', number> }) {
-  const order = ['traffic', 'intercepted', 'missing', 'waits', 'notes', 'variables'] as const;
+/** Each tally's word for one of it. */
+const ONE = { traffic: 'traffic', intercepted: 'intercepted', missing: 'missing', checks: 'check', notes: 'note', variables: 'variable' } as const;
+
+function FoldTally({ counts }: { counts: Record<keyof typeof ONE, number> }) {
+  const order = ['traffic', 'intercepted', 'missing', 'checks', 'notes', 'variables'] as const;
   const shown = order.filter(kind => counts[kind] > 0);
   if (!shown.length) return null;
   return (
     <span class="foldtally">
       {shown.map(kind => (
-        <span key={kind} class={`foldcount ${kind}`} title={`${counts[kind]} ${kind}`}>{counts[kind]}</span>
+        <span key={kind} class={`foldcount ${kind}`} title={`${counts[kind]} ${counts[kind] === 1 ? ONE[kind] : kind}`}>{counts[kind]}</span>
       ))}
     </span>
   );
@@ -1123,13 +1206,28 @@ function withVariables(label: string, valueOf: (name: string) => string | undefi
  * variables the sequence has are offered under it, each putting `{{var:name}}`
  * where the cursor is, since that token is what a step reads a variable by.
  */
-function StepEditor({ step, variables, onSave, onCancel }: {
+function StepEditor({ step, variables, onSave, onCancel, options, inRow, onOption }: {
   step: SequenceStep;
   variables: string[];
   onSave: (params: Record<string, unknown>, why: string) => void;
   onCancel: () => void;
+  /** Starting points to step through with the arrows, each filling the box; for a step not yet in the sequence. */
+  options?: Array<{ label: string; params: Record<string, unknown> }>;
+  /** Opened inside a row that already names the step, so the editor names it no second time. */
+  inRow?: boolean;
+  /** Which starting point the arrows stand on, for a row that names it. */
+  onOption?: (index: number) => void;
 }) {
-  const [text, setText] = useState(() => JSON.stringify(step.params ?? {}, null, 2));
+  const [at, setAt] = useState(0);
+  const [text, setText] = useState(() => JSON.stringify(options?.[0]?.params ?? step.params ?? {}, null, 2));
+  const show = (next: number) => {
+    if (!options?.length) return;
+    const index = (next + options.length) % options.length;
+    setAt(index);
+    onOption?.(index);
+    setText(JSON.stringify(options[index].params, null, 2));
+    setFailure(undefined);
+  };
   const [why, setWhy] = useState(step.comment ?? '');
   const [failure, setFailure] = useState<string | undefined>(undefined);
   const box = useRef<HTMLTextAreaElement>(null);
@@ -1157,15 +1255,21 @@ function StepEditor({ step, variables, onSave, onCancel }: {
   };
   return (
     <div class="stepeditor" onClick={(e: MouseEvent) => e.stopPropagation()}>
-      <div class="stepeditorhead"><span class="quiet">{step.tool}</span></div>
+      {!inRow && <div class="stepeditorhead"><span class="quiet">{step.tool}</span></div>}
       <input class="stepeditwhy" value={why} placeholder="why is this step here?"
         onInput={(e: Event) => setWhy((e.target as HTMLInputElement).value)}
         onKeyDown={(e: KeyboardEvent) => {
           if (e.key === 'Enter') save();
           if (e.key === 'Escape') onCancel();
         }} />
-      <textarea ref={box} class="stepedittext" spellcheck={false} value={text}
-        rows={Math.min(14, text.split('\n').length + 1)}
+      {/* While stepping through options the box is as tall as the tallest of
+          them and holds that height, scrolling past it, so the arrows under
+          it stay put as the JSON changes. */}
+      <textarea ref={box} class={options?.length ? 'stepedittext fixed' : 'stepedittext'} spellcheck={false} value={text}
+        wrap={options?.length ? 'off' : undefined}
+        rows={options?.length
+          ? Math.min(14, Math.max(...options.map(option => JSON.stringify(option.params, null, 2).split('\n').length)) + 1)
+          : Math.min(14, text.split('\n').length + 1)}
         onInput={(e: Event) => { setText((e.target as HTMLTextAreaElement).value); setFailure(undefined); }}
         onKeyDown={(e: KeyboardEvent) => {
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) save();
@@ -1183,38 +1287,114 @@ function StepEditor({ step, variables, onSave, onCancel }: {
         )}
         {failure && <span class="bad">{failure}</span>}
         <span class="grow" />
-        <button class="tool plain" title="⌘↵" onClick={save}>Save</button>
-        <button class="tool plain" title="Esc" onClick={onCancel}>Cancel</button>
+        <span class="footactions">
+          {options && options.length > 1 && <>
+            <button class="tool" title="the previous option" aria-label="previous" onClick={() => show(at - 1)}>←</button>
+            <span class="optionat">{at + 1} of {options.length}</span>
+            <button class="tool" title="the next option" aria-label="next" onClick={() => show(at + 1)}>→</button>
+          </>}
+          <button class="tool keep" title="save ⌘↵" aria-label="save" onClick={save}><Glyph of="save" /></button>
+          <button class="tool bin" title="cancel Esc" aria-label="cancel" onClick={onCancel}><Glyph of="cross" /></button>
+        </span>
       </div>
     </div>
   );
 }
 
+/** The operations that end what a write started: the check reads the key as gone. */
+const ENDINGS = ['removed', 'cleared', 'stopped', 'closed'];
+
 /**
- * A fixed pause to put after a step, for a delay no crossing marks the end
- * of: a slider for the seconds, then Add.
+ * A storage write turned into the check that reads the same place: present
+ * after a set, absent after a removal. The row names the write as
+ * `store:key` with an ending operation after a space. A store the check tool
+ * reads directly is checked by its own field; sessionStorage, which it does
+ * not read, by an expression in the page. A store no check reads offers none.
  */
-function TimerForm({ onAdd, onCancel }: { onAdd: (ms: number) => void; onCancel: () => void }) {
-  const [seconds, setSeconds] = useState('1');
-  const add = () => {
-    const ms = Math.round((Number(seconds) || 0) * 1000);
-    if (ms > 0) onAdd(ms);
-  };
-  const slider = useRef<HTMLInputElement>(null);
-  useEffect(() => { slider.current?.focus(); }, []);
-  return (
-    <div class="timerline open timer">
-      <label class="waitslider timerslider">
-        <span class="waitlabel">wait</span>
-        <input type="range" min={0.5} max={30} step={0.5} value={seconds} ref={slider}
-          onInput={(e: Event) => setSeconds((e.target as HTMLInputElement).value)}
-          onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter') add(); if (e.key === 'Escape') onCancel(); }} />
-        <span class="waitvalue">{seconds} s</span>
-      </label>
-      <button class="tool plain" onClick={add}>Add</button>
-      <button class="tool plain" onClick={onCancel}>Cancel</button>
-    </div>
-  );
+function writeCheck(event: BoundaryEvent): { label: string; params: Record<string, unknown> } | undefined {
+  const store = event.method ?? '';
+  const named = event.url.slice(store.length + 1);
+  const ending = ENDINGS.find(word => named.endsWith(` ${word}`));
+  const key = ending ? named.slice(0, -(ending.length + 1)) : named;
+  if (!key) return undefined;
+  const gone = ending !== undefined;
+  const condition = gone ? 'absent' : 'present';
+  const within = { withinMs: 5000 };
+  if (store === 'localStorage') return { label: `localStorage ${key} ${condition}`, params: { localStorage: key, condition, ...within } };
+  if (store === 'cookie') return { label: `cookie ${key} ${condition}`, params: { cookie: key, condition, ...within } };
+  if (store === 'indexedDB') {
+    const record = key.endsWith('/*') ? key.slice(0, -2) : key;
+    return { label: `IndexedDB ${record} ${condition}`, params: { indexedDB: record, condition, ...within } };
+  }
+  if (store === 'sessionStorage') {
+    return {
+      label: `sessionStorage ${key} ${condition}`,
+      params: { expression: `sessionStorage.getItem(${JSON.stringify(key)}) ${gone ? '===' : '!=='} null`, ...within },
+    };
+  }
+  if (store === 'socket') {
+    return { label: `socket ${key} ${gone ? 'closed' : 'open'}`, params: { socket: key, condition: gone ? 'closed' : 'open', ...within } };
+  }
+  return undefined;
+}
+
+/** The check steps that follow a step, up to the next step that is not a check. */
+function checksAfter(steps: SequenceStep[], index: number): Array<Record<string, unknown>> {
+  const found: Array<Record<string, unknown>> = [];
+  for (const step of steps.slice(index + 1)) {
+    if (step.tool !== 'check') break;
+    found.push(step.params ?? {});
+  }
+  return found;
+}
+
+/**
+ * What a check reads and holds it to, without how long it reads: two checks
+ * with the same subject and condition are the same check whatever their window.
+ */
+function checkIdentity(params: Record<string, unknown>): string {
+  const { withinMs: _within, pollMs: _poll, ...rest } = params;
+  const sorted = (value: unknown): unknown => value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(Object.keys(value).sort().map(key => [key, sorted((value as Record<string, unknown>)[key])]))
+    : value;
+  return JSON.stringify(sorted(rest));
+}
+
+/** The options not already standing as checks after the step. A wait can be added again. */
+function withoutPresent(
+  shapes: Array<{ label: string; params: Record<string, unknown> }>, present: Array<Record<string, unknown>>,
+): Array<{ label: string; params: Record<string, unknown> }> {
+  const standing = new Set(present.map(checkIdentity));
+  return shapes.filter(shape => shape.params.afterMs !== undefined || !standing.has(checkIdentity(shape.params)));
+}
+
+/** Every check a step's traffic offers, with a line naming each. */
+function checkShapes(crossed: BoundaryEvent[], recorded?: Record<string, KindCount>): Array<{ label: string; params: Record<string, unknown> }> {
+  const shapes: Array<{ label: string; params: Record<string, unknown> }> = [
+    { label: 'wait 1s', params: { afterMs: 1000 } },
+  ];
+  const sockets = new Set<string>();
+  for (const event of crossed) {
+    if (event.kind === 'write') {
+      const shape = writeCheck(event);
+      if (shape) shapes.push(shape);
+      continue;
+    }
+    const n = recorded?.[kindOf(event)]?.n ?? 1;
+    const name = event.kind === 'request'
+      ? `${event.method ?? 'GET'} ${keyOf(event)}`
+      : `${event.direction === 'out' ? '→' : '←'} ${socketName(event.url)} ${keyOf(event)}`;
+    const traffic = event.kind === 'request'
+      ? { urlIncludes: keyOf(event), method: event.method ?? 'GET' }
+      : { urlIncludes: socketName(event.url), direction: event.direction === 'out' ? 'sent' : 'received', textIncludes: keyOf(event) };
+    shapes.push({ label: `at least ${n} × ${name} within 5s`, params: { traffic, count: n, stepsBack: 1, withinMs: 5000 } });
+    shapes.push({ label: `exactly ${n} × ${name} within 1s`, params: { traffic, count: n, operator: 'equals', stepsBack: 1, withinMs: 1000 } });
+    if (event.kind !== 'request') sockets.add(socketName(event.url));
+  }
+  for (const socket of sockets) {
+    shapes.push({ label: `socket ${socket} open within 5s`, params: { socket, withinMs: 5000 } });
+  }
+  return shapes;
 }
 
 /**
@@ -1447,32 +1627,153 @@ function Finding({ note, base, post, moves, series }: {
  *
  * What decides it is what the sequence holds: how far it goes, what it is for,
  * and how much has already been written against it - a name alone makes every
- * one of them look the same.
+ * one of them look the same. One row each, in the sequence colour, opening to
+ * the whole of what it is for and the steps it takes.
  */
-function Catalogue({ cards, onOpen }: {
+/** The home page's lists, reading the runs once for both: those going and ended, then the sequences. */
+function HomeLists({ base, post, cards, onOpen }: {
+  base: string;
+  post: (path: string, body?: Record<string, unknown>) => Promise<void>;
   cards: SequenceCard[];
   onOpen: (name: string) => void;
 }) {
+  const runs = useRuns(base);
+  return (
+    <>
+      <RunsPanel view={runs} base={base} post={post} onOpen={onOpen} />
+      <Catalogue base={base} post={post} cards={cards} onOpen={onOpen} running={runs?.running ?? []} />
+    </>
+  );
+}
+
+function Catalogue({ base, post, cards, onOpen, running }: {
+  base: string;
+  post: (path: string, body?: Record<string, unknown>) => Promise<void>;
+  cards: SequenceCard[];
+  onOpen: (name: string) => void;
+  running: RunRow[];
+}) {
+  const [reading, setReading] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  // Deleting takes a second click on the same row; leaving the row clears the first.
+  const [removing, setRemoving] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const rename = async (from: string, to: string) => {
+    const res = await fetch(`${base}/sequence/rename`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ from, to }),
+    }).catch(() => null);
+    const answer = res?.ok ? await res.json() as { failure?: string; references: number } : { failure: 'the bench did not answer', references: 0 };
+    setNotice(answer.failure
+      ? `${from} was not renamed: ${answer.failure}`
+      : `renamed ${from} to ${to}${answer.references ? `, and ${answer.references} step${answer.references === 1 ? '' : 's'} that run${answer.references === 1 ? 's' : ''} it` : ''}`);
+  };
   if (cards.length === 0) {
     return <p class="hint nothing">no sequences recorded yet</p>;
   }
+  // By tag, which is what `runAll` selects on.
+  const groups = byTag(cards);
   return (
-    <div class="tiles">
-      {cards.map(card => (
-        <button class="tile" key={card.name} onClick={() => onOpen(card.name)}>
-          <span class="tilename">{card.name}</span>
-          {card.description && <span class="tilewhat">{card.description}</span>}
-          {card.expectedOutcome && (
-            <span class="tileexpect">expects {card.expectedOutcome}</span>
-          )}
-          <span class="tilecounts">
-            <span>{card.steps} step{card.steps === 1 ? '' : 's'}</span>
-            {card.notes > 0 && (
-              <span class="tilenotes">{card.notes} note{card.notes === 1 ? '' : 's'}</span>
-            )}
-          </span>
-        </button>
-      ))}
+    <>
+    {notice && <p class="hint runnotice">{notice}</p>}
+    {groups.map(([tag, grouped]) => (
+    <section key={tag}>
+    <div class="sectionhead">{tag} <span class="quiet">{grouped.length}</span></div>
+    <ol class="activitycards">
+      {grouped.map(card => {
+        const going = running.find(run => run.sequence === card.name);
+        return (
+        <Row key={card.name} classes={removing === card.name ? ['seqrow', 'removearmed'] : ['seqrow']}
+          onLeave={() => { if (removing === card.name) setRemoving(null); }}
+          columns={['here', 'run', 'open', 'rename', 'remove']}
+          slots={{
+            here: () => void post('/runs/here', { name: card.name }),
+            run: () => {
+              if (going) void post('/runs/stop', going.runId ? { runId: going.runId } : { connection: going.connection ?? '' });
+              else void startRun(base, card.name).then(setNotice);
+            },
+            open: () => onOpen(card.name),
+            rename: () => setRenaming(card.name),
+            remove: () => {
+              if (removing !== card.name) { setRemoving(card.name); return; }
+              setRemoving(null);
+              void post('/sequence/delete', { name: card.name });
+            },
+          }}
+          glyphs={{ ...(going ? { run: 'stop' } : {}), ...(removing === card.name ? { remove: 'tick' } : {}) }}
+          titles={{
+            here: 'play this in this browser: the bench opens it and plays it from step 1',
+            run: going ? `stop this run, at step ${going.step} of ${going.total}` : 'run this in a headless browser of its own',
+            open: 'open this sequence in the bench',
+            rename: 'rename this sequence, and every step that runs it',
+            remove: removing === card.name ? 'click again to delete this sequence and its activity' : 'delete this sequence',
+          }}
+          source={`${card.steps} step${card.steps === 1 ? '' : 's'}`}
+          label={renaming === card.name
+            ? <LabelInput value={card.name} onSave={(to) => void rename(card.name, to)} onDone={() => setRenaming(null)} />
+            : <>
+              <span class="seqname">{card.name}</span>
+              {card.description && <span class="what seqwhat">{card.description}</span>}
+            </>}
+          title={card.description}
+          reading={card.notes > 0 && <span class="seqnotes">{card.notes} note{card.notes === 1 ? '' : 's'}</span>}
+          open={reading === `${tag}|${card.name}`}
+          onOpen={() => setReading(reading === `${tag}|${card.name}` ? null : `${tag}|${card.name}`)}>
+          <SequenceReadme base={base} card={card} onOpen={() => onOpen(card.name)} />
+        </Row>
+        );
+      })}
+    </ol>
+    </section>
+    ))}
+    </>
+  );
+}
+
+/** An opened sequence row: what it is for in full, where it starts, and each step it takes. */
+function SequenceReadme({ base, card, onOpen }: {
+  base: string;
+  card: SequenceCard;
+  onOpen: () => void;
+}) {
+  const [outline, setOutline] = useState<SequenceOutline | null | undefined>(undefined);
+  useEffect(() => {
+    let live = true;
+    fetch(`${base}/sequence/outline?name=${encodeURIComponent(card.name)}`)
+      .then(res => (res.ok ? res.json() : null))
+      .catch(() => null)
+      .then(read => { if (live) setOutline(read); });
+    return () => { live = false; };
+  }, [base, card.name]);
+  return (
+    <div class="body seqreadme">
+      <p class={card.description ? 'seqpurpose' : 'seqpurpose quiet'}>{card.description || 'no purpose recorded'}</p>
+      {card.expectedOutcome && <p class="seqexpect"><span class="asklabel">expects</span> {card.expectedOutcome}</p>}
+      {outline?.startUrl && <p class="seqexpect"><span class="asklabel">starts at</span> {outline.startUrl}</p>}
+      {outline === undefined && <p class="quiet">reading…</p>}
+      {outline === null && <p class="quiet">the file could not be read</p>}
+      {outline && (
+        <ol class="seqsteps">
+          {outline.steps.map((step, k) => (
+            <li key={k}>
+              <span class="seqstepno">{k + 1}</span>
+              <span class="seqsteplabel">{step.label}</span>
+              {step.notes > 0 && <span class="seqnotes">{step.notes} note{step.notes === 1 ? '' : 's'}</span>}
+            </li>
+          ))}
+          {outline.teardown.map((label, k) => (
+            <li key={`t${k}`} class="teardown">
+              <span class="seqstepno">after</span>
+              <span class="seqsteplabel">{label}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+      <div class="bodyfoot">
+        <span class="grow" />
+        <span class="footactions">
+          <button class="tool plain" onClick={onOpen}>Open</button>
+        </span>
+      </div>
     </div>
   );
 }

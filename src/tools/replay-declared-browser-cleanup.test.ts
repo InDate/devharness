@@ -95,7 +95,10 @@ describe('declared browsers', () => {
     expect(killedPorts(calls)).toContain(PORTS['declared-b']);
     // The reference is released too, or the next run declaring it launches
     // against a browser that no longer exists.
-    expect(calls.some(c => c.tool === 'disconnectDebugger' && c.params.reference === 'declared-b')).toBe(true);
+    // With a reason: disconnectDebugger's schema requires one, and a call
+    // without it is refused by validation before it releases anything.
+    const release = calls.find(c => c.tool === 'disconnectDebugger' && c.params.reference === 'declared-b');
+    expect(release?.params.reason).toEqual(expect.stringContaining('declared-b'));
   });
 
   it('are closed when finish ends a paused run', async () => {

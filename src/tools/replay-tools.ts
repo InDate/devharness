@@ -1588,11 +1588,12 @@ async function closeLaunchedConnections(
       if (port === null) continue;
       const sharers = await connectionsSharingPort(executeToolCall, port, ref);
       if (sharers.length > 0) continue; // someone else is on this browser
-      await executeToolCall('killChrome', { reason: `sequence "${sequenceName}" ${origin} ${ref}`, port });
+      const reason = `sequence "${sequenceName}" ${origin} ${ref}`;
+      await executeToolCall('killChrome', { reason, port });
       // Release the reference as well. Killing the process leaves the name
       // bound, and the next sequence in a suite declaring the same reference
       // then fails to launch against a browser that no longer exists.
-      await executeToolCall('disconnectDebugger', { reference: ref }).catch(() => {});
+      await executeToolCall('disconnectDebugger', { reason, reference: ref }).catch(() => {});
       closed.push(ref);
     } catch {
       // Best-effort: a browser that will not close is not a run failure.

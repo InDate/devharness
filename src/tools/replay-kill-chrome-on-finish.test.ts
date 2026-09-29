@@ -190,7 +190,8 @@ describe('killChromeOnFinish', () => {
 
     expect(killedPorts(calls)).toContain(PORTS['phone']);
     // and the reference is released, so the next run can launch it again
-    expect(calls.some(c => c.tool === 'disconnectDebugger' && c.params.reference === 'phone')).toBe(true);
+    const release = calls.find(c => c.tool === 'disconnectDebugger' && c.params.reference === 'phone');
+    expect(release?.params.reason).toEqual(expect.stringContaining('phone'));
   });
 
   it('leaves a per-step browser alone when the launch only reused it', async () => {

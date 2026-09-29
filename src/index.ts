@@ -33,6 +33,7 @@ import { PuppeteerManager } from './puppeteer-manager.js';
 import { ConsoleMonitor } from './console-monitor.js';
 import { NetworkMonitor } from './network-monitor.js';
 import { ConnectionManager, type Connection } from './connection-manager.js';
+import { createActiveManagers } from './active-connection.js';
 import { LogpointExecutionTracker } from './logpoint-execution-tracker.js';
 import { PortReserver } from './port-reserver.js';
 import { validateParams, createTool } from './validation-helpers.js';
@@ -670,7 +671,7 @@ const connectionTools = {
 
           // Set as active connection
           connectionManager.setActiveConnection(existingConnection.id);
-          updateActiveManagers(existingConnection.id);
+          activateConnection(existingConnection.id);
 
           // Get current page info
           let title = 'Unknown';
@@ -886,7 +887,7 @@ const connectionTools = {
             );
 
             // Update active manager references
-            updateActiveManagers(connectionId);
+            activateConnection(connectionId);
 
             // Get page info for Chrome connections
             if (runtimeType === 'chrome') {
@@ -1273,7 +1274,7 @@ const connectionTools = {
         );
 
         // Update active manager references
-        updateActiveManagers(connectionId);
+        activateConnection(connectionId);
 
         // Build console stats for Chrome connections
         let consoleStats: string | undefined;
@@ -1475,7 +1476,7 @@ const connectionTools = {
 
       if (success) {
         // Update active manager references
-        updateActiveManagers(connection.id);
+        activateConnection(connection.id);
         return createSuccessResponse('CONNECTION_SWITCH_SUCCESS', { reference: args.reference });
       } else {
         return createErrorResponse('CONNECTION_SWITCH_FAILED', { reference: args.reference });
@@ -1484,31 +1485,12 @@ const connectionTools = {
   ),
 };
 
-// Active connection manager references (updated when connection is made/switched)
-let activeCdpManager: CDPManager | null = null;
-let activePuppeteerManager: PuppeteerManager | null = null;
-let activeConsoleMonitor: ConsoleMonitor | null = null;
-let activeNetworkMonitor: NetworkMonitor | null = null;
-
 // Session detection state (set in main, used in tool handler)
 let sessionDetectorInstance: SessionDetector | null = null;
 let sessionVerifyStarted = false;
 
 // Log processor orchestrator (set in main for hub instances)
 let orchestratorInstance: Orchestrator | null = null;
-
-// Helper to update active manager references
-const updateActiveManagers = (connectionId?: string) => {
-  const connection = connectionManager.getConnection(connectionId);
-  if (connection) {
-    activeCdpManager = connection.cdpManager;
-    activePuppeteerManager = connection.puppeteerManager || null;
-    activeConsoleMonitor = connection.consoleMonitor || null;
-    activeNetworkMonitor = connection.networkMonitor || null;
-    // Update activity timestamp whenever connection is accessed
-    connectionManager.updateActivity(connection.id);
-  }
-};
 
 /**
  * Resolve a connection from a connectionReason (task description)
@@ -1544,34 +1526,12 @@ async function resolveConnectionFromReason(connectionReason: string): Promise<{
   };
 }
 
-// Create proxy managers that delegate to active connection
-const proxyHandlerForManager = {
-  get(target: any, prop: string) {
-    // For CDPManager
-    if (target.constructor.name === 'CDPManager' && activeCdpManager) {
-      return (activeCdpManager as any)[prop];
-    }
-    // For PuppeteerManager
-    if (target.constructor.name === 'PuppeteerManager' && activePuppeteerManager) {
-      return (activePuppeteerManager as any)[prop];
-    }
-    // For ConsoleMonitor
-    if (target.constructor.name === 'ConsoleMonitor' && activeConsoleMonitor) {
-      return (activeConsoleMonitor as any)[prop];
-    }
-    // For NetworkMonitor
-    if (target.constructor.name === 'NetworkMonitor' && activeNetworkMonitor) {
-      return (activeNetworkMonitor as any)[prop];
-    }
-    return target[prop];
-  },
-};
-
-// Create proxy managers
-const proxyCdpManager = new Proxy(new CDPManager(sourceMapHandler), proxyHandlerForManager);
-const proxyPuppeteerManager = new Proxy(new PuppeteerManager(), proxyHandlerForManager);
-const proxyConsoleMonitor = new Proxy(new ConsoleMonitor(), proxyHandlerForManager);
-const proxyNetworkMonitor = new Proxy(new NetworkMonitor(), proxyHandlerForManager);
+const activeManagers = createActiveManagers(connectionManager, sourceMapHandler);
+const proxyCdpManager = activeManagers.cdpManager;
+const proxyPuppeteerManager = activeManagers.puppeteerManager;
+const proxyConsoleMonitor = activeManagers.consoleMonitor;
+const proxyNetworkMonitor = activeManagers.networkMonitor;
+const activateConnection = activeManagers.activate;
 
 // Register logpoint tracker callbacks
 proxyConsoleMonitor.onMessage((message: any) => {
@@ -1680,7 +1640,7 @@ const allTools = {
   // Connection tools (Chrome/debugger)
   ...(configManager.isToolEnabled('connection') ? toolset('connection', connectionTools) : {}),
   // Tab Management tools
-  ...(configManager.isToolEnabled('tab') ? toolset('tab', createTabTools(connectionManager, sourceMapHandler, updateActiveManagers, logpointTracker, serverManager)) : {}),
+  ...(configManager.isToolEnabled('tab') ? toolset('tab', createTabTools(connectionManager, sourceMapHandler, activateConnection, logpointTracker, serverManager)) : {}),
   // CDP Debugging tools
   ...(configManager.isToolEnabled('breakpoint') ? toolset('breakpoint', createBreakpointTools(proxyCdpManager, sourceMapHandler, logpointTracker, resolveConnectionFromReason)) : {}),
   ...(configManager.isToolEnabled('execution') ? toolset('execution', createExecutionTools(proxyCdpManager, resolveConnectionFromReason, connectionManager, (port) => serverManager.retryPendingRestartByInspectorPort(port))) : {}),

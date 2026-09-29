@@ -29,7 +29,7 @@ const tabSchema = z.object({
 export function createTabTools(
   connectionManager: ConnectionManager,
   sourceMapHandler: SourceMapHandler,
-  updateActiveManagers: (connectionId: string) => void,
+  activateConnection: (connectionId: string) => void,
   logpointTracker: LogpointExecutionTracker,
   serverManager: ServerManager
 ) {
@@ -207,7 +207,7 @@ export function createTabTools(
               );
 
               // Switch to this new tab as active
-              updateActiveManagers(connectionId);
+              activateConnection(connectionId);
 
               const url = page.url();
               const title = await page.title();
@@ -287,7 +287,7 @@ export function createTabTools(
             const success = connectionManager.setActiveConnection(connection.id);
 
             if (success) {
-              updateActiveManagers(connection.id);
+              activateConnection(connection.id);
 
               // Sync Puppeteer page reference to match the connection's page index
               if (connection?.puppeteerManager?.isConnected() && connection.pageIndex !== undefined) {

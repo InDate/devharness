@@ -816,7 +816,7 @@ const connectionTools = {
 
               // Register logpoint tracker callback on this connection's console monitor
               consoleMonitor.onMessage((message) => {
-                logpointTracker.handleConsoleMessage(message);
+                logpointTracker.handleConsoleMessage(message, cdpManager);
               });
 
               if (args.width !== undefined || args.height !== undefined) {
@@ -1249,7 +1249,7 @@ const connectionTools = {
         // Register logpoint tracker callback on this connection's console monitor
         // This ensures logpoint executions are tracked for both Chrome and Node.js connections
         consoleMonitor.onMessage((message) => {
-          logpointTracker.handleConsoleMessage(message);
+          logpointTracker.handleConsoleMessage(message, cdpManager);
         });
 
         // Get page index for tracking
@@ -1532,23 +1532,6 @@ const proxyPuppeteerManager = activeManagers.puppeteerManager;
 const proxyConsoleMonitor = activeManagers.consoleMonitor;
 const proxyNetworkMonitor = activeManagers.networkMonitor;
 const activateConnection = activeManagers.activate;
-
-// Register logpoint tracker callbacks
-proxyConsoleMonitor.onMessage((message: any) => {
-  logpointTracker.handleConsoleMessage(message);
-});
-
-logpointTracker.setLimitExceededCallback((metadata) => {
-  proxyCdpManager.handleLogpointLimitExceeded({
-    breakpointId: metadata.breakpointId,
-    url: metadata.url,
-    lineNumber: metadata.lineNumber,
-    logMessage: metadata.logMessage,
-    executionCount: metadata.executionCount,
-    maxExecutions: metadata.maxExecutions,
-    logs: metadata.logs,
-  });
-});
 
 function truncate(text: string, limit: number): string {
   return text.length <= limit ? text : `${text.slice(0, limit - 1)}\u2026`;

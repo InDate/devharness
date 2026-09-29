@@ -242,7 +242,7 @@ export function createBreakpointTools(
             } else {
               // Line breakpoint or logpoint - unregister from tracker first
               if (logpointTracker) {
-                logpointTracker.unregisterLogpoint(bpId);
+                logpointTracker.unregisterLogpoint(targetCdpManager, bpId);
               }
               await targetCdpManager.removeBreakpoint(bpId);
             }
@@ -342,7 +342,7 @@ export function createBreakpointTools(
               return createErrorResponse('DEBUGGER_NOT_CONNECTED');
             }
 
-            const metadata = logpointTracker.getLogpoint(args.breakpointId);
+            const metadata = logpointTracker.getLogpoint(targetCdpManager, args.breakpointId);
 
             if (!metadata) {
               return createErrorResponse('BREAKPOINT_NOT_FOUND', { breakpointId: args.breakpointId });
@@ -350,7 +350,7 @@ export function createBreakpointTools(
 
             // Reset the counter in the tracker
             const previousCount = metadata.executionCount;
-            logpointTracker.resetCounter(args.breakpointId);
+            logpointTracker.resetCounter(targetCdpManager, args.breakpointId);
 
             // Reset the global counter in the page context
             const logpointKey = `${metadata.url}:${metadata.lineNumber}`;
@@ -816,7 +816,7 @@ export function createBreakpointTools(
                 // Remove the breakpoint - don't keep a broken logpoint
                 // Unregister from tracker first
                 if (logpointTracker) {
-                  logpointTracker.unregisterLogpoint(breakpoint.breakpointId);
+                  logpointTracker.unregisterLogpoint(targetCdpManager, breakpoint.breakpointId);
                 }
 
                 try {
@@ -912,6 +912,7 @@ export function createBreakpointTools(
             // Register with logpoint execution tracker
             if (logpointTracker) {
               logpointTracker.registerLogpoint(
+                targetCdpManager,
                 breakpoint.breakpointId,
                 targetUrl,
                 actualLineUser,  // Use the actual line where it was set (1-based)

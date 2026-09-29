@@ -1,6 +1,11 @@
 /**
  * Logpoint Execution Tracker
  * Monitors logpoint executions and enforces execution limits
+ *
+ * Each logpoint belongs to the debugger of the connection it was set on. CDP
+ * builds a breakpoint id from its line, column and URL, so two tabs logging
+ * the same line hold the same id, and a message from one tab carries the same
+ * location text as the other's: both are told apart by that owner.
  */
 
 import type { StoredConsoleMessage } from './console-monitor.js';
@@ -15,23 +20,27 @@ export interface LogpointMetadata {
   logs: StoredConsoleMessage[];
 }
 
-export type LimitExceededCallback = (metadata: LogpointMetadata) => void;
+/** The debugger a logpoint was set on, which pauses when the logpoint reaches its limit. */
+export interface LogpointOwner {
+  handleLogpointLimitExceeded(metadata: LogpointMetadata): Promise<void>;
+}
 
 export class LogpointExecutionTracker {
-  private logpoints: Map<string, LogpointMetadata> = new Map();
-  private onLimitExceeded: LimitExceededCallback | null = null;
+  private logpoints: Map<LogpointOwner, Map<string, LogpointMetadata>> = new Map();
 
   /**
    * Register a new logpoint for tracking
    */
   registerLogpoint(
+    owner: LogpointOwner,
     breakpointId: string,
     url: string,
     lineNumber: number,
     logMessage: string,
     maxExecutions: number
   ): void {
-    this.logpoints.set(breakpointId, {
+    const owned = this.logpoints.get(owner) ?? new Map<string, LogpointMetadata>();
+    owned.set(breakpointId, {
       breakpointId,
       url,
       lineNumber,
@@ -40,20 +49,21 @@ export class LogpointExecutionTracker {
       executionCount: 0,
       logs: [],
     });
+    this.logpoints.set(owner, owned);
   }
 
   /**
    * Unregister a logpoint
    */
-  unregisterLogpoint(breakpointId: string): void {
-    this.logpoints.delete(breakpointId);
+  unregisterLogpoint(owner: LogpointOwner, breakpointId: string): void {
+    this.logpoints.get(owner)?.delete(breakpointId);
   }
 
   /**
    * Reset the execution counter for a logpoint
    */
-  resetCounter(breakpointId: string): void {
-    const metadata = this.logpoints.get(breakpointId);
+  resetCounter(owner: LogpointOwner, breakpointId: string): void {
+    const metadata = this.getLogpoint(owner, breakpointId);
     if (metadata) {
       metadata.executionCount = 0;
       metadata.logs = [];
@@ -63,29 +73,22 @@ export class LogpointExecutionTracker {
   /**
    * Get metadata for a specific logpoint
    */
-  getLogpoint(breakpointId: string): LogpointMetadata | undefined {
-    return this.logpoints.get(breakpointId);
+  getLogpoint(owner: LogpointOwner, breakpointId: string): LogpointMetadata | undefined {
+    return this.logpoints.get(owner)?.get(breakpointId);
   }
 
   /**
    * Get all registered logpoints
    */
   getAllLogpoints(): LogpointMetadata[] {
-    return Array.from(this.logpoints.values());
+    return [...this.logpoints.values()].flatMap(owned => [...owned.values()]);
   }
 
   /**
-   * Set the callback to invoke when a logpoint exceeds its limit
+   * Handle a console message from the connection whose debugger is `source`,
+   * counting it toward that connection's logpoint at the message's location.
    */
-  setLimitExceededCallback(callback: LimitExceededCallback): void {
-    this.onLimitExceeded = callback;
-  }
-
-  /**
-   * Handle a console message - check if it's from a logpoint
-   * This should be called by ConsoleMonitor when a message is added
-   */
-  handleConsoleMessage(message: StoredConsoleMessage): void {
+  handleConsoleMessage(message: StoredConsoleMessage, source: LogpointOwner): void {
     // Check if this is a logpoint message
     if (!message.text.startsWith('[Logpoint]')) {
       return;
@@ -102,25 +105,18 @@ export class LogpointExecutionTracker {
     const messageUrl = locationMatch[1];
     const messageLine = parseInt(locationMatch[2], 10);
 
-    // Find the logpoint that matches this location
-    for (const metadata of this.logpoints.values()) {
-      // Compare URL and line number
+    for (const metadata of this.logpoints.get(source)?.values() ?? []) {
       if (
         this.urlsMatch(messageUrl, metadata.url) &&
         messageLine === metadata.lineNumber
       ) {
-        // Increment execution count
         metadata.executionCount++;
-
-        // Store the log message
         metadata.logs.push(message);
 
-        // Check if limit exceeded
         if (metadata.executionCount >= metadata.maxExecutions) {
-          // Invoke callback if set
-          if (this.onLimitExceeded) {
-            this.onLimitExceeded(metadata);
-          }
+          void source.handleLogpointLimitExceeded(metadata).catch(() => {
+            // A connection that closed as its limit landed has nothing left to pause.
+          });
         }
 
         break; // Only match to one logpoint

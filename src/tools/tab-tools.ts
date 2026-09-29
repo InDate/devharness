@@ -178,7 +178,7 @@ export function createTabTools(
 
               // Register logpoint tracker callback on this connection's console monitor
               consoleMonitor.onMessage((message) => {
-                logpointTracker.handleConsoleMessage(message);
+                logpointTracker.handleConsoleMessage(message, cdpManager);
               });
 
               // Navigate if URL provided

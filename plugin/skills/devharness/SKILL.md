@@ -122,7 +122,7 @@ An arriving message announces itself on the event stream, so the watch above cov
 
 ## Running a tool from the shell
 
-`devharness <command>` typed in a session's shell runs that tool **inside that session**, against the connections it already holds. The plugin does not put `devharness` on PATH - `npm i -g devharness` does, or run it as `npx -y devharness@<version> <command>`. The SessionStart hook reports which of those applies here. Candidates are the sessions rooted at the shell's directory or above it - project state such as issues and config resolves against the answering server's root - and the process tree picks among those, so `! devharness screenshot` uses the browser this session opened, not a new one. A directory no session is rooted in reports that rather than reaching another project.
+`devharness <command>` typed in a session's shell runs that tool **inside that session**, against the connections it already holds. The plugin does not put `devharness` on PATH - `npm i -g devharness` does, or run it as `npx -y devharness@<version> <command>`. The SessionStart hook reports which of those applies here. Candidates are the sessions rooted at the shell's directory or above it - project state such as issues and config resolves against the answering server's root - and the process tree picks among those, so `! devharness call screenshot '{"connectionReason":"app"}'` uses the browser this session opened as `app`, not a new one. A directory no session is rooted in reports that rather than reaching another project.
 
 - `devharness which` - which session this shell resolves to
 - `devharness watch` - exits on this session's next events and prints them; `--follow` streams them (see The event stream)

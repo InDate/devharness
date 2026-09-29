@@ -569,6 +569,7 @@ export function createInspectionTools(
               if (error instanceof EvaluateExpressionPendingPromiseError) {
                 return createErrorResponse('EVALUATE_PROMISE_PENDING_WHILE_PAUSED', {
                   expression: error.expression,
+                  connection: connectionReason ? `, connectionReason: '${connectionReason}'` : '',
                 });
               }
               // The execution context never responded within the bounded

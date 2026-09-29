@@ -800,7 +800,7 @@ Expression returned a pending Promise while the debugger is paused - the event l
 **Expression:** `{{expression}}`
 
 **Suggestions:**
-- Resume execution first (`execution({ action: 'resume' })`), then evaluate the async expression against the running page
+- Resume execution first (`execution({ action: 'resume'{{connection}} })`), then evaluate the async expression against the running page
 - Promises that are already settled (e.g. an async result from before the pause) ARE resolved automatically - only genuinely pending work fails this way
 - Pass `awaitPromise: false` to inspect the pending Promise object itself instead of its value
 
@@ -826,7 +826,7 @@ Not currently paused at a breakpoint
 
 Breakpoint pause acknowledged at {{location}}
 
-Other tools are now unblocked while execution remains paused. Use `execution({ action: 'resume' })` to continue execution.
+Other tools are now unblocked while execution remains paused. Use {{resumeCalls}} to continue execution.
 
 ---
 
@@ -4029,8 +4029,8 @@ Timed out after {{timeoutMs}}ms ({{polls}} checks) waiting for {{condition}}{{la
 Cannot wait for {{condition}}: the debugger on "{{connectionReason}}" is paused at a breakpoint. The page's event loop is stopped, so nothing can change and the wait would only burn its timeout.
 
 **Suggestions:**
-- Resume execution first: `execution({ action: 'resume' })`
-- Or inspect the paused state instead of waiting: `inspect({ action: 'getCallStack' })`
+- Resume execution first: `execution({ action: 'resume', connectionReason: '{{connectionReason}}' })`
+- Or inspect the paused state instead of waiting: `inspect({ action: 'getCallStack', connectionReason: '{{connectionReason}}' })`
 
 ---
 

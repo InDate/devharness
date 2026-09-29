@@ -6,7 +6,8 @@
  * decided by the shell's directory first: only sessions rooted at it or above
  * it are candidates, because every project-scoped path resolves against the
  * answering server's root. Process ancestry then picks among those, so
- * `! devharness screenshot` reaches the browser this session opened.
+ * `! devharness call screenshot '{"connectionReason":"app"}'` reaches the
+ * browser this session opened as `app`.
  *
  * Guards that the MCP request handler applies - a dead dev server port, a
  * paused breakpoint, a pending bug - are not applied here, the same as

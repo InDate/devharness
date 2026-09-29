@@ -653,11 +653,16 @@ export function checkBreakpointPause(
     return `- "${p.reference}"${loc}${frameId}${restart}`;
   }).join('\n');
 
-  // Build getVariables hint with callFrameId if available
-  const firstCallFrameId = pausedConnections[0]?.callFrameId;
-  const getVariablesHint = firstCallFrameId
-    ? `\`inspect({ action: 'getVariables', callFrameId: '${firstCallFrameId}' })\``
-    : `\`inspect({ action: 'getVariables' })\``;
+  // Every suggested call names the paused connection: without it the call
+  // reaches the active connection, which need not be the one paused.
+  const first = pausedConnections[0];
+  const on = `connectionReason: '${first.reference}'`;
+  const getVariablesHint = first.callFrameId
+    ? `\`inspect({ action: 'getVariables', callFrameId: '${first.callFrameId}', ${on} })\``
+    : `\`inspect({ action: 'getVariables', ${on} })\``;
+  const othersHint = pausedConnections.length > 1
+    ? `\n- The same calls with ${pausedConnections.slice(1).map(p => `\`connectionReason: '${p.reference}'\``).join(', ')} reach the other paused connection(s)`
+    : '';
 
   const firstPendingRestart = pausedConnections.find(p => p.pendingRestart)?.pendingRestart;
   const cancelRestartHint = firstPendingRestart
@@ -676,9 +681,9 @@ The following connection(s) are paused at a breakpoint:
 ${pauseDetails}
 
 **To continue:**
-- Use \`execution({ action: 'resume' })\` to resume execution
-- Use \`execution({ action: 'acknowledge' })\` to acknowledge and continue using other tools while paused
-- Use \`inspect({ action: 'getCallStack' })\` or ${getVariablesHint} to examine state${cancelRestartHint}
+- Use \`execution({ action: 'resume', ${on} })\` to resume execution
+- Use \`execution({ action: 'acknowledge', ${on} })\` to acknowledge and continue using other tools while paused
+- Use \`inspect({ action: 'getCallStack', ${on} })\` or ${getVariablesHint} to examine state${othersHint}${cancelRestartHint}
 
 Other tools are blocked until execution is resumed or acknowledged.`,
         },
@@ -695,7 +700,7 @@ Other tools are blocked until execution is resumed or acknowledged.`,
         const loc = p.location ? ` at ${p.location.url}:${p.location.lineNumber}` : '';
         return `"${p.reference}"${loc}`;
       }).join(', ')}`,
-      resolve: `execution({ action: 'resume' }) or execution({ action: 'acknowledge' })`,
+      resolve: `execution({ action: 'resume', ${on} }) or execution({ action: 'acknowledge', ${on} })`,
     }
   };
 }

@@ -101,6 +101,8 @@ export function createBreakpointTools(
       breakpointSchema,
       async (args, abortSignal) => {
         const { action } = args;
+        // Appended to every call a reply suggests, so the call reaches this connection.
+        const on = args.connectionReason ? `, connectionReason: '${args.connectionReason}'` : '';
 
         // Resolve connection if connectionReason is provided
         let targetCdpManager = cdpManager;
@@ -378,7 +380,7 @@ export function createBreakpointTools(
             markdown += `- **Log Message:** \`${metadata.logMessage}\`\n`;
             markdown += `- **Previous Count:** ${previousCount}\n`;
             markdown += `- **New Count:** 0\n`;
-            markdown += `\n**Next Step:** Use \`execution({ action: 'resume' })\` to continue execution.`;
+            markdown += `\n**Next Step:** Use \`execution({ action: 'resume'${on} })\` to continue execution.`;
 
             return {
               content: [
@@ -1338,10 +1340,10 @@ export function createBreakpointTools(
                   markdown += `**Paused at:** \`${topFrame.functionName || '(anonymous)'}\`\n`;
                   markdown += `**Call Frame ID:** \`${topFrame.callFrameId}\`\n\n`;
                   markdown += `**Next steps:**\n`;
-                  markdown += `- \`inspect({ action: 'getVariables', callFrameId: '${topFrame.callFrameId}' })\` - View variables\n`;
-                  markdown += `- \`inspect({ action: 'evaluateExpression', expression: '...' })\` - Evaluate code\n`;
-                  markdown += `- \`execution({ action: 'stepOver' })\` - Step to next line\n`;
-                  markdown += `- \`execution({ action: 'resume' })\` - Continue execution\n`;
+                  markdown += `- \`inspect({ action: 'getVariables', callFrameId: '${topFrame.callFrameId}'${on} })\` - View variables\n`;
+                  markdown += `- \`inspect({ action: 'evaluateExpression', expression: '...'${on} })\` - Evaluate code\n`;
+                  markdown += `- \`execution({ action: 'stepOver'${on} })\` - Step to next line\n`;
+                  markdown += `- \`execution({ action: 'resume'${on} })\` - Continue execution\n`;
                 } else {
                   markdown += `Execution paused but no call stack available.\n`;
                 }

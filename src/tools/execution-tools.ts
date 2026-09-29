@@ -129,6 +129,9 @@ export function createExecutionTools(
             return createSuccessResponse('EXECUTION_STEP_OUT');
 
           case 'acknowledge': {
+            const resumeCall = (reference?: string): string => reference
+              ? `\`execution({ action: 'resume', connectionReason: '${reference}' })\``
+              : `\`execution({ action: 'resume' })\``;
             const locationOf = (manager: CDPManager): string => {
               const pauseInfo = manager.getPausedInfo();
               return pauseInfo.location
@@ -147,6 +150,7 @@ export function createExecutionTools(
                 conn.breakpointPauseAcknowledged = true;
               }
               return createSuccessResponse('BREAKPOINT_ACKNOWLEDGED', {
+                resumeCalls: paused.map(conn => resumeCall(conn.reference)).join(' and '),
                 location: paused.length === 1
                   ? locationOf(paused[0].cdpManager)
                   : paused.map(conn => `${conn.reference ?? conn.id} ${locationOf(conn.cdpManager)}`).join(', '),
@@ -160,6 +164,7 @@ export function createExecutionTools(
               resolvedConnection.breakpointPauseAcknowledged = true;
             }
             return createSuccessResponse('BREAKPOINT_ACKNOWLEDGED', {
+              resumeCalls: resumeCall(resolvedConnection?.reference),
               location: locationOf(targetCdpManager),
             });
           }

@@ -785,7 +785,6 @@ export function createBreakpointTools(
 
             // Mark as logpoint in the breakpoint info (state is already updated by setBreakpoint)
             breakpoint.isLogpoint = true;
-            (cdpManager as any).state.breakpoints.set(breakpoint.breakpointId, breakpoint);
 
             // AUTOMATIC LINE/COLUMN MAPPING VALIDATION
             // Get actual location from CDP (0-based)

@@ -129,29 +129,38 @@ export function createExecutionTools(
             return createSuccessResponse('EXECUTION_STEP_OUT');
 
           case 'acknowledge': {
-            // Acknowledge the breakpoint pause to allow other tools to run
+            const locationOf = (manager: CDPManager): string => {
+              const pauseInfo = manager.getPausedInfo();
+              return pauseInfo.location
+                ? `${pauseInfo.location.url}:${pauseInfo.location.lineNumber}`
+                : 'unknown location';
+            };
+
+            // With no connection named, every paused connection is the one the
+            // pause guard blocks on, and the active connection may be running.
+            if (!resolvedConnection && connectionManager) {
+              const paused = connectionManager.getAllConnections().filter(conn => conn.cdpManager.isPaused());
+              if (paused.length === 0) {
+                return createErrorResponse('NOT_PAUSED');
+              }
+              for (const conn of paused) {
+                conn.breakpointPauseAcknowledged = true;
+              }
+              return createSuccessResponse('BREAKPOINT_ACKNOWLEDGED', {
+                location: paused.length === 1
+                  ? locationOf(paused[0].cdpManager)
+                  : paused.map(conn => `${conn.reference ?? conn.id} ${locationOf(conn.cdpManager)}`).join(', '),
+              });
+            }
+
             if (!targetCdpManager.isPaused()) {
               return createErrorResponse('NOT_PAUSED');
             }
-
             if (resolvedConnection) {
               resolvedConnection.breakpointPauseAcknowledged = true;
-            } else if (connectionManager) {
-              // Acknowledge all paused connections
-              for (const conn of connectionManager.getAllConnections()) {
-                if (conn.cdpManager.isPaused()) {
-                  conn.breakpointPauseAcknowledged = true;
-                }
-              }
             }
-
-            const pauseInfo = targetCdpManager.getPausedInfo();
-            const location = pauseInfo.location
-              ? `${pauseInfo.location.url}:${pauseInfo.location.lineNumber}`
-              : 'unknown location';
-
             return createSuccessResponse('BREAKPOINT_ACKNOWLEDGED', {
-              location,
+              location: locationOf(targetCdpManager),
             });
           }
 

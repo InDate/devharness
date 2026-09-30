@@ -381,7 +381,19 @@ interface HistoryCommand {
   comment?: string;
   /** The sequence whose run executed this call as a step. */
   run?: string;
+  /** The channel the call came in on. */
+  from?: 'mcp' | 'cli' | 'bench';
 }
+
+/**
+ * A call's channel in words, for the ones that did not come from the agent:
+ * a person's work in the bench announces itself on the event stream only for
+ * notes, captures and sequence writes, so its other calls are found here.
+ */
+const CHANNEL_WORDS: Partial<Record<NonNullable<HistoryCommand['from']>, string>> = {
+  bench: ' from the bench',
+  cli: ' from the CLI',
+};
 
 /**
  * Format command history listing
@@ -404,7 +416,8 @@ export function formatHistory(
     const paramStr = JSON.stringify(cmd.params);
     const truncatedParams = paramStr.length > 60 ? paramStr.slice(0, 60) + '...' : paramStr;
     const run = cmd.run ? ` in run \`${cmd.run}\`` : '';
-    let line = `\n${cmd.index}. **${cmd.tool}**${run} - ${truncatedParams}`;
+    const channel = cmd.from ? CHANNEL_WORDS[cmd.from] ?? '' : '';
+    let line = `\n${cmd.index}. **${cmd.tool}**${run}${channel} - ${truncatedParams}`;
     // Show delay and comment if present
     const extras: string[] = [];
     if (cmd.delay) extras.push(`delay:${cmd.delay}ms`);

@@ -94,6 +94,13 @@ app tab, type in the pane, save - and the note lands in the step of the
 sequence it belongs to, and on the event stream, so with a watch armed it
 reaches you mid-task. Keep working while they write.
 
+Only notes, captures, screenshots and sequence writes reach the event stream.
+Everything else a person does in the bench - Run on the Tools tab, a comment
+or an edit on the Issues tab, Run on a History row - is a tool call, and
+`replay({ action: 'history' })` lists it marked `from the bench`. Asked whether
+you can see something done in the bench, read history first; the event stream
+answers only for those four kinds.
+
 The bench also drives a sequence step by step, reads what crossed the boundary
 under each step, and carries the proxy's own controls. Launch the browser with
 `proxy: true` or it records nothing.

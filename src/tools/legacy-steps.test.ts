@@ -128,3 +128,13 @@ describe('unknownToolResponse', () => {
     expect(body).not.toHaveProperty('replacedBy');
   });
 });
+
+describe('a name matching an inherited object property', () => {
+  it('is no removed tool: the call, the step and the replacement are left as they are', () => {
+    expect(translateCall('toString', { a: 1 })).toEqual({ tool: 'toString', params: { a: 1 } });
+    expect(translateCall('constructor', {})).toEqual({ tool: 'constructor', params: {} });
+    expect(replacementFor('constructor')).toBeUndefined();
+    expect(translateSequence({ commands: [{ tool: 'hasOwnProperty', params: {} }] }).commands)
+      .toEqual([{ tool: 'hasOwnProperty', params: {} }]);
+  });
+});

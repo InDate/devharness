@@ -87,22 +87,30 @@ const REPLACEMENTS: Record<string, string> = {
   getDebugLoggingStatus: "config with action: 'debugLoggingStatus'",
 };
 
+/**
+ * The entry `table` holds for `key` itself. A plain index reads inherited
+ * properties too, so `toString` or `constructor` would read as a removed tool.
+ */
+function own<T>(table: Record<string, T>, key: string): T | undefined {
+  return Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
+}
+
 /** The call an old one became, or the call unchanged when its tool still exists. */
 export function translateCall(tool: string, params: Record<string, any> | undefined): Call {
-  const rewrite = REWRITES[tool];
+  const rewrite = own(REWRITES, tool);
   return rewrite ? rewrite(params ?? {}) : { tool, params: params ?? {} };
 }
 
 /** What replaced an old tool name, or undefined for a name that was never replaced. */
 export function replacementFor(tool: string): string | undefined {
-  return REPLACEMENTS[tool];
+  return own(REPLACEMENTS, tool);
 }
 
 /** A sequence's steps and teardown rewritten step by step; everything else kept. */
 export function translateSequence<T extends { commands?: Array<{ tool: string; params?: Record<string, any> }>; teardown?: Array<{ tool: string; params?: Record<string, any> }> }>(sequence: T): T {
   const translateSteps = (steps: Array<{ tool: string; params?: Record<string, any> }>) =>
     steps.map(step => {
-      if (!REWRITES[step.tool]) return step;
+      if (!own(REWRITES, step.tool)) return step;
       const { tool, params } = translateCall(step.tool, step.params);
       return { ...step, tool, params };
     });
@@ -124,7 +132,7 @@ export function callTarget<T>(
   calledParams: Record<string, any> | undefined
 ): { toolName: string; params: Record<string, any>; tool: T | undefined } {
   const { tool: toolName, params } = translateCall(calledName, calledParams);
-  return { toolName, params, tool: Object.prototype.hasOwnProperty.call(tools, toolName) ? tools[toolName] : undefined };
+  return { toolName, params, tool: own(tools, toolName) };
 }
 
 /**

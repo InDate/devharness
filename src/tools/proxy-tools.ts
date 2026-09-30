@@ -69,6 +69,21 @@ export function createProxyTools() {
           });
         }
 
+        // An empty match answers every request or every message, and an absent
+        // id looks up nothing; each is refused before it reaches the proxy.
+        const missing =
+          args.action === 'answer' && !args.urlIncludes ? 'urlIncludes'
+          : args.action === 'answerFrame' && !args.textIncludes && !args.urlIncludes ? 'textIncludes or urlIncludes'
+          : (args.action === 'body' || args.action === 'withdraw') && !args.id ? 'id'
+          : undefined;
+        if (missing) {
+          return createErrorResponse('MISSING_PARAMETER', {
+            action: args.action,
+            missing,
+            message: `The "${args.action}" action requires ${missing}`,
+          });
+        }
+
         const namesOf = namesSharing(args.connectionReason);
         const meta = (extra: Record<string, unknown>) => ({
           tool: 'proxy', action: args.action, timestamp: Date.now(), ...extra,

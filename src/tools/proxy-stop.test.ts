@@ -29,3 +29,23 @@ describe('proxy stop', () => {
     expect(result._meta.proxy).toMatchObject({ stopped: true, remaining: [] });
   });
 });
+
+describe('proxy actions missing what they act on', () => {
+  it('refuse rather than answer every request, drop every message, or look up no id', async () => {
+    const { proxy: running } = await startProxyFor('pin guard tab');
+    const { proxy } = createProxyTools();
+
+    for (const args of [
+      { action: 'answer', value: '{}' },
+      { action: 'answerFrame' },
+      { action: 'body' },
+      { action: 'withdraw' },
+    ]) {
+      const result: any = await proxy.handler({ ...args, connectionReason: 'pin guard tab' } as any);
+      expect(result.isError, args.action).toBe(true);
+    }
+    expect(running.listPins()).toEqual([]);
+    expect(running.listFramePins()).toEqual([]);
+    await proxy.handler({ action: 'stop', connectionReason: 'pin guard tab' } as any);
+  });
+});

@@ -14,7 +14,7 @@ import { sanitizeReference } from './reference-validator.js';
 import { getOutputPath, registerRootBound } from './helpers/paths.js';
 import { atomicWriteFile } from './atomic-write.js';
 import type { ExpectedValue } from './bench/kinds.js';
-import { mergeActivity, readActivity, splitActivity, writeActivity } from './sequence-activity.js';
+import { activityPathFor, mergeActivity, readActivity, splitActivity, writeActivity } from './sequence-activity.js';
 import { getIssueSequencesDir, getIssuesBySequenceFile } from './issue-tracker.js';
 import { captureVariable } from './tools/replay-executor.js';
 import { asCheckStep } from './tools/check-tools.js';
@@ -359,7 +359,7 @@ export class CommandRecorder {
     this.watchedDirs = new Set(dirs);
     this.sequenceWatcher = new ServerFileWatcher({
       paths: dirs,
-      // Sequences live UNDER .cdp-tools, which the default exclude list drops -
+      // Sequences live UNDER .devharness, which the default exclude list drops -
       // taking every sequence with it.
       excludeDirNames: ['node_modules', '.git'],
       onChange: () => { void this.reloadChangedSequences(); },
@@ -774,6 +774,8 @@ export class CommandRecorder {
    * Delete a sequence
    */
   deleteSequence(sequenceId: string): boolean {
+    // Its file stops being watched too, or an edit to it brings it back.
+    this.sequenceSources.delete(sequenceId);
     return this.sequences.delete(sequenceId);
   }
 
@@ -785,7 +787,10 @@ export class CommandRecorder {
   private removeSequenceByName(name: string): void {
     for (const [id, seq] of this.sequences.entries()) {
       if (seq.name === name) {
+        // An edit to the replaced copy's file would otherwise reload it over
+        // the copy that replaced it.
         this.sequences.delete(id);
+        this.sequenceSources.delete(id);
       }
     }
   }
@@ -795,6 +800,7 @@ export class CommandRecorder {
    */
   async clearAllSequences(): Promise<void> {
     this.sequences.clear();
+    this.sequenceSources.clear();
     await debugLog('command-recorder', 'All sequences cleared');
   }
 
@@ -873,7 +879,7 @@ export class CommandRecorder {
       // The actions go here; what the app did goes to the activity file.
       const { actions, activity } = splitActivity(sequence);
       const exportData = {
-        _comment: 'CDP Tools replay sequence. Load with: replay({ action: "load", filename: "<this-file>" }), then run with: replay({ action: "run", name: "<this-file>" }). What the app did under each step, and the responses that answer it on replay, are in the file of the same name under activity/.',
+        _comment: 'devharness replay sequence. Load with: replay({ action: "load", filename: "<this-file>" }), then run with: replay({ action: "run", name: "<this-file>" }). What the app did under each step, and the responses that answer it on replay, are in the file of the same name under activity/.',
         ...actions
       };
       await atomicWriteFile(filepath, JSON.stringify(exportData, null, 2));
@@ -1147,6 +1153,7 @@ export class CommandRecorder {
       // Support absolute paths directly
       if (filename.startsWith('/') || filename.includes(':\\')) {
         await fs.unlink(filename);
+        await fs.unlink(activityPathFor(filename)).catch(() => {});
         await debugLog('command-recorder', `Deleted sequence file: ${filename}`);
         return true;
       }
@@ -1162,6 +1169,9 @@ export class CommandRecorder {
       await debugLog('command-recorder', `Matched "${filename}" to "${match.filename}" (${match.matchType})`);
 
       await fs.unlink(filepath);
+      // The activity kept beside it would otherwise be read into the next
+      // sequence written under the same filename.
+      await fs.unlink(activityPathFor(filepath)).catch(() => {});
       await debugLog('command-recorder', `Deleted sequence file: ${filepath}`);
       return true;
     } catch (error: any) {

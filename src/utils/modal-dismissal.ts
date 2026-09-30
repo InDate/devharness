@@ -62,69 +62,58 @@ export async function dismissModalByStrategy(
 
       const selectors: string[] = [];
 
-      // Define button search patterns based on strategy
-      // TODO: These button text patterns are English-only. Non-English sites will fail button detection.
-      // Workaround: Use strategy: 'remove' for non-English sites.
-      // See KNOWN_LIMITATIONS.md "Language Limitations" section for details.
+      // The patterns are English: on a site in another language no button
+      // matches, and strategy "remove" is the way to dismiss.
       let textPatterns: RegExp;
       let classPatterns: string[];
 
+      // Whole words only: "ok" as a substring reads "Cookie settings" as an
+      // accept button, and "no" reads "notification" as a reject one.
       switch (strat) {
         case 'accept':
-          textPatterns = /accept|agree|allow|enable|ok|got it|i accept|continue|yes/i;
+          textPatterns = /\b(accept|agree|allow|enable|ok|got it|continue|yes)\b/i;
           classPatterns = ['accept', 'agree', 'allow', 'enable', 'ok', 'continue', 'yes'];
           break;
         case 'reject':
-          textPatterns = /reject|decline|deny|disable|no thanks|refuse|dismiss/i;
+          textPatterns = /\b(reject|decline|deny|disable|no thanks|refuse|dismiss)\b/i;
           classPatterns = ['reject', 'decline', 'deny', 'refuse', 'no'];
           break;
         case 'close':
-          textPatterns = /close|dismiss|×|✕|✖|skip|no thanks/i;
+          textPatterns = /\b(close|dismiss|skip|no thanks)\b|[×✕✖]/i;
           classPatterns = ['close', 'dismiss', 'skip'];
           break;
         default:
           return [];
       }
 
-      // Find buttons within modal
+      const escape = (value: string): string => {
+        const css = (globalThis as any).CSS;
+        return css?.escape ? css.escape(value) : value.replace(/[^\w-]/g, ch => `\\${ch}`);
+      };
+      // An element:nth-of-type path from the modal down to the button, which
+      // names that button alone whatever its id and classes are.
+      const pathFromModal = (el: any): string => {
+        const steps: string[] = [];
+        for (let node = el; node && node !== modal; node = node.parentElement) {
+          let n = 1;
+          for (let sib = node.previousElementSibling; sib; sib = sib.previousElementSibling) {
+            if (sib.tagName === node.tagName) n++;
+          }
+          steps.unshift(`${node.tagName.toLowerCase()}:nth-of-type(${n})`);
+        }
+        return `${sel} > ${steps.join(' > ')}`;
+      };
+
       const buttons = modal.querySelectorAll(
         'button, [role="button"], a[href="#"], .button, .btn, [class*="button" i], [class*="btn" i]'
       );
 
-      buttons.forEach((btn: any, idx: number) => {
-        const text = (btn.textContent || '').trim().toLowerCase();
-        const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
-        const className = btn.className.toLowerCase();
-        const id = btn.id.toLowerCase();
-        const combined = `${text} ${ariaLabel} ${className} ${id}`;
-
-        // Check text pattern
-        if (textPatterns.test(combined)) {
-          // Try to create a unique selector
-          if (btn.id) {
-            selectors.push(`#${btn.id}`);
-          } else if (btn.className) {
-            const classes = btn.className.split(/\s+/).filter(Boolean);
-            if (classes.length > 0) {
-              selectors.push(`${sel} .${classes.join('.')}`);
-            }
-          } else {
-            // Fallback to nth-of-type
-            selectors.push(`${sel} button:nth-of-type(${idx + 1})`);
-          }
+      buttons.forEach((btn: any) => {
+        const words = `${btn.textContent || ''} ${btn.getAttribute('aria-label') || ''} ${btn.id}`;
+        const classTokens = String(btn.className || '').toLowerCase().split(/[\s_-]+/).filter(Boolean);
+        if (textPatterns.test(words) || classPatterns.some(pattern => classTokens.includes(pattern))) {
+          selectors.push(btn.id ? `#${escape(btn.id)}` : pathFromModal(btn));
         }
-
-        // Check class patterns
-        classPatterns.forEach(pattern => {
-          if (className.includes(pattern.toLowerCase())) {
-            if (btn.id) {
-              selectors.push(`#${btn.id}`);
-            } else if (btn.className) {
-              const classes = btn.className.split(/\s+/).filter(Boolean);
-              selectors.push(`${sel} .${classes.join('.')}`);
-            }
-          }
-        });
       });
 
       return [...new Set(selectors)]; // Remove duplicates

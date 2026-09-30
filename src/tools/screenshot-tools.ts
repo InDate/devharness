@@ -3,8 +3,7 @@
  */
 
 import { z } from 'zod';
-import type { ConnectionManager } from '../connection-manager.js';
-import { executeWithPauseDetection, formatActionResult } from '../debugger-aware-wrapper.js';
+import { executeWithPauseDetection, actionFailureResponse } from '../debugger-aware-wrapper.js';
 import { checkBrowserAutomation } from '../error-helpers.js';
 import { createTool } from '../validation-helpers.js';
 import { promises as fs } from 'fs';
@@ -12,7 +11,6 @@ import path from 'path';
 import { createSuccessResponse, createErrorResponse } from '../messages.js';
 import { spawn } from 'child_process';
 import { resolveSelector, isExtendedSelector, cleanupResolvedSelector } from '../utils/selector-resolver.js';
-import { randomBytes } from 'crypto';
 import { getOutputPath, getTempPath } from '../helpers/paths.js';
 import { throwIfAborted } from '../utils/abort.js';
 
@@ -157,12 +155,14 @@ async function generatePDFWithWeasyPrint(
     optimizeImages?: boolean;
     timeout?: number;
   }
-): Promise<{ success: boolean; filepath?: string; fileSize?: string; version?: string; error?: string; context?: any }> {
-  // Check if WeasyPrint is available
+): Promise<{ success: boolean; notInstalled?: boolean; filepath?: string; fileSize?: string; version?: string; error?: string; context?: any }> {
+  // A binary absent from PATH fails to spawn (ENOENT) rather than exiting
+  // non-zero, so availability is carried as a flag rather than read off the text.
   const wpCheck = await checkWeasyPrintAvailable();
   if (!wpCheck.available) {
     return {
       success: false,
+      notInstalled: true,
       error: wpCheck.error || 'WeasyPrint not found',
       context: { version: wpCheck.version }
     };
@@ -300,7 +300,6 @@ async function generatePDFWithWeasyPrint(
  */
 async function generatePDFWithChrome(
   page: any,
-  cdpManager: any,
   args: {
     saveToDisk?: string;
     landscape?: boolean;
@@ -309,7 +308,7 @@ async function generatePDFWithChrome(
     paperWidthCm?: number;
     paperHeightCm?: number;
   }
-): Promise<{ success: boolean; filepath?: string; fileSize?: string; base64?: string; error?: string; context?: any }> {
+): Promise<{ success: boolean; filepath?: string; fileSize?: string; error?: string; context?: any }> {
   // Validate page content
   const contentValidation = await validatePageContent(page);
   if (!contentValidation.valid) {
@@ -321,8 +320,9 @@ async function generatePDFWithChrome(
 
   const pageUrl = page.url();
 
+  let cdpSession: any;
   try {
-    const cdpSession = await page.createCDPSession();
+    cdpSession = await page.createCDPSession();
 
     // A4 paper size in cm: 21.0 x 29.7 (default for consistency with WeasyPrint)
     const a4WidthCm = 21.0;
@@ -345,28 +345,18 @@ async function generatePDFWithChrome(
 
     const buffer = Buffer.from(pdfData.data, 'base64');
 
-    // Save to disk if path provided
-    if (args.saveToDisk) {
-      const filepath = path.isAbsolute(args.saveToDisk)
-        ? args.saveToDisk
-        : path.join(process.cwd(), args.saveToDisk);
+    // Without a path, the PDF goes where screenshots go; the reply carries no
+    // PDF body, so a PDF not written anywhere was lost.
+    const filepath = args.saveToDisk
+      ? (path.isAbsolute(args.saveToDisk) ? args.saveToDisk : path.join(process.cwd(), args.saveToDisk))
+      : path.join(getOutputPath('pdfs', new Date().toISOString().split('T')[0]), `page-${Date.now()}.pdf`);
 
-      // Ensure directory exists
-      await fs.mkdir(path.dirname(filepath), { recursive: true });
-      await fs.writeFile(filepath, buffer);
+    await fs.mkdir(path.dirname(filepath), { recursive: true });
+    await fs.writeFile(filepath, buffer);
 
-      const sizeMB = (buffer.length / 1_000_000).toFixed(2);
-      return {
-        success: true,
-        filepath,
-        fileSize: `${sizeMB} MB`,
-      };
-    }
-
-    // Return base64 data
     return {
       success: true,
-      base64: pdfData.data,
+      filepath,
       fileSize: `${(buffer.length / 1_000_000).toFixed(2)} MB`,
     };
   } catch (error: any) {
@@ -384,6 +374,8 @@ async function generatePDFWithChrome(
         }
       }
     };
+  } finally {
+    await cdpSession?.detach().catch(() => {});
   }
 }
 
@@ -402,7 +394,7 @@ const screenshotSchema = z.object({
   type: z.enum(['png', 'jpeg']).optional(),
   quality: z.number().min(0).max(100).optional().describe('JPEG quality 0-100'),
   clip: clipSchema.optional().describe('Region to capture'),
-  saveToDisk: z.string().optional().describe('Output path'),
+  saveToDisk: z.string().optional().describe('Output path (default: .devharness/screenshots/ or .devharness/pdfs/)'),
   autoSaveThreshold: z.number().optional().describe('Auto-save bytes threshold'),
   fullPage: z.boolean().optional(),
 
@@ -425,7 +417,7 @@ const screenshotSchema = z.object({
   }),
 }).strict();
 
-export function createScreenshotTools(connectionManager: ConnectionManager, resolveConnectionFromReason: (connectionReason: string) => Promise<any>) {
+export function createScreenshotTools(resolveConnectionFromReason: (connectionReason: string) => Promise<any>) {
   /**
    * Save screenshot buffer to disk
    */
@@ -436,6 +428,7 @@ export function createScreenshotTools(connectionManager: ConnectionManager, reso
     // If user provided a path, use it
     if (suggestedPath) {
       const filepath = path.isAbsolute(suggestedPath) ? suggestedPath : path.join(process.cwd(), suggestedPath);
+      await fs.mkdir(path.dirname(filepath), { recursive: true });
       await fs.writeFile(filepath, buffer);
       return filepath;
     }
@@ -638,7 +631,10 @@ export function createScreenshotTools(connectionManager: ConnectionManager, reso
             // Clean up temporary selector attribute
             await cleanupResolvedSelector(page, selector);
 
-            // Handle errors
+            {
+              const failed = actionFailureResponse(result, 'element screenshot', rawSelector);
+              if (failed) return failed;
+            }
             if (result.result?.error) {
               return createErrorResponse('ELEMENT_NOT_FOUND', { selector: rawSelector });
             }
@@ -678,6 +674,12 @@ export function createScreenshotTools(connectionManager: ConnectionManager, reso
           case 'pdf': {
             const engine = args.engine || 'chrome';
 
+            // Both engines read the page's content first, which a paused page
+            // answers only once it resumes.
+            if (targetCdpManager.isPaused()) {
+              return createErrorResponse('PDF_GENERATION_FAILED', { error: 'execution is paused at a breakpoint' });
+            }
+
             // Branch based on engine
             if (engine === 'weasyprint') {
               if (!args.saveToDisk) {
@@ -694,7 +696,7 @@ export function createScreenshotTools(connectionManager: ConnectionManager, reso
               });
 
               if (!result.success) {
-                if (result.error?.includes('WeasyPrint not found') || result.error?.includes('not installed')) {
+                if (result.notInstalled) {
                   return createErrorResponse('WEASYPRINT_NOT_FOUND', {
                     error: result.error,
                     ...result.context
@@ -719,7 +721,7 @@ export function createScreenshotTools(connectionManager: ConnectionManager, reso
             const result = await executeWithPauseDetection(
               targetCdpManager,
               async () => {
-                return await generatePDFWithChrome(page, targetCdpManager, {
+                return await generatePDFWithChrome(page, {
                   saveToDisk: args.saveToDisk,
                   landscape: args.landscape,
                   printBackground: args.printBackground,
@@ -731,28 +733,18 @@ export function createScreenshotTools(connectionManager: ConnectionManager, reso
               'printToPDF'
             );
 
-            // Handle Chrome result
-            if (!result.success || result.result?.error) {
+            if (!result.success || !result.result || result.result.error) {
               return createErrorResponse('PDF_GENERATION_FAILED', {
-                error: result.result?.error || result.error || 'Unknown error occurred',
+                error: result.result?.error || result.error
+                  || (result.pausedAtBreakpoint ? 'execution is paused at a breakpoint' : 'Unknown error occurred'),
                 ...result.result?.context
               });
             }
 
-            // Handle disk save
-            if (result.result?.filepath) {
-              return createSuccessResponse('PDF_SAVED', {
-                filepath: result.result.filepath,
-                fileSize: result.result.fileSize!,
-                engine: 'chrome'
-              });
-            }
-
-            // Return PDF as base64
-            return createSuccessResponse('PDF_GENERATED', {
-              size: result.result?.fileSize,
-              engine: 'chrome',
-              note: 'PDF generated successfully. Use saveToDisk parameter to save to a file.',
+            return createSuccessResponse('PDF_SAVED', {
+              filepath: result.result.filepath!,
+              fileSize: result.result.fileSize!,
+              engine: 'chrome'
             });
           }
 

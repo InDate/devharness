@@ -580,7 +580,7 @@ const allTools = {
   ...toolset('hold', createHoldTools()),
   ...(configManager.isToolEnabled('page') ? toolset('page', createPageTools(resolveConnectionFromReason, clickableCache, executeToolCall)) : {}),
   ...(configManager.isToolEnabled('dom') ? toolset('dom', createDOMTools(resolveConnectionFromReason)) : {}),
-  ...(configManager.isToolEnabled('screenshot') ? toolset('screenshot', createScreenshotTools(connectionManager, resolveConnectionFromReason)) : {}),
+  ...(configManager.isToolEnabled('screenshot') ? toolset('screenshot', createScreenshotTools(resolveConnectionFromReason)) : {}),
   ...(configManager.isToolEnabled('input') ? toolset('input', createInputTools(resolveConnectionFromReason)) : {}),
   ...(configManager.isToolEnabled('content') ? toolset('content', createContentTools(resolveConnectionFromReason, clickableCache)) : {}),
   ...(configManager.isToolEnabled('modal') ? toolset('modal', createModalTools(resolveConnectionFromReason)) : {}),

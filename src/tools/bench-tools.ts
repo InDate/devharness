@@ -19,7 +19,7 @@ import { getProxy } from '../proxy/registry.js';
 import { autoLaunchChrome } from './replay-executor.js';
 import { createdName, isLaunchStep } from './connection-steps.js';
 import { stopRecording, cancelRecording, eventsToCommands } from '../interaction-recorder.js';
-import { openBackgroundPage, type PuppeteerManager } from '../puppeteer-manager.js';
+import { openBackgroundPage } from '../puppeteer-manager.js';
 import type { SourceMapHandler } from '../sourcemap-handler.js';
 import type { CommandRecorder } from '../command-recorder.js';
 import { debugLog } from '../debug-logger.js';
@@ -1526,7 +1526,6 @@ export function createSequenceDriver(
 }
 
 export function createBenchTools(
-  puppeteerManager: PuppeteerManager,
   sourceMapHandler: SourceMapHandler,
   commandRecorder: CommandRecorder,
   executeToolCall: (tool: string, args: Record<string, unknown>) => Promise<any>,
@@ -1632,7 +1631,7 @@ export function createBenchTools(
           return { ...response, _meta: buildMeta('status', { active: !!state, connection, state }) };
         }
 
-        const targetPuppeteerManager = resolved.puppeteerManager || puppeteerManager;
+        const targetPuppeteerManager = resolved.puppeteerManager;
         const browserError = checkBrowserAutomation(
           resolved.cdpManager,
           targetPuppeteerManager,

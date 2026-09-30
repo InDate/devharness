@@ -3,8 +3,6 @@
  */
 
 import { z } from 'zod';
-import type { CDPManager } from '../cdp-manager.js';
-import { PuppeteerManager } from '../puppeteer-manager.js';
 import type { ConnectionManager } from '../connection-manager.js';
 import { executeWithPauseDetection, formatActionResult, actionFailureResponse } from '../debugger-aware-wrapper.js';
 import { checkBrowserAutomation } from '../error-helpers.js';
@@ -23,8 +21,6 @@ const domSchema = z.object({
 }).strict();
 
 export function createDOMTools(
-  puppeteerManager: PuppeteerManager,
-  cdpManager: CDPManager,
   connectionManager: ConnectionManager,
   resolveConnectionFromReason: (connectionReason: string) => Promise<any>
 ) {
@@ -52,7 +48,7 @@ export function createDOMTools(
           });
         }
 
-        const targetPuppeteerManager = resolved.puppeteerManager || puppeteerManager;
+        const targetPuppeteerManager = resolved.puppeteerManager;
         const targetCdpManager = resolved.cdpManager;
 
         const error = checkBrowserAutomation(targetCdpManager, targetPuppeteerManager, `dom.${action}`, resolved.connection.port);

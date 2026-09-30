@@ -63,7 +63,7 @@ describe('hints name the connection the reply came from', () => {
   it('breakpoint await names the connection in its next steps', async () => {
     const named = pausedCdp();
     const { breakpoint } = createBreakpointTools(
-      pausedCdp('other.js'), { mapToGenerated: async () => null } as any, undefined,
+      { mapToGenerated: async () => null } as any, undefined,
       async (reason) => (reason === 'device-b' ? { cdpManager: named } as any : null)
     );
 
@@ -79,7 +79,7 @@ describe('hints name the connection the reply came from', () => {
     const tracker = new LogpointExecutionTracker();
     tracker.registerLogpoint(named, 'bp-1', 'app.js', 42, 'hit', 5);
     const { breakpoint } = createBreakpointTools(
-      pausedCdp('other.js'), { mapToGenerated: async () => null } as any, tracker,
+      { mapToGenerated: async () => null } as any, tracker,
       async (reason) => (reason === 'device-b' ? { cdpManager: named } as any : null)
     );
 
@@ -94,7 +94,7 @@ describe('hints name the connection the reply came from', () => {
     const connectionManager = new ConnectionManager();
     connectionManager.createConnection(pausedCdp('a.js'), undefined, undefined, undefined, 'localhost', 9229, 'device-a');
     connectionManager.createConnection(pausedCdp('b.js'), undefined, undefined, undefined, 'localhost', 9230, 'device-b');
-    const { execution } = createExecutionTools(pausedCdp(), async () => null, connectionManager);
+    const { execution } = createExecutionTools(async () => null, connectionManager);
 
     const result: any = await execution.handler({ action: 'acknowledge' } as any);
 
@@ -105,7 +105,7 @@ describe('hints name the connection the reply came from', () => {
   it('a pending promise while paused names the connection in its resume', async () => {
     const named = pausedCdp();
     const { inspect } = createInspectionTools(
-      pausedCdp('other.js'), {} as any,
+      {} as any,
       async (reason) => (reason === 'device-b' ? { cdpManager: named } as any : null)
     );
 

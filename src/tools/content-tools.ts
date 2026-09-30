@@ -3,8 +3,6 @@
  */
 
 import { z } from 'zod';
-import type { CDPManager } from '../cdp-manager.js';
-import { PuppeteerManager } from '../puppeteer-manager.js';
 import type { ConnectionManager } from '../connection-manager.js';
 import { executeWithPauseDetection } from '../debugger-aware-wrapper.js';
 import { checkBrowserAutomation } from '../error-helpers.js';
@@ -50,7 +48,7 @@ const contentSchema = z.object({
   waitMs: z.number().optional().describe("Max ms to wait for the plugin's waitFor predicate before extracting (for parse action, default: 8000; 0 to skip waiting)"),
 }).strict();
 
-export function createContentTools(puppeteerManager: PuppeteerManager, cdpManager: CDPManager, connectionManager: ConnectionManager, resolveConnectionFromReason: (connectionReason: string) => Promise<any>, clickableCache: ClickableCache) {
+export function createContentTools(connectionManager: ConnectionManager, resolveConnectionFromReason: (connectionReason: string) => Promise<any>, clickableCache: ClickableCache) {
   /**
    * Save extracted content to disk
    */
@@ -96,7 +94,7 @@ export function createContentTools(puppeteerManager: PuppeteerManager, cdpManage
           });
         }
 
-        const targetPuppeteerManager = resolved.puppeteerManager || puppeteerManager;
+        const targetPuppeteerManager = resolved.puppeteerManager;
         const targetCdpManager = resolved.cdpManager;
 
         const error = checkBrowserAutomation(targetCdpManager, targetPuppeteerManager, action, resolved.connection.port, true);

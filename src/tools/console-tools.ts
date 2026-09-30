@@ -150,8 +150,8 @@ function validateRequiredParams(args: ConsoleArgs): ReturnType<typeof createErro
 // Helpers
 // =============================================================================
 
-function ensureMonitoring(monitor: ConsoleMonitor, manager: PuppeteerManager): void {
-  if (!monitor.isActive() && manager.isConnected()) {
+function ensureMonitoring(monitor: ConsoleMonitor, manager: PuppeteerManager | null): void {
+  if (!monitor.isActive() && manager?.isConnected()) {
     monitor.startMonitoring(manager.getPage());
   }
 }
@@ -193,7 +193,7 @@ function buildListResponse(
 // Action Handlers
 // =============================================================================
 
-function handleList(monitor: ConsoleMonitor, manager: PuppeteerManager, args: ConsoleArgs) {
+function handleList(monitor: ConsoleMonitor, manager: PuppeteerManager | null, args: ConsoleArgs) {
   ensureMonitoring(monitor, manager);
 
   const messages = monitor.getMessages({
@@ -209,7 +209,7 @@ function handleList(monitor: ConsoleMonitor, manager: PuppeteerManager, args: Co
   return buildListResponse(messages, header, 'list', monitor);
 }
 
-function handleRecent(monitor: ConsoleMonitor, manager: PuppeteerManager, args: ConsoleArgs) {
+function handleRecent(monitor: ConsoleMonitor, manager: PuppeteerManager | null, args: ConsoleArgs) {
   ensureMonitoring(monitor, manager);
 
   const requestedCount = args.count ?? 50;
@@ -222,7 +222,7 @@ function handleRecent(monitor: ConsoleMonitor, manager: PuppeteerManager, args: 
   return buildListResponse(messages, header, 'recent', monitor);
 }
 
-function handleSearch(monitor: ConsoleMonitor, manager: PuppeteerManager, args: ConsoleArgs) {
+function handleSearch(monitor: ConsoleMonitor, manager: PuppeteerManager | null, args: ConsoleArgs) {
   ensureMonitoring(monitor, manager);
 
   let regex: RegExp;
@@ -330,8 +330,6 @@ function handleSetObjectDepth(monitor: ConsoleMonitor, depth: number) {
 // =============================================================================
 
 export function createConsoleTools(
-  puppeteerManager: PuppeteerManager,
-  consoleMonitor: ConsoleMonitor,
   resolveConnectionFromReason: (connectionReason: string) => Promise<any>
 ) {
   return {
@@ -351,8 +349,8 @@ export function createConsoleTools(
           });
         }
 
-        const monitor = resolved.consoleMonitor || consoleMonitor;
-        const manager = resolved.puppeteerManager || puppeteerManager;
+        const monitor = resolved.consoleMonitor;
+        const manager = resolved.puppeteerManager;
 
         // A worker's console belongs to its own target and reaches no page
         // listener, so it comes from that target's own client.

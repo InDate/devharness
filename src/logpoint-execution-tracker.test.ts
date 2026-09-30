@@ -30,7 +30,6 @@ async function logpointOnSecond(maxExecutions: number) {
   const named = connectedManager();
   const tracker = new LogpointExecutionTracker();
   const { breakpoint } = createBreakpointTools(
-    active,
     { mapToGenerated: async () => null } as any,
     tracker,
     async (reason) => (reason === 'second' ? { cdpManager: named } as any : null)

@@ -20,7 +20,7 @@ function twoConnections(opts: { secondPaused: boolean }) {
   const first = connectionManager.createConnection(running, undefined, undefined, undefined, 'localhost', 9229);
   const second = connectionManager.createConnection(paused, undefined, undefined, undefined, 'localhost', 9230);
   connectionManager.setActiveConnection(first);
-  const { execution } = createExecutionTools(running, async () => null, connectionManager);
+  const { execution } = createExecutionTools(async () => null, connectionManager);
   return { connectionManager, execution, first, second };
 }
 
@@ -43,5 +43,17 @@ describe('execution acknowledge with no connectionReason', () => {
 
     expect(result.isError).toBe(true);
     expect(result._errorId ?? result.content[0].text).toMatch(/NOT_PAUSED|Not currently paused/);
+  });
+});
+
+describe('execution actions other than acknowledge', () => {
+  it('refuse a call with no connectionReason rather than act on the active connection', async () => {
+    const { execution } = twoConnections({ secondPaused: true });
+
+    for (const action of ['pause', 'resume', 'stepOver', 'stepInto', 'stepOut'] as const) {
+      const result: any = await execution.handler({ action } as any);
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('connectionReason');
+    }
   });
 });

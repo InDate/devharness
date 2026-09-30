@@ -42,7 +42,7 @@ describe('inspect searchCode/searchFunctions honour connectionReason', () => {
   beforeEach(() => {
     defaultCdp = makeFakeCdpManager('default');
     otherCdp = makeFakeCdpManager('other');
-    const tools = createInspectionTools(defaultCdp, fakeSourceMapHandler, async (reason: string) =>
+    const tools = createInspectionTools(fakeSourceMapHandler, async (reason: string) =>
       reason === 'other-tab'
         ? { connection: {}, cdpManager: otherCdp, puppeteerManager: null, consoleMonitor: null, networkMonitor: null }
         : null
@@ -134,7 +134,7 @@ describe('network enable/disable honour connectionReason', () => {
     otherPuppeteer = makeFakePuppeteerManager('other');
     otherMonitor = makeFakeNetworkMonitor();
 
-    const tools = createNetworkTools(defaultPuppeteer, defaultMonitor, async (reason: string) =>
+    const tools = createNetworkTools(async (reason: string) =>
       reason === 'other-tab'
         ? { connection: {}, cdpManager: {}, puppeteerManager: otherPuppeteer, consoleMonitor: null, networkMonitor: otherMonitor }
         : reason === 'node-target'

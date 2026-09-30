@@ -347,14 +347,13 @@ preserves it, and `create` decides what to do with it:
 - all steps on one connection - hoisted off the steps, so the sequence stays
   portable and `run({ connectionReason })` still retargets it
 - genuinely spanning connections - kept per step
-- **mixed** (some steps named, some driven implicitly through the active
-  connection) - kept as-is with a warning, because nothing can tell which
+- **mixed** (some steps named, some recorded bare) - kept as-is with a warning, because nothing can tell which
   browser the bare steps belonged to. `create` says so; re-record naming every
   step rather than shipping it
 
-"Bare" covers the tools whose `connectionReason` is *optional* (`inspect`,
-`execution`, `storage`, `network`, `breakpoint`, `request`), not just the
-browser-only ones - those are the ones actually left off. A sequence can be both
+"Bare" covers `inspect`, `execution`, `storage`, `breakpoint` and `request`,
+not just the browser-only tools. Calls now have to name their connection, so
+bare steps come from recordings made before that. A sequence can be both
 multi-connection and mixed, and that is the worst case: the bare steps land in a
 different browser depending on the run-level `connectionReason`, green either
 way. `create` warns about both.

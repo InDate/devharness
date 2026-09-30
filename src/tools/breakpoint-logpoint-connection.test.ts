@@ -23,7 +23,6 @@ describe('breakpoint setLogpoint on a named connection', () => {
     const active = connectedManager('bp-active');
     const named = connectedManager('bp-named');
     const { breakpoint } = createBreakpointTools(
-      active,
       { mapToGenerated: async () => null } as any,
       undefined,
       async (reason) => (reason === 'second' ? { cdpManager: named } as any : null)

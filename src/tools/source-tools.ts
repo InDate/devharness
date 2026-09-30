@@ -21,9 +21,8 @@ const sourceSchema = z.object({
 type SourceArgs = z.infer<typeof sourceSchema>;
 
 export function createSourceTools(
-  cdpManager: CDPManager,
   sourceMapHandler: SourceMapHandler,
-  resolveConnectionFromReason?: (connectionReason: string) => Promise<{
+  resolveConnectionFromReason: (connectionReason: string) => Promise<{
     connection: any;
     cdpManager: CDPManager;
     puppeteerManager: any;
@@ -32,17 +31,14 @@ export function createSourceTools(
   } | null>
 ) {
   const get = async (args: SourceArgs): Promise<any> => {
-    const { startLine, endLine, connectionReason } = args;
+    const { startLine, endLine } = args;
     const url = args.url!;
 
-    let targetCdpManager = cdpManager;
-    if (connectionReason && resolveConnectionFromReason) {
-      const resolved = await resolveConnectionFromReason(connectionReason);
-      if (!resolved) {
-        return createErrorResponse('CONNECTION_NOT_FOUND');
-      }
-      targetCdpManager = resolved.cdpManager;
+    const resolved = await resolveConnectionFromReason(args.connectionReason!);
+    if (!resolved) {
+      return createErrorResponse('CONNECTION_NOT_FOUND');
     }
+    const targetCdpManager = resolved.cdpManager;
 
     try {
       const sourceCode = await targetCdpManager.getSourceCode(url, startLine, endLine);
@@ -80,7 +76,7 @@ export function createSourceTools(
 
   /** Parameters each action cannot run without, checked before it runs. */
   const REQUIRED: Record<SourceArgs['action'], Array<keyof SourceArgs>> = {
-    get: ['url'],
+    get: ['url', 'connectionReason'],
     loadMaps: ['directory'],
   };
 

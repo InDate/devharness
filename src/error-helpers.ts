@@ -25,7 +25,7 @@ export function setChromeLauncher(launcher: ChromeLauncher): void {
  */
 export function checkBrowserAutomation(
   cdpManager: CDPManager,
-  puppeteerManager: PuppeteerManager,
+  puppeteerManager: PuppeteerManager | null,
   toolName: string,
   debugPort?: number,
   requirePageLoad?: boolean
@@ -50,7 +50,7 @@ export function checkBrowserAutomation(
     return createErrorResponse('NODEJS_NOT_SUPPORTED', { feature: toolName });
   }
 
-  if (!puppeteerManager.isConnected()) {
+  if (!puppeteerManager?.isConnected()) {
     return createErrorResponse('PUPPETEER_NOT_CONNECTED');
   }
 

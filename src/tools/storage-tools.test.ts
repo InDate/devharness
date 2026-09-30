@@ -397,7 +397,8 @@ function fakePage() {
 
 function buildTool(page: any = fakePage()) {
   const puppeteerManager: any = { isConnected: () => true, getPage: () => page };
-  const tools = createStorageTools(puppeteerManager, fakeCdpManager());
+  const cdpManager = fakeCdpManager();
+  const tools = createStorageTools(async () => ({ connection: {}, cdpManager, puppeteerManager, consoleMonitor: null, networkMonitor: null }) as any);
   return { tools, page };
 }
 
@@ -438,7 +439,7 @@ describe('storage - sessionStorage actions (feature-012)', () => {
     sessionStorage.setItem('other', '1');
     const { tools } = buildTool();
 
-    const text = textOf(await tools.storage.handler({ action: 'getSessionStorage' } as any));
+    const text = textOf(await tools.storage.handler({ connectionReason: 'app', action: 'getSessionStorage' } as any));
     expect(text).toContain('sessionStorage');
     expect(text).toContain('lockScreen');
     expect(text).toContain('pending');
@@ -449,16 +450,16 @@ describe('storage - sessionStorage actions (feature-012)', () => {
     sessionStorage.setItem('lockScreen', 'pending');
     const { tools } = buildTool();
 
-    expect(textOf(await tools.storage.handler({ action: 'getSessionStorage', key: 'lockScreen' } as any)))
+    expect(textOf(await tools.storage.handler({ connectionReason: 'app', action: 'getSessionStorage', key: 'lockScreen' } as any)))
       .toContain('"lockScreen": "pending"');
-    expect(textOf(await tools.storage.handler({ action: 'getSessionStorage', key: 'absent' } as any)))
+    expect(textOf(await tools.storage.handler({ connectionReason: 'app', action: 'getSessionStorage', key: 'absent' } as any)))
       .toContain('"absent": null');
   });
 
   it('writes sessionStorage without touching localStorage', async () => {
     const { tools } = buildTool();
 
-    const result = await tools.storage.handler({ action: 'setSessionStorage', key: 'flag', value: 'on' } as any);
+    const result = await tools.storage.handler({ connectionReason: 'app', action: 'setSessionStorage', key: 'flag', value: 'on' } as any);
     expect(result.isError).toBeFalsy();
     expect(sessionStorage.getItem('flag')).toBe('on');
     expect(localStorage.getItem('flag')).toBeNull();
@@ -470,16 +471,16 @@ describe('storage - sessionStorage actions (feature-012)', () => {
     sessionStorage.setItem('drop', '3');
     const { tools } = buildTool();
 
-    const local = await tools.storage.handler({ action: 'removeLocalStorage', key: 'drop' } as any);
+    const local = await tools.storage.handler({ connectionReason: 'app', action: 'removeLocalStorage', key: 'drop' } as any);
     expect(local.isError).toBeFalsy();
     expect(localStorage.getItem('drop')).toBeNull();
     expect(localStorage.getItem('keep')).toBe('1');
 
-    const session = await tools.storage.handler({ action: 'removeSessionStorage', key: 'drop' } as any);
+    const session = await tools.storage.handler({ connectionReason: 'app', action: 'removeSessionStorage', key: 'drop' } as any);
     expect(session.isError).toBeFalsy();
     expect(sessionStorage.getItem('drop')).toBeNull();
 
-    const absent = await tools.storage.handler({ action: 'removeLocalStorage', key: 'never-existed' } as any);
+    const absent = await tools.storage.handler({ connectionReason: 'app', action: 'removeLocalStorage', key: 'never-existed' } as any);
     expect(absent.isError).toBeFalsy();
     expect(textOf(absent)).toContain('not present');
   });
@@ -487,10 +488,10 @@ describe('storage - sessionStorage actions (feature-012)', () => {
   it('requires key and value where the action needs them', async () => {
     const { tools } = buildTool();
 
-    expect((await tools.storage.handler({ action: 'setSessionStorage', value: 'v' } as any)).isError).toBe(true);
-    expect((await tools.storage.handler({ action: 'setSessionStorage', key: 'k' } as any)).isError).toBe(true);
-    expect((await tools.storage.handler({ action: 'removeSessionStorage' } as any)).isError).toBe(true);
-    expect((await tools.storage.handler({ action: 'removeLocalStorage' } as any)).isError).toBe(true);
+    expect((await tools.storage.handler({ connectionReason: 'app', action: 'setSessionStorage', value: 'v' } as any)).isError).toBe(true);
+    expect((await tools.storage.handler({ connectionReason: 'app', action: 'setSessionStorage', key: 'k' } as any)).isError).toBe(true);
+    expect((await tools.storage.handler({ connectionReason: 'app', action: 'removeSessionStorage' } as any)).isError).toBe(true);
+    expect((await tools.storage.handler({ connectionReason: 'app', action: 'removeLocalStorage' } as any)).isError).toBe(true);
   });
 
   it('writes an empty string and a zero key instead of calling them missing', async () => {
@@ -499,19 +500,19 @@ describe('storage - sessionStorage actions (feature-012)', () => {
     sessionStorage.setItem('flag', 'on');
     const { tools } = buildTool();
 
-    const session = await tools.storage.handler({ action: 'setSessionStorage', key: 'flag', value: '' } as any);
+    const session = await tools.storage.handler({ connectionReason: 'app', action: 'setSessionStorage', key: 'flag', value: '' } as any);
     expect(session.isError).toBeFalsy();
     expect(sessionStorage.getItem('flag')).toBe('');
 
-    const local = await tools.storage.handler({ action: 'setLocalStorage', key: 'flag', value: '' } as any);
+    const local = await tools.storage.handler({ connectionReason: 'app', action: 'setLocalStorage', key: 'flag', value: '' } as any);
     expect(local.isError).toBeFalsy();
     expect(localStorage.getItem('flag')).toBe('');
 
-    const zeroKey = await tools.storage.handler({ action: 'setSessionStorage', key: 0, value: 'v' } as any);
+    const zeroKey = await tools.storage.handler({ connectionReason: 'app', action: 'setSessionStorage', key: 0, value: 'v' } as any);
     expect(zeroKey.isError).toBeFalsy();
     expect(sessionStorage.getItem('0')).toBe('v');
 
-    const removed = await tools.storage.handler({ action: 'removeSessionStorage', key: 0 } as any);
+    const removed = await tools.storage.handler({ connectionReason: 'app', action: 'removeSessionStorage', key: 0 } as any);
     expect(removed.isError).toBeFalsy();
     expect(sessionStorage.getItem('0')).toBeNull();
     expect(textOf(removed)).not.toContain('not present');
@@ -520,7 +521,7 @@ describe('storage - sessionStorage actions (feature-012)', () => {
   it('sets an empty cookie value rather than rejecting it', async () => {
     const { tools, page } = buildTool();
 
-    const result = await tools.storage.handler({ action: 'setCookie', name: 'session', value: '' } as any);
+    const result = await tools.storage.handler({ connectionReason: 'app', action: 'setCookie', name: 'session', value: '' } as any);
     expect(result.isError).toBeFalsy();
     expect(page.setCookie).toHaveBeenCalledWith(expect.objectContaining({ name: 'session', value: '' }));
   });
@@ -531,11 +532,12 @@ describe('storage - sessionStorage actions (feature-012)', () => {
 
     for (const action of ['getSessionStorage', 'setSessionStorage', 'removeSessionStorage', 'removeLocalStorage',
       'idbListDatabases', 'idbListStores', 'idbGet', 'idbGetAll', 'idbPut', 'idbDelete']) {
-      expect(schema.safeParse({ action }).success, action).toBe(true);
+      expect(schema.safeParse({ action, connectionReason: 'app' }).success, action).toBe(true);
     }
-    expect(schema.safeParse({ action: 'clear', reason: 'test', types: ['indexedDB'] }).success).toBe(true);
-    expect(schema.safeParse({ action: 'idbGet', db: 'a', store: 'b', key: 7 }).success).toBe(true);
-    expect(schema.safeParse({ action: 'idbPut', db: 'a', store: 'b', record: { nested: [1] } }).success).toBe(true);
+    expect(schema.safeParse({ action: 'clear', connectionReason: 'app', reason: 'test', types: ['indexedDB'] }).success).toBe(true);
+    expect(schema.safeParse({ action: 'idbGet', connectionReason: 'app', db: 'a', store: 'b', key: 7 }).success).toBe(true);
+    expect(schema.safeParse({ action: 'idbPut', connectionReason: 'app', db: 'a', store: 'b', record: { nested: [1] } }).success).toBe(true);
+    expect(schema.safeParse({ action: 'getLocalStorage' }).success).toBe(false);
   });
 });
 
@@ -659,7 +661,7 @@ describe('storage - IndexedDB actions (feature-011)', () => {
     install({ app: { version: 3, stores: { keys: {} } }, other: { stores: {} } });
     const { tools } = buildTool();
 
-    const text = textOf(await tools.storage.handler({ action: 'idbListDatabases' } as any));
+    const text = textOf(await tools.storage.handler({ connectionReason: 'app', action: 'idbListDatabases' } as any));
     expect(text).toContain('app');
     expect(text).toContain('other');
     expect(text).toContain('"version": 3');
@@ -669,7 +671,7 @@ describe('storage - IndexedDB actions (feature-011)', () => {
     install({ app: { stores: { keys: { keyPath: 'id', records: [['a', { id: 'a' }]] }, blobs: { autoIncrement: true } } } });
     const { tools } = buildTool();
 
-    const text = textOf(await tools.storage.handler({ action: 'idbListStores', db: 'app' } as any));
+    const text = textOf(await tools.storage.handler({ connectionReason: 'app', action: 'idbListStores', db: 'app' } as any));
     expect(text).toContain('keys');
     expect(text).toContain('"keyPath": "id"');
     expect(text).toContain('"count": 1');
@@ -681,11 +683,11 @@ describe('storage - IndexedDB actions (feature-011)', () => {
     install({ app: { stores: { kv: { records: [['token', { value: 'abc' }]] } } } });
     const { tools } = buildTool();
 
-    const found = await tools.storage.handler({ action: 'idbGet', db: 'app', store: 'kv', key: 'token' } as any);
+    const found = await tools.storage.handler({ connectionReason: 'app', action: 'idbGet', db: 'app', store: 'kv', key: 'token' } as any);
     expect(found.isError).toBeFalsy();
     expect(textOf(found)).toContain('abc');
 
-    const missing = await tools.storage.handler({ action: 'idbGet', db: 'app', store: 'kv', key: 'nope' } as any);
+    const missing = await tools.storage.handler({ connectionReason: 'app', action: 'idbGet', db: 'app', store: 'kv', key: 'nope' } as any);
     expect(missing.isError).toBeFalsy();
     expect(textOf(missing)).toContain('No record found');
   });
@@ -695,7 +697,7 @@ describe('storage - IndexedDB actions (feature-011)', () => {
     install({ identity: { stores: { keys: { records: [['device', { id: 'device', signing: pair.privateKey }]] } } } });
     const { tools } = buildTool();
 
-    const text = textOf(await tools.storage.handler({ action: 'idbGet', db: 'identity', store: 'keys', key: 'device' } as any));
+    const text = textOf(await tools.storage.handler({ connectionReason: 'app', action: 'idbGet', db: 'identity', store: 'keys', key: 'device' } as any));
     expect(text).toContain('"__type": "CryptoKey"');
     expect(text).toContain('"extractable": false');
     expect(text).toContain('ECDSA');
@@ -708,10 +710,10 @@ describe('storage - IndexedDB actions (feature-011)', () => {
     install({ app: { stores: { items: { records } } } });
     const { tools } = buildTool();
 
-    const all = textOf(await tools.storage.handler({ action: 'idbGetAll', db: 'app', store: 'items' } as any));
+    const all = textOf(await tools.storage.handler({ connectionReason: 'app', action: 'idbGetAll', db: 'app', store: 'items' } as any));
     expect(all).toContain('**Count:** 5');
 
-    const limited = textOf(await tools.storage.handler({ action: 'idbGetAll', db: 'app', store: 'items', limit: 2 } as any));
+    const limited = textOf(await tools.storage.handler({ connectionReason: 'app', action: 'idbGetAll', db: 'app', store: 'items', limit: 2 } as any));
     expect(limited).toContain('**Count:** 2');
     expect(limited).toContain('showing 2 of 5');
   });
@@ -732,7 +734,7 @@ describe('storage - IndexedDB actions (feature-011)', () => {
     const idb = install({ app: { stores: { docs: { keyPath: 'id' } } } });
     const { tools } = buildTool();
 
-    const ok = await tools.storage.handler({ action: 'idbPut', db: 'app', store: 'docs', record: { id: 'doc-1', title: 'x' } } as any);
+    const ok = await tools.storage.handler({ connectionReason: 'app', action: 'idbPut', db: 'app', store: 'docs', record: { id: 'doc-1', title: 'x' } } as any);
     expect(ok.isError).toBeFalsy();
     expect(idb.__state.app.stores.docs.data.get('doc-1')).toEqual({ id: 'doc-1', title: 'x' });
 
@@ -747,7 +749,7 @@ describe('storage - IndexedDB actions (feature-011)', () => {
     install({ app: { stores: { kv: {} } } });
     const { tools } = buildTool();
 
-    const result = await tools.storage.handler({ action: 'idbPut', db: 'app', store: 'kv', record: { a: 1 } } as any);
+    const result = await tools.storage.handler({ connectionReason: 'app', action: 'idbPut', db: 'app', store: 'kv', record: { a: 1 } } as any);
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain('"key" parameter is required');
   });
@@ -756,11 +758,11 @@ describe('storage - IndexedDB actions (feature-011)', () => {
     const idb = install({ app: { stores: { kv: { records: [['gone', 1]] } } } });
     const { tools } = buildTool();
 
-    const deleted = await tools.storage.handler({ action: 'idbDelete', db: 'app', store: 'kv', key: 'gone' } as any);
+    const deleted = await tools.storage.handler({ connectionReason: 'app', action: 'idbDelete', db: 'app', store: 'kv', key: 'gone' } as any);
     expect(deleted.isError).toBeFalsy();
     expect(idb.__state.app.stores.kv.data.has('gone')).toBe(false);
 
-    const absent = await tools.storage.handler({ action: 'idbDelete', db: 'app', store: 'kv', key: 'never' } as any);
+    const absent = await tools.storage.handler({ connectionReason: 'app', action: 'idbDelete', db: 'app', store: 'kv', key: 'never' } as any);
     expect(absent.isError).toBeFalsy();
     expect(textOf(absent)).toContain('no record existed');
   });
@@ -769,7 +771,7 @@ describe('storage - IndexedDB actions (feature-011)', () => {
     const idb = install({ app: { stores: { kv: {} } } });
     const { tools } = buildTool();
 
-    const result = await tools.storage.handler({ action: 'idbGet', db: 'typo', store: 'kv', key: 'x' } as any);
+    const result = await tools.storage.handler({ connectionReason: 'app', action: 'idbGet', db: 'typo', store: 'kv', key: 'x' } as any);
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain('does not exist');
     // The read must not have created "typo" as a side effect.
@@ -780,7 +782,7 @@ describe('storage - IndexedDB actions (feature-011)', () => {
     install({ app: { stores: { kv: {}, other: {} } } });
     const { tools } = buildTool();
 
-    const result = await tools.storage.handler({ action: 'idbGet', db: 'app', store: 'nope', key: 'x' } as any);
+    const result = await tools.storage.handler({ connectionReason: 'app', action: 'idbGet', db: 'app', store: 'nope', key: 'x' } as any);
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain('not found in database');
   });
@@ -789,7 +791,7 @@ describe('storage - IndexedDB actions (feature-011)', () => {
     (globalThis as any).indexedDB = { open: () => {} };
     const { tools } = buildTool();
 
-    const result = await tools.storage.handler({ action: 'idbListDatabases' } as any);
+    const result = await tools.storage.handler({ connectionReason: 'app', action: 'idbListDatabases' } as any);
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain('not supported');
   });
@@ -798,23 +800,23 @@ describe('storage - IndexedDB actions (feature-011)', () => {
     install({ app: { stores: { kv: {} } } });
     const { tools } = buildTool();
 
-    expect((await tools.storage.handler({ action: 'idbListStores' } as any)).isError).toBe(true);
-    expect((await tools.storage.handler({ action: 'idbGet', store: 'kv', key: 'a' } as any)).isError).toBe(true);
-    expect((await tools.storage.handler({ action: 'idbGet', db: 'app', key: 'a' } as any)).isError).toBe(true);
-    expect((await tools.storage.handler({ action: 'idbGet', db: 'app', store: 'kv' } as any)).isError).toBe(true);
-    expect((await tools.storage.handler({ action: 'idbDelete', db: 'app', store: 'kv' } as any)).isError).toBe(true);
-    expect((await tools.storage.handler({ action: 'idbPut', db: 'app', store: 'kv', key: 'k' } as any)).isError).toBe(true);
+    expect((await tools.storage.handler({ connectionReason: 'app', action: 'idbListStores' } as any)).isError).toBe(true);
+    expect((await tools.storage.handler({ connectionReason: 'app', action: 'idbGet', store: 'kv', key: 'a' } as any)).isError).toBe(true);
+    expect((await tools.storage.handler({ connectionReason: 'app', action: 'idbGet', db: 'app', key: 'a' } as any)).isError).toBe(true);
+    expect((await tools.storage.handler({ connectionReason: 'app', action: 'idbGet', db: 'app', store: 'kv' } as any)).isError).toBe(true);
+    expect((await tools.storage.handler({ connectionReason: 'app', action: 'idbDelete', db: 'app', store: 'kv' } as any)).isError).toBe(true);
+    expect((await tools.storage.handler({ connectionReason: 'app', action: 'idbPut', db: 'app', store: 'kv', key: 'k' } as any)).isError).toBe(true);
   });
 
   it('clears IndexedDB only when asked, and reports what it deleted', async () => {
     const idb = install({ app: { stores: { kv: {} } }, other: { stores: {} } });
     const { tools } = buildTool();
 
-    const untouched = await tools.storage.handler({ action: 'clear', reason: 'test', types: ['localStorage'] } as any);
+    const untouched = await tools.storage.handler({ connectionReason: 'app', action: 'clear', reason: 'test', types: ['localStorage'] } as any);
     expect(untouched.isError).toBeFalsy();
     expect(Object.keys(idb.__state)).toHaveLength(2);
 
-    const cleared = await tools.storage.handler({ action: 'clear', reason: 'test', types: ['indexedDB'] } as any);
+    const cleared = await tools.storage.handler({ connectionReason: 'app', action: 'clear', reason: 'test', types: ['indexedDB'] } as any);
     expect(cleared.isError).toBeFalsy();
     expect(textOf(cleared)).toContain('indexedDB (2 deleted');
     expect(Object.keys(idb.__state)).toHaveLength(0);
@@ -842,29 +844,29 @@ describe('storage authenticator actions', () => {
   it('adds an authenticator that reports the user verified, and lists passkeys without their private keys', async () => {
     const { page, sent } = sessionPage();
     const { tools } = buildTool(page);
-    const added: any = await tools.storage.handler({ action: 'authenticatorAdd' });
+    const added: any = await tools.storage.handler({ connectionReason: 'app', action: 'authenticatorAdd' });
     expect(added._meta.storage.authenticator).toEqual({ id: 'auth-1', userVerified: true });
     const options = sent.find((s) => s.method === 'WebAuthn.addVirtualAuthenticator')!.params.options;
     expect(options).toMatchObject({ protocol: 'ctap2', transport: 'internal', hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true });
 
-    const listed: any = await tools.storage.handler({ action: 'authenticatorCredentials' });
+    const listed: any = await tools.storage.handler({ connectionReason: 'app', action: 'authenticatorCredentials' });
     expect(listed._meta.storage.authenticator.credentials).toEqual([{ credentialId: 'cred-1', rpId: 'keel.test', userHandle: 'aG9sZGVy', signCount: 2, resident: true }]);
     expect(JSON.stringify(listed)).not.toContain('secret');
 
-    const removed: any = await tools.storage.handler({ action: 'authenticatorRemove' });
+    const removed: any = await tools.storage.handler({ connectionReason: 'app', action: 'authenticatorRemove' });
     expect(removed._meta.storage.authenticator).toEqual({ id: 'auth-1', removed: true });
   });
 
   it('adds one that reports presence without verification where asked', async () => {
     const { page, sent } = sessionPage();
     const { tools } = buildTool(page);
-    await tools.storage.handler({ action: 'authenticatorAdd', userVerified: false });
+    await tools.storage.handler({ connectionReason: 'app', action: 'authenticatorAdd', userVerified: false });
     expect(sent.find((s) => s.method === 'WebAuthn.addVirtualAuthenticator')!.params.options.isUserVerified).toBe(false);
   });
 
   it('refuses a credentials read on a page holding no authenticator', async () => {
     const { tools } = buildTool(sessionPage().page);
-    const r: any = await tools.storage.handler({ action: 'authenticatorCredentials' });
+    const r: any = await tools.storage.handler({ connectionReason: 'app', action: 'authenticatorCredentials' });
     expect(r.isError).toBe(true);
     expect(r._errorId).toBe('NO_AUTHENTICATOR');
   });

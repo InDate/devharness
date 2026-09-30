@@ -11,7 +11,7 @@ CDP debugging for JS/TS in Chrome, Node.js, or any CDP target.
 
 ## Quick start
 
-`name` creates a connection; every later call addresses it as `connectionReason`. A call without one acts on whichever connection is active, so name it.
+`name` creates a connection; every later call addresses it as `connectionReason`, and a call that acts on a connection without naming one is refused.
 
 ```
 connection({ action: 'launch', name: "app" })                          # launches AND connects; do NOT then attach
@@ -49,7 +49,7 @@ Every response footer carries its own history index, `Replay: 58`, which `replay
 - `indices` takes a list: `[58, 59, 60, 61]` re-runs four steps in order
 - Use it for anything you already did — relaunch, re-login, refilling a form, getting back to the bug. Retyped arguments drift from what actually ran
 - `replay({ action: 'history' })` when indices scrolled away
-- Each call replays on the connection it was recorded with, so pass `connectionReason` explicitly when driving several browsers — implicit calls have no connection to replay against
+- Each call replays on the connection it was recorded with
 - Worth keeping: `replay({ action: 'create', name, indices })`
 
 ## Recovering from a failed call

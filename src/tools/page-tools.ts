@@ -3,8 +3,6 @@
  */
 
 import { z } from 'zod';
-import type { CDPManager } from '../cdp-manager.js';
-import { PuppeteerManager } from '../puppeteer-manager.js';
 import { ConsoleMonitor } from '../console-monitor.js';
 import { NetworkMonitor } from '../network-monitor.js';
 import type { ConnectionManager } from '../connection-manager.js';
@@ -142,10 +140,6 @@ const navigateSchema = z.object({
 }).strict();
 
 export function createPageTools(
-  puppeteerManager: PuppeteerManager,
-  cdpManager: CDPManager,
-  consoleMonitor: ConsoleMonitor,
-  networkMonitor: NetworkMonitor,
   connectionManager: ConnectionManager,
   resolveConnectionFromReason: (connectionReason: string) => Promise<any>,
   clickableCache: ClickableCache,
@@ -209,10 +203,10 @@ export function createPageTools(
           });
         }
 
-        const targetPuppeteerManager = resolved.puppeteerManager || puppeteerManager;
+        const targetPuppeteerManager = resolved.puppeteerManager;
         const targetCdpManager = resolved.cdpManager;
-        const targetConsoleMonitor = resolved.consoleMonitor || consoleMonitor;
-        const targetNetworkMonitor = resolved.networkMonitor || networkMonitor;
+        const targetConsoleMonitor = resolved.consoleMonitor;
+        const targetNetworkMonitor = resolved.networkMonitor;
 
         const error = checkBrowserAutomation(targetCdpManager, targetPuppeteerManager, `navigate.${action}`, resolved.connection.port);
         if (error) {

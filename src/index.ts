@@ -32,7 +32,6 @@ import { PuppeteerManager } from './puppeteer-manager.js';
 import { ConsoleMonitor } from './console-monitor.js';
 import { NetworkMonitor } from './network-monitor.js';
 import { ConnectionManager, type Connection } from './connection-manager.js';
-import { createActiveManagers } from './active-connection.js';
 import { createConnectionTools } from './tools/connection-tools.js';
 import { translateCall, replacementFor } from './tools/legacy-steps.js';
 import { LogpointExecutionTracker } from './logpoint-execution-tracker.js';
@@ -501,12 +500,12 @@ async function resolveConnectionFromReason(connectionReason: string): Promise<{
   };
 }
 
-const activeManagers = createActiveManagers(connectionManager, sourceMapHandler);
-const proxyCdpManager = activeManagers.cdpManager;
-const proxyPuppeteerManager = activeManagers.puppeteerManager;
-const proxyConsoleMonitor = activeManagers.consoleMonitor;
-const proxyNetworkMonitor = activeManagers.networkMonitor;
-const activateConnection = activeManagers.activate;
+/** Marks a connection active, which `connection list` reports and `switch` sets. */
+function activateConnection(connectionId: string): void {
+  if (connectionManager.setActiveConnection(connectionId)) {
+    connectionManager.updateActivity(connectionId);
+  }
+}
 const connectionTools = createConnectionTools({
   chromeLauncher,
   connectionManager,
@@ -611,23 +610,23 @@ const allTools = {
   // Connection tools (Chrome/debugger)
   ...(configManager.isToolEnabled('connection') ? toolset('connection', connectionTools) : {}),
   // CDP Debugging tools
-  ...(configManager.isToolEnabled('breakpoint') ? toolset('breakpoint', createBreakpointTools(proxyCdpManager, sourceMapHandler, logpointTracker, resolveConnectionFromReason)) : {}),
-  ...(configManager.isToolEnabled('execution') ? toolset('execution', createExecutionTools(proxyCdpManager, resolveConnectionFromReason, connectionManager, (port) => serverManager.retryPendingRestartByInspectorPort(port))) : {}),
-  ...(configManager.isToolEnabled('inspection') ? toolset('inspection', createInspectionTools(proxyCdpManager, sourceMapHandler, resolveConnectionFromReason)) : {}),
-  ...(configManager.isToolEnabled('source') ? toolset('source', createSourceTools(proxyCdpManager, sourceMapHandler, resolveConnectionFromReason)) : {}),
+  ...(configManager.isToolEnabled('breakpoint') ? toolset('breakpoint', createBreakpointTools(sourceMapHandler, logpointTracker, resolveConnectionFromReason)) : {}),
+  ...(configManager.isToolEnabled('execution') ? toolset('execution', createExecutionTools(resolveConnectionFromReason, connectionManager, (port) => serverManager.retryPendingRestartByInspectorPort(port))) : {}),
+  ...(configManager.isToolEnabled('inspection') ? toolset('inspection', createInspectionTools(sourceMapHandler, resolveConnectionFromReason)) : {}),
+  ...(configManager.isToolEnabled('source') ? toolset('source', createSourceTools(sourceMapHandler, resolveConnectionFromReason)) : {}),
   // Browser Automation tools
-  ...(configManager.isToolEnabled('console') ? toolset('console', createConsoleTools(proxyPuppeteerManager, proxyConsoleMonitor, resolveConnectionFromReason)) : {}),
-  ...(configManager.isToolEnabled('network') ? toolset('network', createNetworkTools(proxyPuppeteerManager, proxyNetworkMonitor, resolveConnectionFromReason)) : {}),
+  ...(configManager.isToolEnabled('console') ? toolset('console', createConsoleTools(resolveConnectionFromReason)) : {}),
+  ...(configManager.isToolEnabled('network') ? toolset('network', createNetworkTools(resolveConnectionFromReason)) : {}),
   ...toolset('proxy', createProxyTools()),
   ...toolset('hold', createHoldTools()),
-  ...(configManager.isToolEnabled('page') ? toolset('page', createPageTools(proxyPuppeteerManager, proxyCdpManager, proxyConsoleMonitor, proxyNetworkMonitor, connectionManager, resolveConnectionFromReason, clickableCache, executeToolCall)) : {}),
-  ...(configManager.isToolEnabled('dom') ? toolset('dom', createDOMTools(proxyPuppeteerManager, proxyCdpManager, connectionManager, resolveConnectionFromReason)) : {}),
-  ...(configManager.isToolEnabled('screenshot') ? toolset('screenshot', createScreenshotTools(proxyPuppeteerManager, proxyCdpManager, connectionManager, resolveConnectionFromReason)) : {}),
-  ...(configManager.isToolEnabled('input') ? toolset('input', createInputTools(proxyPuppeteerManager, proxyCdpManager, connectionManager, resolveConnectionFromReason)) : {}),
-  ...(configManager.isToolEnabled('content') ? toolset('content', createContentTools(proxyPuppeteerManager, proxyCdpManager, connectionManager, resolveConnectionFromReason, clickableCache)) : {}),
+  ...(configManager.isToolEnabled('page') ? toolset('page', createPageTools(connectionManager, resolveConnectionFromReason, clickableCache, executeToolCall)) : {}),
+  ...(configManager.isToolEnabled('dom') ? toolset('dom', createDOMTools(connectionManager, resolveConnectionFromReason)) : {}),
+  ...(configManager.isToolEnabled('screenshot') ? toolset('screenshot', createScreenshotTools(connectionManager, resolveConnectionFromReason)) : {}),
+  ...(configManager.isToolEnabled('input') ? toolset('input', createInputTools(connectionManager, resolveConnectionFromReason)) : {}),
+  ...(configManager.isToolEnabled('content') ? toolset('content', createContentTools(connectionManager, resolveConnectionFromReason, clickableCache)) : {}),
   ...(configManager.isToolEnabled('modal') ? toolset('modal', createModalTools(resolveConnectionFromReason)) : {}),
-  ...(configManager.isToolEnabled('bench') ? toolset('bench', createBenchTools(proxyPuppeteerManager, sourceMapHandler, commandRecorder, executeToolCall, resolveConnectionFromReason, toolCatalogue)) : {}),
-  ...(configManager.isToolEnabled('storage') ? toolset('storage', createStorageTools(proxyPuppeteerManager, proxyCdpManager, resolveConnectionFromReason)) : {}),
+  ...(configManager.isToolEnabled('bench') ? toolset('bench', createBenchTools(sourceMapHandler, commandRecorder, executeToolCall, resolveConnectionFromReason, toolCatalogue)) : {}),
+  ...(configManager.isToolEnabled('storage') ? toolset('storage', createStorageTools(resolveConnectionFromReason)) : {}),
   // Download tools
   ...(configManager.isToolEnabled('download') ? toolset('download', createDownloadTools()) : {}),
   // Request tools (HTTP requests as sequence steps, node or browser destination)

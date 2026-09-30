@@ -51,7 +51,7 @@ const breakpointSchema = z.object({
     'set', 'remove', 'list', 'setLogpoint', 'validate', 'resetCounter', 'waitForScript',
     'setDOMBreakpoint', 'setEventBreakpoint', 'setXHRBreakpoint', 'await'
   ]),
-  connectionReason: z.string().optional(),
+  connectionReason: z.string(),
 
   // Location
   url: z.string().optional(),
@@ -84,10 +84,9 @@ const breakpointSchema = z.object({
 }).strict();
 
 export function createBreakpointTools(
-  cdpManager: CDPManager,
   sourceMapHandler: SourceMapHandler,
-  logpointTracker?: LogpointExecutionTracker,
-  resolveConnectionFromReason?: (connectionReason: string) => Promise<{
+  logpointTracker: LogpointExecutionTracker | undefined,
+  resolveConnectionFromReason: (connectionReason: string) => Promise<{
     connection: any;
     cdpManager: CDPManager;
     puppeteerManager: any;
@@ -102,17 +101,13 @@ export function createBreakpointTools(
       async (args, abortSignal) => {
         const { action } = args;
         // Appended to every call a reply suggests, so the call reaches this connection.
-        const on = args.connectionReason ? `, connectionReason: '${args.connectionReason}'` : '';
+        const on = `, connectionReason: '${args.connectionReason}'`;
 
-        // Resolve connection if connectionReason is provided
-        let targetCdpManager = cdpManager;
-        if (args.connectionReason && resolveConnectionFromReason) {
-          const resolved = await resolveConnectionFromReason(args.connectionReason);
-          if (!resolved) {
-            return createErrorResponse('CONNECTION_NOT_FOUND');
-          }
-          targetCdpManager = resolved.cdpManager;
+        const resolved = await resolveConnectionFromReason(args.connectionReason);
+        if (!resolved) {
+          return createErrorResponse('CONNECTION_NOT_FOUND');
         }
+        const targetCdpManager = resolved.cdpManager;
 
         switch (action) {
           case 'set': {

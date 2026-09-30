@@ -808,9 +808,9 @@ bare steps belonged to, so hoisting could pin them to the wrong one. `create`
 says so in its output; re-record naming every step rather than shipping it.
 
 "Bare" means any step that would have the run-level connection injected — which
-includes the tools whose `connectionReason` is *optional* (`inspect`,
-`execution`, `storage`, `network`, `breakpoint`, `request`, `source`),
-not just the browser-only ones. Those are the ones people actually leave off.
+includes `inspect`, `execution`, `storage`, `breakpoint`, `request` and
+`source`, not just the browser-only tools. A call to any of them now has to name
+its connection, so bare steps come from recordings made before that.
 `wait({ ms })` is a plain sleep and doesn't count; every other `wait` form does.
 
 A sequence can be both multi-connection **and** mixed, and that combination is

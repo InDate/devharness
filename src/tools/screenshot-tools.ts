@@ -3,8 +3,6 @@
  */
 
 import { z } from 'zod';
-import type { CDPManager } from '../cdp-manager.js';
-import { PuppeteerManager } from '../puppeteer-manager.js';
 import type { ConnectionManager } from '../connection-manager.js';
 import { executeWithPauseDetection, formatActionResult } from '../debugger-aware-wrapper.js';
 import { checkBrowserAutomation } from '../error-helpers.js';
@@ -427,7 +425,7 @@ const screenshotSchema = z.object({
   }),
 }).strict();
 
-export function createScreenshotTools(puppeteerManager: PuppeteerManager, cdpManager: CDPManager, connectionManager: ConnectionManager, resolveConnectionFromReason: (connectionReason: string) => Promise<any>) {
+export function createScreenshotTools(connectionManager: ConnectionManager, resolveConnectionFromReason: (connectionReason: string) => Promise<any>) {
   /**
    * Save screenshot buffer to disk
    */
@@ -480,7 +478,7 @@ export function createScreenshotTools(puppeteerManager: PuppeteerManager, cdpMan
             message: 'No Chrome browser available. Start one with `connection` action `launch`.'
           });
         }
-        const targetPuppeteerManager = resolved.puppeteerManager || puppeteerManager;
+        const targetPuppeteerManager = resolved.puppeteerManager;
         const targetCdpManager = resolved.cdpManager;
 
         const error = checkBrowserAutomation(targetCdpManager, targetPuppeteerManager, action, resolved.connection.port, true);

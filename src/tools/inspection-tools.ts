@@ -286,7 +286,7 @@ function workerErrorResponse(error: unknown, target: string) {
 const inspectionToolSchema = z.object({
   action: z.enum(['getCallStack', 'getVariables', 'evaluateExpression', 'searchCode', 'searchFunctions', 'listTargets'])
     .describe('Inspection action: getCallStack (get call stack when paused), getVariables (get variables in call frame), evaluateExpression (evaluate JavaScript), searchCode (search code by pattern), searchFunctions (find function definitions), listTargets (list worker targets)'),
-  connectionReason: z.string().optional().describe('The connection, by the name connection launch or attach gave it (e.g. "unnamed-connection-default")'),
+  connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it (e.g. "unnamed-connection-default")'),
 
   // getVariables and evaluateExpression parameters
   callFrameId: z.string().optional().describe('Call frame ID (required for getVariables, optional for evaluateExpression)'),
@@ -314,9 +314,8 @@ const inspectionToolSchema = z.object({
 }).strict();
 
 export function createInspectionTools(
-  cdpManager: CDPManager,
   sourceMapHandler: SourceMapHandler,
-  resolveConnectionFromReason?: (connectionReason: string) => Promise<{
+  resolveConnectionFromReason: (connectionReason: string) => Promise<{
     connection: any;
     cdpManager: CDPManager;
     puppeteerManager: any;
@@ -341,15 +340,11 @@ export function createInspectionTools(
 
         throwIfAborted(abortSignal);
 
-        // Resolve connection if connectionReason is provided
-        let targetCdpManager = cdpManager;
-        if (connectionReason && resolveConnectionFromReason) {
-          const resolved = await resolveConnectionFromReason(connectionReason);
-          if (!resolved) {
-            return createErrorResponse('CONNECTION_NOT_FOUND');
-          }
-          targetCdpManager = resolved.cdpManager;
+        const resolved = await resolveConnectionFromReason(connectionReason);
+        if (!resolved) {
+          return createErrorResponse('CONNECTION_NOT_FOUND');
         }
+        const targetCdpManager = resolved.cdpManager;
 
         switch (action) {
           case 'getCallStack': {
@@ -569,14 +564,14 @@ export function createInspectionTools(
               if (error instanceof EvaluateExpressionPendingPromiseError) {
                 return createErrorResponse('EVALUATE_PROMISE_PENDING_WHILE_PAUSED', {
                   expression: error.expression,
-                  connection: connectionReason ? `, connectionReason: '${connectionReason}'` : '',
+                  connection: `, connectionReason: '${connectionReason}'`,
                 });
               }
               // The execution context never responded within the bounded
               // timeout - report explicitly instead of hanging forever.
               if (error instanceof EvaluateExpressionTimeoutError) {
                 return createErrorResponse('EVALUATE_CONTEXT_UNRESPONSIVE', {
-                  connectionReason: args.connectionReason || 'unknown',
+                  connectionReason,
                   expression: error.expression,
                   timeoutMs: error.timeoutMs,
                 });

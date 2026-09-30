@@ -41,10 +41,9 @@ function makeCdpManager(overrides: Record<string, any> = {}) {
 
 function makeBreakpoint(cdpManager: any) {
   const { breakpoint } = createBreakpointTools(
-    cdpManager as any,
     { mapToGenerated: async () => null } as any,
     undefined,
-    undefined
+    async () => ({ cdpManager }) as any
   );
   return breakpoint;
 }
@@ -55,7 +54,7 @@ describe('breakpoint.await cancellation', () => {
     const breakpoint = makeBreakpoint(cdpManager);
     const controller = new AbortController();
 
-    const settled = breakpoint.handler({ action: 'await', timeout: 120_000 } as any, controller.signal)
+    const settled = breakpoint.handler({ action: 'await', connectionReason: 'app', timeout: 120_000 } as any, controller.signal)
       .then((value: any) => ({ ok: true as const, value }), (err: any) => ({ ok: false as const, err }));
 
     // Let the handler register its listeners, then cancel.
@@ -74,7 +73,7 @@ describe('breakpoint.await cancellation', () => {
     const controller = new AbortController();
 
     const settled = breakpoint.handler(
-      { action: 'await', url: 'app.js', lineNumber: 42, timeout: 120_000 } as any,
+      { action: 'await', connectionReason: 'app', url: 'app.js', lineNumber: 42, timeout: 120_000 } as any,
       controller.signal
     ).then((value: any) => ({ ok: true as const, value }), (err: any) => ({ ok: false as const, err }));
 
@@ -96,7 +95,7 @@ describe('breakpoint.await cancellation', () => {
     controller.abort();
 
     await expect(
-      breakpoint.handler({ action: 'await', url: 'app.js', lineNumber: 42 } as any, controller.signal)
+      breakpoint.handler({ action: 'await', connectionReason: 'app', url: 'app.js', lineNumber: 42 } as any, controller.signal)
     ).rejects.toSatisfy((err: any) => isAbortError(err));
 
     // No breakpoint set, nothing waited on.
@@ -114,7 +113,7 @@ describe('breakpoint.await cancellation', () => {
     const controller = new AbortController();
 
     for (let i = 0; i < 5; i++) {
-      await breakpoint.handler({ action: 'await', timeout: 1000 } as any, controller.signal);
+      await breakpoint.handler({ action: 'await', connectionReason: 'app', timeout: 1000 } as any, controller.signal);
     }
 
     expect(getEventListeners(controller.signal as any, 'abort')).toHaveLength(0);
@@ -135,7 +134,7 @@ describe('breakpoint.await cancellation', () => {
     };
 
     const commands: RecordedCommand[] = [
-      { tool: 'breakpoint', params: { action: 'await', timeout: 120_000 }, timestamp: Date.now() } as any,
+      { tool: 'breakpoint', params: { action: 'await', connectionReason: 'app', timeout: 120_000 }, timestamp: Date.now() } as any,
     ];
     const sequence = { id: 'seq-1', name: 'await-cancel', commands } as unknown as CommandSequence;
 

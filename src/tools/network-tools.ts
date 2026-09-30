@@ -5,8 +5,7 @@
 import { z } from 'zod';
 import { promises as fs } from 'fs';
 import { join } from 'path';
-import { PuppeteerManager } from '../puppeteer-manager.js';
-import { NetworkMonitor, StoredNetworkRequest } from '../network-monitor.js';
+import { StoredNetworkRequest } from '../network-monitor.js';
 import { createTool } from '../validation-helpers.js';
 import { createSuccessResponse, createErrorResponse, formatCodeBlock } from '../messages.js';
 import type { Page } from 'puppeteer-core';
@@ -137,8 +136,6 @@ function frameLines(sock: any, frames: any[]): string[] {
 }
 
 export function createNetworkTools(
-  puppeteerManager: PuppeteerManager,
-  networkMonitor: NetworkMonitor,
   resolveConnectionFromReason: (connectionReason: string) => Promise<any>
 ) {
   // A Node.js target from connection attach resolves with no page. Falling back to the

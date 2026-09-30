@@ -18,9 +18,8 @@ function makeInspect(registry: any, endpoint: { host: string; port: number } | n
     getEndpoint: () => endpoint,
   } as any;
   const tools = createInspectionTools(
-    cdpManager,
     fakeSourceMapHandler,
-    undefined,
+    async () => ({ cdpManager }) as any,
     () => registry as any
   );
   return tools.inspect;
@@ -31,6 +30,7 @@ describe('inspect evaluateExpression inside a worker target', () => {
     const inspect = makeInspect({ evaluate: async () => 'http://localhost:5173/' });
 
     const result: any = await inspect.handler({
+      connectionReason: 'app',
       action: 'evaluateExpression',
       target: 'sw.js',
       expression: 'self.registration.scope',
@@ -49,6 +49,7 @@ describe('inspect evaluateExpression inside a worker target', () => {
     const inspect = makeInspect({ evaluate: async () => ({ scope: '/', clients: 2 }) });
 
     const result: any = await inspect.handler({
+      connectionReason: 'app',
       action: 'evaluateExpression',
       target: 'sw.js',
       expression: '({ scope: self.registration.scope, clients: 2 })',
@@ -61,6 +62,7 @@ describe('inspect evaluateExpression inside a worker target', () => {
     const inspect = makeInspect({ evaluate: async () => 42 });
 
     const result: any = await inspect.handler({
+      connectionReason: 'app',
       action: 'evaluateExpression',
       target: 'sw.js',
       expression: '42',
@@ -74,6 +76,7 @@ describe('inspect evaluateExpression inside a worker target', () => {
     const inspect = makeInspect({ evaluate });
 
     await inspect.handler({
+      connectionReason: 'app',
       action: 'evaluateExpression',
       target: 'sw.js',
       expression: 'p',
@@ -93,6 +96,7 @@ describe('inspect evaluateExpression inside a worker target', () => {
     });
 
     const result: any = await inspect.handler({
+      connectionReason: 'app',
       action: 'evaluateExpression',
       target: 'absent.js',
       expression: '1',
@@ -114,6 +118,7 @@ describe('inspect evaluateExpression inside a worker target', () => {
     });
 
     const result: any = await inspect.handler({
+      connectionReason: 'app',
       action: 'evaluateExpression',
       target: 'worker.js',
       expression: '1',
@@ -127,6 +132,7 @@ describe('inspect evaluateExpression inside a worker target', () => {
     const inspect = makeInspect({ evaluate }, null);
 
     const result: any = await inspect.handler({
+      connectionReason: 'app',
       action: 'evaluateExpression',
       target: 'sw.js',
       expression: '1',
@@ -145,7 +151,7 @@ describe('inspect listTargets', () => {
     ];
     const inspect = makeInspect({ list: async () => targets });
 
-    const result: any = await inspect.handler({ action: 'listTargets' });
+    const result: any = await inspect.handler({ action: 'listTargets', connectionReason: 'app' });
 
     expect(result._meta.workerTargets).toEqual(targets);
     expect(result.content.map((c: any) => c.text).join('\n')).toContain('sw.js');

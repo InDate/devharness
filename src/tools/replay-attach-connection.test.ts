@@ -22,10 +22,11 @@ function makeHarness(opts: { live?: string[] } = {}) {
     if (tool === 'check') return HELD;
     calls.push({ tool, params });
     if (tool === 'connection' && (params.action === 'launch' || params.action === 'attach')) {
-      if (live.has(params.name)) {
-        return { isError: true, content: [{ type: 'text', text: `Reference "${params.name}" is already in use` }] };
+      const name = params.name ?? 'unnamed-connection-default';
+      if (live.has(name)) {
+        return { isError: true, content: [{ type: 'text', text: `Reference "${name}" is already in use` }] };
       }
-      live.add(params.name);
+      live.add(name);
       return { content: [{ type: 'text', text: '' }] };
     }
     if (typeof params.connectionReason === 'string' && !live.has(params.connectionReason)) {
@@ -84,6 +85,22 @@ describe('a run of an attach to Chrome followed by bare browser steps', () => {
     expect(calls.filter(c => c.tool === 'connection' && c.params.action === 'launch')).toEqual([]);
     expect(calls.filter(c => c.tool === 'connection' && c.params.action === 'attach')).toHaveLength(1);
     expect(connectionsOf(calls, 'input')).toEqual(['shop-tab']);
+  });
+});
+
+describe('a run of a launch that names no connection, followed by bare steps', () => {
+  it('runs the bare steps on the connection the launch created, under the default name', async () => {
+    const { calls, replay, recorder } = makeHarness();
+    await recorder.createSequenceFromCommands('unnamed-launch', [
+      { tool: 'connection', params: { action: 'launch', url: 'http://shop.test/' } },
+      { tool: 'navigate', params: { action: 'goto', url: 'http://shop.test/cart' } },
+    ]);
+
+    const result: any = await replay.handler({ action: 'run', wait: true, name: 'unnamed-launch' } as any);
+
+    expect(result.isError).toBeFalsy();
+    const gotos = calls.filter(c => c.tool === 'navigate' && c.params.action === 'goto');
+    expect(gotos.map(c => c.params.connectionReason)).toEqual(['unnamed-connection-default']);
   });
 });
 

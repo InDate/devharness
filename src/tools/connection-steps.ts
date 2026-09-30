@@ -7,6 +7,8 @@
  * has no connection yet when the step runs, and an addressed one must.
  */
 
+import { UNNAMED_CONNECTION } from '../reference-validator.js';
+
 interface Step {
   tool: string;
   params?: Record<string, any>;
@@ -28,9 +30,14 @@ export function createsConnection(step: Step): boolean {
   return isLaunchStep(step) || isAttachStep(step);
 }
 
-/** The name a launch or attach step creates, when it gives one. */
+/**
+ * The name a launch or attach step creates. A launch that gives none creates
+ * the default connection, so it answers that name; an attach requires one.
+ */
 export function createdName(step: Step): string | undefined {
-  return createsConnection(step) && typeof step.params?.name === 'string' ? step.params.name : undefined;
+  if (!createsConnection(step)) return undefined;
+  if (typeof step.params?.name === 'string') return step.params.name;
+  return isLaunchStep(step) ? UNNAMED_CONNECTION : undefined;
 }
 
 /** A `connection` action that addresses an existing connection, and so takes the run's connection when it names none. */

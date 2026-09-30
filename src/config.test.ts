@@ -134,3 +134,33 @@ describe('ConfigManager live reload', () => {
     }
   }, 15_000);
 });
+
+describe('ConfigManager defaults', () => {
+  it('reset returns the defaults after an earlier change to them', async () => {
+    await manager.reset();
+    await manager.updatePortMonitoringFreqMs({ block: 7 });
+
+    await manager.reset();
+
+    expect(manager.getIntervalForLevel('block')).toBe(1000);
+  });
+
+  it('reset leaves every toggleable tool enabled', async () => {
+    await manager.reset();
+
+    expect(manager.isToolEnabled('connection')).toBe(true);
+    expect(manager.isToolEnabled('replay')).toBe(true);
+  });
+
+  it('backs up beside the config file when a directory name holds ".json"', async () => {
+    const dir = join(tempDir, 'odd.json');
+    await fsp.mkdir(join(dir, '.devharness'), { recursive: true });
+    setWorkingDirOverride(dir);
+    const inOddDir = new ConfigManager();
+
+    const backup = await inOddDir.backup();
+
+    expect(backup!.path.startsWith(join(dir, '.devharness', 'config.backup-'))).toBe(true);
+    inOddDir.stopWatching();
+  });
+});

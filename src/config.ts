@@ -169,7 +169,7 @@ export const TOGGLEABLE_TOOLS = [
   'breakpoint',  // Breakpoints, logpoints
   'execution',   // Pause, resume, step
   'inspection',  // Call stack, variables, evaluate
-  'source',      // Source maps, code search
+  'source',      // Reading source code, loading source maps
   'console',     // Console monitoring
   'network',     // Network monitoring
   'page',        // Navigation
@@ -358,7 +358,7 @@ const DEFAULT_CONFIG: CdpToolsConfig = {
     historyLogEnabled: false,     // History log disabled by default
   },
   tools: {
-    enabled: ['issues'],  // All tools enabled by default
+    enabled: ['issues'],  // discoverTools adds every other toggleable tool
     disabled: [],
   },
   github: {
@@ -369,12 +369,21 @@ const DEFAULT_CONFIG: CdpToolsConfig = {
 };
 
 /**
+ * A fresh copy of the defaults. A spread copy shares DEFAULT_CONFIG's nested
+ * objects and arrays, so a tool list or port monitor edited in the live config
+ * changed the defaults a later reset() returned.
+ */
+function defaultConfig(): CdpToolsConfig {
+  return structuredClone(DEFAULT_CONFIG);
+}
+
+/**
  * Configuration Manager
  * Loads and saves configuration from .devharness/config.json
  * Also tracks runtime port state
  */
 export class ConfigManager {
-  private config: CdpToolsConfig = { ...DEFAULT_CONFIG };
+  private config: CdpToolsConfig = defaultConfig();
   private loaded = false;
   private loadedFromPath: string | null = null;
 
@@ -420,7 +429,7 @@ export class ConfigManager {
           const loaded = JSON.parse(content);
           this.config = this.mergeConfig(DEFAULT_CONFIG, loaded);
         } else {
-          this.config = { ...DEFAULT_CONFIG };
+          this.config = defaultConfig();
         }
         // Auto-discover new tools (populates enabled list)
         this.discoverTools();
@@ -431,7 +440,7 @@ export class ConfigManager {
       }
     } catch {
       // Ignore errors, use defaults
-      this.config = { ...DEFAULT_CONFIG };
+      this.config = defaultConfig();
       this.discoverTools();
     }
 
@@ -465,19 +474,19 @@ export class ConfigManager {
 
   /**
    * Get preferred path for creating new config
-   * Prefers working directory if .cdp-tools folder exists or can be created
+   * Prefers working directory if .devharness folder exists or can be created
    */
   private getPreferredConfigPath(): string {
     try {
       const wdConfigPath = getOutputPath('config.json');
       const wdBase = dirname(wdConfigPath);
 
-      // If .cdp-tools dir exists in working directory, use it
+      // If .devharness dir exists in working directory, use it
       if (fs.existsSync(wdBase)) {
         return wdConfigPath;
       }
 
-      // Try to create .cdp-tools dir in working directory
+      // Try to create .devharness dir in working directory
       fs.mkdirSync(wdBase, { recursive: true });
       return wdConfigPath;
     } catch {
@@ -542,7 +551,7 @@ export class ConfigManager {
           this.config = this.mergeConfig(DEFAULT_CONFIG, loaded);
           await debugLog('ConfigManager', `Seeding local config from global ${globalConfigPath}`);
         } else {
-          this.config = { ...DEFAULT_CONFIG };
+          this.config = defaultConfig();
         }
         // Auto-discover new tools
         if (this.discoverTools()) {
@@ -555,7 +564,8 @@ export class ConfigManager {
       }
     } catch (err) {
       await debugLog('ConfigManager', `Failed to load config: ${err}, using defaults`);
-      this.config = { ...DEFAULT_CONFIG };
+      this.config = defaultConfig();
+      this.discoverTools();
       this.loadedFromPath = null;
     }
 
@@ -770,8 +780,8 @@ export class ConfigManager {
         historyLogEnabled: loaded.debug?.historyLogEnabled ?? defaults.debug.historyLogEnabled,
       },
       tools: {
-        enabled: loaded.tools?.enabled ?? defaults.tools.enabled,
-        disabled: loaded.tools?.disabled ?? defaults.tools.disabled,
+        enabled: [...(loaded.tools?.enabled ?? defaults.tools.enabled)],
+        disabled: [...(loaded.tools?.disabled ?? defaults.tools.disabled)],
       },
       github: {
         enabled: loaded.github?.enabled ?? defaults.github.enabled,
@@ -819,7 +829,7 @@ export class ConfigManager {
   getConfig(): CdpToolsConfig {
     if (!this.loaded) {
       // Synchronous fallback - return defaults
-      return { ...DEFAULT_CONFIG };
+      return defaultConfig();
     }
     return this.config;
   }
@@ -1081,8 +1091,9 @@ export class ConfigManager {
       const loaded = JSON.parse(content);
       this.config = this.mergeConfig(DEFAULT_CONFIG, loaded);
     } else {
-      this.config = { ...DEFAULT_CONFIG };
+      this.config = defaultConfig();
     }
+    this.discoverTools();
 
     this.loadedFromPath = globalPath;
     await this.save();
@@ -1093,7 +1104,9 @@ export class ConfigManager {
    * Reset config to defaults
    */
   async reset(): Promise<void> {
-    this.config = { ...DEFAULT_CONFIG };
+    this.config = defaultConfig();
+    this.discoverTools();
+    this.validateDependencies();
     await this.save();
   }
 
@@ -1106,7 +1119,7 @@ export class ConfigManager {
     }
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const backupPath = this.loadedFromPath.replace('.json', `.backup-${timestamp}.json`);
+    const backupPath = this.loadedFromPath.replace(/\.json$/, `.backup-${timestamp}.json`);
     await fs.promises.copyFile(this.loadedFromPath, backupPath);
     return { path: backupPath };
   }

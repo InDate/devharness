@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { tmpdir } from 'os';
 import { createBreakpointTools } from './breakpoint-tools.js';
 import { createInspectionTools } from './inspection-tools.js';
 import { createSourceTools } from './source-tools.js';
@@ -23,11 +24,11 @@ describe('a call that acts on a connection without naming one', () => {
     const { source } = createSourceTools(sourceMapHandler, resolveNothing);
 
     const get: any = await source.handler({ action: 'get', url: 'app.js' } as any);
-    const loadMaps: any = await source.handler({ action: 'loadMaps', directory: 'dist' } as any);
+    const loadMaps: any = await source.handler({ action: 'loadMaps', directory: tmpdir() } as any);
 
     expect(get.isError).toBe(true);
     expect(get.content[0].text).toContain('connectionReason');
     expect(loadMaps.isError).toBeFalsy();
-    expect(sourceMapHandler.registerSourceMapsFromDirectory).toHaveBeenCalledWith('dist');
+    expect(sourceMapHandler.registerSourceMapsFromDirectory).toHaveBeenCalledWith(tmpdir());
   });
 });

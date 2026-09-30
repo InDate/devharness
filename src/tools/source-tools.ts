@@ -4,6 +4,7 @@
  */
 
 import { z } from 'zod';
+import { promises as fs } from 'fs';
 import { CDPManager } from '../cdp-manager.js';
 import { SourceMapHandler } from '../sourcemap-handler.js';
 import { createTool } from '../validation-helpers.js';
@@ -14,7 +15,7 @@ const sourceSchema = z.object({
   url: z.string().optional().describe('get: file URL or path'),
   startLine: z.number().optional().describe('get: start line number'),
   endLine: z.number().optional().describe('get: end line number'),
-  directory: z.string().optional().describe('loadMaps: the directory containing .js.map files'),
+  directory: z.string().optional().describe('loadMaps: the directory whose .js.map files, subdirectories included, are registered'),
   connectionReason: z.string().optional().describe('get: the connection, by the name connection launch or attach gave it (e.g. "unnamed-connection-default")'),
 }).strict();
 
@@ -36,25 +37,22 @@ export function createSourceTools(
 
     const resolved = await resolveConnectionFromReason(args.connectionReason!);
     if (!resolved) {
-      return createErrorResponse('CONNECTION_NOT_FOUND');
+      return createErrorResponse('CONNECTION_NOT_FOUND', { reference: args.connectionReason });
     }
     const targetCdpManager = resolved.cdpManager;
 
     try {
       const sourceCode = await targetCdpManager.getSourceCode(url, startLine, endLine);
 
-      // Build response with code directly (already formatted with line numbers)
-      const actualStart = startLine || 1;
-      const actualEnd = endLine || (startLine ? Math.min(sourceCode.totalLines, startLine + 9) : sourceCode.totalLines);
-
-      // Pass code as string, not wrapped in object, to avoid JSON stringification
+      // The code arrives numbered; a string is appended to the reply as it is,
+      // where an object would be rendered as JSON.
       const metadata = `Total lines: ${sourceCode.totalLines}${sourceCode.hasSourceMap ? ' (source map available)' : ''}`;
       const codeBlock = '```javascript\n' + sourceCode.code + '\n```';
 
       return createSuccessResponse('SOURCE_CODE_SUCCESS', {
         url,
-        startLine: actualStart.toString(),
-        endLine: actualEnd.toString(),
+        startLine: sourceCode.startLine.toString(),
+        endLine: sourceCode.endLine.toString(),
       }, metadata + '\n\n' + codeBlock);
     } catch (error) {
       return createErrorResponse('SOURCE_CODE_FAILED', { error: `${error}` });
@@ -63,12 +61,18 @@ export function createSourceTools(
 
   const loadMaps = async (args: SourceArgs): Promise<any> => {
     const directory = args.directory!;
+    // The registration reads a missing directory as holding no maps, which
+    // would report a mistyped path as a directory with none in it.
+    const stat = await fs.stat(directory).catch(() => null);
+    if (!stat?.isDirectory()) {
+      return createErrorResponse('SOURCE_MAPS_FAILED', { error: `${directory} is not a directory` });
+    }
     try {
       const registered = await sourceMapHandler.registerSourceMapsFromDirectory(directory);
       return createSuccessResponse('SOURCE_MAPS_LOADED', {
         count: registered.toString(),
         directory
-      }, { registered, note: 'Source maps registered for lazy loading (will be loaded on demand)' });
+      }, { registered });
     } catch (error) {
       return createErrorResponse('SOURCE_MAPS_FAILED', { error: `${error}` });
     }
@@ -82,7 +86,7 @@ export function createSourceTools(
 
   return {
     source: createTool(
-      'Read source code and load source maps. Actions: get (a script\'s code over a line range), loadMaps (register the .js.map files in a directory)',
+      'Read source code and load source maps. Actions: get (a script\'s code over a line range, 10 lines from startLine when endLine is omitted), loadMaps (register the .js.map files in a directory and its subdirectories; each loads when first needed)',
       sourceSchema,
       async (args) => {
         const missing = REQUIRED[args.action].filter(key => args[key] === undefined);

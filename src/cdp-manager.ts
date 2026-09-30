@@ -1651,7 +1651,7 @@ export class CDPManager {
     url: string,
     startLine?: number,
     endLine?: number
-  ): Promise<{ code: string; totalLines: number; hasSourceMap: boolean }> {
+  ): Promise<{ code: string; totalLines: number; hasSourceMap: boolean; startLine: number; endLine: number }> {
     if (!this.state.connected) {
       throw new Error('Not connected to debugger');
     }
@@ -1707,6 +1707,9 @@ export class CDPManager {
     // Determine the range
     const start = startLine ? Math.max(1, startLine) : 1;
     const end = endLine ? Math.min(totalLines!, endLine) : (startLine ? Math.min(totalLines!, startLine + 9) : totalLines!);
+    if (start > totalLines!) {
+      throw new Error(`Line ${start} is past the end of ${url}, which has ${totalLines!} lines`);
+    }
 
     // Extract the requested lines (convert to 0-indexed)
     const extractedLines = lines.slice(start - 1, end);
@@ -1734,6 +1737,8 @@ export class CDPManager {
       code: formattedCode,
       totalLines: totalLines!,
       hasSourceMap,
+      startLine: start,
+      endLine: end,
     };
   }
 

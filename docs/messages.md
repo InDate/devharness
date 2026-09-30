@@ -431,7 +431,7 @@ The run stopped before its first step, so nothing has been executed yet.
 **Code:** NO_CONNECTION
 **Summary:** Connection not found
 
-No active browser connection available.
+{{#message}}{{message}}{{/message}}{{^message}}{{#reference}}No connection is named "{{reference}}". `connection({ action: 'list' })` lists the names this session holds.{{/reference}}{{^reference}}No active browser connection available.{{/reference}}{{/message}}
 
 **Suggestions:**
 - Use `connection({ action: 'launch' })` to launch Chrome with debugging enabled
@@ -467,7 +467,7 @@ Reference "{{reference}}" is already in use by another connection
 
 **Type:** success
 
-Loaded {{count}} source maps from {{directory}}
+Registered {{count}} source maps from {{directory}} and its subdirectories; each loads when a location in its script is first mapped
 
 ---
 

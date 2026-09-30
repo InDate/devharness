@@ -21,7 +21,7 @@ const MAX_STEPS = 500;
 /** Tools that do more than drive a page, so a remote sequence using one is
  *  refused unless the caller explicitly opts in. */
 export const PRIVILEGED_TOOLS: ReadonlySet<string> = new Set([
-  'execution', 'saveToDisk', 'server', 'request', 'download',
+  'execution', 'server', 'request', 'download',
 ]);
 
 export interface FencedBlock {

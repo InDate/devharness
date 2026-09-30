@@ -20,7 +20,7 @@ import { ChromeLauncher, ChromeBinaryAbsentError, ChromeLaunchFailure, InvalidPr
 import { createTool } from '../validation-helpers.js';
 import { createSuccessResponse, createErrorResponse } from '../messages.js';
 import { configManager } from '../config.js';
-import { debugLog, enableDebugLogging, disableDebugLogging, isDebugEnabled } from '../debug-logger.js';
+import { debugLog } from '../debug-logger.js';
 import { validateReference, requireValidReference, sanitizeReference, UNNAMED_CONNECTION } from '../reference-validator.js';
 import { startProxyFor } from '../proxy/registry.js';
 import { sizeWindowToViewport } from '../window-sizing.js';
@@ -1068,67 +1068,6 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
       'The Chrome processes this session launched. Actions: kill (end a Chrome process and every connection in it; every one this session launched when no port is given), resetLauncher (forget every Chrome this session launched)',
       browserSchema,
       async (args) => (args.action === 'kill' ? kill(args) : resetLauncher(args))
-    ),
-
-    setDebugLogging: createTool(
-      'Toggle debug logging',
-      z.object({
-        enabled: z.boolean().describe('Set to true to enable debug logging, false to disable'),
-      }).strict(),
-      async (args) => {
-        if (args.enabled) {
-          await enableDebugLogging(); // Now async to log startup metrics
-          return createSuccessResponse('DEBUG_LOGGING_ENABLED', {
-            message: 'Debug logging enabled. Logs will be written to .devharness/logs/debug.log'
-          }, {
-            enabled: true,
-            message: 'Debug logging enabled. Logs will be written to .devharness/logs/debug.log'
-          });
-        } else {
-          disableDebugLogging();
-          return createSuccessResponse('DEBUG_LOGGING_DISABLED', {
-            message: 'Debug logging disabled'
-          }, {
-            enabled: false,
-            message: 'Debug logging disabled'
-          });
-        }
-      }
-    ),
-    getDebugLoggingStatus: createTool(
-      'Check debug logging status',
-      z.object({}).strict(),
-      async () => {
-        const enabled = isDebugEnabled();
-        return createSuccessResponse('DEBUG_LOGGING_STATUS', {
-          status: enabled ? 'enabled' : 'disabled',
-          enabled,  // Pass boolean for conditionals
-          logFile: '.devharness/logs/debug.log'
-        }, {
-          enabled,
-          logFile: '.devharness/logs/debug.log'
-        });
-      }
-    ),
-    loadSourceMaps: createTool(
-      'Load source maps',
-      z.object({
-        directory: z.string().describe('The directory containing .js.map files'),
-      }).strict(),
-      async (args) => {
-        const { directory } = args;
-
-        try {
-          const registered = await sourceMapHandler.registerSourceMapsFromDirectory(directory);
-
-          return createSuccessResponse('SOURCE_MAPS_LOADED', {
-            count: registered.toString(),
-            directory
-          }, { registered, note: 'Source maps registered for lazy loading (will be loaded on demand)' });
-        } catch (error) {
-          return createErrorResponse('SOURCE_MAPS_FAILED', { error: `${error}` });
-        }
-      }
     ),
   };
 }

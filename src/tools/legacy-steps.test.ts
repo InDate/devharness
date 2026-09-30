@@ -32,6 +32,23 @@ describe('translateCall', () => {
       .toEqual({ tool: 'connection', params: { action: 'list' } });
   });
 
+  it('turns single-operation tools into actions of source, modal, download and config', () => {
+    expect(translateCall('getSourceCode', { url: 'app.js', startLine: 3 }))
+      .toEqual({ tool: 'source', params: { action: 'get', url: 'app.js', startLine: 3 } });
+    expect(translateCall('loadSourceMaps', { directory: 'dist' }))
+      .toEqual({ tool: 'source', params: { action: 'loadMaps', directory: 'dist' } });
+    expect(translateCall('detectModals', { connectionReason: 'app' }))
+      .toEqual({ tool: 'modal', params: { action: 'detect', connectionReason: 'app' } });
+    expect(translateCall('dismissModal', { connectionReason: 'app', index: 1 }))
+      .toEqual({ tool: 'modal', params: { action: 'dismiss', connectionReason: 'app', index: 1 } });
+    expect(translateCall('saveToDisk', { url: 'http://a/f.txt', filename: 'f.txt' }))
+      .toEqual({ tool: 'download', params: { url: 'http://a/f.txt', filename: 'f.txt' } });
+    expect(translateCall('setDebugLogging', { enabled: true }))
+      .toEqual({ tool: 'config', params: { action: 'setDebugLogging', enabled: true } });
+    expect(translateCall('getDebugLoggingStatus', {}))
+      .toEqual({ tool: 'config', params: { action: 'debugLoggingStatus' } });
+  });
+
   it('leaves a call to a tool that still exists unchanged', () => {
     const params = { action: 'goto', url: 'http://a/', connectionReason: 'app' };
     expect(translateCall('navigate', params)).toEqual({ tool: 'navigate', params });

@@ -282,7 +282,7 @@ export function captureVariable(
  * and the auto-launch paths in replay-tools).
  *
  * Deliberately excludes tools that are equally valid against a Node target
- * (`inspect`, `execution`, `breakpoint`, `getSourceCode`, `request`) - listing
+ * (`inspect`, `execution`, `breakpoint`, `source`, `request`) - listing
  * those here would make a Node-only sequence spuriously launch Chrome.
  */
 export const TOOLS_NEEDING_CONNECTION = [
@@ -305,7 +305,7 @@ export const TOOLS_NEEDING_CONNECTION = [
  */
 export const TOOLS_ACCEPTING_CONNECTION = [
   ...TOOLS_NEEDING_CONNECTION,
-  'inspect', 'execution', 'breakpoint', 'getSourceCode', 'detectModals', 'dismissModal', 'assert',
+  'inspect', 'execution', 'breakpoint', 'source', 'modal', 'assert',
   'wait', 'check', 'hold'
 ];
 

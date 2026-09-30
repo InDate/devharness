@@ -9,16 +9,19 @@ import { configManager } from '../config.js';
 import { createSuccessResponse, createErrorResponse } from '../messages.js';
 import { requestSelfRestart } from '../self-restart.js';
 import { InvalidProfileNameError, ProfileInUseError } from '../chrome-launcher.js';
+import { enableDebugLogging, disableDebugLogging, isDebugEnabled } from '../debug-logger.js';
 
 const configSchema = z.object({
-  action: z.enum(['status', 'useLocal', 'useGlobal', 'reset', 'backup', 'cloneFromGlobal', 'show', 'listTools', 'reload', 'restart', 'listProfiles', 'resetProfile'])
-    .describe('Config action: status (show config location info), useLocal (switch to project config), useGlobal (switch to global config), reset (reset to defaults), backup (backup current config), cloneFromGlobal (copy global to local), show (display current config), listTools (list all toggleable tools with status and dependencies), reload (re-read config.json from disk now - also happens automatically on file edits), restart (restart devharness itself if stuck or broken), listProfiles (list named persistent Chrome profiles), resetProfile (wipe and recreate the named persistent Chrome profile given in `profile`)'),
+  action: z.enum(['status', 'useLocal', 'useGlobal', 'reset', 'backup', 'cloneFromGlobal', 'show', 'listTools', 'reload', 'restart', 'listProfiles', 'resetProfile', 'setDebugLogging', 'debugLoggingStatus'])
+    .describe('Config action: status (show config location info), useLocal (switch to project config), useGlobal (switch to global config), reset (reset to defaults), backup (backup current config), cloneFromGlobal (copy global to local), show (display current config), listTools (list all toggleable tools with status and dependencies), reload (re-read config.json from disk now - also happens automatically on file edits), restart (restart devharness itself if stuck or broken), listProfiles (list named persistent Chrome profiles), resetProfile (wipe and recreate the named persistent Chrome profile given in `profile`), setDebugLogging (turn debug logging on or off with `enabled`), debugLoggingStatus (whether debug logging is on, and where it writes)'),
   seedFromGlobal: z.boolean().optional()
     .describe('For useLocal action: if true (default), seeds new local config from global if it exists'),
   path: z.string().optional()
     .describe('useLocal: explicit project dir to use as "local" (overrides server cwd)'),
   profile: z.string().optional()
     .describe('resetProfile: name of the persistent Chrome profile (as given to connection launch as profile) to wipe and recreate empty. Refused while a Chrome launched by devharness still holds that profile - kill it first.'),
+  enabled: z.boolean().optional()
+    .describe('setDebugLogging: true to turn debug logging on, false to turn it off'),
 }).strict();
 
 type ConfigArgs = z.infer<typeof configSchema>;
@@ -43,7 +46,7 @@ export interface ServerIdentity {
 export function createConfigTools(profileStore?: ProfileStore, serverIdentity?: ServerIdentity) {
   return {
     config: createTool(
-      'Manage devharness configuration. Actions: status (show where config is loaded from), useLocal (switch to project-local config), useGlobal (switch to global ~/.devharness config), reset (reset to defaults), backup (create timestamped backup), cloneFromGlobal (copy global config to local), show (display current settings), listTools (list all toggleable tools with their status and dependencies), reload (re-read config.json now; edits also hot-reload automatically within ~250ms), restart (restart devharness itself if stuck or broken), listProfiles (list named persistent Chrome profiles and where they live), resetProfile (wipe and recreate a named persistent Chrome profile, clearing its cookies/localStorage/IndexedDB)',
+      'Manage devharness configuration. Actions: status (show where config is loaded from), useLocal (switch to project-local config), useGlobal (switch to global ~/.devharness config), reset (reset to defaults), backup (create timestamped backup), cloneFromGlobal (copy global config to local), show (display current settings), listTools (list all toggleable tools with their status and dependencies), reload (re-read config.json now; edits also hot-reload automatically within ~250ms), restart (restart devharness itself if stuck or broken), listProfiles (list named persistent Chrome profiles and where they live), resetProfile (wipe and recreate a named persistent Chrome profile, clearing its cookies/localStorage/IndexedDB), setDebugLogging (turn debug logging on or off), debugLoggingStatus (whether debug logging is on)',
       configSchema,
       async (args: ConfigArgs) => {
         switch (args.action) {
@@ -192,6 +195,44 @@ export function createConfigTools(profileStore?: ProfileStore, serverIdentity?: 
                 error: error instanceof Error ? error.message : String(error),
               });
             }
+          }
+
+          case 'setDebugLogging': {
+            if (args.enabled === undefined) {
+              return createErrorResponse('MISSING_PARAMETER', {
+                action: 'setDebugLogging',
+                missing: 'enabled',
+                message: 'The "setDebugLogging" action requires "enabled"',
+              });
+            }
+            if (args.enabled) {
+              await enableDebugLogging();
+              return createSuccessResponse('DEBUG_LOGGING_ENABLED', {
+                message: 'Debug logging enabled. Logs will be written to .devharness/logs/debug.log'
+              }, {
+                enabled: true,
+                message: 'Debug logging enabled. Logs will be written to .devharness/logs/debug.log'
+              });
+            }
+            disableDebugLogging();
+            return createSuccessResponse('DEBUG_LOGGING_DISABLED', {
+              message: 'Debug logging disabled'
+            }, {
+              enabled: false,
+              message: 'Debug logging disabled'
+            });
+          }
+
+          case 'debugLoggingStatus': {
+            const enabled = isDebugEnabled();
+            return createSuccessResponse('DEBUG_LOGGING_STATUS', {
+              status: enabled ? 'enabled' : 'disabled',
+              enabled,
+              logFile: '.devharness/logs/debug.log'
+            }, {
+              enabled,
+              logFile: '.devharness/logs/debug.log'
+            });
           }
 
           case 'listTools': {

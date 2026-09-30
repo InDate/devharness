@@ -149,12 +149,12 @@ export function clearQuarantineRegistry(): void {
  */
 export function createDownloadTools() {
   return {
-    saveToDisk: createTool(
-      'Download file to disk',
+    download: createTool(
+      'Download a file from a URL into the downloads directory; a suspicious file goes to quarantine instead',
       z.object({
         url: z.string().url().describe('URL to download'),
         filename: z.string().describe('Filename to save as'),
-        overwriteIfExists: z.boolean().optional().default(false).describe('Overwrite if exists'),
+        overwriteIfExists: z.boolean().optional().describe('Overwrite if exists (default: false)'),
       }).strict(),
       async (args) => {
         try {

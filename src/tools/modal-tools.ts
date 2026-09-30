@@ -14,20 +14,16 @@ import { executeWithPauseDetection } from '../debugger-aware-wrapper.js';
 import { formatToolError, formatToolSuccess } from '../messages.js';
 import { createTool } from '../validation-helpers.js';
 
-// Zod schemas for input validation
-const detectModalsSchema = z.object({
+const modalSchema = z.object({
+  action: z.enum(['detect', 'dismiss']),
   connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it (e.g. "unnamed-connection-default")'),
-  minZIndex: z.number().optional().describe('Min z-index to consider'),
-  minViewportCoverage: z.number().optional().describe('Min viewport coverage (0-1, default: 0.25)'),
-  includeBackdrops: z.boolean().optional().describe('Include backdrop/overlay elements'),
-}).strict();
-
-const dismissModalSchema = z.object({
-  connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it (e.g. "unnamed-connection-default")'),
-  selector: z.string().optional().describe('CSS selector of the modal to dismiss'),
-  index: z.number().optional().describe('Modal index (1-based)'),
-  strategy: z.enum(['accept', 'reject', 'close', 'remove', 'auto']).default('auto').describe('Dismissal strategy: accept (click accept/agree), reject (click reject/decline), close (click close/X), remove (remove from DOM), auto (smart selection based on modal type)'),
-  retryAttempts: z.number().default(3).describe('Number of retry attempts when clicking buttons'),
+  minZIndex: z.number().optional().describe('detect: min z-index to consider'),
+  minViewportCoverage: z.number().optional().describe('detect: min viewport coverage (0-1, default: 0.25)'),
+  includeBackdrops: z.boolean().optional().describe('detect: include backdrop/overlay elements'),
+  selector: z.string().optional().describe('dismiss: CSS selector of the modal to dismiss'),
+  index: z.number().optional().describe('dismiss: modal index (1-based)'),
+  strategy: z.enum(['accept', 'reject', 'close', 'remove', 'auto']).optional().describe('dismiss: accept (click accept/agree), reject (click reject/decline), close (click close/X), remove (remove from DOM), auto (smart selection based on modal type; default)'),
+  retryAttempts: z.number().optional().describe('dismiss: number of retry attempts when clicking buttons (default: 3)'),
 }).strict();
 
 /**
@@ -35,15 +31,12 @@ const dismissModalSchema = z.object({
  */
 export function createModalTools(resolveConnectionFromReason: (connectionReason: string) => Promise<any>) {
   return {
-    detectModals: createTool(
-      'Detect modals',
-      detectModalsSchema,
-      async (args) => await detectModalsImpl(args, resolveConnectionFromReason)
-    ),
-    dismissModal: createTool(
-      'Dismiss modal',
-      dismissModalSchema,
-      async (args) => await dismissModalImpl(args, resolveConnectionFromReason)
+    modal: createTool(
+      'Blocking modals and overlays on the page. Actions: detect (list them with the strategies each can be dismissed by), dismiss (dismiss one, the topmost by default)',
+      modalSchema,
+      async ({ action, ...args }) => action === 'detect'
+        ? await detectModalsImpl(args, resolveConnectionFromReason)
+        : await dismissModalImpl(args, resolveConnectionFromReason)
     ),
   };
 }
@@ -57,10 +50,13 @@ async function detectModalsImpl(
     minZIndex?: number;
     minViewportCoverage?: number;
     includeBackdrops?: boolean;
+    selector?: string;
+    index?: number;
   },
   resolveConnectionFromReason: (connectionReason: string) => Promise<any>
 ) {
-  const { connectionReason, ...detectionOptions } = args;
+  const { connectionReason, minZIndex, minViewportCoverage, includeBackdrops } = args;
+  const detectionOptions = { minZIndex, minViewportCoverage, includeBackdrops };
 
   try {
     const resolved = await resolveConnectionFromReason(connectionReason);
@@ -120,7 +116,7 @@ async function detectModalsImpl(
         modals: formattedModals,
         recommendation:
           modals.length > 0
-            ? `Use dismissModal with index ${formattedModals[0].index} or selector "${formattedModals[0].selector}"`
+            ? `Use modal({ action: 'dismiss', connectionReason: "${connectionReason}", index: ${formattedModals[0].index} }) or selector "${formattedModals[0].selector}"`
             : undefined,
       }
     );
@@ -142,6 +138,9 @@ async function dismissModalImpl(
     index?: number;
     strategy?: 'accept' | 'reject' | 'close' | 'remove' | 'auto';
     retryAttempts?: number;
+    minZIndex?: number;
+    minViewportCoverage?: number;
+    includeBackdrops?: boolean;
   },
   resolveConnectionFromReason: (connectionReason: string) => Promise<any>
 ) {
@@ -156,7 +155,7 @@ async function dismissModalImpl(
   try {
     // resolveConnectionFromReason yields { connection, cdpManager,
     // puppeteerManager, ... } - there is no `page` on it, so the page has to
-    // come from the puppeteerManager (same as detectModals does).
+    // come from the puppeteerManager (same as detect does).
     const resolved = await resolveConnectionFromReason(connectionReason);
     if (!resolved || !resolved.puppeteerManager) {
       return formatToolError('connection_not_found', 'No Chrome browser available. Start one with `connection` action `launch`.');

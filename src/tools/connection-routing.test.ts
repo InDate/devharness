@@ -196,7 +196,7 @@ describe('network enable/disable honour connectionReason', () => {
 });
 
 // ---------------------------------------------------------------------------
-// dismissModal: resolves its page from the connection
+// modal dismiss: resolves its page from the connection
 // ---------------------------------------------------------------------------
 
 vi.mock('../utils/modal-detector.js', async () => {
@@ -225,7 +225,7 @@ vi.mock('../utils/modal-dismissal.js', async () => {
 const { detectModals: mockedDetectModals } = await import('../utils/modal-detector.js');
 const { dismissModalByStrategy: mockedDismiss } = await import('../utils/modal-dismissal.js');
 
-describe('dismissModal resolves its page from the connection', () => {
+describe('modal dismiss resolves its page from the connection', () => {
   const cdpManager = {
     isPaused: () => false,
     getPausedInfo: () => ({}),
@@ -244,7 +244,8 @@ describe('dismissModal resolves its page from the connection', () => {
         : null
     );
 
-    const result = await tools.dismissModal.handler({
+    const result = await tools.modal.handler({
+      action: 'dismiss',
       connectionReason: 'other-tab',
       strategy: 'accept',
       retryAttempts: 3,
@@ -267,7 +268,8 @@ describe('dismissModal resolves its page from the connection', () => {
   it('returns a connection error rather than throwing when the reference is unknown', async () => {
     const tools = createModalTools(async () => null);
 
-    const result = await tools.dismissModal.handler({
+    const result = await tools.modal.handler({
+      action: 'dismiss',
       connectionReason: 'nope',
       strategy: 'auto',
       retryAttempts: 3,

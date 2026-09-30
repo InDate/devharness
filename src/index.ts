@@ -95,15 +95,17 @@ import { markOnProxies, markNextCommand, releaseCommand, noteCallStart } from '.
  */
 const OBSERVING_TOOLS = new Set([
   'screenshot', 'content', 'inspect', 'proxy', 'network', 'console',
-  'wait', 'assert', 'check', 'dashboard', 'issues', 'message',
-  'getDebugLoggingStatus', 'getSourceCode', 'detectModals', 'config',
+  'wait', 'assert', 'check', 'dashboard', 'issues', 'message', 'source', 'config',
 ]);
-/** The actions of `connection` that read without launching, attaching or closing anything. */
-const OBSERVING_CONNECTION_ACTIONS = new Set(['list', 'status', 'browsers']);
+/** Actions that read without acting, in tools whose other actions act on a connection or page. */
+const OBSERVING_ACTIONS: Record<string, ReadonlySet<string>> = {
+  connection: new Set(['list', 'status', 'browsers']),
+  modal: new Set(['detect']),
+};
 
 function observes(toolName: string, args: Record<string, unknown> | undefined): boolean {
   return OBSERVING_TOOLS.has(toolName)
-    || (toolName === 'connection' && OBSERVING_CONNECTION_ACTIONS.has(String(args?.action)));
+    || (OBSERVING_ACTIONS[toolName]?.has(String(args?.action)) ?? false);
 }
 import { checkPortFailures, checkBreakpointPause, checkBugBlocking, checkPendingStartups, checkDuplicateSession, prependToResponse, appendToResponse, buildStatusSuffix, type StatusLineItem } from './tool-response.js';
 import { recordBlockEvent, clearBlockEvents } from './block-events.js';

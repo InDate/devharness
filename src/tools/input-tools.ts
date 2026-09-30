@@ -328,7 +328,7 @@ export function createInputTools(
                     return {
                       error: `Element is blocked by modal`,
                       blockingModal: blockingCheck.blockingModal,
-                      suggestion: `Enable handleModals parameter or call dismissModal tool first`,
+                      suggestion: `Enable handleModals parameter or call modal with action dismiss first`,
                     };
                   }
                 }
@@ -680,7 +680,7 @@ export function createInputTools(
                     return {
                       error: `Element is blocked by modal`,
                       blockingModal: blockingCheck.blockingModal,
-                      suggestion: `Enable handleModals parameter or call dismissModal tool first`,
+                      suggestion: `Enable handleModals parameter or call modal with action dismiss first`,
                     };
                   }
                 }
@@ -887,7 +887,7 @@ export function createInputTools(
                     return {
                       error: `Element is blocked by modal`,
                       blockingModal: blockingCheck.blockingModal,
-                      suggestion: `Enable handleModals parameter or call dismissModal tool first`,
+                      suggestion: `Enable handleModals parameter or call modal with action dismiss first`,
                     };
                   }
                 }

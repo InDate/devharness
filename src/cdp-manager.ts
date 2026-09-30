@@ -762,7 +762,7 @@ export class CDPManager {
         totalLines: maxLines,
         suggestion: scriptIds.length > 1
           ? `This URL has ${scriptIds.length} inline scripts. The largest has ${maxLines} lines. Use searchCode() to find the correct script and line.`
-          : `The script only has ${maxLines} lines. Use getSourceCode() to view the file and find valid line numbers.`
+          : `The script only has ${maxLines} lines. Use source({ action: 'get' }) to view the file and find valid line numbers.`
       };
     } catch (error) {
       // Fallback if we can't get script source

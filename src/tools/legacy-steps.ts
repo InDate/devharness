@@ -1,6 +1,8 @@
 /**
- * Calls written against tools the merge into `connection` and `browser`
- * removed, rewritten into the calls that replace them.
+ * Calls written against tools the merge removed, rewritten into the calls
+ * that replace them: the connection tools and `tab` into `connection` and
+ * `browser`, and the single-operation tools into `source`, `modal`,
+ * `download` and `config`.
  *
  * Saved sequences, sequences pulled from GitHub, `history.log` and direct
  * callers (the CLI, the bench, internal code) still carry the old names. Each
@@ -39,6 +41,13 @@ const REWRITES: Record<string, Rewrite> = {
   getChromeStatus: p => ({ tool: 'connection', params: withParams(p, [], { action: 'browsers' }) }),
   killChrome: p => ({ tool: 'browser', params: withParams(p, [], { action: 'kill' }) }),
   resetChromeLauncher: p => ({ tool: 'browser', params: withParams(p, [], { action: 'resetLauncher' }) }),
+  getSourceCode: p => ({ tool: 'source', params: withParams(p, [], { action: 'get' }) }),
+  loadSourceMaps: p => ({ tool: 'source', params: withParams(p, [], { action: 'loadMaps' }) }),
+  detectModals: p => ({ tool: 'modal', params: withParams(p, [], { action: 'detect' }) }),
+  dismissModal: p => ({ tool: 'modal', params: withParams(p, [], { action: 'dismiss' }) }),
+  saveToDisk: p => ({ tool: 'download', params: p }),
+  setDebugLogging: p => ({ tool: 'config', params: withParams(p, [], { action: 'setDebugLogging' }) }),
+  getDebugLoggingStatus: p => ({ tool: 'config', params: withParams(p, [], { action: 'debugLoggingStatus' }) }),
   tab: p => {
     switch (p.action) {
       case 'create':
@@ -67,6 +76,13 @@ const REPLACEMENTS: Record<string, string> = {
   killChrome: "browser with action: 'kill'",
   resetChromeLauncher: "browser with action: 'resetLauncher'",
   tab: "connection: list, switch, rename and close; a new tab is connection launch with port",
+  getSourceCode: "source with action: 'get'",
+  loadSourceMaps: "source with action: 'loadMaps'",
+  detectModals: "modal with action: 'detect'",
+  dismissModal: "modal with action: 'dismiss'",
+  saveToDisk: 'download, with the same parameters',
+  setDebugLogging: "config with action: 'setDebugLogging'",
+  getDebugLoggingStatus: "config with action: 'debugLoggingStatus'",
 };
 
 /** The call an old one became, or the call unchanged when its tool still exists. */

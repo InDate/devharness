@@ -3,11 +3,10 @@
  */
 
 import { z } from 'zod';
-import type { ConnectionManager } from '../connection-manager.js';
-import { executeWithPauseDetection } from '../debugger-aware-wrapper.js';
+import { executeWithPauseDetection, actionFailureResponse } from '../debugger-aware-wrapper.js';
 import { checkBrowserAutomation } from '../error-helpers.js';
 import { createTool } from '../validation-helpers.js';
-import { createSuccessResponse, createErrorResponse } from '../messages.js';
+import { createErrorResponse } from '../messages.js';
 import { promises as fs } from 'fs';
 import path from 'path';
 import type { ClickableCache, ClickableElement } from '../clickable-cache.js';
@@ -48,7 +47,7 @@ const contentSchema = z.object({
   waitMs: z.number().optional().describe("Max ms to wait for the plugin's waitFor predicate before extracting (for parse action, default: 8000; 0 to skip waiting)"),
 }).strict();
 
-export function createContentTools(connectionManager: ConnectionManager, resolveConnectionFromReason: (connectionReason: string) => Promise<any>, clickableCache: ClickableCache) {
+export function createContentTools(resolveConnectionFromReason: (connectionReason: string) => Promise<any>, clickableCache: ClickableCache) {
   /**
    * Save extracted content to disk
    */
@@ -69,9 +68,6 @@ export function createContentTools(connectionManager: ConnectionManager, resolve
     return filepath;
   };
 
-  /**
-   * Collect interactive elements from page (live, not cached)
-   */
   return {
     content: createTool(
       'Primary tool for page content. Prefer over screenshots. Actions: extractText (extract webpage text with outline/full/section modes), findInteractive (find all interactive elements like links, buttons, inputs with summary or filtered view), verify (run CDP-based UI verification for dead buttons, viewport issues, touch targets, overflow clipping), parse (run a page-parser plugin from .devharness/parsers/ against the current page — omit name to list available plugins)',
@@ -103,6 +99,15 @@ export function createContentTools(connectionManager: ConnectionManager, resolve
         }
 
         const page = targetPuppeteerManager.getPage();
+        const on = `connectionReason: '${args.connectionReason}'`;
+
+        // findInteractive and verify read the page title first, and a paused
+        // page answers no page JS until it resumes.
+        if ((action === 'findInteractive' || action === 'verify') && targetCdpManager.isPaused()) {
+          return createErrorResponse('ACTION_FAILED', {
+            action, selector: 'page', error: 'execution is paused at a breakpoint',
+          });
+        }
 
         switch (action) {
           case 'extractText': {
@@ -217,11 +222,12 @@ export function createContentTools(connectionManager: ConnectionManager, resolve
               'extractText'
             );
 
-            if (!result.result) {
-              return createErrorResponse('EXTRACTION_FAILED');
+            {
+              const failed = actionFailureResponse(result, 'extractText', 'page');
+              if (failed) return failed;
             }
 
-            const { url, title, headings, markdown, wordCount } = result.result;
+            const { url, title, headings, markdown, wordCount } = result.result!;
 
             // Mode: outline (default) - return metadata and structure
             if (mode === 'outline') {
@@ -255,9 +261,9 @@ export function createContentTools(connectionManager: ConnectionManager, resolve
               response += `\nStructure:\n${outlineText}\n\n`;
               response += `---\n\n`;
               response += `Next Steps:\n`;
-              response += `- Extract full: content({ action: 'extractText', mode: 'full' })\n`;
-              response += `- Extract section: content({ action: 'extractText', mode: 'section', section: 'Name' })\n`;
-              response += `- Search: content({ action: 'extractText', search: 'keyword' })`;
+              response += `- Extract full: content({ action: 'extractText', ${on}, mode: 'full' })\n`;
+              response += `- Extract section: content({ action: 'extractText', ${on}, mode: 'section', section: 'Name' })\n`;
+              response += `- Search: content({ action: 'extractText', ${on}, search: 'keyword' })`;
 
               return {
                 content: [{ type: 'text', text: response }],
@@ -339,7 +345,7 @@ export function createContentTools(connectionManager: ConnectionManager, resolve
                 const flag = p.matches === true ? '  ✓ matches current URL' : '';
                 out += `- ${p.name}: ${p.description ?? '(no description)'}${flag}\n`;
               }
-              out += `\nRun: content({ action: 'parse', name: '<name>' })`;
+              out += `\nRun: content({ action: 'parse', ${on}, name: '<name>' })`;
               return { content: [{ type: 'text', text: out }] };
             }
 
@@ -380,6 +386,13 @@ export function createContentTools(connectionManager: ConnectionManager, resolve
               'parse'
             );
 
+            // An extract may return null for "nothing found"; a pause or a throw is not that.
+            if (!run.success || run.pausedAtBreakpoint) {
+              return createErrorResponse('ACTION_FAILED', {
+                action: 'parse', selector: args.name,
+                error: run.error ?? 'execution is paused at a breakpoint',
+              });
+            }
             const payload = JSON.stringify(run.result ?? null, null, 2);
             let response = `Parser: ${args.name}\nURL: ${url}\n\n${payload}`;
 
@@ -496,7 +509,7 @@ export function createContentTools(connectionManager: ConnectionManager, resolve
               const exampleText = exampleElement?.text || 'Button';
               const exampleTag = exampleElement?.type === 'link' ? 'a' : 'button';
               response += `\n:has-text() matches text content, aria-label, and title.`;
-              response += `\nExample: \`input({ action: 'click', selector: '${exampleTag}:has-text("${exampleText}")' })\``;
+              response += `\nExample: \`input({ action: 'click', ${on}, selector: '${exampleTag}:has-text("${exampleText}")' })\``;
 
               return {
                 content: [{ type: 'text', text: response }],
@@ -578,7 +591,6 @@ export function createContentTools(connectionManager: ConnectionManager, resolve
           }
 
           case 'verify': {
-            const page = targetPuppeteerManager.getPage();
             const title = await page.title();
 
             // Parse checks parameter
@@ -675,19 +687,3 @@ export function createContentTools(connectionManager: ConnectionManager, resolve
   };
 }
 
-/**
- * Format issue type for display
- */
-function formatIssueType(type: string): string {
-  const typeNames: Record<string, string> = {
-    'no-click-handler': 'Element has no click handler',
-    'outside-viewport': 'Element outside viewport',
-    'partially-outside-viewport': 'Element partially outside viewport',
-    'small-touch-target': 'Small touch target',
-    'overflow-clipping': 'Overflow clipping content',
-    'not-clickable': 'Element not clickable (blocked)',
-    'dead-link': 'Dead link',
-    'horizontal-scroll': 'Page has horizontal scroll',
-  };
-  return typeNames[type] || type;
-}

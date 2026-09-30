@@ -19,9 +19,11 @@ const MAX_SEQUENCE_BYTES = 256 * 1024;
 const MAX_STEPS = 500;
 
 /** Tools that do more than drive a page, so a remote sequence using one is
- *  refused unless the caller explicitly opts in. */
+ *  refused unless the caller explicitly opts in. `replay` runs other calls -
+ *  history.log lines, local sequences - that the audit cannot see, and
+ *  `config` restarts, resets or relocates the server. */
 export const PRIVILEGED_TOOLS: ReadonlySet<string> = new Set([
-  'execution', 'server', 'request', 'download', 'browser',
+  'execution', 'server', 'request', 'download', 'browser', 'replay', 'config',
 ]);
 
 export interface FencedBlock {
@@ -39,7 +41,7 @@ const FENCE_RE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
  *
  * Tracks the opening fence's character and length so a longer fence can
  * legally contain shorter ones - the reason this is a scanner and not a
- * regex. Ten issue files on disk already carry code fences of their own.
+ * regex. Issue bodies carry code fences of their own.
  */
 export function extractFencedBlocks(markdown: string): FencedBlock[] {
   const lines = markdown.split(/\r?\n/);

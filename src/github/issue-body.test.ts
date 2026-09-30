@@ -184,6 +184,17 @@ describe('auditSequence', () => {
     expect(auditSequence(parsed.sequence).privileged).toEqual(['browser']);
   });
 
+  it('flags a step that replays other calls or changes the server', () => {
+    const parsed = parseRemoteSequence(JSON.stringify({
+      commands: [
+        { tool: 'replay', params: { action: 'runFromLog', lines: [1] } },
+        { tool: 'config', params: { action: 'restart' } },
+      ],
+    }));
+    if (!parsed.ok) throw new Error('expected ok');
+    expect(auditSequence(parsed.sequence).privileged).toEqual(['config', 'replay']);
+  });
+
   it('reads an old saveToDisk step as download, and flags it', () => {
     const parsed = parseRemoteSequence(JSON.stringify({
       commands: [{ tool: 'saveToDisk', params: { url: 'http://a/f.txt', filename: 'f.txt' } }],

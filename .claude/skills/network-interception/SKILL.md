@@ -26,7 +26,7 @@ record for the identity function is `docs/landscapes/match-identity.md`.
 | Request match | `matchPin`, `:1417` | narrowest accepted pin: constraints (method, step) first, then substring length |
 | Event-stream messages | `takeMessages` in the HTTP answer path, `src/proxy/intercept-proxy.ts` | each `text/event-stream` message is matched as a received frame and passed, replaced (its `event:`/`id:` lines kept) or dropped; a message is held until its blank line arrives; a compressed stream is piped unread |
 | Frame match | `matchFramePin`, `:1362` | narrowest accepted pin: constraints (url, direction, step, field-on-a-parsed-frame) first, then text length; parses the frame once (`objectOf`, `:266`; `carries`, `:278`) |
-| Step binding | `underStep`, `src/proxy/intercept-proxy.ts` | a pin with `step`, or with `steps`, answers only while that replay step (or one of those) is the cursor (`src/tools/replay-executor.ts:2359`) |
+| Step binding | `underStep`, `src/proxy/intercept-proxy.ts` | a pin with `step`, or with `steps`, answers only while that replay step (or one of those) is the cursor (`markNextCommand(cursorAt(i))` in `src/tools/replay-executor.ts`) |
 | Refuse mode | `refuseUnmatchedWrites`, `:880`; branch at `:1474` | an unmatched request outside `GET`/`HEAD`/`OPTIONS` (`SAFE_METHODS`, `:46`) is answered 403, recorded `answeredAs: 'refused'`, counted |
 | Host scope | `allowOnly`, `:858`; `BROWSER_SERVICE_HOSTS`, `:532` | hosts outside the list are destroyed and counted; the app's host is on the list by construction (`src/tools/bench-tools.ts:423`) |
 | Tool surface | `src/tools/proxy-tools.ts:41` | `answer`, `answerFrame` (with `step`, `:50`), `withdraw`, `answers`, `refuse` (`unmatchedWrites`, `:51`), `status`, `events`, `sockets`, `body` |

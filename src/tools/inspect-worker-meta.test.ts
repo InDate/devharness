@@ -1,6 +1,6 @@
 /**
  * `saveAs` and a sequence's assertions read `_meta.inspect.value`
- * (replay-executor.ts:892), never the rendered text. An evaluation inside a
+ * (CAPTURE_SOURCES in replay-executor.ts), never the rendered text. An evaluation inside a
  * worker target takes a different code path from the page's, so if it renders
  * the value but omits the meta, every capture and every assertion downstream
  * of it silently sees nothing while the step reports success.

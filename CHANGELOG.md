@@ -72,6 +72,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`connection list`, `status`, `switch` and a reusing `launch` answer
   while a connection is paused.** Reading the page title waited for the page
   to resume, and the pause guard blocked `list`, `status` and `browsers`.
+- **A tab opened in a proxied Chrome reaches its proxy.** The proxy was
+  registered under the launching name only, so a second tab (`launch` with
+  the same `port`, or `attach`) and a proxied launch that named no connection
+  answered "No proxy" to the `proxy` tool, and their initiator notes were
+  dropped. Every tab of the browser now resolves to the one proxy, which
+  stops only when no tab's name still holds it.
+- **A tool name matching an inherited property is unknown.** An MCP call
+  named `toString` passed the unknown-tool check.
 - **`modal dismiss` works in a tab that is not in front.** The button click
   waited on a rendering frame such a tab never produces, and failed after
   minutes.

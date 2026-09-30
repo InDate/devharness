@@ -93,6 +93,27 @@ export async function startProxyFor(reference: string, appUrl?: string): Promise
   return { proxy, chromeArgs };
 }
 
+/**
+ * Register `reference` against the proxy `holder` was launched through. A tab
+ * opened in a browser that runs through a proxy sends its traffic through that
+ * proxy, since the flag is the browser's; registering the tab's name is what
+ * lets the `proxy` tool and initiator notes reach it. Answers whether `holder`
+ * had a proxy to share.
+ */
+export function shareProxy(holder: string, reference: string): boolean {
+  const proxy = proxies.get(holder);
+  if (!proxy) return false;
+  proxies.set(reference, proxy);
+  launchArgs.set(reference, launchArgs.get(holder) ?? []);
+  networkDetach.set(reference, attachLayer(reference, 'network', proxy.queue.mechanism()));
+  return true;
+}
+
+/** Each running proxy once, however many names share it. */
+function distinctProxies(): InterceptProxy[] {
+  return [...new Set(proxies.values())];
+}
+
 const cursorEnds = new Set<(ending: ProxyCursor) => void>();
 
 /**
@@ -117,7 +138,7 @@ export function onCursorEnd(listener: (ending: ProxyCursor) => void): () => void
 export function markOnProxies(cursor: ProxyCursor | undefined): void {
   if (current) for (const listener of cursorEnds) listener(current);
   current = cursor;
-  for (const proxy of proxies.values()) proxy.mark(cursor);
+  for (const proxy of distinctProxies()) proxy.mark(cursor);
 }
 
 /**
@@ -136,7 +157,7 @@ export function markOnProxies(cursor: ProxyCursor | undefined): void {
  */
 export async function settleProxies(quietMs: number, capMs: number): Promise<void> {
   if (quietMs <= 0 || proxies.size === 0) return;
-  await Promise.all([...proxies.values()].map(proxy => proxy.settle(quietMs, capMs)));
+  await Promise.all(distinctProxies().map(proxy => proxy.settle(quietMs, capMs)));
 }
 
 /** Runs one boundary at a time; see markNextCommand and releaseCommand. */
@@ -260,6 +281,8 @@ export async function stopProxyFor(reference: string): Promise<boolean> {
   launchArgs.delete(reference);
   networkDetach.get(reference)?.();
   networkDetach.delete(reference);
+  // Another tab of the same browser still sends its traffic through it.
+  if ([...proxies.values()].includes(proxy)) return true;
   proxy.queue.releaseAll();
   await proxy.stop().catch(() => {});
   return true;

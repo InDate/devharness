@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createConnectionTools, type ConnectionToolDeps } from './connection-tools.js';
+import { createConnectionTools, shareBrowserProxy, type ConnectionToolDeps } from './connection-tools.js';
+import { startProxyFor, stopProxyFor, getProxy } from '../proxy/registry.js';
 
 /** A connection whose page title never resolves while `paused` is true, as Puppeteer's does. */
 function fakeConnection(reference: string, paused: boolean) {
@@ -63,5 +64,36 @@ describe('a connection paused at a breakpoint', () => {
     expect(result.isError).toBeFalsy();
     expect(result.content[0].text).toContain('http://app/paused-app');
     expect(paused.title).not.toHaveBeenCalled();
+  });
+});
+
+describe('a tab opened in a Chrome that runs through a proxy', () => {
+  it('reaches the proxy its browser was launched through, under its own name', async () => {
+    const { proxy } = await startProxyFor('first-shop-tab');
+
+    shareBrowserProxy([{ port: 9222, reference: 'first-shop-tab' }], 9222, 'second-shop-tab');
+
+    expect(getProxy('second-shop-tab')).toBe(proxy);
+    await stopProxyFor('second-shop-tab');
+    await stopProxyFor('first-shop-tab');
+  });
+
+  it('reaches the proxy of a launch that named no connection', async () => {
+    const { proxy } = await startProxyFor('port-9333');
+
+    shareBrowserProxy([], 9333, 'unnamed-connection-default');
+
+    expect(getProxy('unnamed-connection-default')).toBe(proxy);
+    await stopProxyFor('unnamed-connection-default');
+    await stopProxyFor('port-9333');
+  });
+
+  it('takes no proxy from a Chrome on another port', async () => {
+    await startProxyFor('other-port-tab');
+
+    shareBrowserProxy([{ port: 9444, reference: 'other-port-tab' }], 9222, 'unrelated-new-tab');
+
+    expect(getProxy('unrelated-new-tab')).toBeUndefined();
+    await stopProxyFor('other-port-tab');
   });
 });

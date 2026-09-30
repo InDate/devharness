@@ -112,3 +112,41 @@ export function translateSequence<T extends { commands?: Array<{ tool: string; p
     ...(sequence.teardown ? { teardown: translateSteps(sequence.teardown) } : {}),
   };
 }
+
+/**
+ * The tool a direct call reaches: the call translated, then looked up among
+ * `tools`. Runs before validation and recording, so a call written against a
+ * removed tool runs, and history holds the call it became.
+ */
+export function callTarget<T>(
+  tools: Record<string, T>,
+  calledName: string,
+  calledParams: Record<string, any> | undefined
+): { toolName: string; params: Record<string, any>; tool: T | undefined } {
+  const { tool: toolName, params } = translateCall(calledName, calledParams);
+  return { toolName, params, tool: Object.prototype.hasOwnProperty.call(tools, toolName) ? tools[toolName] : undefined };
+}
+
+/**
+ * The MCP answer to a call naming no tool. MCP clients call the names the
+ * tool list gives them, so an old name is answered with what replaced it
+ * rather than run.
+ */
+export function unknownToolResponse(toolName: string, availableTools: string[]) {
+  const replacedBy = replacementFor(toolName);
+  return {
+    content: [
+      {
+        type: 'text' as const,
+        text: JSON.stringify({
+          success: false,
+          error: `Unknown tool: ${toolName}`,
+          code: 'UNKNOWN_TOOL',
+          ...(replacedBy ? { replacedBy } : {}),
+          availableTools: [...availableTools].sort(),
+        }, null, 2),
+      },
+    ],
+    isError: true,
+  };
+}

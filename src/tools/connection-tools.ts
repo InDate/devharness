@@ -22,7 +22,7 @@ import { createSuccessResponse, createErrorResponse } from '../messages.js';
 import { configManager } from '../config.js';
 import { debugLog } from '../debug-logger.js';
 import { validateReference, requireValidReference, sanitizeReference, UNNAMED_CONNECTION } from '../reference-validator.js';
-import { startProxyFor } from '../proxy/registry.js';
+import { startProxyFor, shareProxy, getProxy } from '../proxy/registry.js';
 import { sizeWindowToViewport } from '../window-sizing.js';
 import type { ToolResponseMeta, PausedAtMeta } from '../tool-response.js';
 
@@ -66,6 +66,26 @@ async function isChromeRunning(port: number): Promise<boolean> {
 function withLaunchMeta(response: any, name: string, reused: boolean): any {
   response._meta = { ...(response._meta || {}), tool: 'connection', action: 'launch', launch: { name, reused } };
   return response;
+}
+
+/**
+ * Register `reference` against the proxy another tab of the Chrome on `port`
+ * runs through: its launching name, or `port-<port>` for a launch that named
+ * none. Every tab of that browser sends its traffic through that one proxy.
+ */
+export function shareBrowserProxy(
+  connections: Array<{ port: number; reference?: string }>,
+  port: number,
+  reference: string
+): void {
+  if (getProxy(reference)) return;
+  const holders = [
+    `port-${port}`,
+    ...connections.filter(c => c.port === port && c.reference && c.reference !== reference).map(c => c.reference!),
+  ];
+  for (const holder of holders) {
+    if (shareProxy(holder, reference)) return;
+  }
 }
 
 const connectionSchema = z.object({
@@ -479,6 +499,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
               connectionReference,
               pageIndex
             );
+            shareBrowserProxy(connectionManager.listConnections(), port, connectionReference);
 
             activateConnection(connectionId);
 
@@ -752,6 +773,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
           reference, // Set reference from parameter
           pageIndex
         );
+        if (runtimeType === 'chrome') shareBrowserProxy(connectionManager.listConnections(), port, reference);
 
         activateConnection(connectionId);
 

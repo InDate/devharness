@@ -33,7 +33,7 @@ import { ConsoleMonitor } from './console-monitor.js';
 import { NetworkMonitor } from './network-monitor.js';
 import { ConnectionManager, type Connection } from './connection-manager.js';
 import { createConnectionTools } from './tools/connection-tools.js';
-import { translateCall, replacementFor } from './tools/legacy-steps.js';
+import { callTarget, unknownToolResponse } from './tools/legacy-steps.js';
 import { LogpointExecutionTracker } from './logpoint-execution-tracker.js';
 import { PortReserver } from './port-reserver.js';
 import { validateParams } from './validation-helpers.js';
@@ -544,10 +544,7 @@ function pageHeldRefusal(toolName: string, args: Record<string, any>): any {
 }
 
 async function executeToolCall(calledName: string, calledParams: Record<string, any>, abortSignal?: AbortSignal): Promise<any> {
-  // Before validation and recording, so a call written against a removed tool
-  // runs, and history holds the call it became.
-  const { tool: toolName, params } = translateCall(calledName, calledParams);
-  const tool = allTools[toolName as keyof typeof allTools];
+  const { toolName, params, tool } = callTarget<any>(allTools, calledName, calledParams);
 
   if (!tool) {
     throw new Error(`Unknown tool: ${toolName}`);
@@ -717,24 +714,12 @@ function registerToolHandlers(server: Server) {
   // Anything a tool call causes is the agent's own doing, and its events say so.
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => runAs('agent', async () => {
     const toolName = request.params.name;
-    const tool = allTools[toolName as keyof typeof allTools];
+    const tool = Object.prototype.hasOwnProperty.call(allTools, toolName)
+      ? allTools[toolName as keyof typeof allTools]
+      : undefined;
 
     if (!tool) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({
-              success: false,
-              error: `Unknown tool: ${toolName}`,
-              code: 'UNKNOWN_TOOL',
-              ...(replacementFor(toolName) ? { replacedBy: replacementFor(toolName) } : {}),
-              availableTools: Object.keys(allTools).sort()
-            }, null, 2),
-          },
-        ],
-        isError: true
-      };
+      return unknownToolResponse(toolName, Object.keys(allTools));
     }
 
     // A tool that drives a page the bench holds - frozen, running, recording -

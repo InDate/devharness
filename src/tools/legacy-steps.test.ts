@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { translateCall, translateSequence, replacementFor } from './legacy-steps.js';
+import { translateCall, translateSequence, replacementFor, callTarget, unknownToolResponse } from './legacy-steps.js';
 
 describe('translateCall', () => {
   it('turns a launchChrome reference into a connection launch name, keeping the other parameters', () => {
@@ -95,5 +95,36 @@ describe('replacementFor', () => {
   it('names the replacement of a removed tool, and nothing for a current one', () => {
     expect(replacementFor('launchChrome')).toContain("action: 'launch'");
     expect(replacementFor('connection')).toBeUndefined();
+  });
+});
+
+describe('callTarget', () => {
+  const tools = { connection: 'connection-tool', navigate: 'navigate-tool' };
+
+  it('reaches the tool that replaced an old name, with the parameters translated', () => {
+    expect(callTarget(tools, 'launchChrome', { reference: 'shop' })).toEqual({
+      toolName: 'connection', params: { action: 'launch', name: 'shop' }, tool: 'connection-tool',
+    });
+  });
+
+  it('reaches no tool for a name that is neither current nor replaced, nor an inherited property', () => {
+    expect(callTarget(tools, 'nosuchtool', {}).tool).toBeUndefined();
+    expect(callTarget(tools, 'toString', {}).tool).toBeUndefined();
+  });
+});
+
+describe('unknownToolResponse', () => {
+  it('names what replaced an old tool, and lists the tools there are', () => {
+    const response = unknownToolResponse('killChrome', ['navigate', 'browser']);
+    const body = JSON.parse(response.content[0].text);
+
+    expect(response.isError).toBe(true);
+    expect(body).toMatchObject({ code: 'UNKNOWN_TOOL', availableTools: ['browser', 'navigate'] });
+    expect(body.replacedBy).toContain("browser with action: 'kill'");
+  });
+
+  it('names no replacement for a name that never existed', () => {
+    const body = JSON.parse(unknownToolResponse('nosuchtool', []).content[0].text);
+    expect(body).not.toHaveProperty('replacedBy');
   });
 });

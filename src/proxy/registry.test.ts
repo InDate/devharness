@@ -3,7 +3,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createServer, request as httpRequest, type Server } from 'node:http';
-import { startProxyFor, stopProxyFor, markOnProxies, forgetCursor } from './registry.js';
+import { startProxyFor, stopProxyFor, markOnProxies, forgetCursor, getProxy, shareProxy, listProxies } from './registry.js';
 
 let origin: Server;
 let originPort = 0;
@@ -42,5 +42,35 @@ describe('a proxy started while a command runs', () => {
 
     const event = proxy.eventsIn().find(e => e.url.endsWith('/launched'));
     expect(event?.commandIndex).toBe(4);
+  });
+});
+
+describe('a second tab opened in a proxied browser', () => {
+  it('resolves to the proxy the browser was launched through', async () => {
+    const { proxy } = await startProxyFor('first shop tab');
+
+    expect(shareProxy('first shop tab', 'second shop tab')).toBe(true);
+
+    expect(getProxy('second shop tab')).toBe(proxy);
+    expect(listProxies()).toEqual(expect.arrayContaining(['first shop tab', 'second shop tab']));
+    await stopProxyFor('first shop tab');
+    await stopProxyFor('second shop tab');
+  });
+
+  it('keeps the proxy running for one name while the other name is stopped', async () => {
+    const { proxy } = await startProxyFor('first cart tab');
+    shareProxy('first cart tab', 'second cart tab');
+
+    await stopProxyFor('second cart tab');
+
+    expect(getProxy('second cart tab')).toBeUndefined();
+    expect(getProxy('first cart tab')).toBe(proxy);
+    expect((proxy as any).front.listening).toBe(true);
+    await stopProxyFor('first cart tab');
+  });
+
+  it('shares nothing when the first name has no proxy', () => {
+    expect(shareProxy('no such tab', 'another new tab')).toBe(false);
+    expect(getProxy('another new tab')).toBeUndefined();
   });
 });

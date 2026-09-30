@@ -213,13 +213,13 @@ export class CDPManager {
       return bestMatch;
     }
 
-    // Third, try filename/path suffix match
-    // This handles cases like "click.js" matching "http://localhost/controls/click.js"
-    // or "controls/click.js" matching "http://localhost/controls/click.js"
+    // Third, a filename or path suffix at a path boundary: "click.js" and
+    // "controls/click.js" match "http://localhost/controls/click.js", and
+    // "click.js" does not match ".../doubleclick.js".
+    const suffix = baseUrl.startsWith('/') ? baseUrl : '/' + baseUrl;
     for (const [loadedUrl, scriptIds] of this.urlToScriptId.entries()) {
       const loadedBaseUrl = loadedUrl.split('?')[0];
-      // Check if the loaded URL ends with the provided URL (after stripping protocol/host)
-      if (loadedBaseUrl.endsWith('/' + baseUrl) || loadedBaseUrl.endsWith(baseUrl)) {
+      if (loadedBaseUrl.endsWith(suffix)) {
         if (scriptIds.length > 0) {
           const maxId = Math.max(...scriptIds.map(id => parseInt(id, 10) || 0));
           if (maxId > highestScriptId) {
@@ -311,11 +311,11 @@ export class CDPManager {
         debugLog('cdp-manager', `Resolving ${resolvers.length} pause resolvers`);
         resolvers.forEach(resolve => resolve());
 
-        // Inject clickable console link when paused at breakpoint
+        // A console line naming where it paused, 1-based as the breakpoint's own line is.
         if (params.callFrames && params.callFrames.length > 0) {
           const location = params.callFrames[0].location;
           const url = this.scriptIdToUrl.get(location.scriptId) || 'unknown';
-          this.injectConsoleLink(url, location.lineNumber, '⏸️ Paused at');
+          this.injectConsoleLink(url, location.lineNumber + 1, '⏸️ Paused at');
         }
 
         // Notify pause callback (e.g., to pause port monitoring)
@@ -679,104 +679,6 @@ export class CDPManager {
   }
 
   /**
-   * Synchronize breakpoint state with CDP's actual breakpoints
-   * Use this to recover from state desynchronization
-   */
-  async syncBreakpoints(): Promise<{ synced: number; removed: number }> {
-    if (!this.state.connected) {
-      throw new Error('Not connected to debugger');
-    }
-
-    // This is a future enhancement - for now, just return current counts
-    // Full implementation would query CDP for all active breakpoints
-    // and reconcile with state.breakpoints Map
-    return {
-      synced: this.state.breakpoints.size,
-      removed: 0,
-    };
-  }
-
-  /**
-   * Diagnose why a breakpoint failed to set (empty locations array)
-   * Performs lazy validation to determine exact cause
-   */
-  async diagnoseBreakpointFailure(url: string, lineNumber: number): Promise<{
-    cause: 'script_not_found' | 'line_out_of_bounds' | 'line_not_executable';
-    message: string;
-    scriptUrl: string;
-    requestedLine: number;
-    totalLines?: number;
-    suggestion: string;
-  }> {
-    // Check if we have this script loaded (with fallback to base URL matching)
-    const match = this.findScriptIds(url);
-
-    if (!match) {
-      return {
-        cause: 'script_not_found',
-        message: `Script not loaded: ${url}`,
-        scriptUrl: url,
-        requestedLine: lineNumber,
-        suggestion: 'The script has not been loaded by Chrome yet. Use reloadPage() or navigateTo() to ensure the script loads.'
-      };
-    }
-
-    const { scriptIds } = match;
-
-    // Script exists - check each scriptId to find which contains the requested line
-    try {
-      const { Debugger } = this.client;
-
-      // Try each script to find one that contains the requested line
-      for (const scriptId of scriptIds) {
-        const source = await Debugger.getScriptSource({ scriptId });
-        const totalLines = source.scriptSource.split('\n').length;
-
-        // Check if this script contains the requested line
-        if (lineNumber <= totalLines) {
-          // This script contains the line - check if it's executable
-          return {
-            cause: 'line_not_executable',
-            message: `Line ${lineNumber} is not executable code`,
-            scriptUrl: url,
-            requestedLine: lineNumber,
-            totalLines: totalLines,
-            suggestion: 'This line may be a comment, blank line, or non-executable declaration. Try setting the breakpoint on a nearby line with executable code (function call, assignment, etc.).'
-          };
-        }
-      }
-
-      // Line number exceeds all scripts - get the maximum lines from all scripts
-      let maxLines = 0;
-      for (const scriptId of scriptIds) {
-        const source = await Debugger.getScriptSource({ scriptId });
-        const lineCount = source.scriptSource.split('\n').length;
-        maxLines = Math.max(maxLines, lineCount);
-      }
-
-      return {
-        cause: 'line_out_of_bounds',
-        message: `Line ${lineNumber} is out of bounds`,
-        scriptUrl: url,
-        requestedLine: lineNumber,
-        totalLines: maxLines,
-        suggestion: scriptIds.length > 1
-          ? `This URL has ${scriptIds.length} inline scripts. The largest has ${maxLines} lines. Use searchCode() to find the correct script and line.`
-          : `The script only has ${maxLines} lines. Use source({ action: 'get' }) to view the file and find valid line numbers.`
-      };
-    } catch (error) {
-      // Fallback if we can't get script source
-      return {
-        cause: 'script_not_found',
-        message: `Unable to access script: ${url}`,
-        scriptUrl: url,
-        requestedLine: lineNumber,
-        suggestion: 'The script may have been unloaded. Try reloadPage().'
-      };
-    }
-  }
-
-  /**
    * Resume execution
    */
   async resume(): Promise<void> {
@@ -899,9 +801,6 @@ export class CDPManager {
   }
 
   /**
-   * Get variables for a specific call frame
-   */
-  /**
    * Estimate token count for a value (rough approximation: ~4 chars per token)
    */
   private estimateTokens(value: any): number {
@@ -922,6 +821,7 @@ export class CDPManager {
     return Math.floor((maxTokens - FIXED_OVERHEAD) / PROPORTIONAL_OVERHEAD);
   }
 
+  /** The variables of one call frame's scopes, reduced to fit `maxTokens`. */
   async getVariables(
     callFrameId: string,
     includeGlobal: boolean = false,
@@ -1088,14 +988,17 @@ export class CDPManager {
   }
 
   /**
-   * Bounded upper limit on how long evaluateExpression() will wait for CDP to
-   * respond, in milliseconds. Exported as an instance property (rather than a
-   * module constant) so tests can override it on a per-manager basis without
-   * needing real wall-clock waits. Kept comfortably below the 180s default
-   * Puppeteer protocolTimeout that would otherwise leak through as a raw,
-   * untyped "Runtime.callFunctionOn timed out" error on this path.
+   * How long evaluateExpression() waits for CDP to respond, in milliseconds.
+   * The CDP client sets no timeout of its own, so without this a wedged target
+   * holds the call forever. An instance property so tests can shorten it per
+   * manager without real waits.
    */
   evaluateExpressionTimeoutMs: number = 10_000;
+
+  /** The browser this manager is connected to, for reaching sibling targets. */
+  getEndpoint(): { host: string; port: number } | null {
+    return this.endpoint;
+  }
 
   /**
    * Evaluate an expression in the current context.
@@ -1118,11 +1021,6 @@ export class CDPManager {
    *    the runaway script themselves and return exceptionDetails cleanly
    *    (case 1) rather than relying solely on our client-side timer.
    */
-  /** The browser this manager is connected to, for reaching sibling targets. */
-  getEndpoint(): { host: string; port: number } | null {
-    return this.endpoint;
-  }
-
   async evaluateExpression(
     expression: string,
     callFrameId?: string,
@@ -1348,80 +1246,6 @@ export class CDPManager {
       }
     }
     return { rawCaptured: false };
-  }
-
-  /**
-   * Get available variables at a specific source location
-   * Useful for validating logpoint expressions
-   */
-  async getScopeVariablesAtLocation(
-    url: string,
-    lineNumber: number
-  ): Promise<{ variables: string[]; scopes: Array<{ type: string; variables: string[] }> } | null> {
-    if (!this.state.connected) {
-      throw new Error('Not connected to debugger');
-    }
-
-    // Temporarily set a breakpoint to inspect scope
-    const tempBreakpoint = await this.setBreakpoint(url, lineNumber);
-
-    try {
-      // Wait for the breakpoint to be hit (with timeout)
-      // Note: This requires the code to actually execute
-      // For static analysis, we'd need a different approach
-
-      // For now, return null to indicate we can't determine scope without execution
-      // This would require the debugger to be paused at that location
-      if (!this.state.paused || !this.state.currentCallFrames) {
-        // Remove the temporary breakpoint
-        await this.removeBreakpoint(tempBreakpoint.breakpointId);
-        return null;
-      }
-
-      // Get the call frame
-      const callFrame = this.state.currentCallFrames[0];
-
-      // Extract variable names from all scopes
-      const { Runtime } = this.client;
-      const scopes: Array<{ type: string; variables: string[] }> = [];
-      const allVariables: string[] = [];
-
-      for (const scope of callFrame.scopeChain) {
-        if (scope.type === 'global') continue; // Skip global scope
-
-        const properties = await Runtime.getProperties({
-          objectId: scope.object.objectId,
-          ownProperties: true,
-        });
-
-        const variableNames = properties.result
-          .filter((prop: any) => prop.value && !prop.name.startsWith('[['))
-          .map((prop: any) => prop.name);
-
-        scopes.push({
-          type: scope.type,
-          variables: variableNames,
-        });
-
-        allVariables.push(...variableNames);
-      }
-
-      // Remove the temporary breakpoint
-      await this.removeBreakpoint(tempBreakpoint.breakpointId);
-
-      return {
-        variables: [...new Set(allVariables)], // Deduplicate
-        scopes,
-      };
-    } catch (error) {
-      // Clean up the breakpoint if something goes wrong
-      try {
-        await this.removeBreakpoint(tempBreakpoint.breakpointId);
-      } catch (e) {
-        // Ignore cleanup errors
-      }
-      throw error;
-    }
   }
 
   /**
@@ -1743,7 +1567,8 @@ export class CDPManager {
   }
 
   /**
-   * Inject a clickable console link in the browser
+   * Log `message` and `url:lineNumber` to the page's console, which DevTools
+   * renders as a link to that line.
    */
   async injectConsoleLink(url: string, lineNumber: number, message: string): Promise<void> {
     if (!this.state.connected) {
@@ -1752,12 +1577,8 @@ export class CDPManager {
 
     const { Runtime } = this.client;
 
-    const consoleExpression = `
-      console.log(
-        '${message} %c${url}:${lineNumber}%c',
-        'color: #0066cc; text-decoration: underline; cursor: pointer; font-weight: bold',
-      );
-    `;
+    // As JSON string literals, so a quote in the URL or message stays inside its string.
+    const consoleExpression = `console.log(${JSON.stringify(`${message} %c${url}:${lineNumber}`)}, ${JSON.stringify('color: #0066cc; text-decoration: underline; cursor: pointer; font-weight: bold')});`;
 
     // Sent without waiting: a pause requested on an idle page stops at this
     // evaluation, which then answers only once the page resumes.
@@ -1861,7 +1682,7 @@ export class CDPManager {
 
       // If expansion is disabled or we've hit max depth, return description
       if (!expandObjects || currentDepth >= maxDepth) {
-        if (value.subtype === 'array') return `Array(${value.description})`;
+        if (value.subtype === 'array') return value.description || 'Array';
         return value.description || value.className || 'Object';
       }
 
@@ -1896,7 +1717,7 @@ export class CDPManager {
                 }
               }
               // Add truncation indicator
-              arrayElements.push(`... ${arrayLength - itemsShown} more items (use evaluateExpression to inspect)`);
+              arrayElements.push(`... ${arrayLength - itemsShown} more items (inspect action evaluateExpression reads the rest)`);
               return arrayElements;
             }
 
@@ -1922,7 +1743,7 @@ export class CDPManager {
             // For very large objects, show summary with first few keys
             if (propCount > 50) {
               const firstKeys = validProps.slice(0, 5).map((p: any) => p.name);
-              return `[Object with ${propCount} properties] {${firstKeys.join(', ')}, ...} - use evaluateExpression to inspect`;
+              return `[Object with ${propCount} properties] {${firstKeys.join(', ')}, ...} - inspect action evaluateExpression reads the rest`;
             }
 
             // For moderately large objects (10-50 props), limit depth
@@ -1945,13 +1766,13 @@ export class CDPManager {
           }
         } catch (error) {
           // If expansion fails, fall back to description
-          if (value.subtype === 'array') return `Array(${value.description})`;
+          if (value.subtype === 'array') return value.description || 'Array';
           return value.description || value.className || 'Object';
         }
       }
 
       // No objectId, can't expand
-      if (value.subtype === 'array') return `Array(${value.description})`;
+      if (value.subtype === 'array') return value.description || 'Array';
       return value.description || value.className || 'Object';
     }
     if (value.type === 'function') {

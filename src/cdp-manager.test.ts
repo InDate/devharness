@@ -693,3 +693,41 @@ describe('CDPManager.getPausedInfo()', () => {
     expect(cdpManager.getPausedInfo().location).toMatchObject({ url: 'http://app/app.js', lineNumber: 3, columnNumber: 5 });
   });
 });
+
+describe('CDPManager script lookup by a partial URL', () => {
+  it('matches a path suffix at a path boundary only', () => {
+    const cdpManager = new CDPManager();
+    (cdpManager as any).urlToScriptId.set('http://app.test/ads/doubleclick.js', ['7']);
+    (cdpManager as any).urlToScriptId.set('http://app.test/controls/click.js', ['3']);
+
+    expect((cdpManager as any).findScriptIds('click.js').matchedUrl).toBe('http://app.test/controls/click.js');
+    expect((cdpManager as any).findScriptIds('controls/click.js').matchedUrl).toBe('http://app.test/controls/click.js');
+    expect((cdpManager as any).findScriptIds('bleclick.js')).toBeNull();
+  });
+});
+
+describe('CDPManager console link text', () => {
+  it('stays one valid expression when the URL holds a quote', async () => {
+    const cdpManager = new CDPManager();
+    const evaluate = vi.fn(async () => ({}));
+    (cdpManager as any).client = { Runtime: { evaluate }, Debugger: {} };
+    (cdpManager as any).state.connected = true;
+
+    await cdpManager.injectConsoleLink("http://app.test/it's.js", 4, 'Breakpoint set at');
+
+    const logged: unknown[][] = [];
+    new Function('console', (evaluate.mock.calls[0] as any)[0].expression)({ log: (...args: unknown[]) => logged.push(args) });
+    expect(String(logged[0][0])).toContain("http://app.test/it's.js:4");
+  });
+});
+
+describe('CDPManager array display', () => {
+  it('shows an unexpanded array by its description once', async () => {
+    const cdpManager = new CDPManager();
+    const evaluate = vi.fn(async () => ({ result: { type: 'object', subtype: 'array', description: 'Array(3)' } }));
+    (cdpManager as any).client = { Runtime: { evaluate }, Debugger: {} };
+    (cdpManager as any).state.connected = true;
+
+    expect(await cdpManager.evaluateExpression('[1, 2, 3]', undefined, false)).toBe('Array(3)');
+  });
+});

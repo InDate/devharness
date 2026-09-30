@@ -134,14 +134,14 @@ node --inspect=9229 server.js
 
 ```javascript
 // Connect to Node.js debugger
-connection({ action: 'attach', name: 'backend debug', port: 9229 })
+connection({ action: 'attach', name: 'backend debug session', port: 9229 })
 
 // Set breakpoints
 breakpoint({
   action: 'set',
   url: 'file:///app/server.js',
   lineNumber: 50,
-  connectionReason: 'backend-debug'
+  connectionReason: 'backend-debug-session'
 })
 ```
 
@@ -151,14 +151,14 @@ Debug Chrome and Node.js simultaneously:
 
 **Chrome:**
 ```javascript
-connection({ action: 'launch', name: 'frontend debug' })
-navigate({ action: 'goto', url: 'http://localhost:3000', connectionReason: 'frontend-debug' })
+connection({ action: 'launch', name: 'frontend debug session' })
+navigate({ action: 'goto', url: 'http://localhost:3000', connectionReason: 'frontend-debug-session' })
 ```
 
 **Node.js (separate connection):**
 ```javascript
-connection({ action: 'attach', name: 'backend debug', port: 9229 })
-breakpoint({ action: 'set', url: 'file:///app/server.js', lineNumber: 50, connectionReason: 'backend-debug' })
+connection({ action: 'attach', name: 'backend debug session', port: 9229 })
+breakpoint({ action: 'set', url: 'file:///app/server.js', lineNumber: 50, connectionReason: 'backend-debug-session' })
 ```
 
 ## Logpoint Expressions
@@ -202,13 +202,13 @@ inspect({ action: 'evaluateExpression', expression: 'myVar', connectionReason: '
 
 1. **Launch and navigate**
 ```javascript
-connection({ action: 'launch', name: 'bug hunt' })
-navigate({ action: 'goto', url: 'http://localhost:3000/problematic-page', connectionReason: 'bug-hunt' })
+connection({ action: 'launch', name: 'bug hunt session' })
+navigate({ action: 'goto', url: 'http://localhost:3000/problematic-page', connectionReason: 'bug-hunt-session' })
 ```
 
 2. **Monitor console errors**
 ```javascript
-console({ action: 'list', type: 'error', connectionReason: 'bug-hunt' })
+console({ action: 'list', type: 'error', connectionReason: 'bug-hunt-session' })
 ```
 
 3. **Set breakpoints**
@@ -217,14 +217,14 @@ breakpoint({
   action: 'set',
   url: 'http://localhost:3000/app.js',
   lineNumber: 150,
-  connectionReason: 'bug-hunt'
+  connectionReason: 'bug-hunt-session'
 })
 ```
 
 4. **Trigger the bug and inspect**
 ```javascript
-input({ action: 'click', selector: '#trigger-button', connectionReason: 'bug-hunt' })
+input({ action: 'click', selector: '#trigger-button', connectionReason: 'bug-hunt-session' })
 // Pauses at breakpoint
-inspect({ action: 'getCallStack', connectionReason: 'bug-hunt' })
-inspect({ action: 'getVariables', callFrameId: '0', connectionReason: 'bug-hunt' })
+inspect({ action: 'getCallStack', connectionReason: 'bug-hunt-session' })
+inspect({ action: 'getVariables', callFrameId: '0', connectionReason: 'bug-hunt-session' })
 ```

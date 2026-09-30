@@ -293,10 +293,10 @@ No active debugger connection found.
 **Example:**
 ```javascript
 // Launch Chrome
-connection({ action: 'launch', name: 'app', url: 'http://localhost:3000' })
+connection({ action: 'launch', name: 'my-web-app', url: 'http://localhost:3000' })
 
 // Or connect to existing
-connection({ action: 'attach', name: 'app', host: 'localhost', port: 9222 })
+connection({ action: 'attach', name: 'my-web-app', host: 'localhost', port: 9222 })
 ```
 
 ---
@@ -1334,7 +1334,7 @@ Not connected to browser. This operation requires browser automation support.
 
 **Suggestions:**
 1. Launch Chrome with `connection({ action: 'launch' })` (automatically enables browser automation)
-2. Or connect to Chrome: `connection({ action: 'attach', name: 'app', port: 9222 })`
+2. Or connect to Chrome: `connection({ action: 'attach', name: 'my-web-app', port: 9222 })`
 
 **Note:** Browser automation features (DOM interaction, screenshots, navigation) are only available when connected to Chrome, not Node.js.
 

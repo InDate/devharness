@@ -136,10 +136,10 @@ A Node service by hand:
 
 ```
 1. node --inspect=9229 app.js
-2. connection({ action: 'attach', name: "api", port: 9229 })
-3. breakpoint({ action: 'set', connectionReason: "api", file: "user.ts", line: 42 })
+2. connection({ action: 'attach', name: "my-api-server", port: 9229 })
+3. breakpoint({ action: 'set', connectionReason: "my-api-server", file: "user.ts", line: 42 })
 4. Trigger the request.
-5. inspect({ action: 'getVariables', connectionReason: "api" })
+5. inspect({ action: 'getVariables', connectionReason: "my-api-server" })
 ```
 
 [examples/test-app](./examples/test-app/README.md) is an app with deliberate bugs

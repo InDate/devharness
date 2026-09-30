@@ -98,7 +98,7 @@ wins** - the more portable of the two is chosen.
 ```javascript
 replay({
   action: 'recordInteraction',
-  connectionReason: 'canvas-bug',
+  connectionReason: 'canvas-bug-repro',
   preferCoordinates: true,   // a WebGL canvas has no useful selectors
   includeHovers: true,       // the bug is a hover artefact
   simplifyEvents: false
@@ -124,7 +124,7 @@ decide whether a step should use a selector or coordinates.
 ### Recording Against an Issue
 
 ```javascript
-replay({ action: 'recordInteraction', connectionReason: 'bug-7', issueId: 7 })
+replay({ action: 'recordInteraction', connectionReason: 'bug-seven-repro', issueId: 7 })
 ```
 
 The issue's `type`, `title` and `startUrl` are used automatically, a fullscreen
@@ -356,14 +356,14 @@ is no file to reload it from.
 replay({
   action: 'run',
   sequenceId: 'seq-1234567890',
-  connectionReason: 'test-session'
+  connectionReason: 'test-debug-session'
 })
 ```
 
 Or by name, which also finds it on disk:
 
 ```javascript
-replay({ action: 'run', name: 'login-flow', connectionReason: 'test-session' })
+replay({ action: 'run', name: 'login-flow', connectionReason: 'test-debug-session' })
 ```
 
 ### Background by Default (breaking change in 0.7)
@@ -480,7 +480,7 @@ replay({ action: 'run', name: 'magic-link-login', startUrl: 'https://app.example
 replay({
   action: 'run',
   sequenceId: 'seq-slow-flow',
-  connectionReason: 'test-session',
+  connectionReason: 'test-debug-session',
   stepTimeout: 60000,    // per step (default: 30000)
   totalTimeout: 600000   // whole run (default: 300000)
 })
@@ -507,7 +507,7 @@ Exceptions:
 replay({
   action: 'run',
   name: 'login-flow',
-  connectionReason: 'test-session',
+  connectionReason: 'test-debug-session',
   startFrom: 5  // Skip steps 1-4, start at step 5 (1-indexed)
 })
 ```
@@ -543,7 +543,7 @@ with `newName`); pass `overwrite: true` to edit the sequence in place.
 ### Closing Chrome Afterwards
 
 ```javascript
-replay({ action: 'run', name: 'smoke-test', connectionReason: 'ci-run',
+replay({ action: 'run', name: 'smoke-test', connectionReason: 'ci-test-run',
          killChromeOnFinish: true })
 ```
 
@@ -608,7 +608,7 @@ the call read as an override.
 replay({
   action: 'run',
   sequenceId: 'seq-login-flow',
-  connectionReason: 'test-session',
+  connectionReason: 'test-debug-session',
   variables: {
     'var_2__email': 'new@email.com',
     'var_3__password': 'newpassword'
@@ -642,7 +642,7 @@ neither the file nor the tool call carries the secret.
 { tool: 'input', params: { action: 'type', selector: '#password', text: '{{env:APP_PASSWORD}}' } }
 
 // The run needs nothing else:
-replay({ action: 'run', name: 'login', connectionReason: 'app' })
+replay({ action: 'run', name: 'login', connectionReason: 'my-web-app' })
 ```
 
 - An **unset or empty** variable fails the step, naming the variable. Resolving
@@ -660,7 +660,7 @@ replay({ action: 'run', name: 'login', connectionReason: 'app' })
 #### Pointing a run at a file: `envFile`
 
 ```javascript
-replay({ action: 'run', name: 'login', connectionReason: 'app',
+replay({ action: 'run', name: 'login', connectionReason: 'my-web-app',
          envFile: 'sequences.env' })
 ```
 
@@ -763,12 +763,12 @@ run-level connection injected (for the tools that accept one).
 
 ```json
 { "tool": "input",    "params": { "action": "click", "selector": "#pair",
-                                  "connectionReason": "device-a" } }
+                                  "connectionReason": "device-a-phone" } }
 { "tool": "inspect",  "params": { "action": "evaluateExpression",
                                   "expression": "document.querySelector('#code').textContent",
-                                  "saveAs": "code", "connectionReason": "device-a" } }
+                                  "saveAs": "code", "connectionReason": "device-a-phone" } }
 { "tool": "navigate", "params": { "action": "goto", "url": "{{var:code}}",
-                                  "connectionReason": "device-b" } }
+                                  "connectionReason": "device-b-phone" } }
 ```
 
 A per-step connection is honoured for **everything wrapped around the step**,
@@ -965,7 +965,7 @@ running too. The run says which it closed:
 
 ```json
 "requiredConnections": [
-  { "reference": "device-a", "profile": "device-a", "role": "the enrolled device" }
+  { "reference": "device-a-phone", "profile": "device-a", "role": "the enrolled device" }
 ]
 ```
 
@@ -1505,14 +1505,14 @@ Configure in `.devharness/config.json` (values shown are the defaults):
 
 ```javascript
 // Record interactions directly - this call blocks until you click ✓ in the browser
-connection({ action: 'launch', name: "checkout-test" })
-replay({ action: 'recordInteraction', connectionReason: 'checkout-test' })
+connection({ action: 'launch', name: "checkout-flow-test" })
+replay({ action: 'recordInteraction', connectionReason: 'checkout-flow-test' })
 
 // Export as Playwright test
-replay({ action: 'export', name: 'checkout-test', format: 'playwright' })
+replay({ action: 'export', name: 'checkout-flow-test', format: 'playwright' })
 
 // Run anytime to verify
-replay({ action: 'run', name: 'checkout-test', connectionReason: 'test-run' })
+replay({ action: 'run', name: 'checkout-flow-test', connectionReason: 'test-run-one' })
 ```
 
 ### Debugging Workflows

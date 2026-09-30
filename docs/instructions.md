@@ -18,8 +18,8 @@ Chrome DevTools Protocol debugging for JavaScript/TypeScript in Chrome, Node.js,
 **Alternative (rename later):**
 ```
 1. connection({ action: 'launch' })                # Uses default "unnamed-connection-default"
-2. connection({ action: 'rename', connectionReason: "unnamed-connection-default", name: "your-name" })
-3. Use other tools with connectionReason: "your-name"
+2. connection({ action: 'rename', connectionReason: "unnamed-connection-default", name: "your-descriptive-name" })
+3. Use other tools with connectionReason: "your-descriptive-name"
 ```
 
 **Node.js debugging:**
@@ -34,14 +34,14 @@ Chrome DevTools Protocol debugging for JavaScript/TypeScript in Chrome, Node.js,
 Past this point, calls are written short and leave `connectionReason` out. Every call that acts on a connection passes it; a call without one is refused.
 
 1. **Connect**:
-   - `connection({ action: 'launch', name: "name" })` - Launches AND auto-connects (ready immediately, don't attach after it)
-   - `connection({ action: 'attach', name: "name" })` - Only for existing Node.js/remote debuggers
+   - `connection({ action: 'launch', name: "my-web-app" })` - Launches AND auto-connects (ready immediately, don't attach after it)
+   - `connection({ action: 'attach', name: "my-web-app" })` - Only for existing Node.js/remote debuggers
 2. **Navigate & interact**: Use connectionReason in all tool calls
-   - `navigate({ action: 'goto', connectionReason: "name", url: "..." })`
-   - `input({ action: 'click', connectionReason: "name", selector: "..." })`
-3. **Debug**: `breakpoint({ action: 'set', connectionReason: "name", ... })`
+   - `navigate({ action: 'goto', connectionReason: "my-web-app", url: "..." })`
+   - `input({ action: 'click', connectionReason: "my-web-app", selector: "..." })`
+3. **Debug**: `breakpoint({ action: 'set', connectionReason: "my-web-app", ... })`
 4. **Inspect when paused**: `inspect({ action: 'getCallStack', ... })` → `inspect({ action: 'getVariables', ... })`
-5. **Monitor**: `console({ action: 'list', connectionReason: "name" })`, `network({ action: 'list', connectionReason: "name" })`
+5. **Monitor**: `console({ action: 'list', connectionReason: "my-web-app" })`, `network({ action: 'list', connectionReason: "my-web-app" })`
 
 ## Key Practices
 
@@ -142,7 +142,7 @@ Line kinds:
 ```json
 {"ts":"...","kind":"block","guard":"pendingStartup","tool":"navigate","detail":"died before port detected: \"web\"","resolve":"server({ action: 'acknowledgeStartup', serverId: 'web' })"}
 {"ts":"...","kind":"message","from":"66ba2d65","id":"d94924a8-...","detail":"Message from 66ba2d65: ...","resolve":"message({ action: 'read' })"}
-{"ts":"...","kind":"annotation","annotationId":"...","connection":"app","url":"http://localhost:5173/","tick":300,"comment":"flashes empty here","selector":"#row-3 > span","component":"StatusRow","detail":"StatusRow #row-3 > span - \"flashes empty here\""}
+{"ts":"...","kind":"annotation","annotationId":"...","connection":"my-web-app","url":"http://localhost:5173/","tick":300,"comment":"flashes empty here","selector":"#row-3 > span","component":"StatusRow","detail":"StatusRow #row-3 > span - \"flashes empty here\""}
 ```
 
 `guard` is one of `port`, `breakpoint`, `pendingStartup`, `bug`, `duplicateSession`. Blocks are deduplicated: one line per *new* block, not one per blocked call. Any client can tail the file.
@@ -264,7 +264,7 @@ runs against (see Quick Start).
 **Replay**: `replay` (actions: history, create, list, get, delete, export, load, listSaved, deleteSaved, run, runAll, step, finish, insert, addCheck, status, cancel, repeat, runFromLog, recordInteraction)
 - `list`: every sequence - the ones in memory, then the ones on disk. A fresh session holds none in memory while the sequences dir holds a whole suite, so `list` is what shows what already exists; `listSaved` narrows it to the files
 - `recordInteraction`: record mouse, keyboard, and navigation events with a visual overlay
-- `runAll`: run every sequence in a folder and report one line each - `replay({ action: 'runAll', folder: 'spine', connectionReason: 'my-app' })`. Sequences may live in SUBFOLDERS of the sequences dir (`spine/`, `story/`, `_helpers/`); filenames are relative to that root (`spine/spine-01.json`) and `load` still accepts the bare basename. The whole tree is LOADED before anything runs, so a sequence in one folder can still reference a helper in another by name (a check's `{ run }`, a forEach's `do`) - those resolve by sequence name, not by path. Folders whose name starts with `_` are loaded but never run by a bare `runAll`, which is where preamble guards and forEach bodies belong; naming such a folder explicitly runs it anyway. A failure is recorded and the suite continues (`continueOnFailure`, default true). Scoped to one root: the project sequences dir, or the global one with `global: true`. Accepts `baseUrl`, so one call runs a suite against any deployment - it reaches the nested sequences a check or forEach names, too. Accepts `killChromeOnFinish`, which means the SUITE's finish: only the last sequence carries it, so a preamble's browser survives between sequences
+- `runAll`: run every sequence in a folder and report one line each - `replay({ action: 'runAll', folder: 'spine', connectionReason: 'my-web-app' })`. Sequences may live in SUBFOLDERS of the sequences dir (`spine/`, `story/`, `_helpers/`); filenames are relative to that root (`spine/spine-01.json`) and `load` still accepts the bare basename. The whole tree is LOADED before anything runs, so a sequence in one folder can still reference a helper in another by name (a check's `{ run }`, a forEach's `do`) - those resolve by sequence name, not by path. Folders whose name starts with `_` are loaded but never run by a bare `runAll`, which is where preamble guards and forEach bodies belong; naming such a folder explicitly runs it anyway. A failure is recorded and the suite continues (`continueOnFailure`, default true). Scoped to one root: the project sequences dir, or the global one with `global: true`. Accepts `baseUrl`, so one call runs a suite against any deployment - it reaches the nested sequences a check or forEach names, too. Accepts `killChromeOnFinish`, which means the SUITE's finish: only the last sequence carries it, so a preamble's browser survives between sequences
 - `addCheck`: add a check step - `replay({ action: 'addCheck', name: 'flow', check: { selector: '.cookie-banner', condition: 'present', holds: { run: 'dismiss-banner' }, fails: 'continue' }, insertAfterStep: 2 })`. `check` takes the check tool's parameters; the tool's schema, the sequence to run (known, not this one) and a forward `resumeAt` are validated up front, and a sequence already on disk is rewritten in place. A check that runs a sequence has no other authoring route
 - `forEach`: a virtual step - enumerate a source and run a sequence per item: `{ tool: 'forEach', params: { in: '{{var:shares}}', as: 'share', do: 'revoke-one-share', where: 'item.name !== "Employees"', maxItems: 50 } }`. `in` is either an array a prior `saveAs` captured or `{{selectorAll:CSS}}`; `where` is JavaScript with `item`/`index` in scope, not the condition grammar. A check reads one thing, so this is what expresses "for everything that is there". An empty source is a success and the count is reported
 - `teardown`: an optional command array beside a sequence's `commands`, run when the main steps reach a terminal state - success, a failed step, an abort, or the total timeout - but not when the run pauses. It has its own timeout budget and does not receive the run's abort signal, so a cancelled or timed-out run still cleans up; it shares the variable store, so it can revoke what setup minted. A failing teardown step never changes the run's verdict. Best-effort: a killed server takes pending teardown with it

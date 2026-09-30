@@ -14,16 +14,16 @@ CDP debugging for JS/TS in Chrome, Node.js, or any CDP target.
 `name` creates a connection; every later call addresses it as `connectionReason`, and a call that acts on a connection without naming one is refused.
 
 ```
-connection({ action: 'launch', name: "app" })                          # launches AND connects; do NOT then attach
-navigate({ action: 'goto', connectionReason: "app", url })               # caches interactive elements
-content({ action: 'findInteractive', connectionReason: "app" })          # summary; filter with search/types
-content({ action: 'extractText', mode: 'outline', connectionReason: "app" })  # prefer over screenshot
+connection({ action: 'launch', name: "my-web-app" })                          # launches AND connects; do NOT then attach
+navigate({ action: 'goto', connectionReason: "my-web-app", url })               # caches interactive elements
+content({ action: 'findInteractive', connectionReason: "my-web-app" })          # summary; filter with search/types
+content({ action: 'extractText', mode: 'outline', connectionReason: "my-web-app" })  # prefer over screenshot
 ```
 
-Node: `node --inspect=9229 app.js` → `connection({ action: 'attach', name: "api", port: 9229 })`.
+Node: `node --inspect=9229 app.js` → `connection({ action: 'attach', name: "my-api-server", port: 9229 })`.
 `attach` is only for existing Node/remote debuggers.
 
-Launched without a name? `connection({ action: 'rename', connectionReason: "unnamed-connection-default", name: "app" })`.
+Launched without a name? `connection({ action: 'rename', connectionReason: "unnamed-connection-default", name: "my-web-app" })`.
 
 Paused: `inspect({ action: 'getCallStack', connectionReason })` → `getVariables` → `evaluateExpression`.
 Watch: `console({ action: 'list', connectionReason })`, `network({ action: 'list', connectionReason })` (needs `network({ action: 'enable', connectionReason })` first).
@@ -85,7 +85,7 @@ only exists mid-interaction and is gone before it can be described - open the
 bench instead of asking:
 
 ```
-bench({ action: 'start', connectionReason: 'app' })
+bench({ action: 'start', connectionReason: 'my-web-app' })
 ```
 
 It opens a pane in its own tab with the page still running. PICKER arms
@@ -122,7 +122,7 @@ An arriving message announces itself on the event stream, so the watch above cov
 
 ## Running a tool from the shell
 
-`devharness <command>` typed in a session's shell runs that tool **inside that session**, against the connections it already holds. The plugin does not put `devharness` on PATH - `npm i -g devharness` does, or run it as `npx -y devharness@<version> <command>`. The SessionStart hook reports which of those applies here. Candidates are the sessions rooted at the shell's directory or above it - project state such as issues and config resolves against the answering server's root - and the process tree picks among those, so `! devharness call screenshot '{"connectionReason":"app"}'` uses the browser this session opened as `app`, not a new one. A directory no session is rooted in reports that rather than reaching another project.
+`devharness <command>` typed in a session's shell runs that tool **inside that session**, against the connections it already holds. The plugin does not put `devharness` on PATH - `npm i -g devharness` does, or run it as `npx -y devharness@<version> <command>`. The SessionStart hook reports which of those applies here. Candidates are the sessions rooted at the shell's directory or above it - project state such as issues and config resolves against the answering server's root - and the process tree picks among those, so `! devharness call screenshot '{"connectionReason":"my-web-app"}'` uses the browser this session opened as `app`, not a new one. A directory no session is rooted in reports that rather than reaching another project.
 
 - `devharness which` - which session this shell resolves to
 - `devharness watch` - exits on this session's next events and prints them; `--follow` streams them (see The event stream)

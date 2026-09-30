@@ -81,7 +81,7 @@ slash command. They are here, once, rather than restated by each of those.
 **Record what a human does** - `recordInteraction`
 
 ```
-replay({ action: 'recordInteraction', connectionReason: 'signup-flow' })
+replay({ action: 'recordInteraction', connectionReason: 'signup-flow-test' })
 ```
 
 Opens the page with a recording overlay and captures real mouse, keyboard and
@@ -165,7 +165,7 @@ sequence built from history has no file to reload from.
 ## Running
 
 ```
-replay({ action: 'run', sequenceId: 'seq-login', connectionReason: 'my-app' })
+replay({ action: 'run', sequenceId: 'seq-login', connectionReason: 'my-web-app' })
 ```
 
 **`run` does not block** (changed in 0.7): it returns a run id immediately and
@@ -330,12 +330,12 @@ validation and pause handling, not just dispatch. That's what makes
 
 ```
 { tool: 'input',   params: { action: 'click', selector: '#pair',
-                             connectionReason: 'device-a' } }
+                             connectionReason: 'device-a-phone' } }
 { tool: 'inspect', params: { action: 'evaluateExpression',
                              expression: '...', saveAs: 'code',
-                             connectionReason: 'device-a' } }
+                             connectionReason: 'device-a-phone' } }
 { tool: 'navigate', params: { action: 'goto', url: '{{var:code}}',
-                              connectionReason: 'device-b' } }
+                              connectionReason: 'device-b-phone' } }
 ```
 
 Steps without an explicit `connectionReason` use the run-level one.
@@ -396,7 +396,7 @@ declaration. A browser that will not launch fails the run before step 1.
 should come up on - the same ones `connection({ action: 'launch', profile })` creates:
 
 ```json
-{ "reference": "device-a", "profile": "device-a", "role": "the enrolled device" }
+{ "reference": "device-a-phone", "profile": "device-a", "role": "the enrolled device" }
 ```
 
 Storage (cookies, localStorage, IndexedDB, non-extractable CryptoKeys) survives

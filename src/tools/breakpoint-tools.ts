@@ -798,10 +798,10 @@ export function createBreakpointTools(
                     1000  // 1 second timeout per candidate
                   );
                 } catch (e) {
+                  // A failed search scores no line, so the one before stands in with its reason.
                   suggestions = [{
                     line: actualLineUser - 1,
                     reason: 'Try the line before where variables might be in scope',
-                    note: "Test expressions first with breakpoint({ action: 'validate' })"
                   }];
                 }
 
@@ -829,7 +829,8 @@ export function createBreakpointTools(
                 if (suggestions.length > 0) {
                   errorMarkdown += `**Suggestions:**\n`;
                   suggestions.forEach((s: any) => {
-                    errorMarkdown += `- Line ${s.line}${s.column ? `:${s.column}` : ''} - ${s.score}% of expressions valid\n`;
+                    const why = s.score === undefined ? s.reason : `${s.score}% of expressions valid`;
+                    errorMarkdown += `- Line ${s.line}${s.column ? `:${s.column}` : ''} - ${why}\n`;
                   });
                   errorMarkdown += `\n`;
 

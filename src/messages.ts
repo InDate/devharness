@@ -132,12 +132,6 @@ class MessageManager {
           continue; // Example code block follows
         }
 
-        // Skip only specific metadata lines, not all lines starting with **
-        if (line.startsWith('**Type:**') || line.startsWith('**Code:**')) {
-          inSuggestions = false;
-          continue;
-        }
-
         // Skip horizontal rules
         if (line.trim() === '---') {
           continue;
@@ -269,11 +263,10 @@ class MessageManager {
     // Build output: first two lines, then blank line, then rest
     let message = lines.join('\n');
 
-    // Determine remaining content (skip lines already used)
-    const contentLinesToSkip = template.summary ? 1 : 1;
-    const restOfContent = formattedContent.split('\n').slice(contentLinesToSkip).join('\n').trim();
+    // The content's first line is already out, as the status line or the key detail.
+    const restOfContent = formattedContent.split('\n').slice(1).join('\n').trim();
 
-    // Always add blank line after first section, then rest of content if any
+    // The rest of the content, after a blank line, when there is any
     if (restOfContent) {
       message += '\n\n' + restOfContent;
     }
@@ -520,11 +513,10 @@ class MessageManager {
     // Build output: first two lines, then blank line, then rest
     let markdown = lines.join('\n');
 
-    // Determine remaining content (skip lines already used)
-    const contentLinesToSkip = template.summary ? 1 : 1;
-    const restOfContent = formattedContent.split('\n').slice(contentLinesToSkip).join('\n').trim();
+    // The content's first line is already out, as the status line or the key detail.
+    const restOfContent = formattedContent.split('\n').slice(1).join('\n').trim();
 
-    // Always add blank line after first section, then rest of content if any
+    // The rest of the content, after a blank line, when there is any
     if (restOfContent) {
       markdown += '\n\n' + restOfContent;
     }
@@ -704,5 +696,3 @@ export function formatToolError(code: string, message: string, data?: any): MCPR
   };
 }
 
-// Console-specific formatting functions have been moved to:
-// src/formatters/console-formatter.ts

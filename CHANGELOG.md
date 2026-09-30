@@ -48,6 +48,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A logpoint belongs to the connection it was set on.** At its limit it
+  paused the active connection, counted matching lines from every tab, and a
+  logpoint on the same line in a second tab overwrote the first. Setting one
+  also wrote a stray copy into the active connection's breakpoint list.
+- **`execution acknowledge` with no connection finds every paused one.** It
+  read only the active connection and answered "not paused" while the pause
+  guard kept blocking on another.
+- **Suggested calls name the connection they came from**: the pause guard,
+  `breakpoint await` and `resetCounter`, `acknowledge`, and the paused-page
+  errors. Replies that suggested `listBreakpoints()`, `setBreakpoint()`,
+  `navigateTo()` and other names that are not tools now name real calls.
+- **A replay run takes its connection from an `attach` step**, so a Node.js
+  sequence's bare `breakpoint` and `inspect` steps run on the process it
+  attached to. `repeat` and `runFromLog` fill a connection into every tool
+  that takes one, not only browser tools.
+- **Replay passes a `reason` when it releases a browser it launched**, which
+  validation had refused, leaving the name bound until Chrome's exit handler
+  ran.
+- **`connection list` and `switch` answer while a connection is paused.**
+  Reading the page title waited for the page to resume.
+- **`modal dismiss` works in a tab that is not in front.** The button click
+  waited on a rendering frame such a tab never produces, and failed after
+  minutes.
+- **`breakpoint set` returns after `execution pause`.** Its console link was
+  the next JavaScript the page ran, so the pause stopped there and the set
+  waited for a resume. `execution pause` now says the pause is requested and
+  when it takes effect.
+
 - **Moving, removing or adding a timer renumbers the armed waits.** The file's
   waits were renumbered and the session's armed copy kept the old step
   numbers, so a wait showed under the step now at its old place, and the next
@@ -74,6 +102,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   headless launch set, and the element was drawn laid out at the bare window.
 
 ### Changed
+
+- **Breaking: 41 tools become 29, and every call names its connection.**
+  - `connection` (launch, attach, list, switch, rename, close, status,
+    browsers) replaces `launchChrome`, `connectDebugger`,
+    `disconnectDebugger`, `switchConnection`, `listConnections`,
+    `getDebuggerStatus`, `getChromeStatus` and `tab`. `name` creates or
+    renames a connection; `connectionReason` addresses one. `close` requires
+    a `reason`; `list` gives each connection's URL and title and drops dead
+    ones; `switch` selects the connection's page. A new tab in a running
+    Chrome is `launch` with its `port`.
+  - `browser` (kill, resetLauncher) replaces `killChrome` and
+    `resetChromeLauncher`, so allowing `connection` allows no kill.
+  - `source` (get, loadMaps), `modal` (detect, dismiss) and `download`
+    replace `getSourceCode`, `loadSourceMaps`, `detectModals`,
+    `dismissModal` and `saveToDisk`; debug logging is `config`
+    `setDebugLogging` and `debugLoggingStatus`.
+  - A call that acts on a connection without `connectionReason` is refused
+    instead of reaching whichever connection was active. `execution
+    acknowledge` alone keeps a bare form.
+  - Saved sequences, sequences pulled from GitHub, `history.log` and CLI or
+    bench calls using the old names are rewritten to the new calls where they
+    are read. An MCP call to an old name returns `UNKNOWN_TOOL` with
+    `replacedBy`. Permission allowlists naming the old tools need the new
+    names.
+- **Schema defaults moved into the handlers**, so history and saved
+  sequences record what a call passed, not `autoConnect`, `headless` and
+  `host` on every connection action.
 
 - **A retake runs at the recorded window size and pixel ratio**, letting a
   held page run while it resizes so its handlers lay it out, then puts the

@@ -694,7 +694,12 @@ export function createSequenceDriver(
         index: command.index,
         at: command.timestamp,
         tool: command.tool,
-        label: labelFor(command).slice(command.tool.length).replace(/^[. ]/, ''),
+        // The row shows the tool beside this, so a label that opens with the
+        // tool's name drops it; a timed check reads "wait for 2000ms" and is kept whole.
+        label: (() => {
+          const label = labelFor(command);
+          return label.startsWith(command.tool) ? label.slice(command.tool.length).replace(/^[. ]/, '') : label;
+        })(),
         ...(typeof connection === 'string' ? { connection } : {}),
         from: command.from,
         ...(command.run !== undefined ? { run: command.run } : {}),
@@ -1534,7 +1539,7 @@ export function createBenchTools(
   catalogue: () => ToolGroup[],
 ) {
   const bench = createTool(
-      'Open the bench beside a driven app: hold the page still, read what crossed its boundary and what caused each thing, record and step sequences, and collect element-level comments. Actions: start (open the bench, arm Chrome\'s element picker), tick (advance frozen time by budgetMs to walk into a transient state), stop (release the page), list, status.',
+      'Open the bench beside a driven app: hold the page still, read what crossed its boundary and what caused each thing, record and step sequences, and collect element-level comments. Actions: start (open the bench with the page running and the picker idle), hold/release, picker, tick (run a held page forward by steps or budgetMs), stop (release the page and close), keepStep/dropStep/flagStep (settle a recorded step), sweep, retake, capture, list, status.',
       benchSchema,
       async (args: BenchArgs) => {
         const { action, connectionReason } = args;
@@ -1627,7 +1632,7 @@ export function createBenchTools(
             active: state ? 'open' : 'closed',
             detail: state
               ? `Page ${state.frozen ? 'held' : 'running'}, picker ${state.pickerArmed ? 'armed' : 'idle'}, ${state.totalSteps} callback(s)/${state.tickMs}ms stepped, ${state.picks} pick(s), ${state.annotations} annotation(s). Bench: ${state.benchUrl}`
-              : 'The bench is closed here. `bench({ action: "start" })` opens it with the page running.',
+              : `The bench is closed here. \`bench({ action: "start", connectionReason: "${connection}" })\` opens it with the page running.`,
           });
           return { ...response, _meta: buildMeta('status', { active: !!state, connection, state }) };
         }

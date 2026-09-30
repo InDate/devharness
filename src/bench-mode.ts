@@ -510,13 +510,13 @@ export interface SequenceDriver {
   /** Erase one note by id, wherever in the open sequence it sits. */
   detachAnnotation: (id: string) => Promise<string | undefined>;
   /**
-   * Carry one note to another step of the open sequence.
+   * Carry one note to another step of the open sequence; `after` places it
+   * among the step's activities (see Annotation.after).
    *
    * A note is stored in the step it belongs to, so a note filed against the
    * wrong one is wrong in the file rather than only on screen - and without
    * this the only way back is to erase it and take the capture again.
    */
-  /** `after` places it among the step's activities; see Annotation.after. */
   moveAnnotation: (id: string, step: number, after?: string) => Promise<string | undefined>;
   /** Replace a saved note's words, and write the file back. */
   rewordAnnotation: (id: string, words: string) => Promise<string | undefined>;
@@ -550,8 +550,7 @@ export interface SequenceDriver {
   insertTimer: (after: number, ms: number) => Promise<string | undefined>;
   /** Put a check step, with these parameters, straight after a step. */
   insertCheck: (after: number, params: Record<string, unknown>, comment?: string) => Promise<string | undefined>;
-  /** Move one step to another position and write the file back. */
-  /** Moves `count` steps from `from` on, together, so the first lands at `to`. */
+  /** Move `count` steps from `from` on, together, so the first lands at `to`, and write the file back. */
   moveStep: (from: number, to: number, count?: number) => Promise<string | undefined>;
   /**
    * Define a variable the sequence carries, as a step that sets it. A run has
@@ -632,11 +631,11 @@ export interface SequenceDriver {
    */
   trafficIn: (connection: string, from: number, to: number) => Promise<StepTraffic>;
   /**
-   * The steps a recording has captured, converted from the page's raw events.
+   * The steps a recording has captured, converted from the page's raw events;
+   * `edits` replace what a step is given, by position, before its label is read.
    * The events are read by the caller over CDP: Puppeteer's page.evaluate
    * blocks on a paused isolate, and the page is held while a step is judged.
    */
-  /** `edits` replace what a step is given, by position, before its label is read. */
   recordedSoFar: (eventsJson: string, startUrl: string, edits?: Map<number, Record<string, unknown>>) => SequenceStep[];
   /** One note of the open sequence with the step holding it, by id. */
   findAnnotation: (id: string) => { annotation: Annotation; step: number; sequence: string } | undefined;
@@ -652,11 +651,6 @@ const MAX_CALLBACK_LOG = 200;
 /** Longest a single sequence step may take before the drive gives up on it. */
 const STEP_TIMEOUT_MS = 45000;
 
-/**
- * Turn a pause into a log line. The instrumentation name arrives as
- * "instrumentation:setTimeout.callback"; only the middle of that is worth
- * showing, and a frame with no function name is an anonymous callback.
- */
 /**
  * What the boundary holds, in the counts a reader needs at a glance.
  *
@@ -708,6 +702,11 @@ function summariseBoundary(
   };
 }
 
+/**
+ * Turn a pause into a log line. The instrumentation name arrives as
+ * "instrumentation:setTimeout.callback"; only the middle of that is worth
+ * showing, and a frame with no function name is an anonymous callback.
+ */
 function describePause(session: BenchSession, event: any, at: number): CallbackEntry {
   const frame = event?.callFrames?.[0];
   const raw = typeof event?.data?.eventName === 'string' ? event.data.eventName : undefined;
@@ -730,15 +729,14 @@ function describePause(session: BenchSession, event: any, at: number): CallbackE
 /**
  * Describe the picked element. Framework lookup is best-effort by design -
  * every branch degrades to omitting the field rather than failing the pick.
+ * Exported so it can be run against a real DOM.
  */
-/** Describe the picked element. Exported so it can be run against a real DOM. */
 export const DESCRIBE_ELEMENT = `function () {
   var el = this;
 
   // A selector good enough to point Chrome's overlay at, built mechanically.
-  // Whether it names the element or merely where the element sat is not
-  // decided here - the material below goes to the agent, which raises it with
-  // the person who took the pick.
+  // It may name only where the element sat rather than the element; the
+  // material below goes with it, so the selector can be judged against it.
   function selectorFor(node) {
     if (!node || node.nodeType !== 1) return '';
     var testId = node.getAttribute && (node.getAttribute('data-testid') || node.getAttribute('data-test-id'));
@@ -1015,12 +1013,12 @@ async function releaseJs(session: BenchSession): Promise<void> {
   session.jsKept = false;
 }
 
-/** Leave the page as it was found: running, with no debugger attached. */
 /**
  * Leave the page as the bench found it: running, with no agent of ours attached.
  *
- * Only the bench's own hold is released. A pause someone else set - a breakpoint
- * from the breakpoint tool, a `debugger` statement - is left stopped, because
+ * Every hold on the connection is released except a breakpoint's. A pause
+ * someone else set - a breakpoint from the breakpoint tool, a `debugger`
+ * statement - is left stopped, because
  * resuming it would throw away what they stopped to look at and they would have
  * no way to know the bench did it.
  */
@@ -1362,9 +1360,9 @@ function matchExpression(selector: string): string {
 /**
  * Outline an annotated element in the page while its row is hovered.
  *
- * DOM and Overlay answer while V8 is stopped, which Runtime.evaluate does not -
- * so this works on a held page, which is the state the pane is used in. An
- * empty selector clears the outline. A selector matching nothing clears it too:
+ * Runtime.evaluate and Overlay both answer while V8 is stopped, so this works
+ * on a held page, which is the state the pane is used in. An empty selector
+ * clears the outline. A selector matching nothing clears it too:
  * the element has moved or gone, and a stale outline over the wrong element
  * reads as a match.
  */
@@ -1991,12 +1989,15 @@ function kinds(session: BenchSession): Map<string, HiddenKind> {
 }
 
 /**
- * Write the session's rules, waits and refuse setting onto the open sequence.
+ * Write the session's responses and hidden kinds to the site file, and the
+ * open sequence's uses of them, its names and the refuse setting onto the
+ * sequence. Answers the failure text, or what was written onto the sequence.
  *
  * Called on every change, so a rule made is a rule kept: an explicit save was
  * a step that, forgotten, lost every decision with the session. While a
- * recording runs there is no file to write to, and the rules are written once
- * it lands. `force` writes an empty set too, which a change never needs to.
+ * recording runs there is no sequence file to write to, and its part is
+ * written once it lands. `force` writes an empty set too, which a change never
+ * needs to.
  */
 async function persistRules(connection: string, force = false, change?: string): Promise<string | undefined> {
   const session = sessions.get(connection);
@@ -2164,15 +2165,6 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
 }
 
 /**
- * Run part of a sequence against a held page.
- *
- * The page has to be running for a step to land at all - input is discarded
- * while V8 is stopped - so each step releases, drives, and holds again. The
- * gap measured about 6ms against a state that lasts 600ms, which is what makes
- * this worth doing by hand: the hold is issued by the runner rather than by
- * someone noticing a state and reaching for a button.
- */
-/**
  * Run `drive` with the app's tab in front, then put the bench back.
  *
  * Chrome delivers no synthesised mouse input to a hidden tab, so a step's
@@ -2199,6 +2191,15 @@ async function withAppInFront<T>(session: BenchSession, drive: () => Promise<T>)
   }
 }
 
+/**
+ * Run part of a sequence against a held page.
+ *
+ * The page has to be running for a step to land at all - input is discarded
+ * while V8 is stopped - so each step releases, drives, and holds again. The
+ * gap measured about 6ms against a state that lasts 600ms, which is what makes
+ * this worth doing by hand: the hold is issued by the runner rather than by
+ * someone noticing a state and reaching for a button.
+ */
 async function driveSequence(
   connection: string,
   drive: (driver: SequenceDriver, signal: AbortSignal) => Promise<string | undefined>
@@ -2276,16 +2277,17 @@ export const selectSequence = async (connection: string, name: string) => {
 };
 
 /**
- * Arm what the open sequence carries, replacing whatever the session held.
+ * Arm the site's responses as the open sequence uses them, with its names,
+ * hidden kinds and refuse setting, replacing whatever the session held.
  *
- * A rule is written onto the sequence so a later run repeats the decision; it
- * arms nothing by sitting in the file. Opening the sequence is the point the
- * decisions become live, so the panel reads what will happen rather than
- * nothing, and the first pass serves the pinned body rather than the server's.
+ * A response kept in the site file arms nothing by sitting there. Opening the
+ * sequence is the point it becomes live, so the panel reads what will happen
+ * rather than nothing, and the first pass serves the pinned body rather than
+ * the server's.
  *
- * The rules that stood for the sequence being closed go with it: they were
- * that sequence's decisions, and leaving them armed answers traffic the open
- * sequence never asked about.
+ * The uses that stood for the sequence being closed go with it: they were that
+ * sequence's choices, and leaving them armed answers traffic the open sequence
+ * never asked about.
  */
 async function armSavedRules(connection: string): Promise<void> {
   const session = sessions.get(connection);
@@ -3082,7 +3084,7 @@ async function setCapturePaused(session: BenchSession, paused: boolean): Promise
 /**
  * Put a fixed pause into the recording, after the last action: it lands in
  * the page's buffer with the clicks, so it takes its place in their order and
- * becomes a `wait` step when the recording is saved.
+ * becomes a timed `check` step (`afterMs`) when the recording is saved.
  */
 export async function addRecordingTimer(connection: string, ms: number): Promise<void> {
   const session = sessions.get(connection);
@@ -4243,7 +4245,6 @@ export async function notifyAnnotation(connection: string, id: string): Promise<
   });
 }
 
-/** Erase one note from the open sequence and write the file back. */
 /** Carry one note to another step, and write the sequence back. */
 export async function moveAnnotation(connection: string, id: string, step: number, after?: string): Promise<void> {
   const session = sessions.get(connection);
@@ -4284,6 +4285,7 @@ function dropHeldAnnotation(session: BenchSession, id: string): undefined {
   return undefined;
 }
 
+/** Erase one note: from memory while a recording holds it, from the file once it is saved. */
 export async function removeAnnotation(connection: string, id: string): Promise<void> {
   const session = sessions.get(connection);
   if (!session?.sequences) return;
@@ -4480,13 +4482,13 @@ export async function startBench(params: {
     }
   });
   await client.send('Page.enable');
-  // Enabled while the page runs: CSS.enable goes unanswered on a held page,
-  // and the element facts read the rules while it is held.
   // Storage the page writes never reaches the proxy; this is what shows it.
   session.writeWatch = new WriteWatch(client, page);
   await session.writeWatch.start().catch((error) => {
     debugLog('bench', `watching storage writes failed: ${error}`);
   });
+  // Enabled while the page runs: CSS.enable goes unanswered on a held page,
+  // and the element facts read the rules while it is held.
   await trackStyleSheets(client, session.sheets).catch((error) => {
     debugLog('bench', `CSS.enable failed, so captures will record no css: ${error}`);
   });
@@ -4549,13 +4551,6 @@ export async function startBench(params: {
       ?? sessions.get(connection)?.writeWatch?.writes.find(write => write.id === id)?.value
       ?? null,
 
-    /**
-     * Answer this from now on with what it answered here.
-     *
-     * A request is held by its own URL, so the next call to it is answered
-     * locally. A frame is held by what it carried, since a socket message has
-     * no other durable handle on it.
-     */
     /**
      * Send one reading back to whoever is driving, with the evidence behind it.
      *
@@ -4621,6 +4616,13 @@ export async function startBench(params: {
       return 'asked the session to relaunch this browser through a proxy';
     },
 
+    /**
+     * Answer this from now on with what it answered here.
+     *
+     * A request is held by its own URL, so the next call to it is answered
+     * locally. A frame is held by what it carried, since a socket message has
+     * no other durable handle on it.
+     */
     proxyHold: async (id: string) => {
       const live = getProxy(connection);
       if (!live) return { text: 'no proxy' };
@@ -4816,7 +4818,7 @@ export async function startBench(params: {
       const use = useFrom(rule.use)
         ?? (parsed.step !== undefined ? [parsed.step] : made ? 'all' as const : undefined);
       if (use) setResponseUse(connection, parsed.key, use);
-      await persistRules(connection, false, rule.verb === 'block' ? `${rule.key} blocked` : rule.verb === 'hide' ? `${rule.key} hidden from the list` : `response to ${rule.key} replaced`);
+      await persistRules(connection, false, parsed.verb === 'block' ? `${parsed.key} blocked` : `response to ${parsed.key} replaced`);
     },
     clearRule: async (key: string) => {
       clearBoundaryRule(connection, key);
@@ -4885,7 +4887,8 @@ export async function startBench(params: {
     },
 
     /**
-     * Write the decisions onto the sequence they were arrived at against.
+     * Write the decisions: responses and hidden kinds to the site file, and the
+     * open sequence's uses of them onto the sequence.
      *
      * The events are not written with them: they are a reading of one pass,
      * and a pass tomorrow reads differently. What a later run needs is the

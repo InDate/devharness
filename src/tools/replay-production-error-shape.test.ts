@@ -115,6 +115,16 @@ describe('live connection probing', () => {
     expect(refs && [...refs]).toEqual(['device-a']);
   });
 
+  it('reads a list with nothing connected as no live connections, not as unknown', async () => {
+    const empty = harness({ 'connection.list': connectionsResponse([]) });
+    const allDropped = harness({
+      'connection.list': connectionsResponse([{ reference: 'device-a', port: 9222, connected: false }]),
+    });
+
+    expect(await probeLiveConnectionReferences(empty)).toEqual(new Set());
+    expect(await probeLiveConnectionReferences(allDropped)).toEqual(new Set());
+  });
+
   it('treats an unreadable connection list as unknown, not empty', async () => {
     const executeToolCall = harness({ 'connection.list': { content: [{ type: 'text', text: 'no json here' }] } });
     expect(await probeLiveConnectionReferences(executeToolCall)).toBeNull();

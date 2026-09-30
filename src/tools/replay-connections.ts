@@ -234,9 +234,10 @@ export function sequenceNeedsConnection(commands: RecordedCommand[]): boolean {
 
 /**
  * The connection references live in this session, as `connection list` reports
- * them. Returns null when that cannot be determined (probe failed, or a stubbed
- * executeToolCall returned nothing parseable) - callers must treat null as
- * "unknown" and NOT as "empty", or every per-step connection would be rejected.
+ * them: an empty set when the list was read and nothing in it is live, and
+ * null when the list could not be read (the call failed, or its reply carried
+ * no `_meta.connections`). Callers treat null as unknown, so an unreadable list
+ * neither rejects a step's own connection nor relaunches a live browser.
  */
 export async function probeLiveConnectionReferences(
   executeToolCall: ExecuteToolCall
@@ -251,7 +252,7 @@ export async function probeLiveConnectionReferences(
     for (const c of parsed) {
       if (c.connected !== false) refs.add(sanitizeReference(c.reference));
     }
-    return refs.size > 0 ? refs : null;
+    return refs;
   } catch {
     return null;
   }

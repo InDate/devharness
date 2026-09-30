@@ -194,3 +194,33 @@ describe('a forEach whose body attaches', () => {
     expect(connectionsOf(calls, 'inspect')).toEqual(['api-server', 'api-server', 'api-server']);
   });
 });
+
+describe('a session with nothing connected', () => {
+  it('runs a nested launch, and runs the nested steps on the browser it launched', async () => {
+    const { calls, replay, recorder } = makeHarness({ live: [] });
+    await recorder.createSequenceFromCommands('first-device', [
+      { tool: 'connection', params: { action: 'launch', name: 'first-device-tab' } },
+      { tool: 'inspect', params: { action: 'evaluateExpression', expression: 'document.title' } },
+    ]);
+    await recorder.createSequenceFromCommands('setup', [runsOnPass('first-device')]);
+
+    await replay.handler({ action: 'run', wait: true, name: 'setup' } as any);
+
+    expect(calls.filter(c => c.tool === 'connection' && c.params.action === 'launch').map(c => c.params.name))
+      .toEqual(['first-device-tab']);
+    expect(connectionsOf(calls, 'inspect')).toEqual(['first-device-tab']);
+  });
+
+  it('refuses a step naming a connection, naming the one it wanted', async () => {
+    const { calls, replay, recorder } = makeHarness({ live: [] });
+    await recorder.createSequenceFromCommands('named-step', [
+      { tool: 'inspect', params: { action: 'evaluateExpression', expression: '1', connectionReason: 'second-device-tab' } },
+    ]);
+
+    const result: any = await replay.handler({ action: 'run', wait: true, name: 'named-step' } as any);
+
+    expect(result.content[0].text).toContain('"second-device-tab"');
+    expect(result.content[0].text).toContain('does not exist in this session');
+    expect(calls.filter(c => c.tool === 'inspect')).toEqual([]);
+  });
+});

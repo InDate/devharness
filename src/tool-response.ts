@@ -417,6 +417,8 @@ export interface GithubToolMeta {
   changed?: Array<{ id: number; number: number; action: string }>;
   conflicts?: Array<{ id: number; number: number }>;
   sequence?: { steps: number; tools: string[]; privileged: string[] };
+  /** sync without confirm: what a confirmed sync would change on each marked issue; empty `changes` is up to date. */
+  plan?: Array<{ id: number; number: number; title: string; changes: string[] }>;
 }
 
 /**

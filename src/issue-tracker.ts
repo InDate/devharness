@@ -67,6 +67,12 @@ export interface TrackedIssue {
   githubSyncedAt?: Date;
   /** sha256 of the body at that moment, to detect a local edit since. */
   githubBodyHash?: string;
+  /**
+   * true: marked for sync. false: left out on purpose, so the bench does not
+   * offer it again. Absent: nobody has decided. `issues sync` reads and writes
+   * only issues holding true.
+   */
+  githubSync?: boolean;
   /** Frontmatter keys this version doesn't know, re-emitted verbatim so a
    *  newer field (or a hand-edit) survives a rewrite by an older build. */
   extraFrontmatter?: Record<string, string>;
@@ -198,7 +204,7 @@ function parseBodyAndComments(rest: string): { body: string; comments: IssueComm
 const KNOWN_FRONTMATTER_KEYS: ReadonlySet<string> = new Set([
   'github', 'id', 'type', 'status', 'title', 'labels', 'sequenceFile', 'startUrl',
   'recordingName', 'githubRepo', 'closedReason', 'reportedAt', 'acknowledgedAt',
-  'startedAt', 'resolvedAt', 'githubSyncedAt', 'githubBodyHash',
+  'startedAt', 'resolvedAt', 'githubSyncedAt', 'githubBodyHash', 'githubSync',
 ]);
 
 /** Raw (unparsed) values for keys we don't know, so re-emission is lossless. */
@@ -235,6 +241,9 @@ function parseIssueFile(raw: string, filePath: string): TrackedIssue | null {
     closedReason: CLOSED_REASONS.has(fm.closedReason) ? fm.closedReason as IssueClosedReason : undefined,
     githubSyncedAt: parseDate(fm.githubSyncedAt),
     githubBodyHash: typeof fm.githubBodyHash === 'string' ? fm.githubBodyHash : undefined,
+    githubSync: fm.githubSync === true || fm.githubSync === 'true' ? true
+      : fm.githubSync === false || fm.githubSync === 'false' ? false
+      : undefined,
     extraFrontmatter: collectExtraFrontmatter(match[1]),
     type: fm.type as IssueType,
     status: fm.status as IssueStatus,
@@ -274,6 +283,7 @@ function serializeIssueFile(issue: TrackedIssue): string {
   if (issue.resolvedAt) fm.push(`resolvedAt: ${issue.resolvedAt.toISOString()}`);
   if (issue.githubSyncedAt) fm.push(`githubSyncedAt: ${issue.githubSyncedAt.toISOString()}`);
   if (issue.githubBodyHash) fm.push(`githubBodyHash: ${yamlQuote(issue.githubBodyHash)}`);
+  if (issue.githubSync !== undefined) fm.push(`githubSync: ${issue.githubSync}`);
   for (const [key, rawValue] of Object.entries(issue.extraFrontmatter ?? {})) {
     fm.push(`${key}: ${rawValue}`);
   }
@@ -674,7 +684,7 @@ export async function updateIssueStatus(id: number, status: IssueStatus): Promis
  *  timestamp switch cannot express. */
 export type IssueFieldPatch = Partial<Pick<TrackedIssue,
   'status' | 'title' | 'body' | 'labels' | 'closedReason' | 'resolvedAt' |
-  'github' | 'githubRepo' | 'githubSyncedAt' | 'githubBodyHash'>>;
+  'github' | 'githubRepo' | 'githubSyncedAt' | 'githubBodyHash' | 'githubSync'>>;
 
 export async function updateIssueFields(id: number, patch: IssueFieldPatch): Promise<TrackedIssue | undefined> {
   await ensureIndexLoaded();

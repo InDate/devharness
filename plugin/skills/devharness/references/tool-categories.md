@@ -76,7 +76,7 @@ runs against (see the skill's Quick Start).
 - For async in-page work, kick it off in one step (store its result in a global), then `wait({ expression: 'window.__result !== undefined' })`
 - A wait is a check with a time limit; written into a sequence from history it is stored as a `check` step
 
-**Issues**: `issues` (actions: list, create, workOn, resolve, acknowledge, comment, publish, sync, import, link, pullSequence)
+**Issues**: `issues` (actions: list, create, edit, workOn, resolve, acknowledge, comment, publish, sync, import, link, pullSequence)
 - `create`/`comment`: track bugs and features as Markdown issues, optionally linked to a replay sequence
 - `list`: `search` matches body and comment text. A listing holding one issue renders it in full, so `issues({ action: 'list', id: N })` returns body, labels, comments and timestamps and leaves the issue's own status and timestamps untouched - reading an issue does not need `workOn`
 - `workOn`: start on an issue, auto-replaying its linked sequence
@@ -86,7 +86,7 @@ runs against (see the skill's Quick Start).
 
 **GitHub sync** (via the `gh` CLI). Everything except `publish` and `sync` is local, so the tracker keeps working offline.
 - `publish` returns a draft and posts **nothing**; pass `confirm: true` to post it. The GitHub body is the local body verbatim plus the repro sequence, so the two stay comparable. Labels missing from the repo are created on confirm
-- `sync` reconciles both ways: it pulls body, comments, closed state and labels down, pushes local edits up, and when **both** sides changed since the last sync it reports a conflict and writes nothing. Resolve with `take: 'local'` or `take: 'remote'` on that one issue. Closing an issue upstream needs `confirm: true`
+- `sync` takes part only for issues marked with `issues({ action: 'edit', id, sync: true })`; a linked issue is left alone until marked. Without `confirm: true` it reads GitHub and returns the plan - what each marked issue would send or take, `_meta.github.plan` - and writes nothing on either side; show the plan to the person and re-run with `confirm: true` once they agree. Confirmed, it reconciles both ways: body, comments, closed state and labels down, local edits and comments up, closing upstream where closed here. When **both** sides changed since the last sync it reports a conflict and writes nothing for that issue; resolve with `take: 'local'` or `take: 'remote'` on that one issue
 - `import` makes a GitHub-only issue local so there is somewhere to record findings - use it when told to "work on #110". `link` adopts an existing number with no network call, and is the recovery path if a publish dies after creating the issue
 - `pullSequence` writes a sequence out of an issue to disk. Nothing is written until you ask, and nothing is ever run automatically: sequence steps are `{tool, params}` for **any** tool, so a sequence in a public issue is a script, not a macro. One authored by a GitHub account other than the one `gh` is logged in as is refused until a **person** has read it and re-run with `confirm: true` - an agent must not confirm on its own. One using `execution`, `server`, `request`, `download`, `browser`, `replay` or `config` is refused unless you pass `allowPrivilegedSteps: true`. Read the step list in the response before you do
 - All of these are blocked while any bug is `pending` - `acknowledge` first

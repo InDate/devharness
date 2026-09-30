@@ -230,13 +230,13 @@ runs against (see Quick Start).
 - For async in-page work, kick it off in one step (store its result in a global), then `wait({ expression: 'window.__result !== undefined' })`
 - A wait is a check with a time limit: written into a sequence from history it is stored as a `check` step
 
-**Issues**: `issues` (actions: list, create, workOn, resolve, acknowledge, comment, publish, sync, import, link, pullSequence)
+**Issues**: `issues` (actions: list, create, edit, workOn, resolve, acknowledge, comment, publish, sync, import, link, pullSequence)
 - `create`/`comment`: track bugs and features as Markdown issues, optionally linked to a replay sequence
 - `list`: `search` matches body and comment text. A listing holding one issue renders it in full, so `issues({ action: 'list', id: N })` returns body, labels, comments and timestamps and leaves the issue's own status and timestamps untouched - reading an issue does not need `workOn`
 - `workOn`: start on an issue, auto-replaying its linked sequence
 - `resolve` is **human-gated**: it opens a browser overlay and only a person clicking Fixed/Not Fixed can close the issue. Don't call it unattended - it will wait ~150s and then fail with `ISSUES_RESOLVE_TIMEOUT`. Record what you found with `comment` and ask the user to run `resolve` themselves
 - `acknowledge`: acknowledge pending bugs to unblock other tools
-- **GitHub** (via the `gh` CLI; only `publish` and `sync` use the network): `publish` shows a draft and posts nothing until `confirm: true`; `sync` reconciles both ways and reports a conflict rather than overwriting when both sides changed; `import` materialises a GitHub-only issue locally; `link` stamps an existing number with no network call; `pullSequence` writes a sequence out of an issue body to disk (one authored by another GitHub account needs a person to read it and pass `confirm: true`)
+- **GitHub** (via the `gh` CLI; only `publish` and `sync` use the network): `publish` shows a draft and posts nothing until `confirm: true`; `sync` reads and writes only issues marked with `edit` `sync: true`; without `confirm: true` it returns the plan - what each marked issue would send or take - and writes nothing, and with it reconciles both ways, reporting a conflict rather than overwriting when both sides changed; `import` materialises a GitHub-only issue locally; `link` stamps an existing number with no network call; `pullSequence` writes a sequence out of an issue body to disk (one authored by another GitHub account needs a person to read it and pass `confirm: true`)
 - A sequence pulled from an issue is **never run automatically**, and one using `execution`, `server`, `request`, `download`, `browser`, `replay` or `config` is refused unless you pass `allowPrivilegedSteps: true`. Read it first
 
 **Bench**: `bench` (actions: start, stop, hold, release, picker, tick, keepStep, dropStep, flagStep, sweep, retake, capture, list, status)

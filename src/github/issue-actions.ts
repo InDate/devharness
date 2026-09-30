@@ -435,6 +435,28 @@ async function applyPush(
   return `pushed ${bits.join(', ')}`;
 }
 
+/**
+ * What a confirmed sync would do to one marked issue, in words, from the same
+ * classification and status reading the sync applies. Empty when the issue is
+ * up to date.
+ */
+function plannedChanges(
+  issue: TrackedIssue, summary: RemoteIssueSummary | undefined, action: string, firstSync: boolean, now: Date,
+): string[] {
+  if (action === 'missing-upstream' || !summary) return [`#${issue.github} is missing on GitHub - nothing to sync`];
+  if (action === 'conflict') return ['conflict: both sides changed - pick one with take: local or take: remote'];
+  const changes: string[] = [];
+  if (action === 'pull') changes.push(firstSync ? "take GitHub's body, title and comments (first sync)" : "take GitHub's body, title and comments");
+  if (action === 'push') changes.push('send the local body to GitHub');
+  const unsent = issue.comments.filter(comment => commentGithubId(comment.text) === null).length;
+  if (unsent > 0) changes.push(`send ${unsent} comment${unsent === 1 ? '' : 's'} to GitHub`);
+  const status = resolveStatus(issue, summary, now);
+  if (status.closeUpstream) changes.push(`close #${issue.github} on GitHub (${status.closeUpstream.replace('_', ' ')})`);
+  else if (status.reopened) changes.push('reopen here: it is open on GitHub');
+  else if (status.status) changes.push(`mark ${status.status} here: it is closed on GitHub`);
+  return changes;
+}
+
 export async function handleSync(args: GithubActionArgs, deps: GithubActionDeps = {}): Promise<any> {
   try {
     const repo = await ghRepoName(args.repo, deps.runOpts);
@@ -443,18 +465,31 @@ export async function handleSync(args: GithubActionArgs, deps: GithubActionDeps 
     // `github: N` stamp belongs to the repo gh infers for this project,
     // never to an explicit override - otherwise an override sweeps every
     // linked issue and can adopt a stranger's issue with the same number.
-    const linked = all.filter(i =>
+    const inRepo = all.filter(i =>
       i.github !== undefined
       && (args.id === undefined || i.id === args.id)
       && (i.githubRepo ? i.githubRepo === repo : args.repo === undefined)
     );
+    if (inRepo.length === 0) return createSuccessResponse('ISSUES_SYNC_NOTHING_LINKED');
 
-    if (linked.length === 0) return createSuccessResponse('ISSUES_SYNC_NOTHING_LINKED');
+    // Only issues marked for sync take part: a linked issue is left alone
+    // until someone marks it, so sync never reaches an issue by default.
+    const linked = inRepo.filter(i => i.githubSync === true);
+    if (linked.length === 0) {
+      return createSuccessResponse('ISSUES_SYNC_NOTHING_MARKED', {
+        linked: inRepo.length,
+        id: args.id ?? inRepo[0].id,
+      });
+    }
 
     const summaries = await ghListIssues(args.repo, deps.runOpts);
     const byNumber = new Map<number, RemoteIssueSummary>(summaries.map(s => [s.number, s]));
 
     const now = new Date();
+    // Without confirm the run is a plan: what each issue would send or take,
+    // read from GitHub, with nothing written on either side.
+    const planning = args.confirm !== true;
+    const plan: Array<{ id: number; number: number; title: string; changes: string[] }> = [];
     const outcomes: SyncOutcome[] = [];
     const conflicts: Array<{ id: number; number: number }> = [];
     const pendingConfirm: string[] = [];
@@ -467,6 +502,11 @@ export async function handleSync(args: GithubActionArgs, deps: GithubActionDeps 
       // An explicit --take overrides the classification for this issue only.
       let action = classification.action;
       if (args.take && args.id !== undefined) action = args.take === 'local' ? 'push' : 'pull';
+
+      if (planning) {
+        plan.push({ id: issue.id, number: issue.github!, title: issue.title, changes: plannedChanges(issue, summary, action, classification.firstSync, now) });
+        continue;
+      }
 
       if (action === 'missing-upstream') {
         outcomes.push({ id: issue.id, number: issue.github!, action: 'missing upstream' });
@@ -511,6 +551,18 @@ export async function handleSync(args: GithubActionArgs, deps: GithubActionDeps 
         id: issue.id, number: issue.github!,
         action: details.length > 0 ? details.join(', ') : 'up to date',
       });
+    }
+
+    if (planning) {
+      const changing = plan.filter(entry => entry.changes.length > 0);
+      const planResponse = createSuccessResponse('ISSUES_SYNC_PLAN', {
+        repo,
+        checked: plan.length,
+        changing: changing.length,
+        results: plan.map(entry => `- #${entry.id} (${repo}#${entry.number}): ${entry.changes.length > 0 ? entry.changes.join('; ') : 'up to date'}`).join('\n'),
+      });
+      planResponse._meta = { tool: 'issues', action: 'sync', timestamp: Date.now(), github: { action: 'sync', repo, plan } };
+      return planResponse;
     }
 
     const response = createSuccessResponse('ISSUES_SYNC_RESULT', {

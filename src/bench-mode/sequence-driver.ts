@@ -546,7 +546,8 @@ export function createSequenceDriver(
 
     callTool: async (tool: string, args: Record<string, unknown>) => {
       try {
-        return { failed: false, result: textOf(await executeToolCall(tool, args)) };
+        const response = await executeToolCall(tool, args);
+        return { failed: false, result: textOf(response), ...(response?._meta && { meta: response._meta }) };
       } catch (error) {
         return { failed: true, result: textOf(error) };
       }

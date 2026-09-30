@@ -224,6 +224,8 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
           ...(issue.githubSyncedAt && { syncedAt: issue.githubSyncedAt.getTime() }),
           bodyChanged: issue.githubBodyHash !== undefined && bodyHash(localProse(issue)) !== issue.githubBodyHash,
           unpushedComments: issue.comments.filter(comment => commentGithubId(comment.text) === null).length,
+          marked: issue.githubSync === true,
+          decided: issue.githubSync !== undefined,
         },
       }),
     })),

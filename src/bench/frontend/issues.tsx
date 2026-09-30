@@ -75,37 +75,73 @@ function outgoing(sync: IssueSync): string[] {
   return words;
 }
 
+/** One marked issue in a sync plan: what a confirmed sync would change on it; empty is up to date. */
+interface PlannedIssue { id: number; number: number; title: string; changes: string[] }
+
 /**
  * The whole tracker against GitHub, above the list: how many issues are
- * linked, how many carry changes the next sync would push, how many are local
- * only, and when the newest sync ran. It reads the issue files alone, so a
- * change made on GitHub shows only after a sync.
+ * linked, how many of those are marked for sync, how many marked ones carry
+ * changes to send, how many are local only, and when the newest sync ran. It
+ * reads the issue files alone, so a change made on GitHub shows only in a
+ * sync plan.
  *
- * Sync runs `issues sync`: it pulls GitHub's changes and pushes local edits
- * and comments. Closing an issue upstream still needs `confirm`, so the reply
- * lists those closes and writes none of them.
+ * Sync opens on the linked issues nobody has decided on yet, each with its
+ * state - not decided, sync, leave out - chosen from a list; those already
+ * decided are counted and shown on asking. With none undecided it goes
+ * straight to the plan. It then asks for the plan - `issues sync` without confirm reads GitHub and
+ * writes nothing - and lists what each marked issue would send or take. Only
+ * Confirm runs the sync, with `confirm: true`.
  */
 function SyncBox({ base, issues, onSynced }: { base: string; issues: IssueRow[]; onSynced: () => void }) {
-  const [syncing, setSyncing] = useState(false);
-  const [said, setSaid] = useState<ToolRun | null>(null);
-  const sending = useRef(false);
-  const sync = async () => {
-    if (sending.current) return;
-    sending.current = true;
-    setSyncing(true);
-    setSaid(null);
-    const run = await callIssues(base, { action: 'sync' });
-    sending.current = false;
-    setSyncing(false);
-    setSaid(run);
+  const [stage, setStage] = useState<'idle' | 'choose' | 'planning' | 'review' | 'applying' | 'done'>('idle');
+  const [marking, setMarking] = useState<number | null>(null);
+  const [showAll, setShowAll] = useState(false);
+  const mark = async (issue: IssueRow, state: SyncState) => {
+    setMarking(issue.id);
+    await callIssues(base, { action: 'edit', id: issue.id, sync: SYNC_VALUE[state] });
+    setMarking(null);
     onSynced();
   };
+  const [plan, setPlan] = useState<PlannedIssue[]>([]);
+  const [said, setSaid] = useState<ToolRun | null>(null);
+  const sending = useRef(false);
+
+  const ask = async (args: Record<string, unknown>): Promise<ToolRun | null> => {
+    if (sending.current) return null;
+    sending.current = true;
+    const run = await callIssues(base, args);
+    sending.current = false;
+    return run;
+  };
+  const planSync = async () => {
+    setStage('planning');
+    setSaid(null);
+    const run = await ask({ action: 'sync' });
+    if (!run) return;
+    const planned = run.meta?.github?.plan as PlannedIssue[] | undefined;
+    if (run.failed || !planned) { setSaid(run); setStage('done'); return; }
+    setPlan(planned);
+    setStage('review');
+  };
+  const applySync = async () => {
+    setStage('applying');
+    const run = await ask({ action: 'sync', confirm: true });
+    if (!run) return;
+    setSaid(run);
+    setStage('done');
+    onSynced();
+  };
+
   const linked = issues.filter(issue => issue.github);
-  const waiting = linked.filter(issue => outgoing(issue.github!).length > 0);
-  const neverSynced = linked.filter(issue => issue.github!.syncedAt === undefined).length;
+  const marked = linked.filter(issue => issue.github!.marked);
+  const undecided = linked.filter(issue => !issue.github!.decided);
+  const waiting = marked.filter(issue => outgoing(issue.github!).length > 0);
+  const neverSynced = marked.filter(issue => issue.github!.syncedAt === undefined).length;
   const local = issues.length - linked.length;
   const newest = Math.max(0, ...linked.map(issue => issue.github!.syncedAt ?? 0));
   const repos = [...new Set(linked.map(issue => issue.github!.repo).filter(Boolean))];
+  const changing = plan.filter(entry => entry.changes.length > 0);
+
   return (
     <div class={waiting.length > 0 ? 'issuesync waiting' : 'issuesync'}>
       <span class="issuesynchead">GitHub{repos.length === 1 && <span class="issuesyncrepo"> · {repos[0]}</span>}</span>
@@ -114,24 +150,88 @@ function SyncBox({ base, issues, onSynced }: { base: string; issues: IssueRow[];
       ) : (
         <span class="issuesyncfacts">
           <span>{linked.length} linked</span>
-          {waiting.length > 0
-            ? <span class="issuesyncout">{waiting.length} with changes to push</span>
-            : <span>nothing waiting to push</span>}
+          <span>{marked.length} marked for sync</span>
+          {waiting.length > 0 && <span class="issuesyncout">{waiting.length} with changes to send</span>}
           {neverSynced > 0 && <span>{neverSynced} never synced</span>}
           <span>{local} local only</span>
           <span>{newest > 0 ? `last synced ${ago(newest)}` : 'never synced'}</span>
         </span>
       )}
       <span class="grow" />
-      {linked.length > 0 && (
-        <button class="resetbtn issuesyncbtn" disabled={syncing} onClick={() => void sync()}
-          title="pull GitHub's changes and push local edits and comments; closing an issue upstream waits for confirm">
-          {syncing ? 'Syncing…' : 'Sync'}
+      {linked.length > 0 && (stage === 'idle' || stage === 'done') && (
+        <button class="resetbtn issuesyncbtn" onClick={() => {
+          setSaid(null);
+          setShowAll(false);
+          // Every issue decided and some marked: nothing to ask, so straight to the plan.
+          if (undecided.length === 0 && marked.length > 0) void planSync();
+          else setStage('choose');
+        }}
+          title="choose the issues to sync, then see what a sync would change; nothing is written until you confirm">
+          Sync…
         </button>
       )}
-      {said
+      {(stage === 'choose' || stage === 'planning') ? (
+        <div class="syncplan">
+          <p class="syncplanhead">
+            {undecided.length > 0
+              ? `${undecided.length} linked issue${undecided.length === 1 ? ' has' : 's have'} no sync decision yet. Choose Sync or Leave out for each; Not decided ones are offered again next time.`
+              : 'Every linked issue is set to sync or left out.'}
+          </p>
+          <ol class="syncchoose">
+            {(showAll ? linked : undecided).map(issue => (
+              <li key={issue.id}>
+                <div class="syncchoice">
+                  <SyncStateSelect state={syncStateOf(issue)} disabled={marking === issue.id || stage === 'planning'}
+                    label={`Sync state of issue #${issue.id}`} onChoose={state => void mark(issue, state)} />
+                  <span>#{issue.id} · {issue.title}</span>
+                  <span class="quiet">GitHub #{issue.github!.number}{outgoing(issue.github!).length > 0 && ` · ${outgoing(issue.github!).join(', ')}`}</span>
+                </div>
+              </li>
+            ))}
+          </ol>
+          {!showAll && linked.length > undecided.length && (
+            <p class="quiet syncplanrest">
+              {marked.length} set to sync, {linked.length - undecided.length - marked.length} left out.{' '}
+              <button class="linkbtn" onClick={() => setShowAll(true)}>Show all</button>
+            </p>
+          )}
+          <div class="syncplanfoot">
+            <button class="runbtn" disabled={marked.length === 0 || stage === 'planning'} onClick={() => void planSync()}>
+              {stage === 'planning' ? 'Reading GitHub…' : `Read GitHub for ${marked.length} set to sync`}
+            </button>
+            <button class="resetbtn" disabled={stage === 'planning'} onClick={() => setStage('idle')}>Cancel</button>
+          </div>
+        </div>
+      ) : (stage === 'review' || stage === 'applying') ? (
+        <div class="syncplan">
+          <p class="syncplanhead">
+            {changing.length === 0
+              ? `All ${plan.length} marked issue${plan.length === 1 ? ' is' : 's are'} up to date. Nothing to send or take.`
+              : `A sync would change ${changing.length} of ${plan.length} marked issue${plan.length === 1 ? '' : 's'}:`}
+          </p>
+          {changing.length > 0 && (
+            <ol class="syncplanlist">
+              {changing.map(entry => (
+                <li key={entry.id}>
+                  <span class="syncplanissue">#{entry.id} · {entry.title} <span class="quiet">→ GitHub #{entry.number}</span></span>
+                  <ul>{entry.changes.map(change => <li key={change}>{change}</li>)}</ul>
+                </li>
+              ))}
+            </ol>
+          )}
+          {plan.length > changing.length && changing.length > 0 && (
+            <p class="quiet syncplanrest">{plan.length - changing.length} other marked issue{plan.length - changing.length === 1 ? ' is' : 's are'} up to date.</p>
+          )}
+          <div class="syncplanfoot">
+            <button class="runbtn" disabled={changing.length === 0 || stage === 'applying'} onClick={() => void applySync()}>
+              {stage === 'applying' ? 'Syncing…' : 'Confirm sync'}
+            </button>
+            <button class="resetbtn" disabled={stage === 'applying'} onClick={() => setStage('idle')}>Cancel</button>
+          </div>
+        </div>
+      ) : said
         ? <pre class={said.failed ? 'issuesyncsaid bad' : 'issuesyncsaid'}>{said.result.trim()}</pre>
-        : <span class="issuesyncnote">Changes made on GitHub show after a sync.</span>}
+        : <span class="issuesyncnote">Only issues marked for sync take part. Sync reads GitHub and shows the changes; nothing is sent until you confirm.</span>}
     </div>
   );
 }
@@ -272,7 +372,9 @@ export function Issues({ base, issue: openId, onIssue, onGoToNote }: {
                       : `opened ${ago(issue.reportedAt)}`}
                     {!closed(issue) && issue.status !== 'acknowledged' && <> · <span class={`issuestatus issue-${issue.status}`}>{STATUS_WORDS[issue.status]}</span></>}
                     {issue.github
-                      ? <> · GitHub #{issue.github.number}{outgoing(issue.github).length > 0 && <> · <span class="issuesyncout">{outgoing(issue.github).join(', ')}</span></>}</>
+                      ? <> · GitHub #{issue.github.number}{issue.github.marked
+                        ? (outgoing(issue.github).length > 0 ? <> · <span class="issuesyncout">{outgoing(issue.github).join(', ')}</span></> : <> · synced</>)
+                        : <> · {issue.github.decided ? 'left out of sync' : 'sync not decided'}</>}</>
                       : <> · local only</>}
                   </div>
                 </div>
@@ -425,6 +527,7 @@ function IssuePage({ base, issue, onBack, onChanged, onGoToNote, onLabel, onType
             {issue.github ? (
               <>
                 <p>#{issue.github.number}{issue.github.repo && <> in {issue.github.repo}</>}</p>
+                <SyncMark base={base} issue={issue} onChanged={onChanged} />
                 <p class="quiet">{issue.github.syncedAt !== undefined ? `synced ${ago(issue.github.syncedAt)}` : 'linked, never synced'}</p>
                 {outgoing(issue.github).length > 0
                   ? <p class="issuesyncout">{outgoing(issue.github).join(', ')} since then</p>
@@ -726,6 +829,52 @@ function SequenceLink({ base, issue, onLinked }: { base: string; issue: IssueRow
         <button class="tool plain" disabled={linking} onClick={() => void link()}>{linking ? 'Linking…' : 'Link'}</button>
       )}
       {failure && <p class="bad">{failure}</p>}
+    </div>
+  );
+}
+
+/** A linked issue's sync decision: nobody has decided, it syncs, or it is left out on purpose. */
+type SyncState = 'undecided' | 'sync' | 'leave';
+
+/** What `issues edit` takes for each state; null clears the decision. */
+const SYNC_VALUE: Record<SyncState, boolean | null> = { undecided: null, sync: true, leave: false };
+
+function syncStateOf(issue: IssueRow): SyncState {
+  if (!issue.github?.decided) return 'undecided';
+  return issue.github.marked ? 'sync' : 'leave';
+}
+
+/**
+ * The three sync states as a list to choose from, each named, so a change is
+ * a deliberate pick rather than a click that flips a box.
+ */
+function SyncStateSelect({ state, disabled, label, onChoose }: {
+  state: SyncState; disabled: boolean; label: string; onChoose: (state: SyncState) => void;
+}) {
+  return (
+    <select class={`syncstate syncstate-${state}`} value={state} disabled={disabled} aria-label={label}
+      onChange={(e: Event) => onChoose((e.target as HTMLSelectElement).value as SyncState)}>
+      <option value="undecided">Not decided</option>
+      <option value="sync">Sync</option>
+      <option value="leave">Leave out</option>
+    </select>
+  );
+}
+
+/** A linked issue's sync state on its page, through `issues edit`; sync reads and writes issues set to sync only. */
+function SyncMark({ base, issue, onChanged }: { base: string; issue: IssueRow; onChanged: () => void }) {
+  const [saving, setSaving] = useState(false);
+  const choose = async (state: SyncState) => {
+    if (saving) return;
+    setSaving(true);
+    await callIssues(base, { action: 'edit', id: issue.id, sync: SYNC_VALUE[state] });
+    setSaving(false);
+    onChanged();
+  };
+  return (
+    <div class="syncmark" title="only issues set to sync are read from or sent to GitHub">
+      <span>Sync with GitHub</span>
+      <SyncStateSelect state={syncStateOf(issue)} disabled={saving} label={`Sync state of issue #${issue.id}`} onChoose={state => void choose(state)} />
     </div>
   );
 }

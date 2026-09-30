@@ -74,6 +74,8 @@ const issuesSchema = z.object({
     .describe('comment: Markdown text'),
   newest: z.number().int().positive().optional()
     .describe('list with id: only the newest N comments, oldest first, no body'),
+  sync: z.boolean().nullable().optional()
+    .describe('edit: true syncs a linked issue, false leaves it out, null returns it to undecided; sync reads and writes true only'),
   sequenceName: z.string().optional()
     .describe('create/edit: existing sequence to link, copied into the issues folder'),
   startUrl: z.string().optional()
@@ -91,7 +93,7 @@ const issuesSchema = z.object({
   includeSequence: z.boolean().optional()
     .describe('create: record a sequence (default true); false opens no Chrome'),
   confirm: z.boolean().optional()
-    .describe('publish/sync: write to GitHub (default false: a draft, or a report). pullSequence: accept another account\'s sequence, once a person has read it'),
+    .describe('publish/sync: write to GitHub (default false: a draft, or a sync plan with nothing written). pullSequence: accept another account\'s sequence, once a person has read it'),
   github: z.number().int().positive().optional()
     .describe('Upstream GitHub issue number (import, link)'),
   repo: z.string().optional()
@@ -518,7 +520,7 @@ export function createIssuesTools(
                 message: 'Issue ID is required',
               });
             }
-            if (args.title === undefined && args.body === undefined && args.labels === undefined && args.sequenceName === undefined) {
+            if (args.title === undefined && args.body === undefined && args.labels === undefined && args.sequenceName === undefined && args.sync === undefined) {
               return createErrorResponse('ISSUES_NOTHING_TO_EDIT', { id: args.id });
             }
             if (args.title !== undefined && !args.title.trim()) {
@@ -531,6 +533,7 @@ export function createIssuesTools(
               ...(args.title !== undefined && { title: args.title.trim() }),
               ...(args.body !== undefined && { body: args.body }),
               ...(args.labels !== undefined && { labels: args.labels }),
+              ...(args.sync !== undefined && { githubSync: args.sync ?? undefined }),
             });
             if (!edited) {
               return createErrorResponse('ISSUES_NOT_FOUND', {
@@ -573,6 +576,7 @@ export function createIssuesTools(
                 args.body !== undefined && 'body',
                 args.labels !== undefined && 'labels',
                 args.sequenceName !== undefined && `sequence (${args.sequenceName})`,
+                args.sync !== undefined && (args.sync === true ? 'set to sync' : args.sync === false ? 'left out of sync' : 'sync undecided'),
               ].filter(Boolean).join(', '),
               linked: edited.github !== undefined ? `#${edited.github}` : undefined,
             });

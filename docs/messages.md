@@ -2850,7 +2850,7 @@ Linked to GitHub {{linked}}: the next `issues({ action: 'sync' })` pushes this c
 **Type:** error
 **Code:** ISSUES_NOTHING_TO_EDIT
 
-Nothing to change on issue #{{id}}: pass `title`, `body`, `labels` or `sequenceName`.
+Nothing to change on issue #{{id}}: pass `title`, `body`, `labels`, `sequenceName` or `sync`.
 
 ---
 
@@ -2926,7 +2926,7 @@ The sequence block accounts for {{sequenceLength}} of that. Shorten the repro, o
 ## ISSUES_SYNC_RESULT
 
 **Type:** success
-**Summary:** Synced {{checked}} linked issue(s)
+**Summary:** Synced {{checked}} marked issue(s)
 
 **Sync: {{repo}}**
 
@@ -2940,6 +2940,26 @@ The sequence block accounts for {{sequenceLength}} of that. Shorten the repro, o
 **Needs confirmation:** {{pendingConfirm}}
 Re-run with `confirm: true` to apply.
 {{/pendingConfirm}}
+
+## ISSUES_SYNC_PLAN
+
+**Type:** success
+**Summary:** Sync plan for {{repo}}: {{changing}} of {{checked}} marked issue(s) would change - nothing written
+
+{{results}}
+
+Apply it with `issues({ action: 'sync', confirm: true })`.
+
+---
+
+## ISSUES_SYNC_NOTHING_MARKED
+
+**Type:** success
+**Summary:** No issue is marked for sync
+
+{{linked}} issue(s) are linked to GitHub and none is marked for sync, so nothing was read or written. Mark one with `issues({ action: 'edit', id: {{id}}, sync: true })`.
+
+---
 
 ## ISSUES_SYNC_NOTHING_LINKED
 

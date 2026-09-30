@@ -263,6 +263,10 @@ export interface IssueSync {
   bodyChanged: boolean;
   /** Comments carrying no GitHub marker, so the next sync pushes them. */
   unpushedComments: number;
+  /** Marked for sync; an unmarked linked issue is left out of every sync. */
+  marked: boolean;
+  /** Marked or left out by someone; false while nobody has decided, which is what the bench offers. */
+  decided: boolean;
 }
 
 /** A note written against a step of a saved sequence, for quoting into an issue. */
@@ -356,6 +360,8 @@ export const NO_TOOL_VALUES: ToolValues = { connections: [], servers: [], sequen
 export interface ToolRun {
   failed: boolean;
   result: string;
+  /** The response's `_meta`, for a page that acts on what the call found rather than its words. */
+  meta?: Record<string, any>;
 }
 
 /** A step held while the agent reads it, and whether it needs the person. */

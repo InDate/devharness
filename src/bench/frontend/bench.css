@@ -733,6 +733,26 @@ nav button.on .tabcount { color: var(--fg); }
 .issuesyncfacts { display: flex; flex-wrap: wrap; gap: 4px 12px; }
 .issuesyncnote { flex-basis: 100%; }
 .issuesyncbtn { border: 1px solid var(--line); }
+/* The plan a sync would carry out, shown before anything is sent. */
+.syncplan { flex-basis: 100%; display: flex; flex-direction: column; gap: 8px; margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--fg); }
+.syncplanhead, .syncplanrest { margin: 0; }
+.syncplanlist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow: auto; }
+.syncplanissue { font-weight: 600; }
+.syncplanlist ul { margin: 2px 0 0; padding-left: 18px; color: var(--muted); }
+.syncplanfoot { display: flex; gap: 8px; align-items: center; }
+.syncchoose { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow: auto; display: flex; flex-direction: column; gap: 2px; }
+.syncchoice { display: flex; align-items: center; gap: 8px; padding: 3px 4px; border-radius: 4px; }
+.syncchoice:hover { background: var(--panel); }
+.syncstate {
+  flex: 0 0 auto; font: inherit; font-size: 12px; padding: 2px 4px;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg);
+}
+.syncstate-undecided { color: var(--muted); border-style: dashed; }
+.syncstate-sync { border-color: var(--accent); }
+.syncchoose .quiet { margin-left: auto; white-space: nowrap; }
+.linkbtn { padding: 0; border: 0; background: none; font: inherit; color: var(--accent); cursor: pointer; }
+.linkbtn:hover { text-decoration: underline; }
+.syncmark { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 6px; font-size: 12px; }
 .issuesyncsaid {
   flex-basis: 100%; margin: 4px 0 0; max-height: 200px; overflow: auto; white-space: pre-wrap;
   font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--fg);

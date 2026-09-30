@@ -279,6 +279,7 @@ describe('sync', () => {
       github: 92, githubRepo: 'InDate/devharness',
       githubSyncedAt: new Date('2026-08-01T00:00:00.000Z'),
       githubBodyHash: undefined,
+      githubSync: true,
       ...overrides,
     });
     return (await getIssue(issue.id))!;
@@ -286,7 +287,7 @@ describe('sync', () => {
 
   it('says so when nothing is linked', async () => {
     await addIssue({ type: 'bug', title: 'Local only' });
-    const response = await handleSync({});
+    const response = await handleSync({ confirm: true });
     expect(text(response)).toContain('No local issue is linked');
     expect(ran('issue list')).toBe(false);
   });
@@ -301,7 +302,7 @@ describe('sync', () => {
       labels: [{ name: 'bug' }], updatedAt: '2026-08-10T00:00:00.000Z', url: 'u', comments: [],
     }));
 
-    await handleSync({});
+    await handleSync({ confirm: true });
 
     const reloaded = await getIssue(issue.id);
     expect(reloaded!.status).toBe('fixed');
@@ -322,7 +323,7 @@ describe('sync', () => {
       body: `Upstream\n\n${emitSequenceBlock({ name: 'x', commands: [{ tool: 'navigate' }] })}`,
     }));
 
-    await handleSync({});
+    await handleSync({ confirm: true });
 
     const reloaded = await getIssue(1);
     expect(reloaded!.sequenceFile).toBe('');
@@ -336,7 +337,7 @@ describe('sync', () => {
       { number: 92, state: 'OPEN', stateReason: null, labels: [], updatedAt: '2026-08-10T00:00:00.000Z', url: 'u' },
     ]));
 
-    const response = await handleSync({});
+    const response = await handleSync({ confirm: true });
 
     expect(response._meta.github.conflicts).toEqual([{ id: issue.id, number: 92 }]);
     expect(text(response)).toContain('CONFLICT');
@@ -357,7 +358,7 @@ describe('sync', () => {
       labels: [], updatedAt: '2026-08-10T00:00:00.000Z', url: 'u', comments: [],
     }));
 
-    await handleSync({ id: issue.id, take: 'local' });
+    await handleSync({ id: issue.id, take: 'local', confirm: true });
 
     expect(ran('issue edit')).toBe(true);
     expect(stdinSeen.join('\n')).toContain('Original body');
@@ -375,9 +376,10 @@ describe('sync', () => {
       labels: [], updatedAt: '2026-07-01T00:00:00.000Z', url: 'u', comments: [],
     }));
 
-    const reported = await handleSync({});
+    const planned = await handleSync({});
     expect(ran('issue close')).toBe(false);
-    expect(text(reported)).toContain('confirmation');
+    expect(ran('issue edit')).toBe(false);
+    expect(planned._meta.github.plan[0].changes).toContain('close #92 on GitHub (completed)');
 
     await handleSync({ confirm: true });
     expect(ran('issue close')).toBe(true);
@@ -394,8 +396,8 @@ describe('sync', () => {
       labels: [], updatedAt: '2026-08-10T00:00:00.000Z', url: 'u', comments: [remoteComment],
     }));
 
-    await handleSync({});
-    await handleSync({});
+    await handleSync({ confirm: true });
+    await handleSync({ confirm: true });
 
     expect((await getIssue(1))!.comments).toHaveLength(1);
   });
@@ -413,7 +415,7 @@ describe('sync', () => {
 
   it('a bare github stamp syncs against the inferred repo', async () => {
     const bare = await addIssue({ type: 'bug', title: 'Bare stamp', body: 'Local body' });
-    await updateIssueFields(bare.id, { github: 92 });
+    await updateIssueFields(bare.id, { github: 92, githubSync: true });
     responses.set('issue list', JSON.stringify([
       { number: 92, state: 'OPEN', stateReason: null, labels: [], updatedAt: '2026-08-10T00:00:00.000Z', url: 'u' },
     ]));
@@ -422,7 +424,7 @@ describe('sync', () => {
       labels: [], updatedAt: '2026-08-10T00:00:00.000Z', url: 'u', comments: [],
     }));
 
-    const response = await handleSync({});
+    const response = await handleSync({ confirm: true });
 
     expect(text(response)).toContain('#92');
     expect(text(response)).not.toContain('No local issue is linked');
@@ -444,13 +446,13 @@ describe('sync', () => {
       view([{ id: 'IC_9', body: 'Local note', createdAt: '2026-08-10T00:00:00.000Z' }]),
     ]);
 
-    await handleSync({});
+    await handleSync({ confirm: true });
 
     expect(calls.filter(a => key(a) === 'issue comment')).toHaveLength(1);
     expect((await getIssue(issue.id))!.comments[0].text).toContain('<!-- gh: IC_9 -->');
 
     // A forced second push must skip the now-stamped comment.
-    await handleSync({ id: issue.id, take: 'local' });
+    await handleSync({ id: issue.id, take: 'local', confirm: true });
 
     expect(calls.filter(a => key(a) === 'issue comment')).toHaveLength(1);
     expect((await getIssue(issue.id))!.comments).toHaveLength(1);
@@ -471,7 +473,7 @@ describe('sync', () => {
       view([{ id: 'IC_11', body: 'Late note', createdAt: '2026-08-10T00:00:00.000Z' }]),
     ]);
 
-    await handleSync({});
+    await handleSync({ confirm: true });
 
     expect(ran('issue edit')).toBe(false);  // body classified as unchanged
     expect(calls.filter(a => key(a) === 'issue comment')).toHaveLength(1);
@@ -491,7 +493,7 @@ describe('sync', () => {
       comments: [{ id: 'IC_4', body: 'Orphaned by a dead push', createdAt: '2026-08-10T00:00:00.000Z' }],
     }));
 
-    await handleSync({});
+    await handleSync({ confirm: true });
 
     expect(calls.filter(a => key(a) === 'issue comment')).toHaveLength(0);
     const comments = (await getIssue(issue.id))!.comments;
@@ -511,7 +513,7 @@ describe('sync', () => {
       comments: [{ id: 'IC_5', body: 'Same words', createdAt: '2026-08-09T00:00:00.000Z' }],
     }));
 
-    await handleSync({});
+    await handleSync({ confirm: true });
 
     const comments = (await getIssue(issue.id))!.comments;
     expect(comments).toHaveLength(1);
@@ -529,10 +531,10 @@ describe('sync', () => {
       body: `Upstream body\n\n<!-- devharness: local #${issue.id} -->`,
     }));
 
-    await handleSync({});
+    await handleSync({ confirm: true });
     expect((await getIssue(issue.id))!.body).toBe('Upstream body');
 
-    await handleSync({ id: issue.id, take: 'local' });
+    await handleSync({ id: issue.id, take: 'local', confirm: true });
     const pushedBody = stdinSeen[stdinSeen.length - 1];
     expect(pushedBody.match(/devharness: local #/g)).toHaveLength(1);
   });

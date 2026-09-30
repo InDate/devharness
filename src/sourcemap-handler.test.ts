@@ -129,3 +129,16 @@ describe('a paused frame no source map covers', () => {
     expect(result.content[0].text).toContain('http://localhost:3000/plain.js:19:30');
   });
 });
+
+describe('clear while a map is loading', () => {
+  it('leaves no map behind from the load that was in flight', async () => {
+    const handler = new SourceMapHandler();
+    await handler.registerSourceMapsFromDirectory(dist);
+
+    const inFlight = handler.mapToOriginal('http://localhost:3000/assets/app.js', 3, 0);
+    handler.clear();
+    await inFlight;
+
+    expect(handler.getLoadedSourceMaps()).toEqual([]);
+  });
+});

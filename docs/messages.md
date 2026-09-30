@@ -555,7 +555,7 @@ Reason: {{error}}
 
 A breakpoint already exists at {{url}}:{{lineNumber}}
 
-**TIP:** Use `listBreakpoints()` to see all active breakpoints and their IDs.
+**TIP:** Use `breakpoint({ action: 'list', connectionReason })` to see all active breakpoints and their IDs.
 
 ---
 
@@ -575,7 +575,7 @@ Breakpoint {{breakpointId}} removed successfully
 Breakpoint {{breakpointId}} not found
 
 **Suggestions:**
-- Use `listBreakpoints()` to see all active breakpoints
+- Use `breakpoint({ action: 'list', connectionReason })` to see all active breakpoints
 - The breakpoint may have already been removed
 
 ---
@@ -589,7 +589,7 @@ Logpoint set at {{url}}:{{lineNumber}} (max executions: {{maxExecutions}})
 **Breakpoint ID:** `{{breakpointId}}`
 **Log message:** `{{logMessage}}`
 
-**Note:** Logpoint will pause execution after {{maxExecutions}} executions. Use `resetLogpointCounter()` to reset the counter.
+**Note:** Logpoint will pause execution after {{maxExecutions}} executions. Use `breakpoint({ action: 'resetCounter', connectionReason, breakpointId })` to reset the counter.
 
 ---
 
@@ -613,7 +613,7 @@ Logpoint validation failed: {{error}}
 **Suggestions:**
 - Check that the expressions in `{curly braces}` are valid JavaScript
 - Ensure variables referenced exist in the scope at that line
-- Try evaluating the expression manually with `evaluateExpression()`
+- Try evaluating the expression manually with `inspect({ action: 'evaluateExpression', connectionReason })`
 
 ---
 
@@ -774,7 +774,7 @@ Failed to evaluate expression: {{error}}
 **Suggestions:**
 - Check that the expression is valid JavaScript
 - Ensure variables referenced exist in the current scope
-- If evaluating in a specific frame, verify the call frame ID is valid with `getCallStack()`
+- If evaluating in a specific frame, verify the call frame ID is valid with `inspect({ action: 'getCallStack', connectionReason })`
 
 ---
 
@@ -837,8 +837,8 @@ Expression returned a pending Promise while the debugger is paused - the event l
 Not currently paused at a breakpoint
 
 **Suggestions:**
-- Use `pause()` to pause execution
-- Set a breakpoint with `setBreakpoint()` and trigger it
+- Use `execution({ action: 'pause', connectionReason })` to pause execution
+- Set a breakpoint with `breakpoint({ action: 'set', connectionReason, url, lineNumber })` and trigger it
 - Wait for execution to hit an existing breakpoint
 
 ---
@@ -863,7 +863,7 @@ Timeout waiting for execution to pause
 **Suggestions:**
 - The breakpoint may not be hit in the code path being executed
 - Try increasing the timeout duration
-- Verify the breakpoint is set at the correct location with `listBreakpoints()`
+- Verify the breakpoint is set at the correct location with `breakpoint({ action: 'list', connectionReason })`
 
 ---
 
@@ -968,7 +968,7 @@ Element not found: `{{selector}}`
 
 **Suggestions:**
 - Verify the CSS selector is correct
-- Use `querySelector()` to test if the element exists
+- Use `dom({ action: 'querySelector', connectionReason, selector })` to test if the element exists
 - The element may not be visible or loaded yet - try waiting or reloading the page
 
 ---
@@ -1067,10 +1067,10 @@ Element `{{selector}}` was clicked, but may not have a click handler attached. V
 {{action}} on `{{selector}}` triggered breakpoint at {{url}}:{{lineNumber}}
 
 **Next steps:**
-- Use `getCallStack()` to see the full call stack
-- Use `getVariables()` to inspect variables at this location
-- Use `stepOver()`, `stepInto()`, or `stepOut()` to continue debugging
-- Use `resume()` to continue execution
+- Use `inspect({ action: 'getCallStack', connectionReason })` to see the full call stack
+- Use `inspect({ action: 'getVariables', connectionReason, callFrameId })` to inspect variables at this location
+- Use `execution` with `stepOver`, `stepInto` or `stepOut` to continue debugging
+- Use `execution({ action: 'resume', connectionReason })` to continue execution
 
 ---
 
@@ -1227,7 +1227,7 @@ Network Request Search: {{matchCount}} matches for pattern "{{pattern}}"{{#flags
 Network request {{id}} not found
 
 **Suggestions:**
-- Use `listNetworkRequests()` to see all captured requests
+- Use `network({ action: 'list', connectionReason })` to see all captured requests
 - Ensure network monitoring was enabled before the request was made
 - The request may have occurred before monitoring started
 
@@ -1246,7 +1246,7 @@ Script not found for URL: {{url}}
 - Verify the URL is correct (use `file://` for local files)
 - Ensure the script has been loaded by the browser
 - For dynamically loaded scripts, wait for them to load before setting breakpoints
-- Use `searchCode()` to find available scripts
+- Use `inspect({ action: 'searchCode', connectionReason, pattern })` to find available scripts
 
 ---
 
@@ -1272,7 +1272,7 @@ Line {{lineNumber}} not found in {{url}}
 Call frame {{callFrameId}} not found
 
 **Suggestions:**
-- Use `getCallStack()` to get valid call frame IDs
+- Use `inspect({ action: 'getCallStack', connectionReason })` to get valid call frame IDs
 - Ensure execution is still paused at a breakpoint
 - The call stack may have changed if execution resumed
 
@@ -1348,7 +1348,7 @@ Not connected to browser. This operation requires browser automation support.
 No page loaded. The tool `{{toolName}}` requires a web page to be loaded first.
 
 **Suggestions:**
-1. Navigate to a URL with `navigateTo({ url: 'https://example.com' })`
+1. Navigate to a URL with `navigate({ action: 'goto', connectionReason, url: 'https://example.com' })`
 2. Or launch Chrome with a URL: `connection({ action: 'launch', url: 'https://example.com' })`
 
 **Note:** Chrome starts with a blank page by default. You must navigate to a URL before using tools that interact with page content.

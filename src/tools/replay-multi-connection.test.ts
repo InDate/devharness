@@ -296,6 +296,26 @@ describe('run against a two-connection sequence', () => {
     expect(domConnections(calls)).toEqual(['my-second-browser']);
   });
 
+  it('accepts a key that only a forEach body names', async () => {
+    const { replay, recorder, calls } = makeHarness({ live: [OWNER, 'my-second-browser'] });
+    await recorder.createSequenceFromCommands('per-member', [
+      { tool: 'dom', params: { action: 'querySelector', selector: '#member-claim', connectionReason: MEMBER } },
+    ]);
+    await recorder.createSequenceFromCommands('duo-each', [
+      { tool: 'forEach', params: { in: [1], as: 'row', do: 'per-member' } },
+    ]);
+    const sequenceId = recorder.listSequences().find(s => s.name === 'duo-each')!.id;
+
+    const res = await run(replay, {
+      sequenceId,
+      connectionReason: OWNER,
+      connections: { [MEMBER]: 'my-second-browser' },
+    });
+
+    expect(res.isError).toBeFalsy();
+    expect(domConnections(calls)).toEqual(['my-second-browser']);
+  });
+
   it('launches the mapped browser when the session does not have it', async () => {
     const { replay, recorder, calls } = makeHarness({ live: [OWNER] });
     await recorder.createSequenceFromCommands('duo-setup', [

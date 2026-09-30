@@ -276,7 +276,7 @@ export interface ReplayRunMeta {
   runStatus?: string;
   /** 1-based step currently executing (status action replies). */
   currentStep?: number;
-  /** recordInteraction: the person closed the recorder without saving. */
+  /** run: the run was cancelled. recordInteraction: the person closed the recorder without saving. */
   cancelled?: boolean;
 }
 

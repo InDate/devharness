@@ -18,13 +18,21 @@ const PORTS: Record<string, number> = {
   'declared-b': 9333,
 };
 
-function makeReplay(commands: RecordedCommand[]) {
+/**
+ * `launchAnswer` is how a launch of the declared browser answers: a fresh
+ * browser, one already running under the name (reused), or a refusal because
+ * the name is bound and forceNewInstance was asked.
+ */
+function makeReplay(
+  commands: RecordedCommand[],
+  opts: { declared?: CommandSequence['requiredConnections']; launchAnswer?: 'fresh' | 'reused' | 'bound' } = {},
+) {
   const sequence = {
     id: 'seq-declared',
     name: 'declared-seq',
     commands,
     createdAt: 1,
-    requiredConnections: [{ reference: 'declared-b' }],
+    requiredConnections: opts.declared ?? [{ reference: 'declared-b' }],
   } as CommandSequence;
 
   let activeSequence: any = null;
@@ -44,6 +52,12 @@ function makeReplay(commands: RecordedCommand[]) {
   const calls: Array<{ tool: string; params: Record<string, any> }> = [];
   const executeToolCall = vi.fn(productionShaped(async (tool: string, params: Record<string, any>) => {
     calls.push({ tool, params });
+    if (tool === 'connection' && params.action === 'launch') {
+      if (opts.launchAnswer === 'bound') {
+        return { isError: true, _errorId: 'CHROME_REFERENCE_ALREADY_BOUND', content: [{ type: 'text', text: 'Error: name in use' }] };
+      }
+      return { content: [{ type: 'text', text: '' }], _meta: { launch: { name: params.name, reused: opts.launchAnswer === 'reused' } } };
+    }
     if (tool === 'connection' && params.action === 'list') {
       return {
         content: [{ type: 'text', text: 'Active debugger connections' }],
@@ -61,7 +75,7 @@ function makeReplay(commands: RecordedCommand[]) {
   const { replay } = createReplayTools(
     recorder,
     executeToolCall,
-    async () => null,
+    async (reference: string) => (opts.launchAnswer === 'bound' && reference === 'declared-b' ? {} : null),
     async (reference: string) => PORTS[reference] ?? null,
     undefined
   );
@@ -129,5 +143,26 @@ describe('declared browsers', () => {
     }, { timeout: 5000 });
 
     expect(killedPorts(calls)).toContain(PORTS['declared-b']);
+  });
+
+  it('are left running when the launch found the browser already up under that name', async () => {
+    const { replay, calls } = makeReplay(twoSteps, {
+      declared: [{ reference: 'declared-b', profile: 'member' }],
+      launchAnswer: 'reused',
+    });
+
+    await replay.handler({ action: 'run', wait: true, sequenceId: 'seq-declared', connectionReason: 'run-device' } as any);
+
+    expect(calls.some(c => c.tool === 'connection' && c.params.action === 'launch')).toBe(true);
+    expect(killedPorts(calls)).not.toContain(PORTS['declared-b']);
+  });
+
+  it('reuse a browser already bound to the name, read from the error id', async () => {
+    const { replay, calls } = makeReplay(twoSteps, { launchAnswer: 'bound' });
+
+    const result: any = await replay.handler({ action: 'run', wait: true, sequenceId: 'seq-declared', connectionReason: 'run-device' } as any);
+
+    expect(result.isError).toBeFalsy();
+    expect(killedPorts(calls)).not.toContain(PORTS['declared-b']);
   });
 });

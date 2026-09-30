@@ -19,7 +19,7 @@ import { createTool } from '../validation-helpers.js';
 import { createSuccessResponse, createErrorResponse } from '../messages.js';
 import { showReplayOverlay } from '../interaction-recorder.js';
 import { getIssue } from '../issue-tracker.js';
-import { deriveConnectionReference, sanitizeReference } from '../reference-validator.js';
+import { deriveConnectionReference, sanitizeReference, validateReference } from '../reference-validator.js';
 import { normalizeProfileName } from '../chrome-launcher.js';
 import { runRegistry, type RunRecord } from './replay-run-registry.js';
 import { appendRun, beginSuite } from '../run-log.js';
@@ -129,9 +129,8 @@ export function findUnknownStepTools(
 }
 
 /**
- * Build the error response for a sequence containing unknown tool names.
- * Uses a plain response rather than a message template because there is no
- * template for this case yet (see report for the suggested SEQUENCE_UNKNOWN_TOOL entry).
+ * Build the error response for a sequence containing unknown tool names. A
+ * plain response: docs/messages.md holds no template for this case.
  */
 function unknownStepToolsError(
   action: string,
@@ -331,8 +330,8 @@ async function handleHistory(args: ReplayArgs, recorder: CommandRecorder) {
 }
 
 /**
- * Decide whether an explicit batch-level `connectionReason` may replace the
- * connections the commands were recorded against (`repeat`, `runFromLog`).
+ * Whether an explicit batch-level `connectionReason` replaces the connections
+ * the commands were recorded against (`repeat`, `runFromLog`).
  *
  * Yes for a single-connection batch - that is what the parameter has always
  * meant, and silently ignoring it (which is what "never overwrite a recorded
@@ -406,9 +405,9 @@ async function handleRepeat(
   let connectionReason = args.connectionReason;
 
   // An explicitly passed connectionReason must still mean "run these against
-  // that connection" - history now retains the recorded one for every browser
-  // command, so honouring only bare commands turned this documented parameter
-  // into a silent no-op. It can only be honoured when the batch is
+  // that connection" - history retains the recorded one for every command that
+  // named a connection, so honouring only bare commands would turn this
+  // documented parameter into a silent no-op. It can only be honoured when the batch is
   // single-connection; overriding a two-browser batch is the collapse bug-018
   // is about, so that combination is refused rather than silently picking one.
   const override = resolveBatchOverride(commands, args.connectionReason, 'repeat');
@@ -620,8 +619,8 @@ async function handleCreate(args: ReplayArgs, recorder: CommandRecorder, getKnow
   // per-step only where the sequence genuinely spans connections.
   const normalized = normalizeStepConnections(sequence.commands);
   (sequence as any).commands = normalized.commands;
-  // Remember what was hoisted - `insert` needs it to tell a same-browser insert
-  // from a cross-browser one (see handleInsert).
+  // What was hoisted is stored: `insert` reads it to separate a same-browser
+  // insert from a cross-browser one (see handleInsert).
   if (normalized.hoisted) (sequence as any).recordedConnection = normalized.hoisted;
   const recordingProxy = normalized.hoisted ? getProxy(normalized.hoisted) : undefined;
   if (recordingProxy) {
@@ -686,8 +685,8 @@ function rehydrateStepConnections(sequence: CommandSequence): RecordedCommand[] 
 /**
  * What `create`/`insert` did with the recorded per-step connections, and what the
  * user has to do about it on `run`. A multi-connection sequence is only portable
- * if its references are rebound, and an ambiguous ("mixed") recording is worth
- * saying out loud rather than guessing at.
+ * if its references are rebound, and an ambiguous ("mixed") recording is
+ * reported rather than pinned to one connection.
  */
 function formatConnectionNote(normalized: ReturnType<typeof normalizeStepConnections>): string {
   const { analysis, hoisted } = normalized;
@@ -710,12 +709,11 @@ function formatConnectionNote(normalized: ReturnType<typeof normalizeStepConnect
   // dangerous one: bare steps in a two-browser sequence take whatever the
   // run-level connection happens to be, so the same sequence sends them to a
   // different browser depending on how it is run - silently, and green either
-  // way. Returning early on multiConnection used to make this warning
-  // unreachable in exactly the case that needs it.
+  // way.
   if (analysis.mixed) {
     notes.push(`\n\n**${analysis.multiConnection ? 'Some steps name no connection' : 'Mixed connections'}:** ` +
       `steps naming ${analysis.references.map(r => `\`${r}\``).join(', ')} are pinned, but other browser steps name none` +
-      ` (they ran against whichever connection was active at record time, which is not recorded).` +
+      ` (nothing records which connection they ran against).` +
       ` Those bare steps take the run-level connection, so ${analysis.multiConnection
         ? `they land in a DIFFERENT browser depending on the run-level \`connectionReason\` - and the run still reports success either way.`
         : `a run-level \`connectionReason\` retargets them while the named steps stay put.`}` +
@@ -1033,8 +1031,8 @@ async function connectionsSharingPort(
   }
 }
 
-/** The sequences a run can reach by name: a check's `{ run }` on either answer. */
-function branchTargets(commands: RecordedCommand[]): string[] {
+/** The sequences a run reaches by name: a check's `{ run }` on either answer, and a `forEach`'s `do`. */
+function reachedByName(commands: RecordedCommand[]): string[] {
   const names: string[] = [];
   for (const cmd of commands) {
     if (cmd.tool === 'check') {
@@ -1042,13 +1040,14 @@ function branchTargets(commands: RecordedCommand[]): string[] {
         if (typeof answer?.run === 'string') names.push(answer.run);
       }
     }
+    if (cmd.tool === 'forEach' && typeof cmd.params?.do === 'string') names.push(cmd.params.do);
   }
   return names;
 }
 
 /**
- * References that sequences reached through a check's `{ run }` name, for
- * validating `connections`. Resolution is memory-only and best-effort: a
+ * References that sequences reached by name (a check's `{ run }`, a
+ * `forEach`'s `do`) name, for validating `connections`. Resolution is memory-only and best-effort: a
  * sequence that lives on disk isn't loaded here (that would register it as a
  * side effect of validation), so `complete: false` says "this list may be
  * short" and the caller must not treat a missing key as a typo.
@@ -1070,7 +1069,7 @@ function collectNestedRebindableReferences(
   const references: string[] = [];
   let complete = true;
 
-  for (const then of branchTargets(commands)) {
+  for (const then of reachedByName(commands)) {
     if (seen.has(then)) continue;
     seen.add(then);
 
@@ -1149,11 +1148,7 @@ function collectVariableKeys(
   }
 
   let complete = true;
-  const named = [
-    ...branchTargets(commands),
-    ...commands.filter(cmd => cmd.tool === 'forEach' && typeof cmd.params?.do === 'string').map(cmd => cmd.params.do as string),
-  ];
-  for (const name of named) {
+  for (const name of reachedByName(commands)) {
     if (!name || seen.has(name)) continue;
     seen.add(name);
     const nested = recorder.listSequences().find(sq => sq.name === name);
@@ -1172,9 +1167,9 @@ function collectVariableKeys(
  * reach. Empty when the key list could not be resolved in full, because a key
  * valid for an unloaded helper is not a typo.
  *
- * A `variables` key is matched exactly and nothing else looks at it, so an
- * unmatched key used to be dropped in silence: the step ran on its RECORDED
- * text while the call read as an override. For a recorded credential that
+ * A `variables` key is matched exactly and nothing else reads it, so an
+ * unmatched key would be dropped in silence: the step would run on its
+ * RECORDED text while the call read as an override. For a recorded credential that
  * means the old password reaching the live app with the run reporting success.
  * Same rule the `connections` rebinding already applies to a reference that
  * names no recorded step.
@@ -1200,8 +1195,8 @@ function unmatchedVariableKeys(
  *    can still reference a helper in _helpers/ by name (a check's `{ run }`,
  *    forEach `do`) — those resolve by sequence NAME, not by path;
  *  - a failure is recorded and the run continues (continueOnFailure, default
- *    true). A suite that stops at the first red tells you far less than one
- *    that finishes and shows you all of them.
+ *    true). A suite that stops at the first red reports far less than one
+ *    that finishes and shows all of them.
  *
  * Folders whose name starts with '_' are loaded but never run on their own —
  * that is where preamble/helper sequences live, which are meaningless in
@@ -1358,15 +1353,17 @@ async function handleRunAll(
         { validateVariableKeys: false, suite: { id: suite.id, label: suite.label } }
       );
       const text = (res?.content || []).map((c: any) => c?.text || '').join('\n');
-      // performRun stamps _meta.replay on every terminal response, so trust that
-      // over the prose. Regexing for a line starting with "Error:" both misses
-      // non-run outcomes (a variables prompt, a pause) and misfires on any step
-      // output that happens to echo one.
+      // performRun stamps _meta.replay on every terminal response, and the
+      // outcome is read from it rather than the prose: a line starting with
+      // "Error:" misses non-run outcomes (a variables prompt, a pause) and
+      // matches any step output that happens to echo one.
       const meta = res?._meta?.replay;
       if (meta && typeof meta.success === 'boolean') {
         ok = meta.success === true && meta.paused !== true && meta.prompted !== true;
         detail = meta.prompted
           ? 'did not run: it has recorded variables and none were supplied — pass variables:{} to keep the recorded values'
+          : meta.cancelled
+            ? 'cancelled while it ran'
           : meta.paused
             ? 'did not finish: the run PAUSED (stepTo, a breakpoint, or click validation) and is still open'
             : (text.match(/\*\*Socket health failed\*\*[\s\S]*?(?=\n\n\*\*|$)/)?.[0]?.replace(/\s+/g, ' ').slice(0, 200)
@@ -1429,17 +1426,6 @@ async function handleRunAll(
   };
 }
 
-/**
- * Launch the browsers a sequence declares it needs, if they are not live yet.
- *
- * Naming a connection on a step does not create it. Without this, a
- * multi-browser sequence runs only when someone has already opened those
- * browsers by hand — so an unattended suite run skips precisely the coverage
- * that a single browser cannot provide.
- *
- * A caller's `connections` rebinding wins: the declaration supplies a default
- * browser, it does not override where the caller wants the steps pointed.
- */
 /**
  * Connections a sequence actually loads the app in - the ones a declared
  * WebSocket could plausibly belong to.
@@ -1511,6 +1497,18 @@ function declaredProfileConflict(
   return null;
 }
 
+/**
+ * Launch the browsers a sequence declares it needs, if they are not live yet,
+ * and answer with the ones this run launched - the ones it owns and closes.
+ *
+ * Naming a connection on a step does not create it. Without this, a
+ * multi-browser sequence runs only when someone has already opened those
+ * browsers by hand — so an unattended suite run skips precisely the coverage
+ * that a single browser cannot provide.
+ *
+ * A caller's `connections` rebinding wins: the declaration supplies a default
+ * browser, it does not override where the caller wants the steps pointed.
+ */
 async function ensureDeclaredConnections(
   sequence: CommandSequence,
   executeToolCall: ExecuteToolCall,
@@ -1536,7 +1534,7 @@ async function ensureDeclaredConnections(
     // first step that uses it. Attempt the launch and treat "already bound" as a
     // live browser to reuse.
     try {
-      await executeToolCall('connection', {
+      const result: any = await executeToolCall('connection', {
         action: 'launch',
         name: target,
         url: decl.url ?? sequence.startUrl,
@@ -1549,10 +1547,12 @@ async function ensureDeclaredConnections(
           : decl.forceNewInstance !== false,
         ...(decl.profile && { profile: decl.profile }),
       });
-      launched.push(target);
+      // A launch that found the name already up reused someone else's browser
+      // (a profile-bearing declaration launches without forceNewInstance), and
+      // a browser the run did not create is not the run's to close (#103).
+      if (result?._meta?.launch?.reused !== true) launched.push(target);
     } catch (err: any) {
-      const message = String(err?.message || err);
-      if (/already bound/i.test(message)) {
+      if (err?.response?._errorId === 'CHROME_REFERENCE_ALREADY_BOUND') {
         try {
           if (await getPageForConnection(target)) continue;
         } catch { /* fall through to the error below */ }
@@ -1610,9 +1610,9 @@ async function closeLaunchedConnections(
  *
  * A pause is the one outcome that deliberately keeps its browsers - they are
  * the state someone stopped to inspect. Every way out of a pause is terminal
- * though (cancel, step to the end, finish), and each used to drop the launched
- * references on the floor: the browsers stayed up and the next run reused one
- * carrying the previous run's state (issue #127).
+ * though (cancel, step to the end, finish), and each has to close them, or
+ * the browsers stay up and the next run reuses one carrying the previous
+ * run's state (issue #127).
  */
 const pendingDeclaredCleanups = new Map<string, () => Promise<string>>();
 
@@ -1735,7 +1735,7 @@ const WAIT_BOUND_MS = 120_000;
  * Socket problems a run CAUSED, per socket.
  *
  * Diffed against the start so a socket that was already dead is not blamed on
- * this sequence. Two failures, and the sequence's declaration decides which
+ * this sequence. Two failures, and the sequence's declaration sets which
  * sockets are in scope:
  *
  *  - one it depends on closed or hit frame errors mid-run. No assertion written
@@ -1779,7 +1779,7 @@ function socketFailures(
     for (const sock of now) {
       if (!inScope(sock.url)) continue;
       const prev = was.get(sock.id);
-      // Three closes this run did not cause, all of them normal:
+      // Four closes this run did not cause, all of them normal:
       //  - already closed before the run started;
       //  - torn down with its target, since a `navigate` replaces the page's
       //    workers and takes their sockets with it;
@@ -1952,9 +1952,9 @@ async function handleRun(
     .some(v => !hasTemplateToken(v.value));
   if (needsAnswer && args.variables === undefined) {
     const idParam = args.sequenceId || args.name!;
-    // Tag it: this response is a PROMPT, not a run. runAll has to be able to
-    // tell "asked you a question" from "executed and passed", or a suite goes
-    // green for a sequence that ran zero steps.
+    // Tagged as a PROMPT, not a run: runAll reads `prompted` to separate
+    // "asked a question" from "executed and passed", or a suite goes green for
+    // a sequence that ran zero steps.
     return {
       content: [{ type: 'text', text: formatVariablePrompt(sequence.name, idParam, extractedVariables, connectionReason) }],
       _meta: { tool: 'replay', action: 'run', timestamp: Date.now(), replay: { success: false, prompted: true } }
@@ -2007,9 +2007,10 @@ async function handleRun(
   const connectionMap = sanitizeConnectionMap(args.connections);
   if (connectionMap) {
     const recorded = analyzeRecordedStepConnections(commands);
-    // A sequence a check runs inherits this map, and a setup sequence
-    // normally lives BEHIND the check - so its references have to count as
-    // rebindable too, or the only rebindable ones are those needing no rebind.
+    // A sequence a check runs, or a forEach's body, inherits this map, and a
+    // setup sequence normally lives BEHIND the check - so its references have
+    // to count as rebindable too, or the only rebindable ones are those
+    // needing no rebind.
     const nested = collectNestedRebindableReferences(commands, recorder);
     const launchRefs = commands
       .map(createdName)
@@ -2109,9 +2110,8 @@ async function handleRun(
           message: declaredConns.error,
         })
       // Not CONNECTION_NOT_FOUND: that template renders a generic "no active
-      // browser connection" and drops the message, so every failed declaration
-      // reported the same thing and never said which browser, which role, or
-      // why the launch failed.
+      // browser connection" and drops the message, which names the browser,
+      // its role and why the launch failed.
       : createErrorResponse('DECLARED_CONNECTION_FAILED', { message: declaredConns.error });
   }
 
@@ -2130,10 +2130,6 @@ async function handleRun(
     ...(runEnv && { runEnv }),
   };
 
-  // wait: true - pre-0.7 blocking behaviour, driven by the MCP request signal.
-  // Also what nested `replay run` STEPS use (the executor injects wait: true),
-  // so a run started from inside a sequence never registers as its own
-  // top-level run and its caller keeps the result.
   // Connections a strict run watches: the run's own, plus every browser the
   // sequence declared.
   const watchedRefs = [...new Set([
@@ -2151,10 +2147,9 @@ async function handleRun(
   //
   // "Drives" is read from the NAVIGATE steps, because a socket rides on a
   // loaded app: a connection that never navigated has no page for the
-  // transport to belong to. Inferring it from connection injection instead
-  // failed a healthy three-browser run - its 3 bare steps were `assert`s over
-  // values already captured, which take a connection but load nothing, and
-  // that was enough to demand a sync socket on the run's own idle browser.
+  // transport to belong to. Connection injection is the wrong reading: an
+  // `assert` over a captured value takes a connection and loads nothing, and
+  // counting it demands a socket on an idle browser.
   const stepRefs = analyzeRecordedStepConnections(commands);
   const navigatedRefs = navigatedConnections(commands, connectionReason);
   const namedRefs = navigatedRefs.length > 0
@@ -2230,11 +2225,10 @@ async function handleRun(
 
   /**
    * Tear down the browsers this run owns: its own connection, plus any a step
-   * CREATED. Runs AFTER the health verdicts, because both of them interrogate
-   * the browser - a run with `killChromeOnFinish` and declared sockets used to
-   * kill Chrome first and then report "could not read socket health -
-   * Connection not found" as a socket FAILURE. Every such run failed, for a
-   * reason that was an artefact of its own cleanup.
+   * CREATED. Runs AFTER the health verdicts, because both of them read the
+   * browser: killing first leaves the verdict reading "could not read socket
+   * health - Connection not found" as a socket FAILURE, an artefact of the
+   * run's own cleanup.
    *
    * Ownership is not guessed from the sequence text: a launch step
    * hands back an existing browser when the reference is already bound, which
@@ -2305,7 +2299,10 @@ async function handleRun(
   };
   runRegistry.register(record);
 
-  // An abort from the caller's own request reaches the run it waits on.
+  // wait: true blocks the call on the run, driven by the MCP request signal. A
+  // nested `replay run` STEP runs this way too (the executor sets wait: true),
+  // so its caller keeps the result. An abort from the caller's own request
+  // reaches the run it waits on.
   if (args.wait === true) abortSignal?.addEventListener('abort', () => controller.abort(), { once: true });
 
   const finished = performRun(deps, controller.signal, runId, (ev) => {
@@ -2322,8 +2319,8 @@ async function handleRun(
     record.finalResponse = response;
     if (results) record.results = results;
     record.endedAt = Date.now();
-    // Still not derived by parsing the response: the check reports its own
-    // verdict, and a run whose transport died did not complete successfully.
+    // Read from the health verdict, not parsed from the response: a run whose
+    // transport died did not complete successfully.
     record.status = !healthy && outcome === 'completed' ? 'failed' : outcome;
     if (outcome !== 'paused') logRun(record);
   }).catch(async (error: any) => {
@@ -2528,8 +2525,8 @@ async function performRun(
   // Handle abort - return early (cleanup already handled by abort signal listener)
   if (abortSignal?.aborted) {
     // results holds every step ATTEMPTED - failures and the abort marker
-    // included - so its length is not a count of completed work. A run that
-    // aborted while a step was failing reported that step as completed.
+    // included - so its length is not a count of completed work, and a step
+    // failing when the abort came is counted as failed.
     const succeeded = execResult.results.filter(r => r.success).length;
     const failed = execResult.results.filter(r => !r.success).length;
     const abortedResponse = createSuccessResponse('REPLAY_ABORTED', {
@@ -2541,7 +2538,7 @@ async function performRun(
     });
     abortedResponse._meta = {
       tool: 'replay', action: 'run', timestamp: Date.now(),
-      replay: { success: false, totalSteps: sequence.commands.length, failedSteps: execResult.results.filter(r => !r.success).length, paused: true }
+      replay: { success: false, totalSteps: sequence.commands.length, failedSteps: failed, paused: false, cancelled: true }
     };
     return { response: abortedResponse, outcome: 'cancelled', results: execResult.results };
   }
@@ -2742,6 +2739,19 @@ async function handleStatus(args: ReplayArgs, recorder: CommandRecorder) {
   return { content: [{ type: 'text', text }] };
 }
 
+/**
+ * End the registered run a paused session belongs to: its status, its end, and
+ * its line in the run log, which a paused run gets only when it ends. A
+ * `wait: true` pause registers no record, and nothing is done for it.
+ */
+function endPausedRun(runId: string | undefined, status: 'completed' | 'failed' | 'cancelled'): void {
+  const record = runId ? runRegistry.get(runId) : undefined;
+  if (!record || record.status !== 'paused') return;
+  record.status = status;
+  record.endedAt = Date.now();
+  logRun(record);
+}
+
 /** Cancel one specific registered run, whatever state it is in. */
 async function cancelRunRecord(record: RunRecord, recorder: CommandRecorder) {
   if (record.status === 'running' || record.status === 'cancelling') {
@@ -2758,9 +2768,7 @@ async function cancelRunRecord(record: RunRecord, recorder: CommandRecorder) {
     if (activeSeq?.runId === record.runId) {
       recorder.setActiveSequence(null);
     }
-    record.status = 'cancelled';
-    record.endedAt = record.endedAt ?? Date.now();
-    logRun(record);
+    endPausedRun(record.runId, 'cancelled');
     // Cancelling ends the run, so it cleans up like any other terminal outcome.
     const closedNote = await drainDeclaredCleanup(record.runId, record.sequenceId);
     const response = createSuccessResponse('REPLAY_RUN_CANCELLED', {
@@ -2792,13 +2800,7 @@ async function handleCancel(args: ReplayArgs, recorder: CommandRecorder) {
   // behaviour - `cancel` always meant "drop the paused session").
   const activeSeq = recorder.getActiveSequence();
   if (activeSeq) {
-    if (activeSeq.runId) {
-      const record = runRegistry.get(activeSeq.runId);
-      if (record && record.status === 'paused') {
-        record.status = 'cancelled';
-        record.endedAt = record.endedAt ?? Date.now();
-      }
-    }
+    endPausedRun(activeSeq.runId, 'cancelled');
     const name = activeSeq.sequenceName;
     recorder.setActiveSequence(null);
     // Terminal: close what the paused run launched, whichever way it paused
@@ -2853,6 +2855,7 @@ async function handleStep(
 
   if (startStep >= commands.length) {
     recorder.setActiveSequence(null);
+    endPausedRun(activeSeq.runId, 'completed');
     const closedNote = await drainDeclaredCleanup(activeSeq.runId, activeSeq.sequenceId);
     return { content: [{ type: 'text', text: `**Sequence complete.** All ${commands.length} steps executed.${closedNote}` }] };
   }
@@ -2897,6 +2900,7 @@ async function handleStep(
     recorder.updateActiveSequenceStep(lastDone ?? startStep);
   } else if (failed || lastExecuted >= commands.length) {
     recorder.setActiveSequence(null);
+    endPausedRun(activeSeq.runId, failed ? 'failed' : 'completed');
     // Stepping off the end (or onto a failure) ends the run: same cleanup a
     // straight-through run gets.
     closedNote = await drainDeclaredCleanup(activeSeq.runId, activeSeq.sequenceId);
@@ -2931,6 +2935,7 @@ async function handleFinish(
 
   if (startStep >= commands.length) {
     recorder.setActiveSequence(null);
+    endPausedRun(activeSeq.runId, 'completed');
     const alreadyDone = await drainDeclaredCleanup(activeSeq.runId, activeSeq.sequenceId);
     return { content: [{ type: 'text', text: `**Sequence already complete.** All ${commands.length} steps executed.${alreadyDone}` }] };
   }
@@ -2951,8 +2956,8 @@ async function handleFinish(
     ctx
   });
 
-  // Clear active sequence
   recorder.setActiveSequence(null);
+  endPausedRun(activeSeq.runId, execResult.results.some(r => !r.success) ? 'failed' : 'completed');
   const closedNote = await drainDeclaredCleanup(activeSeq.runId, activeSeq.sequenceId);
 
   return { content: [{ type: 'text', text: formatExecutionResults(sequence.name, execResult.results, commands.length, execResult.durationMs) + closedNote }] };
@@ -3085,7 +3090,7 @@ async function handleInsert(args: ReplayArgs, recorder: CommandRecorder) {
   // insert into a single-connection sequence must not quietly pin those steps to
   // this session's reference and make the sequence unportable.
   // The sequence's own steps are bare because `create` hoisted their connection
-  // off; re-stamp it first. Merging without that made every insert look
+  // off; re-stamp it first. Merged without it, every insert reads as
   // "ambiguous" (one named reference + bare steps), which blocks the hoist and
   // leaves the sequence half-pinned to this session's reference - unportable,
   // and green on a run that splits it across two browsers.
@@ -3294,10 +3299,8 @@ function normalizeTags(tags: string[]): { tags: string[] } | { error: string } {
  * assertions ride on, and what kind of sequence it is.
  *
  * Declarations cannot be recorded - they are statements about a run, not steps
- * in it - so before this the only way to add them was to open the JSON and
- * type them in, against advice that otherwise says to keep sequences inside
- * the tools. That also put them squarely in the path of the bug where an
- * edited file was shadowed by the copy in memory.
+ * in it - so without this the only way to add them is to edit the JSON by
+ * hand, where the copy in memory can shadow the edited file.
  *
  * Each list REPLACES its field, and `[]` clears it: a declaration set is a
  * whole statement about the run, and merging would make "remove the second
@@ -3323,14 +3326,17 @@ async function handleDeclare(args: ReplayArgs, recorder: CommandRecorder) {
   if (args.requiredConnections !== undefined) {
     const seen = new Map<string, string>();
     for (const decl of args.requiredConnections) {
-      const reference = sanitizeReference(decl.reference);
-      if (!reference) {
+      // The run launches each declared reference by name, and a launch refuses
+      // a name that is not three words - refused here, while it is written.
+      const validation = validateReference(decl.reference);
+      if (!validation.valid) {
         return createErrorResponse('INVALID_PARAMETER', {
           parameter: 'requiredConnections',
           value: decl.reference,
-          message: `"${decl.reference}" is not a usable connection reference.`,
+          message: `"${decl.reference}" is not a usable connection reference: ${validation.error}.`,
         });
       }
+      const reference = validation.sanitized!;
       if (seen.has(reference)) {
         return createErrorResponse('INVALID_PARAMETER', {
           parameter: 'requiredConnections',
@@ -3433,10 +3439,10 @@ async function handleRecordInteraction(
 
   /**
    * The failure text, or null when the navigation worked. A failed goto THROWS
-   * in production (executeToolCall rethrows isError), so the NAVIGATION_FAILED
-   * responses below never fired and the recorder went on to record against
-   * whatever page happened to be open - the same try/catch shape
-   * navigateToStartUrl already uses.
+   * in production (executeToolCall rethrows isError), so it is caught here;
+   * read as a returned response, the NAVIGATION_FAILED answers below would
+   * never be reached and the recorder would record against whatever page is
+   * open. Same try/catch shape navigateToStartUrl uses.
    */
   const navigateTo = async (url: string): Promise<string | null> => {
     try {
@@ -3475,6 +3481,16 @@ async function handleRecordInteraction(
     issueType = issue.type;
     issueTitle = issue.title;
     startUrl = startUrl || issue.startUrl;  // Use provided startUrl or fall back to issue's startUrl
+  }
+
+  const sequenceName = args.name || (issueId ? `${issueType}-${issueId}-repro` : args.connectionReason);
+  // Refused before anything is launched or recorded: a conflict found after the
+  // recording asks for it to be made again under another name.
+  if (recorder && !args.overwrite && recorder.sequenceNameExists(sequenceName)) {
+    return createSuccessResponse('RECORDING_NAME_CONFLICT', {
+      sequenceName,
+      connectionReason: args.connectionReason
+    });
   }
 
   let page = await getPageForConnection(args.connectionReason);
@@ -3526,10 +3542,9 @@ async function handleRecordInteraction(
   }
 
   const showOverlay = args.showOverlay !== false;
-  const sequenceName = args.name || (issueId ? `${issueType}-${issueId}-repro` : args.connectionReason);
 
-  // startRecording now blocks until recording completes
-  // If issueId is provided, startRecording will show a fullscreen overlay with issue details
+  // startRecording blocks until the recording completes. With an issueId it
+  // shows a fullscreen overlay with the issue's details.
   const result = await startRecording(page, args.connectionReason, {
     showOverlay,
     closeTabOnDone: args.closeTabOnDone,
@@ -3557,9 +3572,8 @@ async function handleRecordInteraction(
           type: 'text',
           text: '**Recording cancelled** - no sequence created.'
         }],
-        // Structurally too: callers were deciding this by searching the
-        // sentence for "cancelled", which any recorded page title could also
-        // have contained.
+        // Structurally too, so a caller reads `cancelled` rather than searching
+        // the sentence for it, which a recorded page title can also contain.
         _meta: {
           tool: 'replay',
           action: 'recordInteraction',
@@ -3576,8 +3590,7 @@ async function handleRecordInteraction(
   const summary = recording.summary;
 
   const replayConfig = configManager.getReplayConfig();
-  // Recording options come from args; the defaults are the values that used to
-  // be hardcoded here, so omitting them keeps the previous behaviour.
+  // Recording options come from args, with these defaults.
   // preferSelectors wins over preferCoordinates when both are set.
   const commands = eventsToCommands(recording.events, {
     simplify: args.simplifyEvents ?? true,
@@ -3678,7 +3691,7 @@ async function handleRecordInteraction(
       issueType,
       issueTitle,
       sequenceData,
-      `CDP Tools verification sequence for ${issueType} #${issueId}: ${issueTitle}`
+      `devharness verification sequence for ${issueType} #${issueId}: ${issueTitle}`
     );
   }
 
@@ -3742,9 +3755,11 @@ function escapeJsString(str: string): string {
     .replace(/\t/g, '\\t');    // Tabs
 }
 
-/**
- * Generate Puppeteer test code from sequence commands
- */
+/** A recorded value as a single-quoted JavaScript string literal. */
+function jsString(value: unknown): string {
+  return `'${escapeJsString(String(value))}'`;
+}
+
 /**
  * One page variable per recorded connection, for the code generators.
  *
@@ -3752,8 +3767,8 @@ function escapeJsString(str: string): string {
  * step against a single `page` is the bug-018 collapse relocated into the
  * exported test, and it is silent - the generated file looks perfectly
  * reasonable and passes while never involving the second browser. The first
- * recorded reference keeps the name `page` so single-connection output is
- * byte-identical to before.
+ * recorded reference keeps the name `page`, so single-connection output names
+ * only `page`.
  */
 function buildPageVars(commands: Array<{ tool: string; params: Record<string, any> }>) {
   const { references, mixed } = analyzeRecordedStepConnections(commands);
@@ -3802,6 +3817,7 @@ function generatedCodeHeader(pages: ReturnType<typeof buildPageVars>): string[] 
   return out;
 }
 
+/** Puppeteer test code for a sequence's commands. */
 function generatePuppeteerCode(commands: Array<{ tool: string; params: Record<string, any> }>, startUrl?: string): string {
   const pages = buildPageVars(commands);
   const lines: string[] = [
@@ -3817,7 +3833,7 @@ function generatePuppeteerCode(commands: Array<{ tool: string; params: Record<st
   ];
 
   if (startUrl) {
-    lines.push(`  await page.goto('${startUrl}');`);
+    lines.push(`  await page.goto(${jsString(startUrl)});`);
     lines.push('');
   }
 
@@ -3829,7 +3845,7 @@ function generatePuppeteerCode(commands: Array<{ tool: string; params: Record<st
     if (cmd.tool === 'navigate') {
       const { action, ...params } = cmd.params;
       if (action === 'goto' && params.url) {
-        lines.push(`  await page.goto('${params.url}');`);
+        lines.push(`  await page.goto(${jsString(params.url)});`);
         lines.push('');
       } else if (action === 'reload') {
         lines.push(`  await page.reload();`);
@@ -3865,18 +3881,18 @@ function generatePuppeteerCode(commands: Array<{ tool: string; params: Record<st
           if (typeof params.x === 'number' && typeof params.y === 'number') {
             lines.push(`  await page.mouse.click(${params.x}, ${params.y});`);
           } else if (params.selector) {
-            lines.push(`  await page.click('${params.selector}');`);
+            lines.push(`  await page.click(${jsString(params.selector)});`);
           }
           lines.push('');
           break;
 
         case 'type':
-          lines.push(`  await page.keyboard.type('${escapeJsString(params.text)}');`);
+          lines.push(`  await page.keyboard.type(${jsString(params.text)});`);
           lines.push('');
           break;
 
         case 'press':
-          lines.push(`  await page.keyboard.press('${escapeJsString(params.key)}');`);
+          lines.push(`  await page.keyboard.press(${jsString(params.key)});`);
           lines.push('');
           break;
       }
@@ -3918,7 +3934,7 @@ function generatePlaywrightCode(commands: Array<{ tool: string; params: Record<s
   ];
 
   if (startUrl) {
-    lines.push(`  await page.goto('${startUrl}');`);
+    lines.push(`  await page.goto(${jsString(startUrl)});`);
     lines.push('');
   }
 
@@ -3928,7 +3944,7 @@ function generatePlaywrightCode(commands: Array<{ tool: string; params: Record<s
     const emittedFrom = lines.length;
     // Add comment if present
     if (cmd.comment) {
-      lines.push(`  // ${cmd.comment}`);
+      lines.push(`  // ${String(cmd.comment).replace(/\s*[\r\n]+\s*/g, ' ')}`);
     }
 
     // Add delay if present
@@ -3941,7 +3957,7 @@ function generatePlaywrightCode(commands: Array<{ tool: string; params: Record<s
     if (cmd.tool === 'navigate') {
       const { action, ...params } = cmd.params;
       if (action === 'goto' && params.url) {
-        lines.push(`  await page.goto('${params.url}');`);
+        lines.push(`  await page.goto(${jsString(params.url)});`);
         lines.push('');
       } else if (action === 'reload') {
         lines.push(`  await page.reload();`);
@@ -3983,25 +3999,25 @@ function generatePlaywrightCode(commands: Array<{ tool: string; params: Record<s
           if (typeof params.x === 'number' && typeof params.y === 'number') {
             lines.push(`  await page.mouse.click(${params.x}, ${params.y});`);
           } else if (params.selector) {
-            lines.push(`  await page.click('${params.selector}');`);
+            lines.push(`  await page.click(${jsString(params.selector)});`);
           }
           lines.push('');
           break;
 
         case 'type':
           // Playwright uses type() for key-by-key typing, fill() for setting value directly
-          lines.push(`  await page.keyboard.type('${escapeJsString(params.text)}');`);
+          lines.push(`  await page.keyboard.type(${jsString(params.text)});`);
           lines.push('');
           break;
 
         case 'press':
-          lines.push(`  await page.keyboard.press('${escapeJsString(params.key)}');`);
+          lines.push(`  await page.keyboard.press(${jsString(params.key)});`);
           lines.push('');
           break;
 
         case 'hover':
           if (params.selector) {
-            lines.push(`  await page.hover('${params.selector}');`);
+            lines.push(`  await page.hover(${jsString(params.selector)});`);
           }
           lines.push('');
           break;

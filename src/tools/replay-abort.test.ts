@@ -319,5 +319,7 @@ describe('replay cancel end to end', () => {
 
     const record = runRegistry.get(runId)!;
     expect(record.results.some(r => r.error === 'Replay aborted by user')).toBe(true);
+    // Cancelled, not paused: a paused run is still open, and runAll reads this.
+    expect(record.finalResponse._meta.replay).toMatchObject({ success: false, cancelled: true, paused: false });
   });
 });

@@ -270,3 +270,60 @@ describe('recordInteraction honours outputFormat (bug B, raw-event side)', () =>
     expect(text).not.toContain('Commands (JSON)');
   });
 });
+
+describe('recordInteraction under a name already taken', () => {
+  it('is refused before anything is recorded, so no recording is lost to it', async () => {
+    const recorder = new CommandRecorder();
+    await recorder.createSequenceFromCommands('checkout-flow-test', [
+      { tool: 'dom', params: { action: 'querySelector', selector: '#a' } },
+    ]);
+    const tool = makeTool(recorder);
+
+    const result: any = await tool.handler({
+      action: 'recordInteraction', connectionReason: 'checkout-page-tab', name: 'checkout-flow-test',
+    } as any);
+
+    expect(result.content[0].text).toContain('"checkout-flow-test" exists');
+    expect(startRecordingMock).not.toHaveBeenCalled();
+  });
+
+  it('records over it with overwrite', async () => {
+    const recorder = new CommandRecorder();
+    await recorder.createSequenceFromCommands('checkout-flow-test', [
+      { tool: 'dom', params: { action: 'querySelector', selector: '#a' } },
+    ]);
+    const tool = makeTool(recorder);
+
+    await tool.handler({
+      action: 'recordInteraction', connectionReason: 'checkout-page-tab', name: 'checkout-flow-test', overwrite: true,
+    } as any);
+
+    expect(startRecordingMock).toHaveBeenCalled();
+  });
+});
+
+describe('exported test code', () => {
+  async function exported(format: 'playwright' | 'puppeteer') {
+    const recorder = new CommandRecorder();
+    await recorder.createSequenceFromCommands('quoted-flow-test', [
+      { tool: 'navigate', params: { action: 'goto', url: "http://shop.test/?q=it's" } },
+      { tool: 'input', params: { action: 'click', selector: "[data-test='buy']" }, comment: 'first line\nsecond line' } as any,
+      { tool: 'input', params: { action: 'hover', selector: "a[title='Help']" } },
+    ]);
+    const result: any = await makeTool(recorder).handler({ action: 'get', name: 'quoted-flow-test', outputFormat: format } as any);
+    return result.content[0].text.split('```')[1].replace(/^\w+\n/, '');
+  }
+
+  it('escapes quotes in selectors and URLs, so the Puppeteer file parses', async () => {
+    const code = await exported('puppeteer');
+    expect(() => new Function(code)).not.toThrow();
+    expect(code).toContain("page.click('[data-test=\\'buy\\']')");
+  });
+
+  it('keeps a multi-line step comment inside the comment in the Playwright file', async () => {
+    const code = await exported('playwright');
+    expect(code).toContain('// first line second line');
+    expect(code).toContain("page.hover('a[title=\\'Help\\']')");
+    expect(code).toContain("page.goto('http://shop.test/?q=it\\'s')");
+  });
+});

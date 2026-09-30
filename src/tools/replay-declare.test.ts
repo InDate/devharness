@@ -72,10 +72,10 @@ describe('declare', () => {
   });
 
   it('replaces rather than merges, so a browser can be removed', async () => {
-    await declare({ requiredConnections: [{ reference: 'device-one' }, { reference: 'device-two' }] });
-    await declare({ requiredConnections: [{ reference: 'device-one' }] });
+    await declare({ requiredConnections: [{ reference: 'device-one-phone' }, { reference: 'device-two-phone' }] });
+    await declare({ requiredConnections: [{ reference: 'device-one-phone' }] });
 
-    expect((await onDisk()).requiredConnections).toEqual([{ reference: 'device-one' }]);
+    expect((await onDisk()).requiredConnections).toEqual([{ reference: 'device-one-phone' }]);
   });
 
   it('clears a declaration with an empty list', async () => {
@@ -87,11 +87,11 @@ describe('declare', () => {
 
   it('leaves the other declaration alone', async () => {
     await declare({ requiredSockets: ['/api/sync/socket'] });
-    await declare({ requiredConnections: [{ reference: 'device-one' }] });
+    await declare({ requiredConnections: [{ reference: 'device-one-phone' }] });
 
     const saved = await onDisk();
     expect(saved.requiredSockets).toEqual(['/api/sync/socket']);
-    expect(saved.requiredConnections).toEqual([{ reference: 'device-one' }]);
+    expect(saved.requiredConnections).toEqual([{ reference: 'device-one-phone' }]);
   });
 });
 
@@ -99,8 +99,8 @@ describe('declarations that cannot mean what they say are refused at authoring t
   it('refuses two references on one profile', async () => {
     const res = await declare({
       requiredConnections: [
-        { reference: 'device-one', profile: 'shared' },
-        { reference: 'device-two', profile: 'shared' },
+        { reference: 'device-one-phone', profile: 'shared' },
+        { reference: 'device-two-phone', profile: 'shared' },
       ],
     });
 
@@ -108,9 +108,16 @@ describe('declarations that cannot mean what they say are refused at authoring t
     expect((await onDisk()).requiredConnections).toBeUndefined();
   });
 
+  it('refuses a reference that a launch would refuse, before the run reaches it', async () => {
+    const res = await declare({ requiredConnections: [{ reference: 'device-a' }] });
+
+    expect(text(res)).toContain('exactly 3 words');
+    expect((await onDisk()).requiredConnections).toBeUndefined();
+  });
+
   it('refuses the same reference twice', async () => {
     const res = await declare({
-      requiredConnections: [{ reference: 'device-one' }, { reference: 'device-one' }],
+      requiredConnections: [{ reference: 'device-one-phone' }, { reference: 'device-one-phone' }],
     });
 
     expect(text(res)).toContain('declared twice');
@@ -118,7 +125,7 @@ describe('declarations that cannot mean what they say are refused at authoring t
 
   it('refuses a profile name that is not a safe directory segment', async () => {
     const res = await declare({
-      requiredConnections: [{ reference: 'device-one', profile: '../escape' }],
+      requiredConnections: [{ reference: 'device-one-phone', profile: '../escape' }],
     });
 
     expect(text(res)).toContain('Invalid profile name');

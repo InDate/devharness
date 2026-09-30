@@ -1215,7 +1215,7 @@ FAILED: {{errorText}}{{/failed}}
 
 **Type:** success
 
-Network Request Search: {{matchCount}} matches for pattern "{{pattern}}"{{#flags}} (flags: {{flags}}){{/flags}}{{#filtersText}} (filters: {{filtersText}}){{/filtersText}} out of {{totalSearched}} searched
+Network Request Search: {{matchCount}} matches for pattern "{{pattern}}"{{#flags}} (flags: {{flags}}){{/flags}}{{#filtersText}} (filters: {{filtersText}}){{/filtersText}} out of {{totalSearched}} searched{{#truncated}}, first {{shown}} shown{{/truncated}}
 
 ---
 

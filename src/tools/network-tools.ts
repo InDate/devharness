@@ -34,12 +34,12 @@ const networkToolSchema = z.object({
   flags: z.string().optional().describe('Regex flags (for search action, default: "")'),
 
   // windowing, for attributing traffic to the action that caused it
-  since: z.number().optional().describe('list/sockets: epoch ms. Only traffic that started at or after this. Read `at` off a previous response, act, then pass it back to get exactly what that action caused'),
-  until: z.number().optional().describe('list/sockets: epoch ms. Only traffic that started before this. With `since`, brackets one action'),
+  since: z.number().optional().describe('list/sockets/streams: epoch ms. Only traffic that started at or after this. Read `at` off a previous response, act, then pass it back to get exactly what that action caused'),
+  until: z.number().optional().describe('list/sockets/streams: epoch ms. Only traffic that started before this. With `since`, brackets one action'),
 
-  // sockets action parameters
-  frames: z.boolean().optional().describe('sockets: include the frame log per socket - what crossed it, oldest first, with text and binary payloads truncated. Off by default: a sync transport carries thousands of frames and the lifecycle alone answers whether it stayed up'),
-  socketUrl: z.string().optional().describe('sockets: with frames, only sockets whose URL contains this substring. Match the app\'s own path to leave dev-server transports out'),
+  // sockets and streams action parameters
+  frames: z.boolean().optional().describe('sockets/streams: include the frame (or event) log per socket or stream - what crossed it, oldest first, with text and binary payloads truncated. Off by default: a sync transport carries thousands of frames and the lifecycle alone answers whether it stayed up'),
+  socketUrl: z.string().optional().describe('sockets/streams: only sockets or streams whose URL contains this substring. Match the app\'s own path to leave dev-server transports out'),
 
   // setConditions action parameters
   preset: z.enum(['offline', 'slow-3g', 'fast-3g', 'fast-4g', 'online']).optional().describe('Network condition preset (required for setConditions action)'),
@@ -143,27 +143,21 @@ export function createNetworkTools(
   const noPage = (connectionReason: string) => createErrorResponse('CONNECTION_NOT_FOUND', {
     message: `Connection "${connectionReason}" has no browser page to monitor (a Node.js debugger target has no page). Network monitoring requires a browser connection.`
   });
+  const notFound = (connectionReason: string) => createErrorResponse('CONNECTION_NOT_FOUND', {
+    message: `No connection named "${connectionReason}". \`connection({ action: 'list' })\` lists the ones this session holds.`
+  });
 
   return {
     network: createTool(
-      'Monitor and manage network requests. Actions: list (list requests with optional type filter and pagination), get (get specific request by ID), search (search requests by regex pattern), enable (enable network monitoring), disable (disable network monitoring), setConditions (set network throttling conditions)',
+      'Monitor and manage network requests. Actions: list (list requests with optional type filter and pagination), get (get specific request by ID), search (search requests by regex pattern), enable (enable network monitoring), disable (disable network monitoring), setConditions (set network throttling conditions), sockets (WebSocket lifecycle and frames), streams (EventSource messages)',
       networkToolSchema,
       async (args) => {
         const { action, connectionReason } = args;
 
         switch (action) {
           case 'streams': {
-            if (!connectionReason) {
-              return createErrorResponse('CONNECTION_NOT_FOUND', {
-                message: 'No Chrome browser available. Start one with `connection` action `launch`.'
-              });
-            }
             const resolved = await resolveConnectionFromReason(connectionReason);
-            if (!resolved) {
-              return createErrorResponse('CONNECTION_NOT_FOUND', {
-                message: 'No Chrome browser available. Start one with `connection` action `launch`.'
-              });
-            }
+            if (!resolved) return notFound(connectionReason);
             if (!resolved.puppeteerManager || !resolved.networkMonitor) return noPage(connectionReason);
             const targetPuppeteerManager = resolved.puppeteerManager;
             const targetNetworkMonitor = resolved.networkMonitor;
@@ -205,17 +199,8 @@ export function createNetworkTools(
           }
 
           case 'sockets': {
-            if (!connectionReason) {
-              return createErrorResponse('CONNECTION_NOT_FOUND', {
-                message: 'No Chrome browser available. Start one with `connection` action `launch`.'
-              });
-            }
             const resolved = await resolveConnectionFromReason(connectionReason);
-            if (!resolved) {
-              return createErrorResponse('CONNECTION_NOT_FOUND', {
-                message: 'No Chrome browser available. Start one with `connection` action `launch`.'
-              });
-            }
+            if (!resolved) return notFound(connectionReason);
             if (!resolved.puppeteerManager || !resolved.networkMonitor) return noPage(connectionReason);
             const targetPuppeteerManager = resolved.puppeteerManager;
             const targetNetworkMonitor = resolved.networkMonitor;
@@ -287,19 +272,8 @@ export function createNetworkTools(
           case 'list': {
             const { resourceType, limit = 100, offset = 0, since, until } = args;
 
-            if (!connectionReason) {
-              return createErrorResponse('CONNECTION_NOT_FOUND', {
-                message: 'No Chrome browser available. Start one with `connection` action `launch`.'
-              });
-            }
-
-            // Resolve connection from reason
-            const resolved = await resolveConnectionFromReason(connectionReason);
-            if (!resolved) {
-              return createErrorResponse('CONNECTION_NOT_FOUND', {
-                message: 'No Chrome browser available. Start one with `connection` action `launch`.'
-              });
-            }
+                  const resolved = await resolveConnectionFromReason(connectionReason);
+            if (!resolved) return notFound(connectionReason);
 
             if (!resolved.puppeteerManager || !resolved.networkMonitor) return noPage(connectionReason);
             const targetPuppeteerManager = resolved.puppeteerManager;
@@ -387,11 +361,7 @@ export function createNetworkTools(
             }
 
             const resolved = await resolveConnectionFromReason(connectionReason);
-            if (!resolved) {
-              return createErrorResponse('CONNECTION_NOT_FOUND', {
-                message: 'No Chrome browser available. Start one with `connection` action `launch`.'
-              });
-            }
+            if (!resolved) return notFound(connectionReason);
             if (!resolved.networkMonitor) return noPage(connectionReason);
 
             const request = resolved.networkMonitor.getRequest(id);
@@ -476,11 +446,7 @@ export function createNetworkTools(
           case 'enable':
           case 'disable': {
             const resolved = await resolveConnectionFromReason(connectionReason);
-            if (!resolved) {
-              return createErrorResponse('CONNECTION_NOT_FOUND', {
-                message: 'No Chrome browser available. Start one with `connection` action `launch`.'
-              });
-            }
+            if (!resolved) return notFound(connectionReason);
             if (!resolved.puppeteerManager || !resolved.networkMonitor) return noPage(connectionReason);
             const targetPuppeteerManager = resolved.puppeteerManager;
             const targetNetworkMonitor = resolved.networkMonitor;
@@ -515,19 +481,8 @@ export function createNetworkTools(
               };
             }
 
-            if (!connectionReason) {
-              return createErrorResponse('CONNECTION_NOT_FOUND', {
-                message: 'No Chrome browser available. Start one with `connection` action `launch`.'
-              });
-            }
-
-            // Resolve connection from reason
-            const resolved = await resolveConnectionFromReason(connectionReason);
-            if (!resolved) {
-              return createErrorResponse('CONNECTION_NOT_FOUND', {
-                message: 'No Chrome browser available. Start one with `connection` action `launch`.'
-              });
-            }
+                  const resolved = await resolveConnectionFromReason(connectionReason);
+            if (!resolved) return notFound(connectionReason);
 
             if (!resolved.puppeteerManager || !resolved.networkMonitor) return noPage(connectionReason);
             const targetPuppeteerManager = resolved.puppeteerManager;
@@ -557,28 +512,26 @@ export function createNetworkTools(
             // Get all requests and filter
             const allRequests = targetNetworkMonitor.getRequests({ resourceType });
 
-            const matchingRequests = allRequests
-              .filter((req: StoredNetworkRequest) => {
-                // Filter by URL pattern
-                if (!regex.test(req.url)) return false;
+            const allMatches = allRequests.filter((req: StoredNetworkRequest) => {
+              // A `g` or `y` flag makes test() resume from the last match's end,
+              // which skips a match in the next URL.
+              regex.lastIndex = 0;
+              if (!regex.test(req.url)) return false;
 
-                // Filter by method if specified
-                if (method && req.method !== method.toUpperCase()) return false;
+              if (method && req.method !== method.toUpperCase()) return false;
 
-                // Filter by status code if specified
-                if (statusCode && req.response) {
-                  const status = req.response.status;
-                  if (statusCode.endsWith('xx')) {
-                    const prefix = statusCode.charAt(0);
-                    if (!String(status).startsWith(prefix)) return false;
-                  } else if (String(status) !== statusCode) {
-                    return false;
-                  }
+              // A request with no response yet, or one that failed, has no status to match.
+              if (statusCode) {
+                if (!req.response) return false;
+                const status = String(req.response.status);
+                if (statusCode.endsWith('xx') ? !status.startsWith(statusCode.charAt(0)) : status !== statusCode) {
+                  return false;
                 }
+              }
 
-                return true;
-              })
-              .slice(0, limit);
+              return true;
+            });
+            const matchingRequests = allMatches.slice(0, limit);
 
             const matches = matchingRequests.map((req: StoredNetworkRequest) => ({
               id: req.id,
@@ -601,7 +554,9 @@ export function createNetworkTools(
               pattern,
               flags,
               filtersText: filters.length > 0 ? filters.join(', ') : undefined,
-              matchCount: matchingRequests.length,
+              matchCount: allMatches.length,
+              shown: matches.length,
+              truncated: matches.length < allMatches.length,
               totalSearched: allRequests.length
             }, matches);
 
@@ -612,7 +567,7 @@ export function createNetworkTools(
               timestamp: Date.now(),
               network: {
                 totalCount: allRequests.length,
-                matchCount: matchingRequests.length,
+                matchCount: allMatches.length,
               },
             };
 
@@ -634,19 +589,8 @@ export function createNetworkTools(
               };
             }
 
-            if (!connectionReason) {
-              return createErrorResponse('CONNECTION_NOT_FOUND', {
-                message: 'No Chrome browser available. Start one with `connection` action `launch`.'
-              });
-            }
-
-            // Resolve connection from reason
-            const resolved = await resolveConnectionFromReason(connectionReason);
-            if (!resolved) {
-              return createErrorResponse('CONNECTION_NOT_FOUND', {
-                message: 'No Chrome browser available. Start one with `connection` action `launch`.'
-              });
-            }
+                  const resolved = await resolveConnectionFromReason(connectionReason);
+            if (!resolved) return notFound(connectionReason);
 
             if (!resolved.puppeteerManager) return noPage(connectionReason);
             const targetPuppeteerManager = resolved.puppeteerManager;
@@ -687,7 +631,7 @@ export function createNetworkTools(
               content: [
                 {
                   type: 'text',
-                  text: `## Error\n\nInvalid action: ${action}\n\n**Valid actions:** list, get, search, enable, disable, setConditions`,
+                  text: `## Error\n\nInvalid action: ${action}\n\n**Valid actions:** list, get, search, enable, disable, setConditions, sockets, streams`,
                 },
               ],
               isError: true,

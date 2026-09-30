@@ -145,6 +145,32 @@ export function clearQuarantineRegistry(): void {
 }
 
 /**
+ * A response body read up to `maxBytes`. A body without content-length has
+ * its size known only by reading, so the read stops at the limit rather than
+ * holding the whole of it first.
+ */
+export async function readLimited(
+  response: Response,
+  maxBytes: number
+): Promise<{ tooLarge: false; buffer: Buffer } | { tooLarge: true; bytes: number }> {
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  const reader = response.body?.getReader();
+  if (!reader) return { tooLarge: false, buffer: Buffer.alloc(0) };
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    bytes += value.byteLength;
+    if (bytes > maxBytes) {
+      await reader.cancel().catch(() => {});
+      return { tooLarge: true, bytes };
+    }
+    chunks.push(value);
+  }
+  return { tooLarge: false, buffer: Buffer.concat(chunks) };
+}
+
+/**
  * Download tools for saving files from URLs
  */
 export function createDownloadTools() {
@@ -179,14 +205,6 @@ export function createDownloadTools() {
             existingFileStats = await fs.stat(filepath);
           } catch {
             // File doesn't exist, which is fine
-          }
-
-          // Check if overwriteIfExists is set to true when file doesn't exist
-          if (args.overwriteIfExists && !existingFileStats) {
-            return createErrorResponse('CANNOT_OVERWRITE_NONEXISTENT', {
-              filename: args.filename,
-              filepath: filepath
-            });
           }
 
           // If file exists and overwrite not allowed, return error BEFORE downloading
@@ -242,19 +260,16 @@ export function createDownloadTools() {
             }
           }
 
-          // Get the response body
-          const arrayBuffer = await response.arrayBuffer();
-          const buffer = Buffer.from(arrayBuffer);
-          const actualSize = buffer.length;
-
-          // Double-check size after download
-          if (actualSize > MAX_FILE_SIZE) {
+          const read = await readLimited(response, MAX_FILE_SIZE);
+          if (read.tooLarge) {
             return createErrorResponse('FILE_TOO_LARGE', {
               url: args.url,
-              size: `${(actualSize / 1024 / 1024).toFixed(2)} MB`,
+              size: `more than ${(MAX_FILE_SIZE / 1024 / 1024).toFixed(2)} MB`,
               maxSize: `${(MAX_FILE_SIZE / 1024 / 1024).toFixed(2)} MB`
             });
           }
+          const buffer = read.buffer;
+          const actualSize = buffer.length;
 
           const newFileSizeKB = (actualSize / 1024).toFixed(2);
 

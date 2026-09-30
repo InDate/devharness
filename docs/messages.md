@@ -1583,19 +1583,6 @@ Please choose a different, more descriptive filename or set `overwriteIfExists: 
 
 ---
 
-## CANNOT_OVERWRITE_NONEXISTENT
-
-**Type:** error
-**Code:** CANNOT_OVERWRITE_NONEXISTENT
-
-**ERROR:** Cannot set `overwriteIfExists: true` for a file that doesn't exist yet.
-
-The file `{{filename}}` does not exist at `{{filepath}}`.
-
-Remove the `overwriteIfExists` parameter (it defaults to false) for new downloads.
-
----
-
 ## FILE_DOWNLOAD_FAILED
 
 **Type:** error

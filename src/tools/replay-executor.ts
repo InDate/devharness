@@ -20,7 +20,7 @@ import { assertAsCheck, subjectOf as subjectOfCheck, waitAsCheck } from './check
 import type { CheckOutcome as CheckOutcomeRecord, RanStep } from '../proxy/registry.js';
 import { asStep, withinRun } from '../call-origin.js';
 import type { ConnectionMeta, DebuggerStatusMeta } from '../tool-response.js';
-import { addressesConnection, createsConnection, createdName, isLaunchStep } from './connection-steps.js';
+import { addressesConnection, createsConnection, createdName, isAttachStep, isLaunchStep } from './connection-steps.js';
 
 // Re-export replay cursor functions
 export { injectReplayCursor, showClickEffect, showKeyPress, removeReplayCursor } from '../replay-cursor.js';
@@ -1243,7 +1243,10 @@ export function analyzeSequenceConnections(commands: RecordedCommand[]): Connect
 }
 
 /**
- * The name the sequence's first launch step creates, when it launches before any step needs a browser
+ * The connection a sequence's bare steps run on, when the sequence creates it:
+ * the name its first launch gives, when that launch comes before any step
+ * needs a browser, or else the name its first attach gives, when that attach
+ * comes before any step takes a connection.
  */
 export function extractConnectionFromSequence(
   commands: RecordedCommand[],
@@ -1251,6 +1254,14 @@ export function extractConnectionFromSequence(
 ): string | undefined {
   if (analysis.hasLaunchBeforeConnection) {
     const name = createdName(commands[analysis.launchIndex]);
+    if (name) {
+      return sanitizeReference(name);
+    }
+  }
+  const attachIndex = commands.findIndex(isAttachStep);
+  const firstTakingIndex = commands.findIndex(commandTakesInjectedConnection);
+  if (attachIndex !== -1 && (firstTakingIndex === -1 || attachIndex < firstTakingIndex)) {
+    const name = createdName(commands[attachIndex]);
     if (name) {
       return sanitizeReference(name);
     }

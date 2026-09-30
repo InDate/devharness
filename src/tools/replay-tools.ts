@@ -44,7 +44,6 @@ import {
   removeReplayCursor,
   checkIfPaused,
   autoLaunchChrome,
-  commandNeedsBrowserConnection,
   analyzeRecordedStepConnections,
   commandTakesInjectedConnection,
   normalizeStepConnections,
@@ -402,7 +401,7 @@ async function handleRepeat(
   // replays from this session's own history, so the recorded references are the
   // live ones by construction.
   const needsConnection = commands.some(cmd =>
-    commandNeedsBrowserConnection(cmd) && !cmd.params.connectionReason
+    commandTakesInjectedConnection(cmd) && !cmd.params.connectionReason
   );
   let connectionReason = args.connectionReason;
 
@@ -428,7 +427,7 @@ async function handleRepeat(
     return createErrorResponse('MISSING_PARAMETER', {
       action: 'repeat',
       missing: 'connectionReason',
-      message: 'These commands require a browser connection. Provide connectionReason parameter.'
+      message: 'These commands act on a connection and name none. Provide connectionReason parameter.'
     });
   }
 
@@ -446,7 +445,7 @@ async function handleRepeat(
       // the recorded one only when the caller explicitly asked to retarget a
       // single-connection batch (see resolveBatchOverride).
       const params = { ...cmd.params };
-      if (connectionReason && commandNeedsBrowserConnection(cmd) &&
+      if (connectionReason && commandTakesInjectedConnection(cmd) &&
           (override.replaceRecorded || !params.connectionReason)) {
         params.connectionReason = connectionReason;
       }
@@ -510,7 +509,7 @@ async function handleRunFromLog(
   // As in repeat: a logged command keeps the connection it was recorded with, so
   // only the bare ones need a batch-level connection (bug-018).
   const needsConnection = commands.some(cmd =>
-    commandNeedsBrowserConnection(cmd) && !cmd.params.connectionReason
+    commandTakesInjectedConnection(cmd) && !cmd.params.connectionReason
   );
   let connectionReason = args.connectionReason;
 
@@ -531,7 +530,7 @@ async function handleRunFromLog(
     return createErrorResponse('MISSING_PARAMETER', {
       action: 'runFromLog',
       missing: 'connectionReason',
-      message: 'These commands require a browser connection. Provide connectionReason parameter.'
+      message: 'These commands act on a connection and name none. Provide connectionReason parameter.'
     });
   }
 
@@ -542,7 +541,7 @@ async function handleRunFromLog(
   for (const cmd of commands) {
     try {
       const params = { ...cmd.params };
-      if (connectionReason && commandNeedsBrowserConnection(cmd) &&
+      if (connectionReason && commandTakesInjectedConnection(cmd) &&
           (override.replaceRecorded || !params.connectionReason)) {
         params.connectionReason = connectionReason;
       }

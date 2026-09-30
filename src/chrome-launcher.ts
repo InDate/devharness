@@ -38,9 +38,9 @@ export const EPHEMERAL_PROFILE_PREFIX = 'chrome-debug-profile-';
  * A Chrome user-data-dir tracked by the launcher.
  *
  * `ephemeral` records a throwaway profile we created and are therefore allowed
- * to delete when the instance goes away. Named/persistent profiles (see issue
- * 13) will be registered with `ephemeral: false` and must never be deleted by
- * the launcher, neither on kill nor by the startup sweep.
+ * to delete when the instance goes away. Named/persistent profiles (issue 13)
+ * are registered with `ephemeral: false` and are never deleted by the
+ * launcher, neither on kill nor by the startup sweep.
  */
 export interface ChromeProfileRecord {
   dir: string;
@@ -188,9 +188,8 @@ export interface LaunchPortRequest {
 /**
  * Decide which port a connection launch should use (bug-005).
  *
- * Extracted from the MCP handler so the decision is testable without a browser
- * or an MCP server: src/index.ts calls main() on import, so anything left
- * inline there can only be "tested" by grepping the source.
+ * A pure function, so the decision is tested without a browser or an MCP
+ * server; connection launch in src/tools/connection-tools.ts calls it.
  *
  * Rules:
  *  - An explicit `port` is always honoured, never silently relocated.
@@ -345,7 +344,6 @@ export class ChromeLauncher {
       case 'win32': // Windows
         return 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
       case 'linux':
-        // Try common Linux paths
         return '/usr/bin/google-chrome';
       default:
         throw new Error(`Unsupported platform: ${platform}`);
@@ -515,7 +513,7 @@ export class ChromeLauncher {
 
       probeFailures.push(failure);
 
-      // Exponential backoff: 500ms + (attempt * 200ms)
+      // Linear backoff: 500ms + (attempt * 200ms)
       await new Promise(resolve => setTimeout(resolve, 500 + i * 200));
     }
 
@@ -595,7 +593,7 @@ export class ChromeLauncher {
       }
       // ...and the same profile may be held by a Chrome belonging to ANOTHER
       // devharness session (the persistent profile root is global by default),
-      // which our own maps know nothing about. Without this the launch "works",
+      // which our own maps hold no record of. Without this the launch "works",
       // Chrome hands off to the existing singleton, and the caller gets an
       // unexplained spawn failure. POSIX-only - see ProfileLockedError.
       const lockPid = await this.findProfileLockHolder(name);
@@ -617,8 +615,7 @@ export class ChromeLauncher {
   }
 
   /**
-   * Internal method that performs the actual Chrome launch
-   * Separated from launch() to allow mutex/locking logic
+   * The spawn and readiness wait, run under launchOnPort()'s per-port lock.
    */
   private async performLaunch(port: number, url?: string, portReserver?: PortReserver, headless: boolean = false, extraArgs: string[] = [], profileName?: string): Promise<{ port: number; pid: number }> {
     await debugLog('ChromeLauncher', `performLaunch() starting for port ${port}`);
@@ -928,12 +925,13 @@ export class ChromeLauncher {
    */
   private isProcessAlive(pid: number): boolean {
     try {
-      // process.kill with signal 0 doesn't kill the process, just checks if it exists
+      // Signal 0 delivers nothing; it only reports whether the process exists.
       process.kill(pid, 0);
       return true;
-    } catch {
-      // ESRCH = No such process, EPERM = exists but no permission (still alive)
-      return false;
+    } catch (error: any) {
+      // ESRCH: no such process. EPERM: it exists and this user may not signal
+      // it, so a Chrome another user runs on a shared profile reads as alive.
+      return error?.code === 'EPERM';
     }
   }
 
@@ -1036,10 +1034,7 @@ export class ChromeLauncher {
     // Wait 500ms for graceful shutdown, then force kill if needed
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => {
-        try {
-          // Check if process still exists using signal 0 (doesn't actually kill)
-          process.kill(pid, 0);
-          // Process still exists, force kill
+        if (this.isProcessAlive(pid)) {
           debugLog('ChromeLauncher', `Chrome on port ${port} didn't exit gracefully, sending SIGKILL (PID: ${pid})`);
           try {
             chromeProcess.kill('SIGKILL');
@@ -1047,8 +1042,7 @@ export class ChromeLauncher {
           } catch (killError) {
             debugLog('ChromeLauncher', `Failed to send SIGKILL: ${killError}`);
           }
-        } catch {
-          // Process already dead (signal 0 threw error)
+        } else {
           debugLog('ChromeLauncher', `Chrome on port ${port} exited gracefully (PID: ${pid})`);
         }
         resolve();
@@ -1415,7 +1409,7 @@ export class ChromeLauncher {
     // Return only alive instances
     return {
       instances: instances.filter(i => i.running),
-      lastCloseEvents: this.lastCloseEvents
+      lastCloseEvents: [...this.lastCloseEvents]
     };
   }
 

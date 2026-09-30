@@ -7,6 +7,7 @@
 
 import type { Page } from 'puppeteer-core';
 import type { DetectedModalInfo as DetectedModal, DismissStrategy } from './modal-detection-core.js';
+import { clickElement } from './click-element.js';
 
 export interface DismissalResult {
   success: boolean;
@@ -139,8 +140,7 @@ export async function dismissModalByStrategy(
         const button = await page.$(btnSelector);
         if (!button) continue;
 
-        // Click the button
-        await button.click();
+        await clickElement(page, button);
 
         // Wait for modal to disappear (with timeout)
         try {

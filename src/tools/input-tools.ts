@@ -15,6 +15,7 @@ import { resolveSelector, isExtendedSelector, cleanupResolvedSelector } from '..
 import { domChangeMonitor, formatDOMChanges, DOMChanges } from '../dom-change-monitor.js';
 import type { ToolResponseMeta, ClickActionMeta } from '../tool-response.js';
 import { abortErrorFor, abortableSleep, isAbortError, throwIfAborted } from '../utils/abort.js';
+import { clickElement } from '../utils/click-element.js';
 
 // Coordinate schema for mouse actions
 const coordinateSchema = z.object({
@@ -78,21 +79,7 @@ const inputToolSchema = z.object({
  * Sets __cdpReplayClickInProgress flag before the action and clears it after.
  * This allows CDP-dispatched events to pass through the overlay's event listeners.
  */
-/**
- * Click a selector without waiting on the document's rendering lifecycle.
- *
- * puppeteer's `page.click` begins with `scrollIntoViewIfNeeded`, which asks an
- * IntersectionObserver whether the element is in view. Observer entries are
- * delivered from the rendering lifecycle, and a tab that is not the selected
- * one in its window gets no rendering opportunities - so on a hidden tab that
- * promise never settles, the CDP call never returns, and the click never
- * reaches the wire. Measured: with the bench tab selected, the app tab
- * reports `document.hidden === true` and a selector click runs past 120s while
- * a coordinate click at the same point returns at once.
- *
- * `scrollIntoView` scrolls over CDP and `clickablePoint` reads getClientRects
- * synchronously; neither needs a frame to be produced.
- */
+/** Click a selector through `clickElement`, which a tab that is not in front can take. */
 async function clickSelector(
   page: any,
   selector: string,
@@ -101,9 +88,7 @@ async function clickSelector(
   const handle = await page.$(selector);
   if (!handle) throw new Error(`Element not found: ${selector}`);
   try {
-    await handle.scrollIntoView();
-    const { x, y } = await handle.clickablePoint();
-    await page.mouse.click(x, y, options);
+    await clickElement(page, handle, options);
   } finally {
     await handle.dispose().catch(() => {});
   }

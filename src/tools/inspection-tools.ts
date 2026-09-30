@@ -338,18 +338,19 @@ export function createInspectionTools(
             // A frame a source map covers is reported at its original source.
             const mappedStack = await Promise.all(
               callStack.map(async (frame) => {
+                // Chrome's frame lines are 0-based; source map lines are 1-based.
                 const original = await sourceMapHandler.mapToOriginal(
                   frame.url,
-                  frame.location.lineNumber,
+                  frame.location.lineNumber + 1,
                   frame.location.columnNumber
                 );
 
                 return {
                   functionName: frame.functionName,
-                  location: original || {
+                  location: original ? { ...original, column: original.column + 1 } : {
                     source: frame.url,
-                    line: frame.location.lineNumber,
-                    column: frame.location.columnNumber,
+                    line: frame.location.lineNumber + 1,
+                    column: frame.location.columnNumber !== undefined ? frame.location.columnNumber + 1 : undefined,
                   },
                   callFrameId: frame.callFrameId,
                 };

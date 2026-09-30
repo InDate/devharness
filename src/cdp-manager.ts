@@ -1772,11 +1772,12 @@ export class CDPManager {
       return { paused: false };
     }
 
+    // 1-based, as every reply shows a location; Chrome's frames are 0-based.
     const callStack = this.getCallStack();
     const location = callStack && callStack.length > 0 ? {
       url: callStack[0].url,
-      lineNumber: callStack[0].location.lineNumber,
-      columnNumber: callStack[0].location.columnNumber,
+      lineNumber: callStack[0].location.lineNumber + 1,
+      columnNumber: callStack[0].location.columnNumber !== undefined ? callStack[0].location.columnNumber + 1 : undefined,
       functionName: callStack[0].functionName,
     } : undefined;
 

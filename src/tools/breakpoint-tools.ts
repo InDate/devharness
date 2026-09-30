@@ -34,11 +34,12 @@ async function resolveBreakpointLocation(
 
     if (!tsScriptLoaded) {
       // Traditional build: .ts files compiled to .js, need source map translation
-      const mapped = await sourceMapHandler.mapToGenerated(url, lineNumber, columnNumber || 0);
+      // Breakpoint columns are 1-based and source map columns 0-based; lines are 1-based in both.
+      const mapped = await sourceMapHandler.mapToGenerated(url, lineNumber, columnNumber ? columnNumber - 1 : 0);
       if (mapped) {
         targetUrl = mapped.generatedFile;
         targetLine = mapped.line;
-        targetColumn = mapped.column;
+        targetColumn = mapped.column + 1;
       }
     }
   }

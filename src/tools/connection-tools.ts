@@ -143,13 +143,16 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
   async function pausedAtOf(cdpManager: CDPManager): Promise<PausedAtMeta | undefined> {
     const top = cdpManager.getCallStack()?.[0];
     if (!top) return undefined;
-    const original = await sourceMapHandler.mapToOriginal(top.url, top.location.lineNumber, top.location.columnNumber)
+    // Chrome's frame lines are 0-based; source map lines are 1-based.
+    const original = await sourceMapHandler.mapToOriginal(top.url, top.location.lineNumber + 1, top.location.columnNumber)
       .catch(() => null);
+    // 1-based, as a breakpoint's line and column are. Source map lines are
+    // 1-based already; its columns, and Chrome's lines and columns, are 0-based.
+    const column = original ? original.column + 1 : (top.location.columnNumber !== undefined ? top.location.columnNumber + 1 : undefined);
     return {
       url: original?.source ?? top.url,
-      lineNumber: original?.line ?? top.location.lineNumber,
-      ...((original?.column ?? top.location.columnNumber) !== undefined
-        ? { columnNumber: original?.column ?? top.location.columnNumber } : {}),
+      lineNumber: original?.line ?? top.location.lineNumber + 1,
+      ...(column !== undefined ? { columnNumber: column } : {}),
       functionName: top.functionName,
       callFrameId: top.callFrameId,
     };

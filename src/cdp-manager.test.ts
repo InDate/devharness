@@ -682,3 +682,14 @@ describe('CDPManager.injectConsoleLink()', () => {
     expect(evaluate).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('CDPManager.getPausedInfo()', () => {
+  it('reports the top frame in 1-based line and column, where Chrome reports them 0-based', () => {
+    const cdpManager = new CDPManager();
+    (cdpManager as any).state.paused = true;
+    (cdpManager as any).state.currentCallFrames = [{ callFrameId: 'f1', functionName: 'tick', location: { scriptId: '7', lineNumber: 2, columnNumber: 4 } }];
+    (cdpManager as any).scriptIdToUrl.set('7', 'http://app/app.js');
+
+    expect(cdpManager.getPausedInfo().location).toMatchObject({ url: 'http://app/app.js', lineNumber: 3, columnNumber: 5 });
+  });
+});

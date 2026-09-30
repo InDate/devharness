@@ -36,6 +36,15 @@ interface LoadError {
 export class SourceMapHandler {
   private sourceMaps: Map<string, SourceMapConsumer> = new Map();
   private pendingSourceMaps: Map<string, string> = new Map(); // scriptUrl → sourceMapURL (lazy loading)
+  /**
+   * Maps registered from a build directory, by the generated file's path
+   * relative to that directory ("assets/app.js") → the map's path on disk.
+   * The page serves the file at a URL whose path ends with the relative path,
+   * so that path is both how a script URL finds its map and a URL the
+   * breakpoint code resolves to the loaded script. Each is loaded into
+   * `sourceMaps` under its relative path when first needed.
+   */
+  private directoryMaps: Map<string, string> = new Map();
   private loadingPromises: Map<string, Promise<void>> = new Map(); // prevent concurrent loads with proper deduplication
   private lastErrors: LoadError[] = []; // track recent errors for debugging
   private clearing = false; // flag to prevent operations during clear
@@ -79,12 +88,20 @@ export class SourceMapHandler {
     // Nothing loaded carries it. A pending map whose script shares the file's
     // name is where it will be - loading every pending map to find out would
     // cost more than the answer is worth.
-    const basename = path.basename(this.normalizePath(originalSource));
+    const basename = path.basename(this.normalizePath(originalSource)).replace(/\.[^.]+$/, '');
     for (const [scriptUrl, sourceMapURL] of [...this.pendingSourceMaps]) {
-      if (!this.normalizePath(scriptUrl).endsWith(basename)) continue;
+      if (!path.basename(this.normalizePath(scriptUrl)).startsWith(basename)) continue;
       await this.loadSourceMapFromURL(scriptUrl, sourceMapURL);
       this.pendingSourceMaps.delete(scriptUrl);
       const consumer = this.sourceMaps.get(scriptUrl);
+      if (consumer) {
+        const content = fromConsumer(consumer);
+        if (content) return content;
+      }
+    }
+    for (const relative of this.directoryMaps.keys()) {
+      if (!path.basename(relative).startsWith(basename)) continue;
+      const consumer = await this.directoryConsumer(relative);
       if (consumer) {
         const content = fromConsumer(consumer);
         if (content) return content;
@@ -183,6 +200,44 @@ export class SourceMapHandler {
   }
 
   /**
+   * The directory-registered map for a script, by the relative path its URL's
+   * path ends with; the longest such path when several do ("app.js" and
+   * "assets/app.js" both end "http://host/assets/app.js").
+   */
+  private directoryMapFor(scriptUrl: string): string | undefined {
+    const scriptPath = this.normalizePath(scriptUrl.split(/[?#]/)[0].replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*/i, ''));
+    let best: string | undefined;
+    for (const relative of this.directoryMaps.keys()) {
+      if (scriptPath !== relative && !scriptPath.endsWith('/' + relative)) continue;
+      if (!best || relative.length > best.length) best = relative;
+    }
+    return best;
+  }
+
+  /**
+   * Where an original line and column were generated. A breakpoint asks for
+   * column 0, and an indented line's first mapping starts after the
+   * indentation, where the default search - at or before the column - finds
+   * nothing; the first mapping after the column on the same line answers then.
+   */
+  private generatedFor(consumer: SourceMapConsumer, source: string, line: number, column: number): { line: number; column: number } | null {
+    for (const bias of [SourceMapConsumer.GREATEST_LOWER_BOUND, SourceMapConsumer.LEAST_UPPER_BOUND]) {
+      const generated = consumer.generatedPositionFor({ source, line, column, bias });
+      if (generated.line !== null && generated.column !== null) return { line: generated.line, column: generated.column };
+    }
+    return null;
+  }
+
+  /** A directory-registered map's consumer, loaded under its relative path on first use. */
+  private async directoryConsumer(relative: string): Promise<SourceMapConsumer | undefined> {
+    const mapPath = this.directoryMaps.get(relative);
+    if (mapPath && !this.sourceMaps.has(relative)) {
+      await this.loadSourceMapFromURL(relative, mapPath);
+    }
+    return this.sourceMaps.get(relative);
+  }
+
+  /**
    * Map a TypeScript position to JavaScript position (for setting breakpoints)
    */
   async mapToGenerated(
@@ -202,18 +257,9 @@ export class SourceMapHandler {
       const matchingSource = this.findMatchingSource(sources, originalSource);
 
       if (matchingSource) {
-        const generated = consumer.generatedPositionFor({
-          source: matchingSource,
-          line: originalLine,
-          column: originalColumn,
-        });
-
-        if (generated.line !== null && generated.column !== null) {
-          return {
-            generatedFile,
-            line: generated.line,
-            column: generated.column,
-          };
+        const generated = this.generatedFor(consumer, matchingSource, originalLine, originalColumn);
+        if (generated) {
+          return { generatedFile, ...generated };
         }
       }
     }
@@ -238,20 +284,26 @@ export class SourceMapHandler {
         const matchingSource = this.findMatchingSource(sources, originalSource);
 
         if (matchingSource) {
-          const generated = consumer.generatedPositionFor({
-            source: matchingSource,
-            line: originalLine,
-            column: originalColumn,
-          });
-
-          if (generated.line !== null && generated.column !== null) {
-            return {
-              generatedFile: scriptUrl,
-              line: generated.line,
-              column: generated.column,
-            };
+          const generated = this.generatedFor(consumer, matchingSource, originalLine, originalColumn);
+          if (generated) {
+            return { generatedFile: scriptUrl, ...generated };
           }
         }
+      }
+    }
+
+    // Directory maps not yet loaded; one loaded already was searched above.
+    for (const relative of this.directoryMaps.keys()) {
+      if (this.clearing) return null;
+      if (this.sourceMaps.has(relative)) continue;
+      const consumer = await this.directoryConsumer(relative);
+      const sources = (consumer as any)?.sources as string[] | undefined;
+      if (!consumer || !sources) continue;
+      const matchingSource = this.findMatchingSource(sources, originalSource);
+      if (!matchingSource) continue;
+      const generated = this.generatedFor(consumer, matchingSource, originalLine, originalColumn);
+      if (generated) {
+        return { generatedFile: relative, ...generated };
       }
     }
 
@@ -276,6 +328,11 @@ export class SourceMapHandler {
       await this.loadSourceMapFromURL(generatedFile, sourceMapURL);
       this.pendingSourceMaps.delete(generatedFile);
       consumer = this.sourceMaps.get(generatedFile);
+    }
+
+    if (!consumer) {
+      const relative = this.directoryMapFor(generatedFile);
+      if (relative) consumer = await this.directoryConsumer(relative);
     }
 
     if (!consumer || this.clearing) {
@@ -391,7 +448,10 @@ export class SourceMapHandler {
 
       // Handle relative URLs - convert to absolute file path
       let mapPath: string;
-      if (sourceMapURL.startsWith('http://') || sourceMapURL.startsWith('https://')) {
+      if (path.isAbsolute(sourceMapURL)) {
+        // A map registered from a directory, already a path on disk.
+        mapPath = sourceMapURL;
+      } else if (sourceMapURL.startsWith('http://') || sourceMapURL.startsWith('https://')) {
         // For HTTP URLs, extract the path component and treat as local file
         // Note: This is a best-effort heuristic for local development
         const url = new URL(sourceMapURL);
@@ -486,9 +546,11 @@ export class SourceMapHandler {
   }
 
   /**
-   * Register source maps from a directory for lazy loading (does NOT eagerly load)
+   * Register the .js.map files in a directory and its subdirectories, each
+   * under its generated file's path relative to `root` (see directoryMaps).
+   * Nothing is loaded until a location in the script is first mapped.
    */
-  async registerSourceMapsFromDirectory(directory: string): Promise<number> {
+  async registerSourceMapsFromDirectory(directory: string, root: string = directory): Promise<number> {
     if (this.clearing) return 0;
 
     let registered = 0;
@@ -499,12 +561,10 @@ export class SourceMapHandler {
         const fullPath = path.join(directory, entry.name);
 
         if (entry.isDirectory()) {
-          // Recurse into subdirectories
-          registered += await this.registerSourceMapsFromDirectory(fullPath);
+          registered += await this.registerSourceMapsFromDirectory(fullPath, root);
         } else if (entry.name.endsWith('.js.map')) {
-          // Register the source map for the corresponding JS file
-          const jsPath = fullPath.slice(0, -4); // Remove .map
-          this.pendingSourceMaps.set(jsPath, fullPath);
+          const relative = path.relative(root, fullPath.slice(0, -'.map'.length)).split(path.sep).join('/');
+          this.directoryMaps.set(relative, path.resolve(fullPath));
           registered++;
         }
       }
@@ -545,6 +605,7 @@ export class SourceMapHandler {
     }
     this.sourceMaps.clear();
     this.pendingSourceMaps.clear();
+    this.directoryMaps.clear();
     this.loadingPromises.clear();
     this.lastErrors = [];
 
@@ -565,7 +626,7 @@ export class SourceMapHandler {
       this.pendingSourceMaps.delete(scriptUrl);
       return true;
     }
-    return false;
+    return this.directoryMaps.delete(scriptUrl);
   }
 
   /**
@@ -579,7 +640,7 @@ export class SourceMapHandler {
    * Check if a source map is loaded or registered for a given file
    */
   hasSourceMap(file: string): boolean {
-    return this.sourceMaps.has(file) || this.pendingSourceMaps.has(file);
+    return this.sourceMaps.has(file) || this.pendingSourceMaps.has(file) || this.directoryMapFor(file) !== undefined;
   }
 
   /**
@@ -593,6 +654,7 @@ export class SourceMapHandler {
    * Get all registered (pending) source map URLs
    */
   getPendingSourceMaps(): string[] {
-    return Array.from(this.pendingSourceMaps.keys());
+    const unloadedDirectoryMaps = [...this.directoryMaps.keys()].filter(relative => !this.sourceMaps.has(relative));
+    return [...this.pendingSourceMaps.keys(), ...unloadedDirectoryMaps];
   }
 }

@@ -578,7 +578,7 @@ const allTools = {
   ...(configManager.isToolEnabled('network') ? toolset('network', createNetworkTools(resolveConnectionFromReason)) : {}),
   ...toolset('proxy', createProxyTools()),
   ...toolset('hold', createHoldTools()),
-  ...(configManager.isToolEnabled('page') ? toolset('page', createPageTools(connectionManager, resolveConnectionFromReason, clickableCache, executeToolCall)) : {}),
+  ...(configManager.isToolEnabled('page') ? toolset('page', createPageTools(resolveConnectionFromReason, clickableCache, executeToolCall)) : {}),
   ...(configManager.isToolEnabled('dom') ? toolset('dom', createDOMTools(resolveConnectionFromReason)) : {}),
   ...(configManager.isToolEnabled('screenshot') ? toolset('screenshot', createScreenshotTools(connectionManager, resolveConnectionFromReason)) : {}),
   ...(configManager.isToolEnabled('input') ? toolset('input', createInputTools(connectionManager, resolveConnectionFromReason)) : {}),

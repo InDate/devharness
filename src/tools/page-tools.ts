@@ -5,15 +5,13 @@
 import { z } from 'zod';
 import { ConsoleMonitor } from '../console-monitor.js';
 import { NetworkMonitor } from '../network-monitor.js';
-import type { ConnectionManager } from '../connection-manager.js';
-import { executeWithPauseDetection, formatActionResult } from '../debugger-aware-wrapper.js';
+import { executeWithPauseDetection, type ActionResult } from '../debugger-aware-wrapper.js';
 import { checkBrowserAutomation } from '../error-helpers.js';
 import { createTool } from '../validation-helpers.js';
-import { createSuccessResponse, createErrorResponse, formatCodeBlock } from '../messages.js';
+import { createSuccessResponse, createErrorResponse } from '../messages.js';
 import { autoLaunchChrome } from './replay-executor.js';
-import type { ClickableCache, ClickableElement } from '../clickable-cache.js';
+import type { ClickableCache } from '../clickable-cache.js';
 import { collectInteractiveElements } from '../element-collector.js';
-import type { ToolResponseMeta, NavigateActionMeta } from '../tool-response.js';
 import type { ExecuteToolCall } from '../types.js';
 import { raceAbort, throwIfAborted } from '../utils/abort.js';
 
@@ -91,16 +89,18 @@ export async function gatherPageContext(
 }
 
 /**
- * Format page context for response
+ * Format page context for response. Each hint names `connectionReason`,
+ * since a call that acts on a connection without naming one is refused.
  */
-export function formatPageContextForResponse(context: PageContext): Record<string, any> {
+export function formatPageContextForResponse(context: PageContext, connectionReason: string): Record<string, any> {
+  const on = `connectionReason: '${connectionReason}'`;
   const response: Record<string, any> = {
     url: context.url,
     title: context.title,
     clickableElements: {
       total: context.clickableElements.total,
       inViewport: context.clickableElements.inViewport,
-      hint: 'Use content({ action: "findInteractive" }) to explore interactive elements',
+      hint: `Use content({ action: 'findInteractive', ${on} }) to explore interactive elements`,
     },
   };
 
@@ -110,7 +110,7 @@ export function formatPageContextForResponse(context: PageContext): Record<strin
       errors: context.console.errors,
       warnings: context.console.warnings,
       hint: context.console.errors > 0
-        ? 'Use console({ action: "list", type: "error" }) to view errors'
+        ? `Use console({ action: 'list', ${on}, type: 'error' }) to view errors`
         : undefined,
     };
   }
@@ -120,11 +120,26 @@ export function formatPageContextForResponse(context: PageContext): Record<strin
     response.network = {
       failed: context.network.failed,
       total: context.network.total,
-      hint: 'Use network({ action: "search", statusCode: "4" }) to view failed requests',
+      hint: `Use network({ action: 'list', ${on} }) to see each request with its status or failure`,
     };
   }
 
   return response;
+}
+
+/**
+ * A navigation that stopped at a breakpoint or threw, answered as that;
+ * undefined when it returned the page. Answered as success, a navigation to
+ * an unreachable host read as having arrived.
+ */
+function navigationOutcome(result: ActionResult<unknown>, action: string, target: string): any | undefined {
+  if (result.pausedAtBreakpoint && result.success) {
+    return createSuccessResponse('ACTION_PAUSED_AT_BREAKPOINT', { action, selector: target, ...result.pauseInfo });
+  }
+  if (!result.success) {
+    return createErrorResponse('NAVIGATION_FAILED', { message: result.error ?? `${action} failed` });
+  }
+  return undefined;
 }
 
 // Consolidated schema for page navigation tools
@@ -140,7 +155,6 @@ const navigateSchema = z.object({
 }).strict();
 
 export function createPageTools(
-  connectionManager: ConnectionManager,
   resolveConnectionFromReason: (connectionReason: string) => Promise<any>,
   clickableCache: ClickableCache,
   executeToolCall?: ExecuteToolCall
@@ -238,11 +252,13 @@ export function createPageTools(
               'navigateTo'
             );
 
+            const stopped = navigationOutcome(result, 'navigate goto', args.url!);
+            if (stopped) return stopped;
             if (!result.result) {
               return createSuccessResponse('PAGE_NAVIGATE_SUCCESS', { url: args.url });
             }
 
-            return createSuccessResponse('PAGE_NAVIGATE_SUCCESS', formatPageContextForResponse(result.result));
+            return createSuccessResponse('PAGE_NAVIGATE_SUCCESS', formatPageContextForResponse(result.result, connectionReason));
           }
 
           case 'reload': {
@@ -271,11 +287,13 @@ export function createPageTools(
               'reloadPage'
             );
 
+            const stopped = navigationOutcome(result, 'navigate reload', page.url());
+            if (stopped) return stopped;
             if (!result.result) {
               return createSuccessResponse('PAGE_RELOAD_SUCCESS');
             }
 
-            return createSuccessResponse('PAGE_RELOAD_SUCCESS', formatPageContextForResponse(result.result));
+            return createSuccessResponse('PAGE_RELOAD_SUCCESS', formatPageContextForResponse(result.result, connectionReason));
           }
 
           case 'back': {
@@ -293,11 +311,13 @@ export function createPageTools(
               'goBack'
             );
 
+            const stopped = navigationOutcome(result, 'navigate back', page.url());
+            if (stopped) return stopped;
             if (!result.result) {
               return createSuccessResponse('PAGE_GO_BACK_SUCCESS');
             }
 
-            return createSuccessResponse('PAGE_GO_BACK_SUCCESS', formatPageContextForResponse(result.result));
+            return createSuccessResponse('PAGE_GO_BACK_SUCCESS', formatPageContextForResponse(result.result, connectionReason));
           }
 
           case 'forward': {
@@ -315,11 +335,13 @@ export function createPageTools(
               'goForward'
             );
 
+            const stopped = navigationOutcome(result, 'navigate forward', page.url());
+            if (stopped) return stopped;
             if (!result.result) {
               return createSuccessResponse('PAGE_GO_FORWARD_SUCCESS');
             }
 
-            return createSuccessResponse('PAGE_GO_FORWARD_SUCCESS', formatPageContextForResponse(result.result));
+            return createSuccessResponse('PAGE_GO_FORWARD_SUCCESS', formatPageContextForResponse(result.result, connectionReason));
           }
 
           case 'info': {

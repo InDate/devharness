@@ -64,3 +64,29 @@ describe('a history.log line logged against a removed tool', () => {
     ]);
   });
 });
+
+describe('history.log', () => {
+  it('keeps every entry when commands are logged at the same time', async () => {
+    const { enableHistoryLogging, logToHistoryFile } = await import('./debug-logger.js');
+    const logs = join(dir, '.devharness', 'logs');
+    await fsp.mkdir(logs, { recursive: true });
+    await fsp.writeFile(join(logs, 'history.log'), '');
+    enableHistoryLogging();
+
+    await Promise.all(Array.from({ length: 20 }, (_, i) =>
+      logToHistoryFile(JSON.stringify({ tool: 'navigate', params: { action: 'reload', n: i } }))));
+
+    const lines = (await fsp.readFile(join(logs, 'history.log'), 'utf-8')).split('\n').filter(Boolean);
+    expect(lines).toHaveLength(20);
+  });
+
+  it('reports a line that is not a logged call rather than a call to no tool', async () => {
+    const logs = join(dir, '.devharness', 'logs');
+    await fsp.writeFile(join(logs, 'history.log'), '5\n{}\n');
+
+    expect(await readHistoryLines([1, 2])).toEqual([
+      { line: 1, error: expect.stringContaining('not a logged call') },
+      { line: 2, error: expect.stringContaining('not a logged call') },
+    ]);
+  });
+});

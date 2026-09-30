@@ -1,6 +1,7 @@
 /**
- * Simple debug logger for troubleshooting
- * Writes to .devharness/logs/debug.log when enabled
+ * Debug logging and history.log, both under the logs directory of the state
+ * directory in use: the project's .devharness, or the global one when there
+ * is none.
  */
 
 import { promises as fs } from 'fs';
@@ -146,11 +147,22 @@ export async function debugLog(module: string, message: string): Promise<void> {
  * Each line is a JSON object matching RecordedCommand: { tool, params }
  * New commands are prepended (newest first) so line 1 is always the most recent command
  */
-export async function logToHistoryFile(entry: string): Promise<void> {
-  if (!historyLogEnabled) {
-    return;
-  }
+/**
+ * Writes queue one behind another: each reads the file and writes it back
+ * with its entry first, and two overlapping would both read the old file and
+ * the second would drop the first's entry.
+ */
+let historyWrites: Promise<void> = Promise.resolve();
 
+export function logToHistoryFile(entry: string): Promise<void> {
+  if (!historyLogEnabled) {
+    return Promise.resolve();
+  }
+  historyWrites = historyWrites.then(() => prependHistoryEntry(entry));
+  return historyWrites;
+}
+
+async function prependHistoryEntry(entry: string): Promise<void> {
   try {
     await fs.mkdir(getLogDir(), { recursive: true });
 
@@ -176,30 +188,6 @@ export function getHistoryFilePath(): string {
 }
 
 /**
- * Read a specific line from the history log file (1-indexed)
- * Returns the parsed command or null if line doesn't exist
- */
-export async function readHistoryLine(lineNumber: number): Promise<{ tool: string; params: Record<string, any> } | null> {
-  if (lineNumber < 1) {
-    return null;
-  }
-
-  try {
-    const content = await fs.readFile(getHistoryFile(), 'utf-8');
-    const lines = content.split('\n').filter(line => line.trim());
-
-    if (lineNumber > lines.length) {
-      return null;
-    }
-
-    const line = lines[lineNumber - 1];
-    return JSON.parse(line);
-  } catch (error) {
-    return null;
-  }
-}
-
-/**
  * Read multiple lines from the history log file (1-indexed)
  * Returns array of parsed commands
  */
@@ -218,6 +206,10 @@ export async function readHistoryLines(lineNumbers: number[]): Promise<Array<{ l
 
       try {
         const parsed = JSON.parse(lines[lineNum - 1]);
+        if (typeof parsed?.tool !== 'string') {
+          results.push({ line: lineNum, error: 'This line is not a logged call: it names no tool' });
+          continue;
+        }
         // A line logged against a removed tool replays as the call that replaced it.
         const { tool, params } = translateCall(parsed.tool, parsed.params);
         results.push({ line: lineNum, tool, params });

@@ -1,5 +1,6 @@
 /**
- * Breakpoint Management Tools
+ * `breakpoint` sets, lists and removes a connection's line, logpoint, DOM,
+ * event and XHR breakpoints, validates logpoint expressions, and awaits a hit.
  */
 
 import { z } from 'zod';
@@ -11,8 +12,10 @@ import { createSuccessResponse, createErrorResponse, getErrorMessage } from '../
 import { abortErrorFor, isAbortError, throwIfAborted } from '../utils/abort.js';
 
 /**
- * Helper to resolve TypeScript source maps for breakpoint locations.
- * Handles Vite-style serving (skip translation) vs traditional builds (translate).
+ * The generated location a breakpoint on a TypeScript file is set at. A .ts
+ * file the page loaded as a script (Vite-style serving) is set as given and
+ * CDP maps it through the inline source map; one compiled to .js is mapped to
+ * the .js location here.
  */
 async function resolveBreakpointLocation(
   url: string,
@@ -38,14 +41,11 @@ async function resolveBreakpointLocation(
         targetColumn = mapped.column;
       }
     }
-    // If tsScriptLoaded is true, use url and lineNumber directly
-    // CDP will handle source map translation via inline source maps
   }
 
   return { url: targetUrl, line: targetLine, column: targetColumn };
 }
 
-// Schema definitions
 const breakpointSchema = z.object({
   action: z.enum([
     'set', 'remove', 'list', 'setLogpoint', 'validate', 'resetCounter', 'waitForScript',
@@ -115,7 +115,6 @@ export function createBreakpointTools(
               return createErrorResponse('INVALID_PARAMS', { message: 'url and lineNumber are required for set action' });
             }
 
-            // Check connection and runtime type
             const runtimeType = targetCdpManager.getRuntimeType();
             const isConnected = targetCdpManager.isConnected();
 
@@ -123,7 +122,6 @@ export function createBreakpointTools(
               return createErrorResponse('DEBUGGER_NOT_CONNECTED');
             }
 
-            // Resolve source maps for TypeScript files
             const resolved = await resolveBreakpointLocation(
               args.url, args.lineNumber, args.columnNumber,
               targetCdpManager, sourceMapHandler
@@ -135,9 +133,8 @@ export function createBreakpointTools(
             try {
               const breakpoint = await targetCdpManager.setBreakpoint(targetUrl, targetLine, targetColumn, args.condition);
 
-              // Check if breakpoint is pending (script not loaded yet)
+              // A pending breakpoint's script is not loaded, so there is no page to link in.
               if (breakpoint.status === 'pending') {
-                // Don't inject console link for pending breakpoints (script not loaded)
                 let markdown = `## Breakpoint Set (Pending)\n\n`;
                 markdown += `**Breakpoint ID:** \`${breakpoint.breakpointId}\`\n`;
                 markdown += `**URL:** \`${targetUrl}\`\n`;
@@ -147,8 +144,8 @@ export function createBreakpointTools(
                 }
                 markdown += `\n**Status:** ⏳ Pending - Script not loaded yet\n\n`;
                 markdown += `**Note:** The breakpoint has been set and will activate automatically when the script loads. `;
-                markdown += `Use \`navigate({ action: 'goto' })\` or \`navigate({ action: 'reload' })\` to load the page.\n\n`;
-                markdown += `**TIP:** Use \`breakpoint({ action: 'waitForScript', url: '${targetUrl}' })\` to wait for the script to load.`;
+                markdown += `Use \`navigate({ action: 'goto'${on} })\` or \`navigate({ action: 'reload'${on} })\` to load the page.\n\n`;
+                markdown += `**TIP:** Use \`breakpoint({ action: 'waitForScript', url: '${targetUrl}'${on} })\` to wait for the script to load.`;
 
                 return {
                   content: [{
@@ -164,18 +161,15 @@ export function createBreakpointTools(
                 ? breakpoint.location.columnNumber + 1
                 : undefined;
 
-              // Check if location was adjusted (line or column)
-              // targetColumn was set earlier (line 82) and may have been modified by source mapping
+              // targetColumn is the column after source mapping, which may differ from the one asked for.
               const lineAdjusted = resolvedLine !== targetLine;
               const columnAdjusted = targetColumn !== undefined && resolvedColumn !== undefined && resolvedColumn !== targetColumn;
               const wasAdjusted = lineAdjusted || columnAdjusted;
 
-              // Inject clickable console link at resolved location
               const icon = args.condition ? '🔶' : '🔴';
               const label = args.condition ? 'Conditional breakpoint set at' : 'Breakpoint set at';
               await targetCdpManager.injectConsoleLink(targetUrl, resolvedLine, `${icon} ${label}`);
 
-              // Build location strings for message
               const resolvedLocation = resolvedColumn !== undefined
                 ? `line ${resolvedLine}:${resolvedColumn}`
                 : `line ${resolvedLine}`;
@@ -183,7 +177,6 @@ export function createBreakpointTools(
                 ? `line ${targetLine}:${targetColumn}`
                 : `line ${targetLine}`;
 
-              // Return markdown-only success response with resolved location info
               return createSuccessResponse('BREAKPOINT_SET_SUCCESS', {
                 url: targetUrl,
                 resolvedLine: resolvedLine,
@@ -194,20 +187,19 @@ export function createBreakpointTools(
                 condition: args.condition,
               });
             } catch (error: any) {
-              // Build context-aware error message
               let markdown = getErrorMessage('BREAKPOINT_SET_FAILED', {
                 url: targetUrl,
                 lineNumber: targetLine,
                 error: error.message,
               });
 
-              // Add runtime-specific TIP if applicable
+              // A URL that looks like the other runtime's code gets a hint to attach to that one.
               if (runtimeType === 'chrome' && (args.url.includes('/dist/') || args.url.includes('index.js'))) {
                 markdown += '\n\n**TIP:** You are connected to Chrome (browser) but trying to set a breakpoint on what looks like server code. ' +
-                            'If this is Node.js server code, you need to connect to the Node.js debugger separately using `connection` action `attach` with port 9229.';
+                            'If this is Node.js server code, attach to the Node.js debugger separately with `connection({ action: \'attach\', name, port: 9229 })`.';
               } else if (runtimeType === 'node' && args.url.includes('/public/')) {
                 markdown += '\n\n**TIP:** You are connected to Node.js but trying to set a breakpoint on what looks like browser code. ' +
-                            'You may need to connect to Chrome using `connection` action `attach` with port 9222 for client-side debugging.';
+                            'For client-side debugging, attach to Chrome with `connection({ action: \'attach\', name, port: 9222 })`.';
               }
 
               return {
@@ -229,7 +221,7 @@ export function createBreakpointTools(
 
             const bpId = args.breakpointId;
 
-            // Dispatch to appropriate remove method based on ID prefix
+            // The ID's prefix names the kind of breakpoint.
             if (bpId.startsWith('dom-bp-')) {
               await targetCdpManager.removeDOMBreakpoint(bpId);
             } else if (bpId.startsWith('event-bp-')) {
@@ -237,7 +229,6 @@ export function createBreakpointTools(
             } else if (bpId.startsWith('xhr-bp-')) {
               await targetCdpManager.removeXHRBreakpoint(bpId);
             } else {
-              // Line breakpoint or logpoint - unregister from tracker first
               if (logpointTracker) {
                 logpointTracker.unregisterLogpoint(targetCdpManager, bpId);
               }
@@ -254,13 +245,10 @@ export function createBreakpointTools(
             const eventBreakpoints = targetCdpManager.getEventListenerBreakpoints();
             const xhrBreakpoints = targetCdpManager.getXHRBreakpoints();
 
-            // Count pending breakpoints
             const pendingCount = breakpoints.filter(bp => bp.status === 'pending').length;
 
-            // Calculate total across all types
             const totalAll = counts.total + domBreakpoints.length + eventBreakpoints.length + xhrBreakpoints.length;
 
-            // Build markdown response
             let markdown = `## Active Breakpoints\n\n`;
             markdown += `**Total:** ${totalAll}`;
             if (totalAll > 0) {
@@ -280,12 +268,11 @@ export function createBreakpointTools(
 
             if (totalAll === 0) {
               markdown += 'No active breakpoints.\n\n';
-              markdown += '**TIP:** Use `breakpoint({ action: \'set\' })` to set a line breakpoint, `breakpoint({ action: \'setDOMBreakpoint\' })` for DOM changes, or `breakpoint({ action: \'setEventBreakpoint\' })` for events.';
+              markdown += `**TIP:** Use \`breakpoint({ action: 'set'${on} })\` to set a line breakpoint, \`breakpoint({ action: 'setDOMBreakpoint'${on} })\` for DOM changes, or \`breakpoint({ action: 'setEventBreakpoint'${on} })\` for events.`;
             } else {
               markdown += '| ID | Type | Status | Details |\n';
               markdown += '|---|---|---|---|\n';
 
-              // Line breakpoints and logpoints
               breakpoints.forEach(bp => {
                 const type = bp.isLogpoint ? 'logpoint' : 'line';
                 const status = bp.status === 'pending' ? '⏳ pending' : '✓ resolved';
@@ -298,18 +285,15 @@ export function createBreakpointTools(
                 markdown += `| \`${bp.breakpointId}\` | ${type} | ${status} | \`${location}\` |\n`;
               });
 
-              // DOM breakpoints
               domBreakpoints.forEach(bp => {
                 markdown += `| \`${bp.breakpointId}\` | DOM | ✓ active | \`${bp.selector}\` (${bp.domBreakpointType}) |\n`;
               });
 
-              // Event breakpoints
               eventBreakpoints.forEach(bp => {
                 const target = bp.targetName ? ` on ${bp.targetName}` : '';
                 markdown += `| \`${bp.breakpointId}\` | event | ✓ active | ${bp.eventName}${target} |\n`;
               });
 
-              // XHR breakpoints
               xhrBreakpoints.forEach(bp => {
                 markdown += `| \`${bp.breakpointId}\` | XHR | ✓ active | URL contains \`${bp.urlPattern}\` |\n`;
               });
@@ -334,7 +318,6 @@ export function createBreakpointTools(
               return createErrorResponse('INVALID_PARAMS', { message: 'breakpointId is required for resetCounter action' });
             }
 
-            // Reset the counter in the tracker
             if (!logpointTracker) {
               return createErrorResponse('DEBUGGER_NOT_CONNECTED');
             }
@@ -345,11 +328,10 @@ export function createBreakpointTools(
               return createErrorResponse('BREAKPOINT_NOT_FOUND', { breakpointId: args.breakpointId });
             }
 
-            // Reset the counter in the tracker
             const previousCount = metadata.executionCount;
             logpointTracker.resetCounter(targetCdpManager, args.breakpointId);
 
-            // Reset the global counter in the page context
+            // The page keeps its own count, which the logpoint's condition reads.
             const logpointKey = `${metadata.url}:${metadata.lineNumber}`;
             try {
               await targetCdpManager.evaluateExpression(`
@@ -358,13 +340,12 @@ export function createBreakpointTools(
                 }
               `);
             } catch (error) {
-              // Ignore errors - counter may not exist yet
+              // A logpoint that never ran has no count in the page yet.
             }
 
-            // Clear the logpoint limit exceeded state in CDPManager
+            // Lifts the refusal that `execution resume` gives while the limit stands.
             targetCdpManager.clearLogpointLimitExceeded();
 
-            // Build markdown response with details
             let markdown = getErrorMessage('LOGPOINT_COUNTER_RESET', {
               breakpointId: args.breakpointId,
               maxExecutions: metadata.maxExecutions,
@@ -394,7 +375,6 @@ export function createBreakpointTools(
 
             const timeout = args.timeout || 2000;
 
-            // Parse logMessage to extract expressions
             const expressionMatches = args.logMessage.matchAll(/\{([^}]+)\}/g);
             const expressions: string[] = [];
             for (const match of expressionMatches) {
@@ -418,29 +398,25 @@ export function createBreakpointTools(
               };
             }
 
-            // Set a temporary breakpoint to test the expressions
+            // A temporary breakpoint, which pauses the page there if the line runs within `timeout`, so the expressions can be evaluated in its frame.
             try {
               const tempBreakpoint = await targetCdpManager.setBreakpoint(args.url, args.lineNumber, args.columnNumber);
 
-              // Get actual location from CDP (0-based)
+              // CDP locations are 0-based; the ones shown are 1-based.
               const actualCdpLine = tempBreakpoint.location.lineNumber;
               const actualCdpColumn = tempBreakpoint.location.columnNumber;
 
-              // Convert to 1-based for user display
               const actualLineUser = actualCdpLine + 1;
               const actualColumnUser = actualCdpColumn !== undefined ? actualCdpColumn + 1 : undefined;
 
-              // Check if location differs
               const lineDiffers = actualLineUser !== args.lineNumber;
               const columnDiffers = args.columnNumber !== undefined && actualColumnUser !== args.columnNumber;
               const locationDiffers = lineDiffers || columnDiffers;
 
-              // Wait for the breakpoint to potentially be hit (configurable timeout)
               await new Promise(resolve => setTimeout(resolve, timeout));
 
-              // Check if we're paused at the breakpoint
+              // The line did not run within the wait, so there is no frame to evaluate in.
               if (!targetCdpManager.isPaused()) {
-                // Remove temp breakpoint
                 await targetCdpManager.removeBreakpoint(tempBreakpoint.breakpointId);
 
                 let markdown = `## Logpoint Validation\n\n`;
@@ -469,16 +445,13 @@ export function createBreakpointTools(
                 };
               }
 
-              // Try to evaluate each expression and collect available variables
               const results: Array<{ expression: string; valid: boolean; value?: any; error?: string }> = [];
               let availableVariables: string[] = [];
 
               const callFrame = targetCdpManager.getCallStack()?.[0];
               if (callFrame) {
-                // Get available variables at this location
                 try {
                   const result = await targetCdpManager.getVariables(callFrame.callFrameId, false);
-                  // Extract variable names from grouped data structure
                   const { data, responseType } = result;
                   if (responseType === 'full' || responseType === 'depth_reduced') {
                     // data is Record<string, {name, value, type}[]>
@@ -493,12 +466,11 @@ export function createBreakpointTools(
                       availableVariables.push(...names);
                     }
                   }
-                  // For counts_only, we don't have names to suggest
+                  // counts_only carries no names.
                 } catch (err) {
-                  // Ignore errors getting variables
+                  // The variable list is a hint; the expressions are evaluated without it.
                 }
 
-                // Evaluate each expression
                 for (const expr of expressions) {
                   try {
                     const value = await targetCdpManager.evaluateExpression(expr, callFrame.callFrameId);
@@ -516,7 +488,6 @@ export function createBreakpointTools(
                   }
                 }
               } else {
-                // No call frame available
                 for (const expr of expressions) {
                   results.push({
                     expression: expr,
@@ -526,16 +497,14 @@ export function createBreakpointTools(
                 }
               }
 
-              // Resume execution
               await targetCdpManager.resume();
 
-              // Remove temp breakpoint
               await targetCdpManager.removeBreakpoint(tempBreakpoint.breakpointId);
 
               const allValid = results.every(r => r.valid);
               const invalidExpressions = results.filter(r => !r.valid);
 
-              // Get code snippet (3 lines context around actual location)
+              // The line and one either side, shown with the results.
               let codeContext: string | undefined;
               try {
                 const startLine = Math.max(1, actualLineUser - 1);
@@ -543,15 +512,13 @@ export function createBreakpointTools(
                 const sourceResult = await targetCdpManager.getSourceCode(args.url, startLine, endLine);
                 codeContext = sourceResult.code;
               } catch (err) {
-                // Ignore errors getting code snippet
+                // The snippet is shown when it can be read.
               }
 
-              // Build markdown response
               let markdown = `## Logpoint Validation\n\n`;
               markdown += `**Status:** ${allValid ? 'Valid ✓' : 'Failed ✗'}\n`;
               markdown += `**Message:** ${allValid ? 'All expressions are valid at this location' : `${invalidExpressions.length} expression(s) failed to evaluate`}\n\n`;
 
-              // Location info
               markdown += `**Location:**\n`;
               markdown += `- **Requested:** Line ${args.lineNumber}${args.columnNumber ? `:${args.columnNumber}` : ''}\n`;
               markdown += `- **Actual:** Line ${actualLineUser}${actualColumnUser ? `:${actualColumnUser}` : ''}\n`;
@@ -561,7 +528,6 @@ export function createBreakpointTools(
                 markdown += `**Warning:** CDP mapped your requested location ${args.lineNumber}:${args.columnNumber || 'auto'} to ${actualLineUser}:${actualColumnUser || 'auto'}\n\n`;
               }
 
-              // Expression results
               markdown += `**Expression Results:**\n\n`;
               markdown += `| Expression | Valid | Value/Error |\n`;
               markdown += `|---|---|---|\n`;
@@ -572,17 +538,15 @@ export function createBreakpointTools(
               });
               markdown += `\n`;
 
-              // Available variables
               if (availableVariables.length > 0) {
                 markdown += `**Available Variables:** ${availableVariables.map(v => `\`${v}\``).join(', ')}\n\n`;
               }
 
-              // Code context
               if (codeContext) {
                 markdown += `**Code Context:**\n\`\`\`javascript\n${codeContext}\n\`\`\`\n\n`;
               }
 
-              // If validation failed, search for better locations
+              // Nearby lines where more of the expressions evaluate.
               if (!allValid) {
                 try {
                   const suggestions = await targetCdpManager.findBestLogpointLocation(
@@ -632,7 +596,6 @@ export function createBreakpointTools(
             const includeVariables = args.includeVariables || false;
             const maxExecutions = args.maxExecutions || 20;
 
-            // Resolve source maps for TypeScript files
             const resolved = await resolveBreakpointLocation(
               args.url, args.lineNumber, args.columnNumber,
               targetCdpManager, sourceMapHandler
@@ -641,7 +604,6 @@ export function createBreakpointTools(
             const targetLine = resolved.line;
             const targetColumn = resolved.column;
 
-            // Parse logMessage to extract expressions in {}
             const expressionMatches = args.logMessage.matchAll(/\{([^}]+)\}/g);
             const expressions: string[] = [];
             for (const match of expressionMatches) {
@@ -724,14 +686,13 @@ export function createBreakpointTools(
               }
             })()`;
 
-            // Counting/capping happens in a guard evaluated before the real
-            // console.log call, so we stop logging once maxExecutions is hit
-            // instead of spamming the console forever. The Node-side
-            // LogpointExecutionTracker (see logpoint-execution-tracker.ts) still
-            // detects the maxExecutions-th message and pauses the debuggee as a
-            // safety net - this condition itself never returns true anymore,
-            // since its overall value must stay falsy to match the native
-            // never-pause logpoint semantics above.
+            // The count and cap sit in a guard before the console.log call, so
+            // logging stops at maxExecutions. The condition's value is always
+            // falsy - console.log returns undefined - so the breakpoint never
+            // pauses, matching native logpoints. The pause at the limit comes
+            // from LogpointExecutionTracker (logpoint-execution-tracker.ts),
+            // which counts the logged messages and pauses this connection at
+            // the maxExecutions-th.
             let logExpression = `(function() {
               if (typeof globalThis.__llmCdpLogpointCounters === 'undefined') {
                 globalThis.__llmCdpLogpointCounters = {};
@@ -743,13 +704,12 @@ export function createBreakpointTools(
 
 //# sourceURL=debugger://logpoint`;
 
-            // If a user condition is provided, only log/count when it's true
+            // A caller's condition gates both the count and the log.
             if (args.condition) {
               logExpression = `(${args.condition}) && ${logExpression}`;
             }
 
-            // Use targetCdpManager.setBreakpoint to ensure proper state management
-            // This ensures state.breakpoints Map is updated immediately
+            // Through the manager's setBreakpoint, which records it in its breakpoint list.
             let breakpoint: any;
             try {
               breakpoint = await targetCdpManager.setBreakpoint(
@@ -780,26 +740,20 @@ export function createBreakpointTools(
               };
             }
 
-            // Mark as logpoint in the breakpoint info (state is already updated by setBreakpoint)
             breakpoint.isLogpoint = true;
 
-            // AUTOMATIC LINE/COLUMN MAPPING VALIDATION
-            // Get actual location from CDP (0-based)
+            // CDP may place it on a nearby line; the expressions are checked there. CDP is 0-based.
             const actualCdpLine = breakpoint.location.lineNumber;
             const actualCdpColumn = breakpoint.location.columnNumber;
 
-            // Convert to 1-based for comparison with user input
             const actualLineUser = actualCdpLine + 1;
             const actualColumnUser = actualCdpColumn !== undefined ? actualCdpColumn + 1 : undefined;
 
-            // Check if location differs from what user requested
             const lineDiffers = actualLineUser !== targetLine;
             const columnDiffers = targetColumn !== undefined && actualColumnUser !== targetColumn;
             const locationDiffers = lineDiffers || columnDiffers;
 
-            // If location differs AND we have expressions to validate
             if (locationDiffers && expressions.length > 0) {
-              // Validate expressions at actual location
               const validation = await targetCdpManager.validateLogpointAtActualLocation(
                 targetUrl,
                 actualLineUser,  // 1-based
@@ -808,10 +762,8 @@ export function createBreakpointTools(
                 2000  // 2 second timeout
               );
 
-              // If validation failed (expressions not valid at actual location)
+              // A logpoint whose expressions fail where it landed is removed rather than kept logging errors.
               if (!validation.allValid) {
-                // Remove the breakpoint - don't keep a broken logpoint
-                // Unregister from tracker first
                 if (logpointTracker) {
                   logpointTracker.unregisterLogpoint(targetCdpManager, breakpoint.breakpointId);
                 }
@@ -819,11 +771,10 @@ export function createBreakpointTools(
                 try {
                   await targetCdpManager.removeBreakpoint(breakpoint.breakpointId);
                 } catch (removeError: any) {
-                  // Log but continue - state might already be cleaned up
+                  // It may already be gone; the error below is reported either way.
                   console.error(`[devharness] Warning: Failed to remove invalid logpoint: ${removeError.message}`);
                 }
 
-                // Get code snippet at actual location (3 lines context)
                 let codeContext = '';
                 try {
                   const sourceCode = await targetCdpManager.getSourceCode(
@@ -836,7 +787,6 @@ export function createBreakpointTools(
                   codeContext = '(Could not fetch source code)';
                 }
 
-                // Search for better locations
                 let suggestions: any[] = [];
                 try {
                   suggestions = await targetCdpManager.findBestLogpointLocation(
@@ -848,15 +798,13 @@ export function createBreakpointTools(
                     1000  // 1 second timeout per candidate
                   );
                 } catch (e) {
-                  // If search fails, provide a simple suggestion
                   suggestions = [{
                     line: actualLineUser - 1,
                     reason: 'Try the line before where variables might be in scope',
-                    note: 'Use validateLogpoint first to test expressions'
+                    note: "Test expressions first with breakpoint({ action: 'validate' })"
                   }];
                 }
 
-                // Return detailed error response
                 let errorMarkdown = `## Logpoint Validation Failed\n\n`;
                 errorMarkdown += `**Error:** Logpoint expressions failed validation at actual CDP location\n\n`;
 
@@ -888,10 +836,10 @@ export function createBreakpointTools(
                   if (suggestions[0].score === 100) {
                     errorMarkdown += `**Recommendation:** Set logpoint at line ${suggestions[0].line}:${suggestions[0].column || 'auto'} instead where all expressions are in scope.`;
                   } else {
-                    errorMarkdown += `**Recommendation:** Variables not in scope at actual location ${actualLineUser}:${actualColumnUser || 'auto'}. Try using validateLogpoint to find a better location.`;
+                    errorMarkdown += `**Recommendation:** Variables not in scope at actual location ${actualLineUser}:${actualColumnUser || 'auto'}. Try \`breakpoint({ action: 'validate'${on} })\` to find a better location.`;
                   }
                 } else {
-                  errorMarkdown += `**Recommendation:** Variables not in scope at actual location ${actualLineUser}:${actualColumnUser || 'auto'}. Try using validateLogpoint to find a better location.`;
+                  errorMarkdown += `**Recommendation:** Variables not in scope at actual location ${actualLineUser}:${actualColumnUser || 'auto'}. Try \`breakpoint({ action: 'validate'${on} })\` to find a better location.`;
                 }
 
                 return {
@@ -903,10 +851,8 @@ export function createBreakpointTools(
                 };
               }
 
-              // Validation passed but location differs - will show warning in success response below
             }
 
-            // Register with logpoint execution tracker
             if (logpointTracker) {
               logpointTracker.registerLogpoint(
                 targetCdpManager,
@@ -918,17 +864,14 @@ export function createBreakpointTools(
               );
             }
 
-            // Inject console notification at resolved location
             await targetCdpManager.injectConsoleLink(targetUrl, actualLineUser, '📝 Logpoint set at');
 
-            // Parse expressions to include in the response
             const expressionMatchesForResponse = args.logMessage.matchAll(/\{([^}]+)\}/g);
             const expressionsForResponse: string[] = [];
             for (const match of expressionMatchesForResponse) {
               expressionsForResponse.push(match[1]);
             }
 
-            // Build markdown success response
             let markdown = `## Logpoint Set Successfully\n\n`;
             markdown += `**Breakpoint ID:** \`${breakpoint.breakpointId}\`\n`;
             markdown += `**Location:** \`${targetUrl}:${actualLineUser}${actualColumnUser ? `:${actualColumnUser}` : ''}\`\n`;
@@ -944,7 +887,6 @@ export function createBreakpointTools(
 
             markdown += `**Max Executions:** ${maxExecutions}\n\n`;
 
-            // If location differs, add warning and validation info
             if (locationDiffers && expressions.length > 0) {
               markdown += `**⚠️ Warning:** Logpoint was set at line ${actualLineUser}:${actualColumnUser || 'auto'} (not ${args.lineNumber}:${args.columnNumber || 'auto'}) due to V8 line mapping. All expressions validated successfully at this location.\n\n`;
             } else if (locationDiffers) {
@@ -955,7 +897,7 @@ export function createBreakpointTools(
 
             if (expressionsForResponse.length > 0) {
               markdown += `\n\n**TIP:** Each expression is wrapped in try-catch. If an expression fails, it will show \`[Error: message]\` in the log.`;
-              markdown += `\nTo see logpoint errors, use: \`console({ action: 'search', pattern: "Logpoint Error" })\``;
+              markdown += `\nTo see logpoint errors, use: \`console({ action: 'search', pattern: "Logpoint Error"${on} })\``;
             }
 
             return {
@@ -975,20 +917,18 @@ export function createBreakpointTools(
 
             const timeout = args.timeout || 10000;
 
-            // Check connection
             if (!targetCdpManager.isConnected()) {
               return createErrorResponse('DEBUGGER_NOT_CONNECTED');
             }
 
             try {
-              // First check if script is already loaded
               const existingScript = targetCdpManager.findLoadedScript(args.url);
               if (existingScript) {
                 let markdown = `## Script Already Loaded\n\n`;
                 markdown += `**Pattern:** \`${args.url}\`\n`;
                 markdown += `**Matched URL:** \`${existingScript}\`\n`;
                 markdown += `**Status:** ✓ Script is already loaded\n\n`;
-                markdown += `**Next Step:** You can now set breakpoints on this script using \`breakpoint({ action: 'set', url: '${existingScript}', lineNumber: <line> })\``;
+                markdown += `**Next Step:** You can now set breakpoints on this script using \`breakpoint({ action: 'set', url: '${existingScript}', lineNumber: <line>${on} })\``;
 
                 return {
                   content: [{
@@ -998,14 +938,13 @@ export function createBreakpointTools(
                 };
               }
 
-              // Script not loaded, wait for it
               const matchedUrl = await targetCdpManager.waitForScript(args.url, timeout);
 
               let markdown = `## Script Loaded\n\n`;
               markdown += `**Pattern:** \`${args.url}\`\n`;
               markdown += `**Matched URL:** \`${matchedUrl}\`\n`;
               markdown += `**Status:** ✓ Script loaded successfully\n\n`;
-              markdown += `**Next Step:** You can now set breakpoints on this script using \`breakpoint({ action: 'set', url: '${matchedUrl}', lineNumber: <line> })\``;
+              markdown += `**Next Step:** You can now set breakpoints on this script using \`breakpoint({ action: 'set', url: '${matchedUrl}', lineNumber: <line>${on} })\``;
 
               return {
                 content: [{
@@ -1014,13 +953,12 @@ export function createBreakpointTools(
                 }],
               };
             } catch (error: any) {
-              // Timeout or other error
               let markdown = `## Script Wait Timeout\n\n`;
               markdown += `**Pattern:** \`${args.url}\`\n`;
               markdown += `**Timeout:** ${timeout}ms\n`;
               markdown += `**Error:** ${error.message}\n\n`;
 
-              // List some loaded scripts as hints
+              // The loaded URLs show what the pattern could have matched.
               const loadedScripts = targetCdpManager.getLoadedScripts();
               if (loadedScripts.length > 0) {
                 markdown += `**Currently Loaded Scripts (first 10):**\n`;
@@ -1035,7 +973,7 @@ export function createBreakpointTools(
 
               markdown += `**Suggestions:**\n`;
               markdown += `- Check that the URL pattern is correct\n`;
-              markdown += `- Use \`navigate({ action: 'goto' })\` to load the page containing the script\n`;
+              markdown += `- Use \`navigate({ action: 'goto'${on} })\` to load the page containing the script\n`;
               markdown += `- Increase the timeout if the script loads slowly`;
 
               return {
@@ -1056,19 +994,15 @@ export function createBreakpointTools(
               return createErrorResponse('INVALID_PARAMS', { message: 'domBreakpointType is required for setDOMBreakpoint action' });
             }
 
-            // Check connection
             if (!targetCdpManager.isConnected()) {
               return createErrorResponse('DEBUGGER_NOT_CONNECTED');
             }
 
             try {
-              // Resolve selector to nodeId
               const nodeId = await targetCdpManager.resolveSelector(args.selector);
 
-              // Set the DOM breakpoint
               const breakpoint = await targetCdpManager.setDOMBreakpoint(nodeId, args.domBreakpointType, args.selector);
 
-              // Build success response
               let markdown = `## DOM Breakpoint Set\n\n`;
               markdown += `**Breakpoint ID:** \`${breakpoint.breakpointId}\`\n`;
               markdown += `**Selector:** \`${args.selector}\`\n`;
@@ -1116,7 +1050,6 @@ export function createBreakpointTools(
               return createErrorResponse('INVALID_PARAMS', { message: 'eventName is required for setEventBreakpoint action' });
             }
 
-            // Check connection
             if (!targetCdpManager.isConnected()) {
               return createErrorResponse('DEBUGGER_NOT_CONNECTED');
             }
@@ -1124,7 +1057,6 @@ export function createBreakpointTools(
             try {
               const breakpoint = await targetCdpManager.setEventListenerBreakpoint(args.eventName, args.targetName);
 
-              // Build success response
               let markdown = `## Event Listener Breakpoint Set\n\n`;
               markdown += `**Breakpoint ID:** \`${breakpoint.breakpointId}\`\n`;
               markdown += `**Event:** \`${args.eventName}\`\n`;
@@ -1158,7 +1090,6 @@ export function createBreakpointTools(
               return createErrorResponse('INVALID_PARAMS', { message: 'urlPattern is required for setXHRBreakpoint action' });
             }
 
-            // Check connection
             if (!targetCdpManager.isConnected()) {
               return createErrorResponse('DEBUGGER_NOT_CONNECTED');
             }
@@ -1166,7 +1097,6 @@ export function createBreakpointTools(
             try {
               const breakpoint = await targetCdpManager.setXHRBreakpoint(args.urlPattern);
 
-              // Build success response
               let markdown = `## XHR/Fetch Breakpoint Set\n\n`;
               markdown += `**Breakpoint ID:** \`${breakpoint.breakpointId}\`\n`;
               markdown += `**URL Pattern:** \`${args.urlPattern}\`\n\n`;
@@ -1194,7 +1124,7 @@ export function createBreakpointTools(
           }
 
           case 'await': {
-            // Wait for any breakpoint to be hit, or set one first if url/lineNumber provided
+            // Waits for any pause, after setting a one-shot breakpoint when url and lineNumber are given.
             if (!targetCdpManager.isConnected()) {
               return createErrorResponse('DEBUGGER_NOT_CONNECTED');
             }
@@ -1204,7 +1134,7 @@ export function createBreakpointTools(
             // never resolve and this would block until pause/timeout.)
             throwIfAborted(abortSignal);
 
-            // Track if we created a breakpoint (for cleanup on abort/timeout)
+            // A breakpoint set here is removed on a hit or a cancel; on a timeout it stays, and the reply names it.
             let createdBreakpoint: { breakpointId: string; url: string; line: number; column?: number } | null = null;
 
             const timeout = args.timeout || 300000; // Default 5 minutes
@@ -1235,7 +1165,6 @@ export function createBreakpointTools(
             try {
               // If url and lineNumber provided, set a breakpoint (after listener is registered)
               if (args.url && args.lineNumber !== undefined) {
-                // Resolve source maps for TypeScript files
                 const resolved = await resolveBreakpointLocation(
                   args.url, args.lineNumber, args.columnNumber,
                   targetCdpManager, sourceMapHandler
@@ -1281,12 +1210,9 @@ export function createBreakpointTools(
                     }
                   }
 
-                  // THROW, don't return (#110): this used to resolve a
-                  // success-SHAPED response (no isError), so a cancelled
-                  // `breakpoint.await` step was recorded `success: true` - a
-                  // cancelled step reported as passed. Throwing abort-shaped is
-                  // the same contract every other cancellable handler uses, and
-                  // the replay executor classifies it as
+                  // Thrown abort-shaped, as every cancellable handler does (#110):
+                  // a returned response has no isError, so a cancelled step would
+                  // be recorded as passed. The replay executor reports this as
                   // "Replay aborted by user".
                   throw abortErrorFor(abortSignal!);
                 }
@@ -1296,7 +1222,7 @@ export function createBreakpointTools(
                   timeoutMsg += `No breakpoint was hit within ${timeout / 1000} seconds.\n\n`;
                   if (createdBreakpoint) {
                     timeoutMsg += `**Note:** The breakpoint at \`${createdBreakpoint.url}:${createdBreakpoint.line}\` is still active.\n`;
-                    timeoutMsg += `Use \`breakpoint({ action: 'remove', breakpointId: '${createdBreakpoint.breakpointId}' })\` to remove it.`;
+                    timeoutMsg += `Use \`breakpoint({ action: 'remove', breakpointId: '${createdBreakpoint.breakpointId}'${on} })\` to remove it.`;
                   }
 
                   return {
@@ -1308,10 +1234,9 @@ export function createBreakpointTools(
                   };
                 }
 
-                // Paused - get call stack info
                 const pauseInfo = targetCdpManager.getPausedInfo();
 
-                // If we created a breakpoint, remove it so it doesn't hit again on resume
+                // One-shot: removed so it does not pause again after resume.
                 if (createdBreakpoint) {
                   try {
                     await targetCdpManager.removeBreakpoint(createdBreakpoint.breakpointId);
@@ -1350,9 +1275,8 @@ export function createBreakpointTools(
                   }],
                 };
               } catch (error: any) {
-                // The universal trap: this broad catch would otherwise swallow
-                // the abort thrown just above and report it as an await
-                // *failure*. A cancellation is not a failure of this tool.
+                // Without this, the catch reports the abort thrown above as an
+                // await failure; a cancellation is not one.
                 if (isAbortError(error)) throw error;
                 return {
                   content: [{

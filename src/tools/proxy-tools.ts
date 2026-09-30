@@ -41,7 +41,7 @@ const proxySchema = z.object({
   action: z.enum(['status', 'events', 'sockets', 'body', 'answer', 'answerFrame', 'withdraw', 'answers', 'refuse'])
     .describe('status (is a proxy running for this browser), events (what crossed the boundary, newest last), sockets (what each socket did, and whether arrival names a cause on it), body (one event\'s kept payload), answer (answer a URL with a value instead of reaching the server), answerFrame (replace or drop a socket message), withdraw (remove an answer), answers (what is answered), refuse (answer every unmatched write with 403, or forward it). Stopping traffic in time is the hold tool'),
   connectionReason: z.string()
-    .describe('The browser, as named at launchChrome({ proxy: true })'),
+    .describe("The browser, by the name connection({ action: 'launch', proxy: true }) gave it"),
   since: z.number().optional().describe('events: epoch ms, at or after'),
   until: z.number().optional().describe('events: epoch ms, before'),
   id: z.string().optional().describe('body: the event id. withdraw: the answer id'),
@@ -65,7 +65,7 @@ export function createProxyTools() {
         const proxy = getProxy(args.connectionReason);
         if (!proxy) {
           return createErrorResponse('CONNECTION_NOT_FOUND', {
-            message: `No proxy for "${args.connectionReason}". Launch with launchChrome({ proxy: true }). Running: ${listProxies().join(', ') || 'none'}`,
+            message: `No proxy for "${args.connectionReason}". Launch with connection({ action: 'launch', proxy: true }). Running: ${listProxies().join(', ') || 'none'}`,
           });
         }
 

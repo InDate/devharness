@@ -132,7 +132,7 @@ export function formatPageContextForResponse(context: PageContext): Record<strin
 // Consolidated schema for page navigation tools
 const navigateSchema = z.object({
   action: z.enum(['goto', 'reload', 'back', 'forward', 'info']).describe('Page navigation action: goto (navigate to URL), reload (reload page), back (go back), forward (go forward), info (get page info)'),
-  connectionReason: z.string().describe('Connection reference (use the reference from launchChrome output, e.g., "unnamed-connection-default" or your renamed tab)'),
+  connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it (e.g. "unnamed-connection-default")'),
   // Parameters for goto action
   url: z.string().optional().describe('URL to navigate to (required for goto action)'),
   waitUntil: z.enum(['load', 'domcontentloaded', 'networkidle0', 'networkidle2']).optional().describe('When to consider navigation complete (for goto and reload actions, default: load)'),
@@ -205,7 +205,7 @@ export function createPageTools(
 
         if (!resolved) {
           return createErrorResponse('CONNECTION_NOT_FOUND', {
-            message: 'No Chrome browser available. Use `launchChrome` first to start a browser.'
+            message: 'No Chrome browser available. Start one with `connection` action `launch`.'
           });
         }
 

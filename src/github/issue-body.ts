@@ -11,6 +11,7 @@
  */
 
 import { z } from 'zod';
+import { translateSequence } from '../tools/legacy-steps.js';
 
 export const SEQUENCE_FENCE_INFO = 'json devharness-sequence';
 const SEQUENCE_TAG = 'devharness-sequence';
@@ -195,7 +196,9 @@ export function parseRemoteSequence(json: string): ParseRemoteSequenceResult {
     return { ok: false, reason: `${path}: ${issue.message}` };
   }
 
-  return { ok: true, sequence: parsed.data };
+  // Before the audit and the known-tools check read it, so an old tool name
+  // reads as the tool that replaced it.
+  return { ok: true, sequence: translateSequence(parsed.data) };
 }
 
 export interface SequenceAudit {

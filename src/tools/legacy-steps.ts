@@ -1,0 +1,96 @@
+/**
+ * Calls written against tools the merge into `connection` and `browser`
+ * removed, rewritten into the calls that replace them.
+ *
+ * Saved sequences, sequences pulled from GitHub, `history.log` and direct
+ * callers (the CLI, the bench, internal code) still carry the old names. Each
+ * is rewritten where it enters: when a sequence file or pulled sequence is
+ * read, when a history line is read, and in `executeToolCall` before the call
+ * is validated and recorded, so history holds the new form. `listTools` lists
+ * the new names only.
+ */
+
+interface Call {
+  tool: string;
+  params: Record<string, any>;
+}
+
+type Rewrite = (params: Record<string, any>) => Call;
+
+/** Drops the listed keys and sets the rest, leaving undefined values out. */
+function withParams(base: Record<string, any>, drop: string[], set: Record<string, any>): Record<string, any> {
+  const out: Record<string, any> = {};
+  for (const [key, value] of Object.entries(base)) {
+    if (!drop.includes(key)) out[key] = value;
+  }
+  for (const [key, value] of Object.entries(set)) {
+    if (value !== undefined) out[key] = value;
+  }
+  return out;
+}
+
+const REWRITES: Record<string, Rewrite> = {
+  launchChrome: p => ({ tool: 'connection', params: withParams(p, ['reference'], { action: 'launch', name: p.reference }) }),
+  connectDebugger: p => ({ tool: 'connection', params: withParams(p, ['reference'], { action: 'attach', name: p.reference }) }),
+  disconnectDebugger: p => ({ tool: 'connection', params: withParams(p, ['reference'], { action: 'close', connectionReason: p.reference }) }),
+  switchConnection: p => ({ tool: 'connection', params: withParams(p, ['reference'], { action: 'switch', connectionReason: p.reference }) }),
+  listConnections: p => ({ tool: 'connection', params: withParams(p, [], { action: 'list' }) }),
+  getDebuggerStatus: p => ({ tool: 'connection', params: withParams(p, ['reference'], { action: 'status', connectionReason: p.reference }) }),
+  getChromeStatus: p => ({ tool: 'connection', params: withParams(p, [], { action: 'browsers' }) }),
+  killChrome: p => ({ tool: 'browser', params: withParams(p, [], { action: 'kill' }) }),
+  resetChromeLauncher: p => ({ tool: 'browser', params: withParams(p, [], { action: 'resetLauncher' }) }),
+  tab: p => {
+    switch (p.action) {
+      case 'create':
+        return { tool: 'connection', params: withParams(p, ['action', 'reference'], { action: 'launch', name: p.reference }) };
+      case 'rename':
+        return { tool: 'connection', params: withParams(p, ['action', 'reference', 'newReference'], { action: 'rename', connectionReason: p.reference, name: p.newReference }) };
+      case 'switch':
+        return { tool: 'connection', params: withParams(p, ['action', 'reference'], { action: 'switch', connectionReason: p.reference }) };
+      case 'close':
+        return { tool: 'connection', params: withParams(p, ['action', 'reference'], { action: 'close', connectionReason: p.reference, reason: p.reason ?? 'closed with tab close' }) };
+      default:
+        return { tool: 'connection', params: withParams(p, ['action'], { action: 'list' }) };
+    }
+  },
+};
+
+/** What an old tool name became, for the error an MCP call to it returns. */
+const REPLACEMENTS: Record<string, string> = {
+  launchChrome: "connection with action: 'launch' (reference is now name)",
+  connectDebugger: "connection with action: 'attach' (reference is now name)",
+  disconnectDebugger: "connection with action: 'close' (reference is now connectionReason)",
+  switchConnection: "connection with action: 'switch' (reference is now connectionReason)",
+  listConnections: "connection with action: 'list'",
+  getDebuggerStatus: "connection with action: 'status' (reference is now connectionReason)",
+  getChromeStatus: "connection with action: 'browsers'",
+  killChrome: "browser with action: 'kill'",
+  resetChromeLauncher: "browser with action: 'resetLauncher'",
+  tab: "connection: list, switch, rename and close; a new tab is connection launch with port",
+};
+
+/** The call an old one became, or the call unchanged when its tool still exists. */
+export function translateCall(tool: string, params: Record<string, any> | undefined): Call {
+  const rewrite = REWRITES[tool];
+  return rewrite ? rewrite(params ?? {}) : { tool, params: params ?? {} };
+}
+
+/** What replaced an old tool name, or undefined for a name that was never replaced. */
+export function replacementFor(tool: string): string | undefined {
+  return REPLACEMENTS[tool];
+}
+
+/** A sequence's steps and teardown rewritten step by step; everything else kept. */
+export function translateSequence<T extends { commands?: Array<{ tool: string; params?: Record<string, any> }>; teardown?: Array<{ tool: string; params?: Record<string, any> }> }>(sequence: T): T {
+  const translateSteps = (steps: Array<{ tool: string; params?: Record<string, any> }>) =>
+    steps.map(step => {
+      if (!REWRITES[step.tool]) return step;
+      const { tool, params } = translateCall(step.tool, step.params);
+      return { ...step, tool, params };
+    });
+  return {
+    ...sequence,
+    ...(sequence.commands ? { commands: translateSteps(sequence.commands) } : {}),
+    ...(sequence.teardown ? { teardown: translateSteps(sequence.teardown) } : {}),
+  };
+}

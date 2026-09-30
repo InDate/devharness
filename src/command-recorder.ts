@@ -18,6 +18,7 @@ import { mergeActivity, readActivity, splitActivity, writeActivity } from './seq
 import { getIssueSequencesDir, getIssuesBySequenceFile } from './issue-tracker.js';
 import { captureVariable } from './tools/replay-executor.js';
 import { asCheckStep } from './tools/check-tools.js';
+import { translateSequence } from './tools/legacy-steps.js';
 import type { Annotation, StepTraffic } from './annotation.js';
 import { substituteCapturedValues, type CaptureEntry } from './tools/interpolation-reverse.js';
 import type { CallChannel } from './call-origin.js';
@@ -178,7 +179,7 @@ export interface CommandSequence {
     url?: string;
     /**
      * Named persistent Chrome profile to bring this reference up on, e.g.
-     * 'device-a' (see launchChrome({ profile })). The profile is the durable
+     * 'device-a' (see connection launch's `profile`). The profile is the durable
      * identity - its cookies, localStorage and IndexedDB survive between runs,
      * so a device enrolled once stays enrolled - while the reference is only a
      * name for this session. Declaring the pair is what lets a saved sequence
@@ -532,19 +533,16 @@ export class CommandRecorder {
     //
     // Sanitized so a recorded reference always matches the stored connection
     // reference ("Duo Owner Console" -> "duo-owner-console"), which is what
-    // connection lookup and the launchChrome `reference` below use.
+    // connection lookup and a launch's `name` below use.
     if (typeof paramsClone.connectionReason === 'string') {
       paramsClone.connectionReason = sanitizeReference(paramsClone.connectionReason);
     }
 
-    // Sanitize 'reference' param for tools that create connections
-    // This ensures recorded sequences use the same reference format as the actual connection
-    if (paramsClone.reference && ['launchChrome', 'connectDebugger'].includes(tool)) {
-      paramsClone.reference = sanitizeReference(paramsClone.reference);
-    }
-    // Sanitize 'newReference' for tab rename operations
-    if (paramsClone.newReference && tool === 'tab' && paramsClone.action === 'rename') {
-      paramsClone.newReference = sanitizeReference(paramsClone.newReference);
+    // A name a connection is created or renamed to is stored sanitized, as the
+    // connection itself stores it, so a replay addresses the same connection.
+    if (typeof paramsClone.name === 'string' && tool === 'connection'
+        && ['launch', 'attach', 'rename'].includes(paramsClone.action)) {
+      paramsClone.name = sanitizeReference(paramsClone.name);
     }
 
     const command: HistoryCommand = {
@@ -964,8 +962,9 @@ export class CommandRecorder {
   private async parseSequenceFile(filepath: string): Promise<CommandSequence> {
     const content = await fs.readFile(filepath, 'utf-8');
     // What the app did is kept in its own file; read back in here, so every
-    // reader of a sequence has its traffic and responses with it.
-    return mergeActivity(JSON.parse(content) as CommandSequence, await readActivity(filepath));
+    // reader of a sequence has its traffic and responses with it. Steps written
+    // against removed tools are rewritten here, the one place a file is read.
+    return mergeActivity(translateSequence(JSON.parse(content) as CommandSequence), await readActivity(filepath));
   }
 
   /**

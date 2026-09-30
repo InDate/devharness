@@ -85,7 +85,7 @@ export async function startProxyFor(reference: string, appUrl?: string): Promise
   if (appUrl) {
     try { proxy.allowOnly([new URL(appUrl).host]); } catch { /* not a URL to scope by */ }
   }
-  // launchChrome creates its proxy while it runs, after the cursor was set for
+  // A launch creates its proxy while it runs, after the cursor was set for
   // it, so without this the page load that launch causes carries no command.
   if (current) proxy.mark(current);
   proxies.set(reference, proxy);

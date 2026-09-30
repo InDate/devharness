@@ -10,7 +10,7 @@ import { createReplayTools, findUnknownStepTools } from './replay-tools.js';
 import { CommandRecorder } from '../command-recorder.js';
 import type { CommandSequence, RecordedCommand } from '../command-recorder.js';
 
-const KNOWN_TOOLS = ['navigate', 'inspect', 'input', 'screenshot', 'launchChrome'];
+const KNOWN_TOOLS = ['navigate', 'inspect', 'input', 'screenshot', 'connection'];
 
 const seq = (commands: RecordedCommand[], name = 'hand-authored'): CommandSequence => ({
   id: 'seq-1',

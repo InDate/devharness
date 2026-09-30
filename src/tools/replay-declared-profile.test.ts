@@ -59,7 +59,7 @@ const run = (replay: any, extra: Record<string, any> = {}) =>
   } as any);
 
 const launches = (calls: Array<{ tool: string; params: Record<string, any> }>) =>
-  calls.filter(c => c.tool === 'launchChrome').map(c => c.params);
+  calls.filter(c => c.tool === 'connection' && c.params.action === 'launch').map(c => c.params);
 
 const text = (res: any) => res.content[0].text as string;
 
@@ -72,7 +72,7 @@ describe('a declared connection with a profile', () => {
     await run(replay);
 
     expect(launches(calls)).toContainEqual(expect.objectContaining({
-      reference: 'device-a',
+      name: 'device-a',
       profile: 'device-a',
     }));
   });
@@ -85,7 +85,7 @@ describe('a declared connection with a profile', () => {
     await run(replay);
 
     expect(launches(calls)).toContainEqual(expect.objectContaining({
-      reference: 'device-a',
+      name: 'device-a',
       forceNewInstance: false,
     }));
   });
@@ -98,7 +98,7 @@ describe('a declared connection with a profile', () => {
     await run(replay);
 
     expect(launches(calls)).toContainEqual(expect.objectContaining({
-      reference: 'device-a',
+      name: 'device-a',
       forceNewInstance: true,
     }));
   });
@@ -109,7 +109,7 @@ describe('a declared connection with a profile', () => {
     await run(replay);
 
     expect(launches(calls)).toContainEqual(expect.objectContaining({
-      reference: 'plain-b',
+      name: 'plain-b',
       forceNewInstance: true,
     }));
     expect(launches(calls).every(p => p.profile === undefined)).toBe(true);
@@ -155,6 +155,6 @@ describe('declarations that cannot mean what they say', () => {
     await run(replay, { connections: { 'plain-b': 'my-second-browser' } });
 
     // Rebound onto a browser the caller supplied: nothing to launch for it.
-    expect(launches(calls).some(p => p.reference === 'plain-b')).toBe(false);
+    expect(launches(calls).some(p => p.name === 'plain-b')).toBe(false);
   });
 });

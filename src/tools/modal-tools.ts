@@ -16,14 +16,14 @@ import { createTool } from '../validation-helpers.js';
 
 // Zod schemas for input validation
 const detectModalsSchema = z.object({
-  connectionReason: z.string().describe('Connection reference (use the reference from launchChrome output, e.g., "unnamed-connection-default" or your renamed tab)'),
+  connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it (e.g. "unnamed-connection-default")'),
   minZIndex: z.number().optional().describe('Min z-index to consider'),
   minViewportCoverage: z.number().optional().describe('Min viewport coverage (0-1, default: 0.25)'),
   includeBackdrops: z.boolean().optional().describe('Include backdrop/overlay elements'),
 }).strict();
 
 const dismissModalSchema = z.object({
-  connectionReason: z.string().describe('Connection reference (use the reference from launchChrome output, e.g., "unnamed-connection-default" or your renamed tab)'),
+  connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it (e.g. "unnamed-connection-default")'),
   selector: z.string().optional().describe('CSS selector of the modal to dismiss'),
   index: z.number().optional().describe('Modal index (1-based)'),
   strategy: z.enum(['accept', 'reject', 'close', 'remove', 'auto']).default('auto').describe('Dismissal strategy: accept (click accept/agree), reject (click reject/decline), close (click close/X), remove (remove from DOM), auto (smart selection based on modal type)'),
@@ -65,7 +65,7 @@ async function detectModalsImpl(
   try {
     const resolved = await resolveConnectionFromReason(connectionReason);
     if (!resolved || !resolved.puppeteerManager) {
-      return formatToolError('connection_not_found', 'No Chrome browser available. Use `launchChrome` first to start a browser.');
+      return formatToolError('connection_not_found', 'No Chrome browser available. Start one with `connection` action `launch`.');
     }
     const page = resolved.puppeteerManager.getPage();
     const cdpManager = resolved.cdpManager;
@@ -159,7 +159,7 @@ async function dismissModalImpl(
     // come from the puppeteerManager (same as detectModals does).
     const resolved = await resolveConnectionFromReason(connectionReason);
     if (!resolved || !resolved.puppeteerManager) {
-      return formatToolError('connection_not_found', 'No Chrome browser available. Use `launchChrome` first to start a browser.');
+      return formatToolError('connection_not_found', 'No Chrome browser available. Start one with `connection` action `launch`.');
     }
     const page = resolved.puppeteerManager.getPage();
     const cdpManager = resolved.cdpManager;

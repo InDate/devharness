@@ -1,9 +1,9 @@
 /**
- * Regression tests for bug-005: launchChrome silently discarded an explicit
+ * Regression tests for bug-005: a Chrome launch silently discarded an explicit
  * `port` when `forceNewInstance` was set, and skipped the reference-reuse
  * check so two Chrome instances could share one reference.
  *
- * The handler lives in src/index.ts, which calls main() on import and so can
+ * The handler lived in src/index.ts, which calls main() on import and so can
  * never be imported by a unit test. These tests used to work around that by
  * grepping the handler SOURCE for fragments like `'if (explicitPort !== undefined)'`
  * - which asserted nothing about behaviour and would have passed under any

@@ -44,7 +44,7 @@ beforeEach(async () => {
     recorder,
     vi.fn(productionShaped(async (tool: string, params: Record<string, any>) => {
       if (tool === 'navigate' && params.action === 'goto') gotoUrls.push(String(params.url));
-      if (tool === 'killChrome') killCalls++;
+      if (tool === 'browser' && params.action === 'kill') killCalls++;
       return { content: [{ type: 'text', text: '' }] };
     })) as any,
     async () => null,          // no page -> no cursor/overlay injection

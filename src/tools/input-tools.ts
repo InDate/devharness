@@ -189,7 +189,7 @@ export function createInputTools(
         const resolved = await resolveConnectionFromReason(connectionReason);
         if (!resolved) {
           return createErrorResponse('CONNECTION_NOT_FOUND', {
-            message: 'No Chrome browser available. Use `launchChrome` first to start a browser.'
+            message: 'No Chrome browser available. Start one with `connection` action `launch`.'
           });
         }
 

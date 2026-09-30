@@ -44,11 +44,11 @@ function makeReplay(commands: RecordedCommand[]) {
   const calls: Array<{ tool: string; params: Record<string, any> }> = [];
   const executeToolCall = vi.fn(productionShaped(async (tool: string, params: Record<string, any>) => {
     calls.push({ tool, params });
-    if (tool === 'listConnections') {
+    if (tool === 'connection' && params.action === 'list') {
       return {
         content: [{ type: 'text', text: 'Active debugger connections' }],
         _meta: {
-          tool: 'listConnections', timestamp: 0,
+          tool: 'connection', action: 'list', timestamp: 0,
           connections: Object.entries(PORTS).map(([reference, port]) => ({
             reference, port, type: 'chrome', host: 'localhost', active: false, connected: true, paused: false,
           })),
@@ -69,7 +69,7 @@ function makeReplay(commands: RecordedCommand[]) {
 }
 
 const killedPorts = (calls: Array<{ tool: string; params: Record<string, any> }>) =>
-  calls.filter(c => c.tool === 'killChrome').map(c => c.params.port);
+  calls.filter(c => c.tool === 'browser' && c.params.action === 'kill').map(c => c.params.port);
 
 const twoSteps = [
   { tool: 'dom', params: { action: 'querySelector', selector: '#a' } },
@@ -86,7 +86,7 @@ describe('declared browsers', () => {
     } as any);
 
     expect(paused.content[0].text).toMatch(/paus/i);
-    expect(calls.some(c => c.tool === 'launchChrome' && c.params.reference === 'declared-b')).toBe(true);
+    expect(calls.some(c => c.tool === 'connection' && c.params.action === 'launch' && c.params.name === 'declared-b')).toBe(true);
     // A pause keeps them: that is the state the user stopped to inspect.
     expect(killedPorts(calls)).not.toContain(PORTS['declared-b']);
 
@@ -95,9 +95,9 @@ describe('declared browsers', () => {
     expect(killedPorts(calls)).toContain(PORTS['declared-b']);
     // The reference is released too, or the next run declaring it launches
     // against a browser that no longer exists.
-    // With a reason: disconnectDebugger's schema requires one, and a call
+    // With a reason: connection close requires one, and a call
     // without it is refused by validation before it releases anything.
-    const release = calls.find(c => c.tool === 'disconnectDebugger' && c.params.reference === 'declared-b');
+    const release = calls.find(c => c.tool === 'connection' && c.params.action === 'close' && c.params.connectionReason === 'declared-b');
     expect(release?.params.reason).toEqual(expect.stringContaining('declared-b'));
   });
 

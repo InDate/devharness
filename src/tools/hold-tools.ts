@@ -9,7 +9,7 @@ const layerEnum = z.enum(['code', 'ui', 'network']);
 const holdSchema = z.object({
   action: z.enum(['hold', 'step', 'release', 'status'])
     .describe('hold (stop the layers), step (move one held layer on by its unit, then stop it again), release (let the layers run), status (what is held, where each stands, what waits at the proxy)'),
-  connectionReason: z.string().describe('The connection, as named at launchChrome'),
+  connectionReason: z.string().describe('The connection, by the name connection launch gave it'),
   layers: z.array(layerEnum).optional()
     .describe('hold/release: which layers; all of them by default. ui carries code with it'),
   layer: layerEnum.optional()

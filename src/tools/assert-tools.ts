@@ -94,7 +94,7 @@ export function createAssertTools(
         if (reading.outcome === 'error') {
           return {
             content: [{ type: 'text', text: `## Error\n\n${reading.errorKind === 'no-connection'
-              ? 'No Chrome browser available. Use `launchChrome` first to start a browser.'
+              ? 'No Chrome browser available. Start one with `connection` action `launch`.'
               : reading.detail ?? 'the assertion could not be read'}` }],
             isError: true,
           };

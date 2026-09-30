@@ -2670,7 +2670,7 @@ export async function runFromHome(connection: string, name: string): Promise<str
   const sequences = sessions.get(connection)?.sequences;
   if (!sequences) return 'this bench holds no replay side to run with';
   const reference = `home-run-${++homeRuns}`;
-  const launched = await sequences.callTool('launchChrome', { reference, headless: true, proxy: true, forceNewInstance: true });
+  const launched = await sequences.callTool('connection', { action: 'launch', name: reference, headless: true, proxy: true, forceNewInstance: true });
   if (launched.failed) return launched.result;
   const started = await sequences.callTool('replay', { action: 'run', name, connectionReason: reference, killChromeOnFinish: true });
   return started.failed ? started.result : undefined;

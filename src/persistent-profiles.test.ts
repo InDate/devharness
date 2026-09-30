@@ -302,7 +302,7 @@ describe('one live Chrome per named profile', () => {
   });
 });
 
-describe('decideProfileReuse - launchChrome profile ordering', () => {
+describe('decideProfileReuse - connection launch profile ordering', () => {
   const wanted = '/profiles/device-a';
 
   it('never interferes when no profile was requested', () => {
@@ -311,7 +311,7 @@ describe('decideProfileReuse - launchChrome profile ordering', () => {
   });
 
   it('reuses a live connection that is already running the requested profile', () => {
-    // The regression: `launchChrome({ profile, reference })` called again to
+    // The regression: `connection({ action: 'launch', profile, name })` called again to
     // make sure the browser is up must reuse it, not error with "in use".
     expect(decideProfileReuse({
       wantedProfileDir: wanted,
@@ -415,7 +415,7 @@ describe('resetPersistentProfile', () => {
   });
 });
 
-describe('killChrome vs a relaunch on the same port', () => {
+describe('browser kill vs a relaunch on the same port', () => {
   it('does not delete the profile of a launch that claimed the port meanwhile', async () => {
     const launcher = newLauncher();
     const oldRecord: ChromeProfileRecord = {

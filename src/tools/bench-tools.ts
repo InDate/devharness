@@ -17,6 +17,7 @@ import { getOutputPath } from '../helpers/paths.js';
 import { getIssuesBySequenceFile } from '../issue-tracker.js';
 import { getProxy } from '../proxy/registry.js';
 import { autoLaunchChrome } from './replay-executor.js';
+import { createdName, isLaunchStep } from './connection-steps.js';
 import { stopRecording, cancelRecording, eventsToCommands } from '../interaction-recorder.js';
 import { openBackgroundPage, type PuppeteerManager } from '../puppeteer-manager.js';
 import type { SourceMapHandler } from '../sourcemap-handler.js';
@@ -61,7 +62,7 @@ const benchSchema = z.object({
   action: z.enum(['start', 'stop', 'tick', 'hold', 'release', 'picker', 'list', 'status', 'keepStep', 'dropStep', 'flagStep', 'sweep', 'retake', 'capture'])
     .describe('start (open the bench with the page running and the picker idle), hold/release (hold every layer of the page or let it all run, without closing the bench - driving the app needs it running), picker (arm or disarm, via armed), tick (run forward by steps or budgetMs), stop (release the page and close), keepStep/dropStep (settle the recorded step capture is held on), sweep (report the note captures no sequence refers to, and with remove:true delete them), retake (take a capture\'s region again and compare), capture (read a capture file\'s record and element facts), list, status'),
   connectionReason: z.string()
-    .describe('Connection reference (use the reference from launchChrome output)'),
+    .describe('The connection, by the name connection launch or attach gave it'),
   steps: z.number().int().positive().max(1000).optional()
     .describe('tick: callbacks to run before holding again (default 1). The exact unit - one callback is one thing the page does'),
   budgetMs: z.number().int().positive().max(60000).optional()
@@ -477,7 +478,7 @@ export function createSequenceDriver(
     if (sequence.startUrl) return sequence.startUrl;
     const first = sequence.commands?.[0];
     if (!first) return undefined;
-    const opensSomewhere = first.tool === 'launchChrome'
+    const opensSomewhere = isLaunchStep(first)
       || (first.tool === 'navigate' && first.params?.action === 'goto');
     const url = first.params?.url;
     return opensSomewhere && typeof url === 'string' ? url : undefined;
@@ -486,7 +487,7 @@ export function createSequenceDriver(
   /**
    * Take the driven tab to where the sequence starts.
    *
-   * Rebinding points every step at this tab, and that turns a `launchChrome`
+   * Rebinding points every step at this tab, and that turns a launch
    * step into a no-op: the reference is already bound, so it reuses the
    * connection and its `url` is never honoured - the step reports success while
    * the page has not moved. Navigating first makes the rebound run start where
@@ -538,7 +539,7 @@ export function createSequenceDriver(
 
     const references = new Set<string>();
     for (const command of sequence.commands ?? []) {
-      const recorded = command.params?.connectionReason ?? command.params?.reference;
+      const recorded = command.params?.connectionReason ?? createdName(command);
       if (typeof recorded === 'string' && recorded) references.add(recorded);
     }
     for (const declared of (sequence as any).requiredConnections ?? []) {
@@ -687,7 +688,7 @@ export function createSequenceDriver(
 
     history: () => commandRecorder.getHistory(Number.MAX_SAFE_INTEGER).map(command => {
       const text = textOf(command.result);
-      const connection = command.params?.connectionReason ?? command.params?.reference;
+      const connection = command.params?.connectionReason ?? createdName(command);
       return {
         index: command.index,
         at: command.timestamp,
@@ -1613,7 +1614,7 @@ export function createBenchTools(
         }
         if (!resolved) {
           return createErrorResponse('CONNECTION_NOT_FOUND', {
-            message: 'No Chrome browser available. Use `launchChrome` first to start a browser.',
+            message: 'No Chrome browser available. Start one with `connection` action `launch`.',
           });
         }
 

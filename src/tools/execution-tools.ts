@@ -12,7 +12,7 @@ import { hold, isHeld, release } from '../hold.js';
 // Consolidated schema with action parameter
 const executionSchema = z.object({
   action: z.enum(['pause', 'resume', 'stepOver', 'stepInto', 'stepOut', 'acknowledge']).describe('Execution control action to perform'),
-  connectionReason: z.string().optional().describe('Connection reference (use the reference from launchChrome output, e.g., "unnamed-connection-default" or your renamed tab)'),
+  connectionReason: z.string().optional().describe('The connection, by the name connection launch or attach gave it (e.g. "unnamed-connection-default")'),
 }).strict();
 
 export function createExecutionTools(

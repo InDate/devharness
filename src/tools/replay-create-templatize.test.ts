@@ -8,7 +8,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { CommandRecorder } from '../command-recorder.js';
 import { createReplayTools } from './replay-tools.js';
 
-const KNOWN_TOOLS = ['navigate', 'inspect', 'input', 'request', 'launchChrome'];
+const KNOWN_TOOLS = ['navigate', 'inspect', 'input', 'request', 'connection'];
 
 const text = (res: any) => res.content[0].text as string;
 

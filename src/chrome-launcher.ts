@@ -174,7 +174,7 @@ export type LaunchPortDecision =
   | { decision: 'forced-port-in-use'; port: number };
 
 export interface LaunchPortRequest {
-  /** `port` as passed to launchChrome, if the caller gave one. */
+  /** `port` as passed to connection launch, if the caller gave one. */
   explicitPort?: number;
   forceNewInstance?: boolean;
   /** This session's reserved port - the default when no port is given. */
@@ -186,7 +186,7 @@ export interface LaunchPortRequest {
 }
 
 /**
- * Decide which port a launchChrome call should use (bug-005).
+ * Decide which port a connection launch should use (bug-005).
  *
  * Extracted from the MCP handler so the decision is testable without a browser
  * or an MCP server: src/index.ts calls main() on import, so anything left
@@ -240,12 +240,12 @@ export interface ProfileReuseRequest {
 }
 
 /**
- * Decide whether a launchChrome call may reuse an existing Chrome, given the
+ * Decide whether a connection launch may reuse an existing Chrome, given the
  * named profile it asked for (issue 13 / bug: profile pre-check ordering).
  *
  * The ordering this encodes is the whole point: a live instance already running
  * the requested profile is REUSED, exactly as it would be without a profile, so
- * the idempotent `launchChrome({ profile, reference })` "make sure it's up"
+ * the idempotent `connection({ action: 'launch', profile, name })` "make sure it's up"
  * pattern keeps working. "Profile in use" is only an error when the call would
  * have to put a SECOND Chrome on a profile another instance holds.
  */
@@ -580,7 +580,7 @@ export class ChromeLauncher {
 
     // Use isRunning() to verify the process is actually alive (handles external kills)
     if (this.isRunning(port)) {
-      throw new Error(`Chrome is already running on port ${port}. Use killChrome() to stop it first, or specify a different port.`);
+      throw new Error(`Chrome is already running on port ${port}. Use browser({ action: 'kill' }) to stop it first, or specify a different port.`);
     }
 
     // Create a promise for this launch and store it in the lock map
@@ -700,7 +700,7 @@ export class ChromeLauncher {
       args.push('--no-startup-window');
     }
 
-    // Pass-through: any extra Chrome flags from the launchChrome call (extraArgs)
+    // Pass-through: any extra Chrome flags from the launch call (extraArgs)
     // and/or the CDP_TOOLS_EXTRA_CHROME_ARGS env var (space-separated). Merged
     // after the managed defaults and before the URL (Chrome treats the trailing
     // positional arg as the page to open). Lets callers enable things like a fake
@@ -1163,7 +1163,7 @@ export class ChromeLauncher {
    * Refuses while a Chrome we launched still holds the profile: deleting a
    * live user-data-dir corrupts the running browser and the deletion would be
    * partly undone as Chrome flushes state back out on exit. Kill that instance
-   * (`killChrome({ port })`) first.
+   * (`browser({ action: 'kill', port })`) first.
    *
    * Also refuses when the profile's Chrome SingletonLock names a live PID we
    * did not launch. The default profile root is global (`~/.devharness/profiles`),

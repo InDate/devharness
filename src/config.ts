@@ -139,7 +139,7 @@ export interface ChromeConfig {
   /** Polling interval in minutes for inactivity checks (default: 2) */
   inactivityPollingMinutes: number;
   /**
-   * Where named persistent Chrome profiles (`launchChrome({ profile })`) live.
+   * Where named persistent Chrome profiles (connection launch's `profile`) live.
    *
    * Empty string (the default) means the global root `~/.devharness/profiles`,
    * so a profile named "work-google" is shared by every project on this
@@ -165,8 +165,7 @@ export interface DebugConfig {
  * New tools added here will be auto-discovered and added to enabled list on startup
  */
 export const TOGGLEABLE_TOOLS = [
-  'connection',  // Core Chrome/debugger connection
-  'tab',         // Tab management
+  'connection',  // Launching, attaching, listing, switching and closing connections; the browser tool
   'breakpoint',  // Breakpoints, logpoints
   'execution',   // Pause, resume, step
   'inspection',  // Call stack, variables, evaluate
@@ -201,7 +200,6 @@ export type ToggleableToolName = typeof TOGGLEABLE_TOOLS[number];
  * If a dependency is disabled, the dependent tool cannot function
  */
 export const TOOL_DEPENDENCIES: Record<string, string[]> = {
-  tab: ['connection'],
   breakpoint: ['connection'],
   execution: ['connection'],
   inspection: ['connection'],
@@ -849,7 +847,7 @@ export class ConfigManager {
 
   /**
    * Absolute directory that named persistent Chrome profiles live in
-   * (`launchChrome({ profile })`, `config({action:'resetProfile'})`).
+   * (connection launch's `profile`, `config({action:'resetProfile'})`).
    *
    * Defaults to the global `~/.devharness/profiles` so a named profile is shared
    * across projects. `chrome.persistentProfileRoot` in a project-local config

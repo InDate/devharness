@@ -34,6 +34,7 @@ import { NetworkMonitor } from './network-monitor.js';
 import { ConnectionManager, type Connection } from './connection-manager.js';
 import { createActiveManagers } from './active-connection.js';
 import { createConnectionTools } from './tools/connection-tools.js';
+import { translateCall, replacementFor } from './tools/legacy-steps.js';
 import { LogpointExecutionTracker } from './logpoint-execution-tracker.js';
 import { PortReserver } from './port-reserver.js';
 import { validateParams } from './validation-helpers.js';
@@ -53,7 +54,6 @@ import { createScreenshotTools } from './tools/screenshot-tools.js';
 import { createInputTools } from './tools/input-tools.js';
 import { createContentTools } from './tools/content-tools.js';
 import { createStorageTools } from './tools/storage-tools.js';
-import { createTabTools } from './tools/tab-tools.js';
 import { createDownloadTools } from './tools/download-tools.js';
 import { createRequestTools } from './tools/request-tools.js';
 import { createAssertTools } from './tools/assert-tools.js';
@@ -95,10 +95,16 @@ import { markOnProxies, markNextCommand, releaseCommand, noteCallStart } from '.
  */
 const OBSERVING_TOOLS = new Set([
   'screenshot', 'content', 'inspect', 'proxy', 'network', 'console',
-  'wait', 'assert', 'check', 'dashboard', 'issues', 'message', 'listConnections',
-  'getChromeStatus', 'getDebuggerStatus', 'getDebugLoggingStatus',
-  'getSourceCode', 'detectModals', 'config',
+  'wait', 'assert', 'check', 'dashboard', 'issues', 'message',
+  'getDebugLoggingStatus', 'getSourceCode', 'detectModals', 'config',
 ]);
+/** The actions of `connection` that read without launching, attaching or closing anything. */
+const OBSERVING_CONNECTION_ACTIONS = new Set(['list', 'status', 'browsers']);
+
+function observes(toolName: string, args: Record<string, unknown> | undefined): boolean {
+  return OBSERVING_TOOLS.has(toolName)
+    || (toolName === 'connection' && OBSERVING_CONNECTION_ACTIONS.has(String(args?.action)));
+}
 import { checkPortFailures, checkBreakpointPause, checkBugBlocking, checkPendingStartups, checkDuplicateSession, prependToResponse, appendToResponse, buildStatusSuffix, type StatusLineItem } from './tool-response.js';
 import { recordBlockEvent, clearBlockEvents } from './block-events.js';
 import { createStartupGate } from './startup-gate.js';
@@ -361,7 +367,7 @@ connectionManager.setChromeLauncher(chromeLauncher);
 // Let ServerManager's watch mode check whether a connection at a given
 // inspector port is paused at a breakpoint, so it can defer a file-change
 // restart until the debugger resumes (see requestWatchRestart()). Watched
-// processes are always local, so 'localhost' matches how connectDebugger
+// processes are always local, so 'localhost' matches how connection attach
 // registers them by default.
 serverManager.setPauseChecker((port) => {
   return connectionManager.findConnectionByPort('localhost', port)?.cdpManager.isPaused() ?? false;
@@ -536,7 +542,10 @@ function pageHeldRefusal(toolName: string, args: Record<string, any>): any {
   return hold ? createErrorResponse('PAGE_HELD_BY_BENCH', { ...hold, toolName }) : undefined;
 }
 
-async function executeToolCall(toolName: string, params: Record<string, any>, abortSignal?: AbortSignal): Promise<any> {
+async function executeToolCall(calledName: string, calledParams: Record<string, any>, abortSignal?: AbortSignal): Promise<any> {
+  // Before validation and recording, so a call written against a removed tool
+  // runs, and history holds the call it became.
+  const { tool: toolName, params } = translateCall(calledName, calledParams);
   const tool = allTools[toolName as keyof typeof allTools];
 
   if (!tool) {
@@ -599,8 +608,6 @@ function toolset<T extends object>(name: string, tools: T): T {
 const allTools = {
   // Connection tools (Chrome/debugger)
   ...(configManager.isToolEnabled('connection') ? toolset('connection', connectionTools) : {}),
-  // Tab Management tools
-  ...(configManager.isToolEnabled('tab') ? toolset('tab', createTabTools(connectionManager, sourceMapHandler, activateConnection, logpointTracker, serverManager)) : {}),
   // CDP Debugging tools
   ...(configManager.isToolEnabled('breakpoint') ? toolset('breakpoint', createBreakpointTools(proxyCdpManager, sourceMapHandler, logpointTracker, resolveConnectionFromReason)) : {}),
   ...(configManager.isToolEnabled('execution') ? toolset('execution', createExecutionTools(proxyCdpManager, resolveConnectionFromReason, connectionManager, (port) => serverManager.retryPendingRestartByInspectorPort(port))) : {}),
@@ -720,6 +727,7 @@ function registerToolHandlers(server: Server) {
               success: false,
               error: `Unknown tool: ${toolName}`,
               code: 'UNKNOWN_TOOL',
+              ...(replacementFor(toolName) ? { replacedBy: replacementFor(toolName) } : {}),
               availableTools: Object.keys(allTools).sort()
             }, null, 2),
           },
@@ -847,7 +855,7 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
     // Marked here rather than beside recordCommand above: a command a guard
     // refused never reaches the app, and stamping its index would hand later
     // traffic to a command that did nothing.
-    const marksBoundary = commandIndex !== null && !OBSERVING_TOOLS.has(toolName);
+    const marksBoundary = commandIndex !== null && !observes(toolName, validation.data as Record<string, unknown>);
     if (marksBoundary) {
       // Queued behind the previous command's release, so this command claims
       // nothing that command is still being credited with.
@@ -1051,8 +1059,9 @@ async function runCliSequence(argv: string[]): Promise<void> {
   }
 
   try {
-    const launchResult = await executeToolCall('launchChrome', {
-      reference: connectionReason,
+    const launchResult = await executeToolCall('connection', {
+      action: 'launch',
+      name: connectionReason,
       headless: !headed,
       forceNewInstance: true,
     });

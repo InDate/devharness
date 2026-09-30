@@ -36,7 +36,7 @@ These templates should not be removed - they represent potential error condition
 **Type:** error
 **Code:** CHROME_NOT_RUNNING
 
-{{#message}}{{message}}{{/message}}{{^message}}Chrome is not running on port {{port}}. Use `launchChrome` to start a browser.{{/message}}
+{{#message}}{{message}}{{/message}}{{^message}}Chrome is not running on port {{port}}. Start one with `connection({ action: 'launch' })`.{{/message}}
 
 ---
 
@@ -112,8 +112,8 @@ Failed to kill Chrome: {{error}}
 Chrome is already running. You can either:
 
 **Suggestions:**
-- Use `killChrome()` to close the existing instance
-- Use `connectDebugger()` to connect to the running instance instead
+- Use `browser({ action: 'kill', reason })` to close the existing instance
+- Use `connection({ action: 'attach', name })` to connect to the running instance instead
 
 ---
 
@@ -125,7 +125,7 @@ Chrome is already running. You can either:
 Cannot launch a new Chrome instance on port {{port}}: that port is already in use. `forceNewInstance` guarantees a fresh process, so the requested port is never silently swapped for another one.
 
 **Suggestions:**
-- Use `killChrome({ port: {{port}} })` to free the port, then retry
+- Use `browser({ action: 'kill', port: {{port}}, reason })` to free the port, then retry
 - Drop `forceNewInstance` to reuse/tab into the Chrome already on port {{port}}
 - Omit `port` to let `forceNewInstance` pick a free port automatically
 - Pick a different explicit `port` if you are pinning one instance per port
@@ -142,7 +142,7 @@ Reference "{{reference}}" is already bound to a live connection, so `forceNewIns
 **Suggestions:**
 - Choose a different 3-word reference for the new instance
 - Drop `forceNewInstance` to reuse the existing "{{reference}}" connection
-- Use `killChrome()` or `disconnectDebugger({ reference: "{{reference}}" })` first to release the name
+- Use `connection({ action: 'close', connectionReason: "{{reference}}", reason })` or `browser({ action: 'kill', reason })` first to release the name
 
 ---
 
@@ -172,8 +172,8 @@ Only one live Chrome can use a profile at a time - a second launch on the same u
 
 **Suggestions:**
 - Use the existing instance on port {{port}} (`connectionReason` of that connection)
-- Or free the profile first: `killChrome({ port: {{port}}, reason: 'switching profile' })`
-- Or launch a different profile, e.g. `launchChrome({ profile: '{{profile}}-2' })`
+- Or free the profile first: `browser({ action: 'kill', port: {{port}}, reason: 'switching profile' })`
+- Or launch a different profile, e.g. `connection({ action: 'launch', profile: '{{profile}}-2' })`
 
 ---
 
@@ -187,8 +187,8 @@ Chrome is already running on port {{port}} with profile `{{actualProfile}}`, not
 Reusing it would give you a different browser identity than you asked for.
 
 **Suggestions:**
-- Launch on another port: `launchChrome({ profile: '{{profile}}', forceNewInstance: true })`
-- Or kill the instance first: `killChrome({ port: {{port}}, reason: 'switching profile' })`
+- Launch on another port: `connection({ action: 'launch', profile: '{{profile}}', forceNewInstance: true })`
+- Or kill the instance first: `browser({ action: 'kill', port: {{port}}, reason: 'switching profile' })`
 
 ---
 
@@ -201,7 +201,7 @@ Title: {{title}}, URL: {{url}}{{#viewport}}, Viewport: {{viewport.width}}x{{view
 
 Console: {{consoleStats}}{{/consoleStats}}
 
-{{#hasUserReference}}Ready to use! Use connectionReason: "{{reference}}" in tool calls.{{/hasUserReference}}{{^hasUserReference}}Ready to use! Use connectionReason: "{{reference}}" in tool calls, or rename with tab({ action: 'rename' }) first.{{/hasUserReference}}{{inactivityNote}}
+{{#hasUserReference}}Ready to use! Use connectionReason: "{{reference}}" in tool calls.{{/hasUserReference}}{{^hasUserReference}}Ready to use! Use connectionReason: "{{reference}}" in tool calls, or rename with connection({ action: 'rename', connectionReason: "{{reference}}", name }) first.{{/hasUserReference}}{{inactivityNote}}
 
 ---
 
@@ -230,7 +230,7 @@ Chrome launched with debugging on port {{port}}
 
 Chrome launched successfully but auto-connect failed: {{error}}
 
-**Note:** Use `connectDebugger()` to connect manually.
+**Note:** Use `connection({ action: 'attach', name })` to connect manually.
 
 ---
 
@@ -262,7 +262,7 @@ Failed to connect to debugger at {{host}}:{{port}}: {{error}}
 
 **Suggestions:**
 - Verify the debugger is running and listening on the specified port
-- For Chrome: Launch with `launchChrome()` or start with `--remote-debugging-port={{port}}`
+- For Chrome: Launch with `connection({ action: 'launch' })` or start with `--remote-debugging-port={{port}}`
 - For Node.js: Start with `node --inspect={{port}} app.js`
 
 ---
@@ -287,25 +287,38 @@ Failed to connect to debugger at {{host}}:{{port}}: {{error}}
 No active debugger connection found.
 
 **Suggestions:**
-- Use `launchChrome()` to launch Chrome with debugging enabled
-- Use `connectDebugger()` to connect to an existing debugger instance
+- Use `connection({ action: 'launch' })` to launch Chrome with debugging enabled
+- Use `connection({ action: 'attach', name })` to connect to an existing debugger instance
 
 **Example:**
 ```javascript
 // Launch Chrome
-launchChrome({ url: 'http://localhost:3000' })
+connection({ action: 'launch', name: 'app', url: 'http://localhost:3000' })
 
 // Or connect to existing
-connectDebugger({ host: 'localhost', port: 9222 })
+connection({ action: 'attach', name: 'app', host: 'localhost', port: 9222 })
 ```
 
 ---
 
-## DEBUGGER_DISCONNECT_SUCCESS
+## CONNECTION_CLOSED
 
 **Type:** success
 
-Disconnected from connection: {{reference}}
+Closed connection: {{reference}}. Active connection: {{newActiveReference}}
+
+---
+
+## CONNECTION_CLOSE_FAILED
+
+**Type:** error
+**Code:** CONNECTION_CLOSE_FAILED
+
+Failed to close connection: {{reference}}
+
+**Suggestions:**
+- `connection({ action: 'list' })` shows the connections this session holds
+- The connection may have closed already
 
 ---
 
@@ -371,11 +384,21 @@ Active debugger connections ({{totalConnections}} total)
 
 ---
 
-## CONNECTION_SWITCH_SUCCESS
+## CONNECTION_SWITCHED
 
 **Type:** success
 
 Switched to connection: {{reference}}
+
+Title: {{title}}, URL: {{url}}
+
+---
+
+## CONNECTION_RENAMED
+
+**Type:** success
+
+Renamed connection {{oldName}} to {{newName}}
 
 ---
 
@@ -386,7 +409,7 @@ Switched to connection: {{reference}}
 
 Connection with reference "{{reference}}" not found
 
-**Suggestion:** Use `listConnections()` to see all available connections.
+**Suggestion:** Use `connection({ action: 'list' })` to see all available connections.
 
 ---
 
@@ -411,8 +434,8 @@ The run stopped before its first step, so nothing has been executed yet.
 No active browser connection available.
 
 **Suggestions:**
-- Use `launchChrome()` to launch Chrome with debugging enabled
-- Use `connectDebugger()` to connect to an existing debugger instance
+- Use `connection({ action: 'launch' })` to launch Chrome with debugging enabled
+- Use `connection({ action: 'attach', name })` to connect to an existing debugger instance
 
 ---
 
@@ -786,7 +809,7 @@ Evaluation on connection "{{connectionReason}}" did not respond within {{timeout
 - The renderer/execution context may be wedged by the expression itself - try reloading the page or reconnecting
 - If the expression returned a Promise, it may simply never settle (promises are awaited by default) - check the async work completes, or pass `awaitPromise: false` to inspect the Promise object itself
 - Simplify the expression (e.g. avoid spreading very large arrays or deeply recursive calls) and retry
-- Use `getChromeStatus()` or `listConnections()` to check whether the connection is still healthy
+- Use `connection({ action: 'browsers' })` or `connection({ action: 'list' })` to check whether the connection is still healthy
 
 ---
 
@@ -1310,8 +1333,8 @@ This page holds no virtual authenticator.
 Not connected to browser. This operation requires browser automation support.
 
 **Suggestions:**
-1. Launch Chrome with `launchChrome()` (automatically enables browser automation)
-2. Or connect to Chrome: `connectDebugger({ host: 'localhost', port: 9222 })`
+1. Launch Chrome with `connection({ action: 'launch' })` (automatically enables browser automation)
+2. Or connect to Chrome: `connection({ action: 'attach', name: 'app', port: 9222 })`
 
 **Note:** Browser automation features (DOM interaction, screenshots, navigation) are only available when connected to Chrome, not Node.js.
 
@@ -1326,7 +1349,7 @@ No page loaded. The tool `{{toolName}}` requires a web page to be loaded first.
 
 **Suggestions:**
 1. Navigate to a URL with `navigateTo({ url: 'https://example.com' })`
-2. Or launch Chrome with a URL: `launchChrome({ url: 'https://example.com' })`
+2. Or launch Chrome with a URL: `connection({ action: 'launch', url: 'https://example.com' })`
 
 **Note:** Chrome starts with a blank page by default. You must navigate to a URL before using tools that interact with page content.
 
@@ -1349,7 +1372,7 @@ This feature is not supported for Node.js debugging ({{feature}})
 - Browser automation (DOM, screenshots, navigation)
 - Network request monitoring
 
-**Suggestion:** Use `launchChrome()` if you need browser automation features.
+**Suggestion:** Use `connection({ action: 'launch' })` if you need browser automation features.
 
 ---
 
@@ -1362,7 +1385,7 @@ Execution context was destroyed (page may have navigated or reloaded)
 
 **Suggestions:**
 - Reload the page and try again
-- Reconnect to the debugger with `connectDebugger()`
+- Reconnect to the debugger with `connection({ action: 'attach', name })`
 - Check if the page navigated unexpectedly
 
 ---
@@ -1376,8 +1399,8 @@ Debugger session closed unexpectedly
 
 **Suggestions:**
 - The browser or Node.js process may have crashed or been closed
-- Use `getDebuggerStatus()` to check connection status
-- Reconnect with `connectDebugger()` or relaunch with `launchChrome()`
+- Use `connection({ action: 'status', connectionReason })` to check connection status
+- Reconnect with `connection({ action: 'attach', name })` or relaunch with `connection({ action: 'launch', name })`
 
 ---
 
@@ -1479,96 +1502,7 @@ Common variables used across messages:
 - `{{types}}` - List of storage types
 - `{{depth}}` - DOM traversal depth
 - `{{sampleOutput}}` - Example output from validation
-- `{{newReference}}` - New tab reference name
-- `{{oldReference}}` - Old tab reference name
-- `{{closedReference}}` - Closed tab reference
-- `{{newActiveReference}}` - New active tab reference
-
----
-
-## Tab Management Messages
-
-## TAB_CREATE_SUCCESS
-
-**Type:** success
-**Summary:** New tab created and connected
-
-Title: {{title}}, URL: {{url}}{{#consoleStats}}
-
-Console: {{consoleStats}}{{/consoleStats}}
-
----
-
-## TAB_LIST_EMPTY
-
-**Type:** info
-**Summary:** No Chrome tabs open
-
-Use action "create" to create a new tab.
-
----
-
-## TAB_LIST_SUCCESS
-
-**Type:** list
-**Summary:** {{count}} open tab(s)
-
-{{tabList}}
-
-Tip: Use action "switch" to switch tabs, or "create" to open a new one.
-
----
-
-## TAB_CREATE_FAILED
-
-**Type:** error
-**Code:** TAB_CREATE_FAILED
-
-Failed to create new tab: {{error}}
-
-**Suggestions:**
-- Ensure a Chrome browser is already running (use `launchChrome` first)
-- Check that the browser connection is still active
-
----
-
-## TAB_RENAME_SUCCESS
-
-**Type:** success
-**Summary:** Tab renamed
-
-Old: {{oldReference}}, New: {{newReference}}
-
----
-
-## TAB_SWITCH_SUCCESS
-
-**Type:** success
-**Summary:** Switched to tab
-
-Title: {{title}}, URL: {{url}}
-
----
-
-## TAB_CLOSE_SUCCESS
-
-**Type:** success
-**Summary:** Tab closed
-
-New active: {{newActiveReference}}
-
----
-
-## TAB_CLOSE_FAILED
-
-**Type:** error
-**Code:** TAB_CLOSE_FAILED
-
-Failed to close tab: {{reference}}
-
-**Suggestions:**
-- Verify the reference is correct using `listTabs()`
-- The tab may have already been closed
+- `{{newActiveReference}}` - The connection active after a close
 
 ---
 
@@ -3605,7 +3539,7 @@ Unknown action: "{{action}}".
 Root: {{root}}
 Profiles ({{count}}): {{profiles}}
 
-**Note:** Use `launchChrome({ profile: "<name>" })` to launch one, or `config({ action: "resetProfile", profile: "<name>" })` to wipe it.
+**Note:** Use `connection({ action: "launch", profile: "<name>" })` to launch one, or `config({ action: "resetProfile", profile: "<name>" })` to wipe it.
 
 ---
 
@@ -3646,7 +3580,7 @@ Cannot reset profile "{{profile}}" - the Chrome on port {{port}} is still using 
 Wiping a user-data-dir under a running Chrome corrupts it, and the deletion is partly undone when Chrome flushes state on exit.
 
 **Suggestions:**
-- Stop it first: `killChrome({ port: {{port}}, reason: "resetting profile {{profile}}" })`
+- Stop it first: `browser({ action: "kill", port: {{port}}, reason: "resetting profile {{profile}}" })`
 - Then retry: `config({ action: "resetProfile", profile: "{{profile}}" })`
 
 ---
@@ -3786,7 +3720,7 @@ Note: `tools.enabled`/`tools.disabled` changes still require an MCP server resta
 
 Sent a restart signal to the devharness supervisor (PID {{pid}}). The server restarts shortly - no reconnect needed.
 
-Note: any Chrome instances this session launched will be killed (call `launchChrome` again). Managed dev servers (the `server` tool) survive and reattach automatically.
+Note: any Chrome instances this session launched will be killed (launch them again with `connection({ action: 'launch' })`). Managed dev servers (the `server` tool) survive and reattach automatically.
 
 ---
 
@@ -4283,7 +4217,7 @@ Ensure this selector is serving its purpose, check with the user if that is uncl
 
 **Type:** info
 
-A browser is launched through a proxy or it is not; a running one cannot gain one. Relaunch it with `launchChrome({ reference: '{{connection}}', proxy: true })`, then `bench({ action: 'start', connectionReason: '{{connection}}', sequence: '{{sequence}}' })` so the bench comes back where they left it.
+A browser is launched through a proxy or it is not; a running one cannot gain one. Relaunch it with `connection({ action: 'launch', name: '{{connection}}', proxy: true })`, then `bench({ action: 'start', connectionReason: '{{connection}}', sequence: '{{sequence}}' })` so the bench comes back where they left it.
 
 Until then the ASSOCIATE view has nothing to read: without a proxy nothing records what crossed the boundary.
 

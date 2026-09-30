@@ -43,7 +43,7 @@ const storageSchema = z.object({
     'clear', 'writes',
     'authenticatorAdd', 'authenticatorCredentials', 'authenticatorRemove',
   ]).describe('Storage action: getCookies, setCookie, getLocalStorage, setLocalStorage, removeLocalStorage (delete one localStorage key), getSessionStorage, setSessionStorage, removeSessionStorage (delete one sessionStorage key), idbListDatabases, idbListStores, idbGet, idbGetAll, idbPut, idbDelete, clear (clear storage), writes (localStorage and sessionStorage writes as they happened, which no state read can show - these cross no network boundary, so a step that only wrote locally has no other evidence), authenticatorAdd (a virtual WebAuthn authenticator on this page, answering passkey prompts), authenticatorCredentials (the passkeys it holds), authenticatorRemove'),
-  connectionReason: z.string().optional().describe('Connection reference (use the reference from launchChrome output, e.g., "unnamed-connection-default" or your renamed tab)'),
+  connectionReason: z.string().optional().describe('The connection, by the name connection launch or attach gave it (e.g. "unnamed-connection-default")'),
   since: z.number().optional().describe('writes: epoch ms. Only writes at or after this, so a step\'s own writes separate from the rest'),
   until: z.number().optional().describe('writes: epoch ms. Only writes before this'),
 

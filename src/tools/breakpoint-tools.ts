@@ -209,10 +209,10 @@ export function createBreakpointTools(
               // Add runtime-specific TIP if applicable
               if (runtimeType === 'chrome' && (args.url.includes('/dist/') || args.url.includes('index.js'))) {
                 markdown += '\n\n**TIP:** You are connected to Chrome (browser) but trying to set a breakpoint on what looks like server code. ' +
-                            'If this is Node.js server code, you need to connect to the Node.js debugger separately using `connectDebugger({port: 9229})`.';
+                            'If this is Node.js server code, you need to connect to the Node.js debugger separately using `connection` action `attach` with port 9229.';
               } else if (runtimeType === 'node' && args.url.includes('/public/')) {
                 markdown += '\n\n**TIP:** You are connected to Node.js but trying to set a breakpoint on what looks like browser code. ' +
-                            'You may need to connect to Chrome using `connectDebugger({port: 9222})` for client-side debugging.';
+                            'You may need to connect to Chrome using `connection` action `attach` with port 9222 for client-side debugging.';
               }
 
               return {

@@ -55,7 +55,7 @@ describe('workOn abort-listener hygiene', () => {
     // A later cancel of the run must NOT close tabs of finished steps.
     controller.abort();
     await new Promise(r => setTimeout(r, 20));
-    expect(executeToolCall.mock.calls.filter(c => c[0] === 'tab')).toHaveLength(0);
+    expect(executeToolCall.mock.calls.filter(c => c[0] === 'connection' && c[1]?.action === 'close')).toHaveLength(0);
   });
 
   it('still closes the tab when aborted while the handler is in flight', async () => {
@@ -81,7 +81,7 @@ describe('workOn abort-listener hygiene', () => {
     }
     controller.abort();
     await new Promise(r => setTimeout(r, 20));
-    expect(executeToolCall.mock.calls.some(c => c[0] === 'tab' && c[1]?.action === 'close')).toBe(true);
+    expect(executeToolCall.mock.calls.some(c => c[0] === 'connection' && c[1]?.action === 'close')).toBe(true);
 
     releaseReplay!();
     await pending;

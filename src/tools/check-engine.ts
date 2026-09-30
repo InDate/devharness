@@ -485,7 +485,7 @@ async function readerFor(
     const proxy = deps.connectionReason ? getProxy(deps.connectionReason) : undefined;
     if (!proxy) {
       throw new CheckError(
-        `a ${form} check reads what crosses the proxy, and "${deps.connectionReason ?? '(no connection)'}" was not launched through one - launchChrome({ proxy: true })`,
+        `a ${form} check reads what crosses the proxy, and "${deps.connectionReason ?? '(no connection)'}" was not launched through one - connection({ action: 'launch', proxy: true })`,
         'no-proxy');
     }
     if (form === 'socket') {

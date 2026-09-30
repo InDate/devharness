@@ -472,7 +472,7 @@ export function createIssuesTools(
             let detachAbortListener: (() => void) | undefined;
             if (abortSignal && connectionRef) {
               const onAbort = () => {
-                executeToolCall('tab', { action: 'close', reference: connectionRef }).catch(() => {});
+                executeToolCall('connection', { action: 'close', reason: 'issue work cancelled', connectionReason: connectionRef }).catch(() => {});
               };
               abortSignal.addEventListener('abort', onAbort, { once: true });
               detachAbortListener = () => abortSignal.removeEventListener('abort', onAbort);
@@ -512,8 +512,9 @@ export function createIssuesTools(
                 if (!page) {
                   // Auto-launch Chrome
                   try {
-                    await executeToolCall('launchChrome', {
-                      reference: connectionRef,
+                    await executeToolCall('connection', {
+                      action: 'launch',
+                      name: connectionRef,
                     });
                     page = await getPageForConnection(connectionRef);
                   } catch (error: any) {
@@ -627,25 +628,17 @@ export function createIssuesTools(
             // Always create a fresh tab for resolve verification
             let page = await getPageForConnection(connectionRef);
             if (!page) {
-              // Try to create a new tab first (if Chrome is already running)
+              // A tab in the Chrome already on the reserved port, or a new Chrome.
               try {
-                await executeToolCall('tab', {
-                  action: 'create',
-                  reference: connectionRef,
+                await executeToolCall('connection', {
+                  action: 'launch',
+                  name: connectionRef,
                 });
                 page = await getPageForConnection(connectionRef);
-              } catch {
-                // Chrome not running - launch it
-                try {
-                  await executeToolCall('launchChrome', {
-                    reference: connectionRef,
-                  });
-                  page = await getPageForConnection(connectionRef);
-                } catch (error: any) {
-                  return createErrorResponse('ISSUES_CHROME_LAUNCH_FAILED', {
-                    message: `Failed to launch Chrome: ${error.message}`,
-                  });
-                }
+              } catch (error: any) {
+                return createErrorResponse('ISSUES_CHROME_LAUNCH_FAILED', {
+                  message: `Failed to launch Chrome: ${error.message}`,
+                });
               }
             }
 
@@ -699,7 +692,7 @@ export function createIssuesTools(
                 if (error instanceof IssuesResolveTimeoutError) {
                   if (!args.keepBrowserOpen) {
                     try {
-                      await executeToolCall('tab', { action: 'close', reference: connectionRef });
+                      await executeToolCall('connection', { action: 'close', reason: 'issue verification finished', connectionReason: connectionRef });
                     } catch {
                       // Non-fatal
                     }
@@ -764,7 +757,7 @@ export function createIssuesTools(
               const closeVerificationTab = async () => {
                 if (args.keepBrowserOpen) return;
                 try {
-                  await executeToolCall('tab', { action: 'close', reference: connectionRef });
+                  await executeToolCall('connection', { action: 'close', reason: 'issue verification finished', connectionReason: connectionRef });
                 } catch {
                   // Non-fatal
                 }
@@ -876,7 +869,7 @@ export function createIssuesTools(
               if (error instanceof IssuesResolveTimeoutError) {
                 if (!args.keepBrowserOpen) {
                   try {
-                    await executeToolCall('tab', { action: 'close', reference: connectionRef });
+                    await executeToolCall('connection', { action: 'close', reason: 'issue verification finished', connectionReason: connectionRef });
                   } catch {
                     // Non-fatal
                   }
@@ -892,9 +885,10 @@ export function createIssuesTools(
             // Close the tab after verification (unless keepBrowserOpen is true)
             if (!args.keepBrowserOpen) {
               try {
-                await executeToolCall('tab', {
+                await executeToolCall('connection', {
                   action: 'close',
-                  reference: connectionRef,
+                  reason: 'issue verification finished',
+                  connectionReason: connectionRef,
                 });
               } catch (error: any) {
                 // Non-fatal - tab close failed but verification completed

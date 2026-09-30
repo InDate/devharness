@@ -15,7 +15,7 @@ import { resolveSelector, isExtendedSelector, cleanupResolvedSelector } from '..
 // Consolidated schema for DOM tools
 const domSchema = z.object({
   action: z.enum(['querySelector', 'getProperties', 'snapshot', 'hitTest']).describe('DOM action: querySelector (find element by selector), getProperties (get detailed element properties), snapshot (get full DOM snapshot), hitTest (for every match: is it the topmost element at its own centre, and if not what covers it)'),
-  connectionReason: z.string().describe('Connection reference (use the reference from launchChrome output, e.g., "unnamed-connection-default" or your renamed tab)'),
+  connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it (e.g. "unnamed-connection-default")'),
   // Parameters for querySelector and getProperties actions
   selector: z.string().optional().describe('CSS selector (required for querySelector and getProperties actions). Supports extended selectors: :has-text("text") for partial match, :text("text") for exact match. Example: button:has-text("Submit")'),
   // Parameters for snapshot action
@@ -48,7 +48,7 @@ export function createDOMTools(
         const resolved = await resolveConnectionFromReason(connectionReason);
         if (!resolved) {
           return createErrorResponse('CONNECTION_NOT_FOUND', {
-            message: 'No Chrome browser available. Use `launchChrome` first to start a browser.'
+            message: 'No Chrome browser available. Start one with `connection` action `launch`.'
           });
         }
 

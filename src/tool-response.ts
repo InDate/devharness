@@ -95,7 +95,7 @@ export interface PausedAtMeta {
   callFrameId: string;
 }
 
-/** getDebuggerStatus: the debugger's state, answered the same way paused or running. */
+/** connection status: the debugger's state, answered the same way paused or running. */
 export interface DebuggerStatusMeta {
   reference: string;
   connected: boolean;
@@ -291,7 +291,7 @@ export interface WorkerTargetMeta {
   attached: boolean;
 }
 
-/** One connection as listConnections reports it. */
+/** One connection as connection list reports it. */
 export interface ConnectionMeta {
   reference: string;
   type: string;
@@ -300,13 +300,16 @@ export interface ConnectionMeta {
   active: boolean;
   connected: boolean;
   paused: boolean;
+  /** The page a browser connection drives; absent for a Node.js target. */
+  url?: string;
+  title?: string;
 }
 
 export interface ToolResponseMeta {
   tool: string;
   action?: string;
   timestamp: number;
-  /** listConnections: every connection in this session. */
+  /** connection list: every connection in this session. */
   connections?: ConnectionMeta[];
   /** Worker targets on this browser, from inspect({ action: 'listTargets' }). */
   workerTargets?: WorkerTargetMeta[];
@@ -328,7 +331,7 @@ export interface ToolResponseMeta {
   github?: GithubToolMeta;
   message?: MessageToolMeta;
   bench?: BenchToolMeta;
-  /** launchChrome: the readings taken during a launch that failed. */
+  /** connection launch: the readings taken during a launch that failed. */
   launchObservations?: LaunchObservationsMeta;
 }
 

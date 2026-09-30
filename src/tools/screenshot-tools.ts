@@ -477,7 +477,7 @@ export function createScreenshotTools(puppeteerManager: PuppeteerManager, cdpMan
         const resolved = await resolveConnectionFromReason(args.connectionReason);
         if (!resolved) {
           return createErrorResponse('CONNECTION_NOT_FOUND', {
-            message: 'No Chrome browser available. Use `launchChrome` first to start a browser.'
+            message: 'No Chrome browser available. Start one with `connection` action `launch`.'
           });
         }
         const targetPuppeteerManager = resolved.puppeteerManager || puppeteerManager;

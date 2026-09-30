@@ -62,7 +62,7 @@ export function createRequestTools(resolveConnectionFromReason: (connectionReaso
           const resolved = await resolveConnectionFromReason(args.connectionReason);
           if (!resolved?.puppeteerManager) {
             return createErrorResponse('CONNECTION_NOT_FOUND', {
-              message: `No active browser connection "${args.connectionReason}". Use launchChrome first.`
+              message: `No active browser connection "${args.connectionReason}". Start one with connection({ action: 'launch' }).`
             });
           }
 

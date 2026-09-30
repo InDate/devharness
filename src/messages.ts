@@ -177,7 +177,7 @@ class MessageManager {
       id: 'CHROME_ALREADY_RUNNING',
       type: 'error',
       code: 'CHROME_RUNNING',
-      content: 'Chrome is already running. Use killChrome() to close the existing instance, or use connectDebugger() to connect to it instead.',
+      content: 'Chrome is already running. Use `browser` action `kill` to close the existing instance, or `connection` action `attach` to connect to it instead.',
     });
 
     this.messages.set('DEBUGGER_NOT_CONNECTED', {

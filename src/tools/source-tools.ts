@@ -13,7 +13,7 @@ const getSourceCodeSchema = z.object({
   url: z.string().describe('File URL or path'),
   startLine: z.number().optional().describe('Start line number'),
   endLine: z.number().optional().describe('End line number'),
-  connectionReason: z.string().optional().describe('Connection reference (use the reference from launchChrome output, e.g., "unnamed-connection-default" or your renamed tab)'),
+  connectionReason: z.string().optional().describe('The connection, by the name connection launch or attach gave it (e.g. "unnamed-connection-default")'),
 }).strict();
 
 export function createSourceTools(

@@ -18,7 +18,7 @@ const configSchema = z.object({
   path: z.string().optional()
     .describe('useLocal: explicit project dir to use as "local" (overrides server cwd)'),
   profile: z.string().optional()
-    .describe('resetProfile: name of the persistent Chrome profile (as passed to launchChrome({ profile })) to wipe and recreate empty. Refused while a Chrome launched by devharness still holds that profile - kill it first.'),
+    .describe('resetProfile: name of the persistent Chrome profile (as given to connection launch as profile) to wipe and recreate empty. Refused while a Chrome launched by devharness still holds that profile - kill it first.'),
 }).strict();
 
 type ConfigArgs = z.infer<typeof configSchema>;

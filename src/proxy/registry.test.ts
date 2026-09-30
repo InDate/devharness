@@ -22,7 +22,7 @@ afterAll(async () => {
 
 describe('a proxy started while a command runs', () => {
   it('stamps that command onto the traffic the command causes', async () => {
-    // launchChrome is marked before it runs and creates its proxy during the
+    // A launch is marked before it runs and creates its proxy during the
     // run, so without the seed its own page load would carry no command.
     markOnProxies({ kind: 'command', index: 4 });
     const { proxy } = await startProxyFor('seeded', `http://127.0.0.1:${originPort}`);

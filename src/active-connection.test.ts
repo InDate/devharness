@@ -24,7 +24,7 @@ function twoConnections() {
 }
 
 describe('the active connection', () => {
-  it('after a second connection is activated, listConnections and bare calls both name the second', () => {
+  it('after a second connection is activated, connection list and bare calls both name the second', () => {
     const { connectionManager, active, second } = twoConnections();
 
     expect(connectionManager.getActiveConnectionId()).toBe(second);

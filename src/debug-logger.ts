@@ -6,6 +6,7 @@
 import { promises as fs } from 'fs';
 import { join } from 'path';
 import { getOutputPath } from './helpers/paths.js';
+import { translateCall } from './tools/legacy-steps.js';
 
 // Computed fresh on each call (not cached) so they follow a later
 // setWorkingDirOverride() / config useLocal(path) switch.
@@ -216,7 +217,9 @@ export async function readHistoryLines(lineNumbers: number[]): Promise<Array<{ l
 
       try {
         const parsed = JSON.parse(lines[lineNum - 1]);
-        results.push({ line: lineNum, tool: parsed.tool, params: parsed.params });
+        // A line logged against a removed tool replays as the call that replaced it.
+        const { tool, params } = translateCall(parsed.tool, parsed.params);
+        results.push({ line: lineNum, tool, params });
       } catch {
         results.push({ line: lineNum, error: 'Invalid JSON on this line' });
       }

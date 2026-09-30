@@ -72,12 +72,12 @@ const errorText = (t: string) => ({ isError: true, content: [{ type: 'text', tex
 
 /**
  * Which tool names ran, in order - the cheapest way to assert "cleanup
- * happened". `inspect` and `getDebuggerStatus` are dropped: the executor
+ * happened". `inspect` and `connection status` are dropped: the executor
  * makes its own probing calls around steps, and they are not what any of these
  * tests are about.
  */
 const toolsCalled = (calls: Array<{ tool: string; params: any }>) =>
-  calls.filter(c => c.tool !== 'inspect' && c.tool !== 'getDebuggerStatus').map(c => c.tool);
+  calls.filter(c => c.tool !== 'inspect' && !(c.tool === 'connection' && c.params?.action === 'status')).map(c => c.tool);
 
 beforeEach(() => {
   vi.spyOn(configManager, 'getClickValidationConfig').mockReturnValue({

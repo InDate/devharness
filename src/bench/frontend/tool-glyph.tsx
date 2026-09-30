@@ -15,16 +15,8 @@ const SHARED: Record<string, string> = {
 };
 
 const MARKS: Record<string, preact.JSX.Element> = {
-  launchChrome: <>{WINDOW}<path d="M6.6 7.6v3.6l3-1.8z" /></>,
-  killChrome: <>{WINDOW}<path d="M6.2 7.8l3.6 3.6M9.8 7.8l-3.6 3.6" /></>,
-  resetChromeLauncher: <>{WINDOW}<path d="M10.4 9.6a2.4 2.4 0 1 1-.8-1.8" /><path d="M9.8 7v1.4H8.4" /></>,
-  getChromeStatus: <>{WINDOW}<path d="M4 9.6h1.8l1-1.8 1.6 3 1-1.2H12" /></>,
-  connectDebugger: PLUG,
-  disconnectDebugger: <>{PLUG}<path d="M2.2 13.8 13.8 2.2" /></>,
-  getDebuggerStatus: <><ellipse cx="8" cy="9.2" rx="3.2" ry="4" /><path d="M8 5.2v8M4.8 7.6H2.4M11.2 7.6h2.4M4.8 10.8H2.4M11.2 10.8h2.4M6.2 3.6 5.2 2M9.8 3.6l1-1.6" /></>,
-  listConnections: <path d="M5.6 4h8M5.6 8h8M5.6 12h8M2.4 4h.1M2.4 8h.1M2.4 12h.1" />,
-  switchConnection: <path d="M3 5.4h9.6M10.2 3l2.4 2.4-2.4 2.4M13 10.6H3.4M5.8 8.2 3.4 10.6 5.8 13" />,
-  tab: <path d="M1.8 13.2h12.4M2.8 13.2V4.6h4.6v8.6M7.4 7h5.8v6.2" />,
+  connection: PLUG,
+  browser: <>{WINDOW}<path d="M6.2 7.8l3.6 3.6M9.8 7.8l-3.6 3.6" /></>,
   breakpoint: <path d="M2.2 4h8.4L14 8l-3.4 4H2.2z" />,
   execution: <path d="M2.6 3.6 7.6 8l-5 4.4zM10.6 3.6v8.8M13.4 3.6v8.8" />,
   inspect: <><circle cx="7" cy="7" r="4.2" /><path d="M10.2 10.2 14 14" /></>,

@@ -17,7 +17,7 @@ import type { ToolResponseMeta, NetworkToolMeta } from '../tool-response.js';
 const networkToolSchema = z.object({
   action: z.enum(['list', 'get', 'search', 'enable', 'disable', 'setConditions', 'sockets', 'streams'])
     .describe('Network action: list (list network requests), get (get specific request details), search (search requests by pattern), enable (enable network monitoring), disable (disable network monitoring), setConditions (set network conditions), sockets (WebSocket lifecycle: what opened, what closed, what errored - puppeteer surfaces no page event for these, so they come from the CDP Network domain), streams (EventSource messages: an SSE response body never completes, so the HTTP record holds headers and nothing else)'),
-  connectionReason: z.string().describe('Connection reference (use the reference from launchChrome output, e.g., "unnamed-connection-default" or your renamed tab)'),
+  connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it (e.g. "unnamed-connection-default")'),
 
   // list action parameters
   resourceType: z.string().optional().describe('Filter by resource type (for list and search actions)'),
@@ -141,7 +141,7 @@ export function createNetworkTools(
   networkMonitor: NetworkMonitor,
   resolveConnectionFromReason: (connectionReason: string) => Promise<any>
 ) {
-  // A Node.js connectDebugger target resolves with no page. Falling back to the
+  // A Node.js target from connection attach resolves with no page. Falling back to the
   // default managers there reads or changes another connection while reporting
   // it as the named one.
   const noPage = (connectionReason: string) => createErrorResponse('CONNECTION_NOT_FOUND', {
@@ -159,13 +159,13 @@ export function createNetworkTools(
           case 'streams': {
             if (!connectionReason) {
               return createErrorResponse('CONNECTION_NOT_FOUND', {
-                message: 'No Chrome browser available. Use `launchChrome` first to start a browser.'
+                message: 'No Chrome browser available. Start one with `connection` action `launch`.'
               });
             }
             const resolved = await resolveConnectionFromReason(connectionReason);
             if (!resolved) {
               return createErrorResponse('CONNECTION_NOT_FOUND', {
-                message: 'No Chrome browser available. Use `launchChrome` first to start a browser.'
+                message: 'No Chrome browser available. Start one with `connection` action `launch`.'
               });
             }
             if (!resolved.puppeteerManager || !resolved.networkMonitor) return noPage(connectionReason);
@@ -211,13 +211,13 @@ export function createNetworkTools(
           case 'sockets': {
             if (!connectionReason) {
               return createErrorResponse('CONNECTION_NOT_FOUND', {
-                message: 'No Chrome browser available. Use `launchChrome` first to start a browser.'
+                message: 'No Chrome browser available. Start one with `connection` action `launch`.'
               });
             }
             const resolved = await resolveConnectionFromReason(connectionReason);
             if (!resolved) {
               return createErrorResponse('CONNECTION_NOT_FOUND', {
-                message: 'No Chrome browser available. Use `launchChrome` first to start a browser.'
+                message: 'No Chrome browser available. Start one with `connection` action `launch`.'
               });
             }
             if (!resolved.puppeteerManager || !resolved.networkMonitor) return noPage(connectionReason);
@@ -293,7 +293,7 @@ export function createNetworkTools(
 
             if (!connectionReason) {
               return createErrorResponse('CONNECTION_NOT_FOUND', {
-                message: 'No Chrome browser available. Use `launchChrome` first to start a browser.'
+                message: 'No Chrome browser available. Start one with `connection` action `launch`.'
               });
             }
 
@@ -301,7 +301,7 @@ export function createNetworkTools(
             const resolved = await resolveConnectionFromReason(connectionReason);
             if (!resolved) {
               return createErrorResponse('CONNECTION_NOT_FOUND', {
-                message: 'No Chrome browser available. Use `launchChrome` first to start a browser.'
+                message: 'No Chrome browser available. Start one with `connection` action `launch`.'
               });
             }
 
@@ -393,7 +393,7 @@ export function createNetworkTools(
             const resolved = await resolveConnectionFromReason(connectionReason);
             if (!resolved) {
               return createErrorResponse('CONNECTION_NOT_FOUND', {
-                message: 'No Chrome browser available. Use `launchChrome` first to start a browser.'
+                message: 'No Chrome browser available. Start one with `connection` action `launch`.'
               });
             }
             if (!resolved.networkMonitor) return noPage(connectionReason);
@@ -482,7 +482,7 @@ export function createNetworkTools(
             const resolved = await resolveConnectionFromReason(connectionReason);
             if (!resolved) {
               return createErrorResponse('CONNECTION_NOT_FOUND', {
-                message: 'No Chrome browser available. Use `launchChrome` first to start a browser.'
+                message: 'No Chrome browser available. Start one with `connection` action `launch`.'
               });
             }
             if (!resolved.puppeteerManager || !resolved.networkMonitor) return noPage(connectionReason);
@@ -521,7 +521,7 @@ export function createNetworkTools(
 
             if (!connectionReason) {
               return createErrorResponse('CONNECTION_NOT_FOUND', {
-                message: 'No Chrome browser available. Use `launchChrome` first to start a browser.'
+                message: 'No Chrome browser available. Start one with `connection` action `launch`.'
               });
             }
 
@@ -529,7 +529,7 @@ export function createNetworkTools(
             const resolved = await resolveConnectionFromReason(connectionReason);
             if (!resolved) {
               return createErrorResponse('CONNECTION_NOT_FOUND', {
-                message: 'No Chrome browser available. Use `launchChrome` first to start a browser.'
+                message: 'No Chrome browser available. Start one with `connection` action `launch`.'
               });
             }
 
@@ -640,7 +640,7 @@ export function createNetworkTools(
 
             if (!connectionReason) {
               return createErrorResponse('CONNECTION_NOT_FOUND', {
-                message: 'No Chrome browser available. Use `launchChrome` first to start a browser.'
+                message: 'No Chrome browser available. Start one with `connection` action `launch`.'
               });
             }
 
@@ -648,7 +648,7 @@ export function createNetworkTools(
             const resolved = await resolveConnectionFromReason(connectionReason);
             if (!resolved) {
               return createErrorResponse('CONNECTION_NOT_FOUND', {
-                message: 'No Chrome browser available. Use `launchChrome` first to start a browser.'
+                message: 'No Chrome browser available. Start one with `connection` action `launch`.'
               });
             }
 

@@ -89,7 +89,7 @@ describe('issues resolve - bounded human-verification timeout (bug-003 follow-on
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain('Timed out after');
     expect(result.content[0].text).toContain('waiting for a human to respond');
-    expect(executeToolCall).toHaveBeenCalledWith('tab', expect.objectContaining({ action: 'close' }));
+    expect(executeToolCall).toHaveBeenCalledWith('connection', expect.objectContaining({ action: 'close' }));
 
     const reloaded = await getIssue(issue.id);
     expect(reloaded!.resolvedAt).toBeUndefined(); // no-op on issue state
@@ -114,7 +114,7 @@ describe('issues resolve - bounded human-verification timeout (bug-003 follow-on
  */
 describe('issues resolve - verification replay failures close the browser', () => {
   const tabClosed = (executeToolCall: any) =>
-    executeToolCall.mock.calls.some(([tool, params]: any[]) => tool === 'tab' && params.action === 'close');
+    executeToolCall.mock.calls.some(([tool, params]: any[]) => tool === 'connection' && params.action === 'close');
 
   it('reports and cleans up when the replay runs but steps fail', async () => {
     const issue = await addIssue({ type: 'bug', title: 'Broken', sequenceFile: 'x.json' });

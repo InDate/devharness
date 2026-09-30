@@ -53,6 +53,7 @@ import {
   type ExecutionContext,
   type LoadSequenceResult,
 } from './replay-executor.js';
+import { createdName } from './connection-steps.js';
 
 // =============================================================================
 // Step tool-name validation (bug-010)
@@ -269,7 +270,7 @@ const replaySchema = z.object({
   connectionReason: z.string().optional(),
   requiredConnections: z.array(z.object({
     reference: z.string().describe('Reference the steps use, e.g. "duo-member-two"'),
-    profile: z.string().optional().describe('Named persistent Chrome profile to come up on (launchChrome({ profile })). The durable identity: its storage survives between runs, so a device enrolled once stays enrolled'),
+    profile: z.string().optional().describe('Named persistent Chrome profile to come up on (the profile connection launch takes). The durable identity: its storage survives between runs, so a device enrolled once stays enrolled'),
     url: z.string().optional().describe("Opened on launch (defaults to the sequence's startUrl)"),
     role: z.string().optional().describe('Why this browser exists, shown in the run summary'),
     forceNewInstance: z.boolean().optional().describe('A distinct process rather than a tab. Default true, but false when profile is set - only one live Chrome may hold a profile'),
@@ -308,7 +309,7 @@ const replaySchema = z.object({
   strict: z.enum(['errors', 'warnings']).optional().describe("run/runAll: fail the run when it PRODUCES console output - 'errors' fails on new console errors, 'warnings' also fails on new warnings. Counted per connection and diffed against the start of the run, so pre-existing noise is not blamed on this sequence. A sequence can be functionally correct and still be logging; strict is how you separate those questions"),
   folder: z.string().optional().describe("runAll: sequences subfolder to run, relative to the sequences dir (e.g. 'spine'). Omit to run every sequence outside folders whose name starts with '_'. The whole tree is always LOADED first so name references (a check's run, a forEach's do) resolve wherever the helper lives"),
   continueOnFailure: z.boolean().optional().describe('runAll: keep going after a sequence fails and report every result (default true). false stops at the first failure'),
-  killChromeOnFinish: z.boolean().optional().describe("run/runAll: after finishing (skipped on pause/abort), kill the browsers this run owns - its own connection plus any a launchChrome step actually created. A step that reached an already-bound reference only borrowed that browser and it is left running, so an instance you launched yourself survives. Also skipped for any browser whose port another live connection shares (a launchChrome step usually opens a tab in the same instance), and the run reports which connection kept it alive. On runAll only the LAST sequence carries it, so a preamble's browser survives between sequences and a suite that stops early leaves the browsers up."),
+  killChromeOnFinish: z.boolean().optional().describe("run/runAll: after finishing (skipped on pause/abort), kill the browsers this run owns - its own connection plus any a launch step actually created. A step that reached an already-bound reference only borrowed that browser and it is left running, so an instance you launched yourself survives. Also skipped for any browser whose port another live connection shares (a launch step usually opens a tab in the same instance), and the run reports which connection kept it alive. On runAll only the LAST sequence carries it, so a preamble's browser survives between sequences and a suite that stops early leaves the browsers up."),
 }).strict();
 
 // =============================================================================
@@ -416,10 +417,10 @@ async function handleRepeat(
 
   // Try to extract connection from commands if not provided
   if (!connectionReason && needsConnection) {
-    // Check if any command creates a connection (launchChrome, connectDebugger)
-    const launchCmd = commands.find(c => c.tool === 'launchChrome' || c.tool === 'connectDebugger');
-    if (launchCmd && launchCmd.params.reference) {
-      connectionReason = launchCmd.params.reference;
+    // A launch or attach among the commands names the connection they run on.
+    const created = commands.map(createdName).find(Boolean);
+    if (created) {
+      connectionReason = created;
     }
   }
 
@@ -520,9 +521,9 @@ async function handleRunFromLog(
 
   // Try to extract connection from commands if not provided
   if (!connectionReason && needsConnection) {
-    const launchCmd = commands.find(c => c.tool === 'launchChrome' || c.tool === 'connectDebugger');
-    if (launchCmd && launchCmd.params.reference) {
-      connectionReason = launchCmd.params.reference;
+    const created = commands.map(createdName).find(Boolean);
+    if (created) {
+      connectionReason = created;
     }
   }
 
@@ -1021,7 +1022,7 @@ async function connectionsSharingPort(
   self: string
 ): Promise<string[]> {
   try {
-    const parsed = connectionsOf(await executeToolCall('listConnections', {}));
+    const parsed = connectionsOf(await executeToolCall('connection', { action: 'list' }));
     if (!parsed) return [];
     return parsed
       .filter(c => c.port === port
@@ -1079,8 +1080,9 @@ function collectNestedRebindableReferences(
 
     references.push(...analyzeRecordedStepConnections(nested.commands).references);
     for (const c of nested.commands) {
-      if ((c.tool === 'launchChrome' || c.tool === 'connectDebugger') && typeof c.params.reference === 'string') {
-        references.push(sanitizeReference(c.params.reference));
+      const created = createdName(c);
+      if (created) {
+        references.push(sanitizeReference(created));
       }
     }
 
@@ -1535,8 +1537,9 @@ async function ensureDeclaredConnections(
     // first step that uses it. Attempt the launch and treat "already bound" as a
     // live browser to reuse.
     try {
-      await executeToolCall('launchChrome', {
-        reference: target,
+      await executeToolCall('connection', {
+        action: 'launch',
+        name: target,
         url: decl.url ?? sequence.startUrl,
         // A profile IS the browser this declaration wants, so a live Chrome
         // already running it is the target rather than something to spawn
@@ -1589,11 +1592,11 @@ async function closeLaunchedConnections(
       const sharers = await connectionsSharingPort(executeToolCall, port, ref);
       if (sharers.length > 0) continue; // someone else is on this browser
       const reason = `sequence "${sequenceName}" ${origin} ${ref}`;
-      await executeToolCall('killChrome', { reason, port });
+      await executeToolCall('browser', { action: 'kill', reason, port });
       // Release the reference as well. Killing the process leaves the name
       // bound, and the next sequence in a suite declaring the same reference
       // then fails to launch against a browser that no longer exists.
-      await executeToolCall('disconnectDebugger', { reason, reference: ref }).catch(() => {});
+      await executeToolCall('connection', { action: 'close', reason, connectionReason: ref }).catch(() => {});
       closed.push(ref);
     } catch {
       // Best-effort: a browser that will not close is not a run failure.
@@ -2010,8 +2013,9 @@ async function handleRun(
     // rebindable too, or the only rebindable ones are those needing no rebind.
     const nested = collectNestedRebindableReferences(commands, recorder);
     const launchRefs = commands
-      .filter(c => (c.tool === 'launchChrome' || c.tool === 'connectDebugger') && typeof c.params.reference === 'string')
-      .map(c => sanitizeReference(c.params.reference));
+      .map(createdName)
+      .filter((name): name is string => name !== undefined)
+      .map(name => sanitizeReference(name));
     const known = new Set([...recorded.references, ...launchRefs, ...nested.references]);
     // An unresolvable nested sequence (on disk, or created later) means we
     // cannot prove a key is a typo - and refusing a run over an unprovable
@@ -2085,7 +2089,7 @@ async function handleRun(
   }
 
   // The run-level connection may itself have been DERIVED from the sequence (a
-  // launchChrome reference), in which case it is a recorded name and needs the
+  // launched name), in which case it is a recorded name and needs the
   // same rebinding as the steps - otherwise it points at a reference that does
   // not exist here, and the startUrl navigation and cursor injection silently
   // no-op against it. An explicitly passed connectionReason is already a live
@@ -2233,13 +2237,13 @@ async function handleRun(
    * Connection not found" as a socket FAILURE. Every such run failed, for a
    * reason that was an artefact of its own cleanup.
    *
-   * Ownership is not guessed from the sequence text: a `launchChrome` step
+   * Ownership is not guessed from the sequence text: a launch step
    * hands back an existing browser when the reference is already bound, which
    * is the multi-device case where killing would destroy state the user cannot
    * get back. The launch response says which it was, and only the ones this run
    * created are killed (issue #103).
    *
-   * The kill is by PORT, and other connections can share one - a `launchChrome`
+   * The kill is by PORT, and other connections can share one - a launch
    * step usually opens a TAB in the same instance - so the port is checked for
    * other tenants first.
    */
@@ -2253,7 +2257,8 @@ async function handleRun(
         note += `\n\n**Chrome left running** (port ${port} also serves ${sharers.join(', ')}, killChromeOnFinish)` +
           ` - killing it would take those connections with it.`;
       } else if (port !== null) {
-        const killResult = await executeToolCall('killChrome', {
+        const killResult = await executeToolCall('browser', {
+          action: 'kill',
           reason: `killChromeOnFinish: sequence "${sequence.name}" completed`,
           port,
         }).catch((error: any) => ({ isError: true, error }));
@@ -2436,7 +2441,7 @@ async function performRun(
   if (!navResult.success) {
     // Close the tab if we auto-launched it
     if (didAutoLaunch && connectionReason) {
-      await executeToolCall('tab', { action: 'close', reference: connectionReason }).catch(() => {});
+      await executeToolCall('connection', { action: 'close', reason: `sequence "${sequence.name}" auto-launched it`, connectionReason }).catch(() => {});
     }
     return {
       outcome: 'failed',
@@ -2492,7 +2497,7 @@ async function performRun(
       await cleanupReplayOverlay().catch(() => {});
     }
     if (closeTab && didAutoLaunch && connectionReason) {
-      await executeToolCall('tab', { action: 'close', reference: connectionReason }).catch(() => {});
+      await executeToolCall('connection', { action: 'close', reason: `sequence "${sequence.name}" auto-launched it`, connectionReason }).catch(() => {});
     }
   };
 
@@ -3536,9 +3541,10 @@ async function handleRecordInteraction(
   // Close the tab if requested by the recording result
   if (result.closeTab) {
     try {
-      await executeToolCall('tab', {
+      await executeToolCall('connection', {
         action: 'close',
-        reference: args.connectionReason,
+        reason: 'recording finished with closeTabOnDone',
+        connectionReason: args.connectionReason,
       });
     } catch {
       // Non-fatal - tab may already be closed
@@ -4003,7 +4009,7 @@ function generatePlaywrightCode(commands: Array<{ tool: string; params: Record<s
       }
     }
 
-    // A step with no Playwright equivalent (check, launchChrome, inspect,
+    // A step with no Playwright equivalent (check, connection, inspect,
     // storage, wait, breakpoint...) must leave a visible hole. Dropping it
     // silently is how a sequence turns into a test that passes without doing
     // anything it was recorded to do.

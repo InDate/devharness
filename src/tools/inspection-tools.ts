@@ -286,7 +286,7 @@ function workerErrorResponse(error: unknown, target: string) {
 const inspectionToolSchema = z.object({
   action: z.enum(['getCallStack', 'getVariables', 'evaluateExpression', 'searchCode', 'searchFunctions', 'listTargets'])
     .describe('Inspection action: getCallStack (get call stack when paused), getVariables (get variables in call frame), evaluateExpression (evaluate JavaScript), searchCode (search code by pattern), searchFunctions (find function definitions), listTargets (list worker targets)'),
-  connectionReason: z.string().optional().describe('Connection reference (use the reference from launchChrome output, e.g., "unnamed-connection-default" or your renamed tab)'),
+  connectionReason: z.string().optional().describe('The connection, by the name connection launch or attach gave it (e.g. "unnamed-connection-default")'),
 
   // getVariables and evaluateExpression parameters
   callFrameId: z.string().optional().describe('Call frame ID (required for getVariables, optional for evaluateExpression)'),

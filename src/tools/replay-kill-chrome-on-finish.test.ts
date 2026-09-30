@@ -22,7 +22,7 @@ function makeReplay(
   commands: RecordedCommand[],
   opts: {
     connections?: Array<{ reference: string; port: number }>;
-    /** References a launchChrome step finds already bound (someone else's). */
+    /** Names a launch step finds already bound (someone else's). */
     reused?: string[];
   } = {},
 ) {
@@ -42,11 +42,11 @@ function makeReplay(
   const calls: Array<{ tool: string; params: Record<string, any> }> = [];
   const executeToolCall = vi.fn(productionShaped(async (tool: string, params: Record<string, any>) => {
     calls.push({ tool, params });
-    if (tool === 'listConnections' && opts.connections) {
+    if (tool === 'connection' && params.action === 'list' && opts.connections) {
       return {
         content: [{ type: 'text', text: 'Active debugger connections' }],
         _meta: {
-          tool: 'listConnections', timestamp: 0,
+          tool: 'connection', action: 'list', timestamp: 0,
           connections: opts.connections.map(c => ({
             ...c, type: 'chrome', host: 'localhost', active: false, connected: true, paused: false,
           })),
@@ -61,15 +61,15 @@ function makeReplay(
         _meta: { socketList: [{ id: 's1', url: 'ws://localhost/api/sync', target: 'page', closed: false, errors: 0 }] },
       };
     }
-    if (tool === 'launchChrome') {
-      // Production stamps ownership on the response; a reference that already
+    if (tool === 'connection' && params.action === 'launch') {
+      // Production stamps ownership on the response; a name that already
       // existed comes back reused, and a reused browser is not the run's.
       return {
         content: [{ type: 'text', text: '' }],
         _meta: {
-          launchChrome: {
-            reference: params.reference,
-            reused: (opts.reused || []).includes(params.reference),
+          launch: {
+            name: params.name,
+            reused: (opts.reused || []).includes(params.name),
           },
         },
       };
@@ -91,7 +91,7 @@ function makeReplay(
 }
 
 const killedPorts = (calls: Array<{ tool: string; params: Record<string, any> }>) =>
-  calls.filter(c => c.tool === 'killChrome').map(c => c.params.port);
+  calls.filter(c => c.tool === 'browser' && c.params.action === 'kill').map(c => c.params.port);
 
 const text = (res: any) => res.content[0].text as string;
 
@@ -146,7 +146,7 @@ describe('killChromeOnFinish', () => {
     expect(getConnectionPort.mock.calls.flat()).toEqual(['run-device']);
   });
 
-  // Driven live: a launchChrome step usually opens a TAB in the existing
+  // Driven live: a launch step usually opens a TAB in the existing
   // instance, so a second connection shares the run's port. Killing by port
   // then takes that browser down too - the exact thing this promises not to do.
   it('leaves the browser running when another connection shares its port', async () => {
@@ -180,9 +180,9 @@ describe('killChromeOnFinish', () => {
     // takes no connectionReason of its own and the second launch is a browser
     // that exists only because this run opened it.
     const { replay, calls } = makeReplay([
-      { tool: 'launchChrome', params: { reference: 'run-device' } },
+      { tool: 'connection', params: { action: 'launch', name: 'run-device' } },
       { tool: 'dom', params: { action: 'querySelector', selector: '#a', connectionReason: 'run-device' } },
-      { tool: 'launchChrome', params: { reference: 'phone' } },
+      { tool: 'connection', params: { action: 'launch', name: 'phone' } },
       { tool: 'dom', params: { action: 'querySelector', selector: '#b', connectionReason: 'phone' } },
     ]);
 
@@ -190,16 +190,16 @@ describe('killChromeOnFinish', () => {
 
     expect(killedPorts(calls)).toContain(PORTS['phone']);
     // and the reference is released, so the next run can launch it again
-    const release = calls.find(c => c.tool === 'disconnectDebugger' && c.params.reference === 'phone');
+    const release = calls.find(c => c.tool === 'connection' && c.params.action === 'close' && c.params.connectionReason === 'phone');
     expect(release?.params.reason).toEqual(expect.stringContaining('phone'));
   });
 
   it('leaves a per-step browser alone when the launch only reused it', async () => {
     const { replay, calls } = makeReplay(
       [
-        { tool: 'launchChrome', params: { reference: 'run-device' } },
+        { tool: 'connection', params: { action: 'launch', name: 'run-device' } },
         { tool: 'dom', params: { action: 'querySelector', selector: '#a', connectionReason: 'run-device' } },
-        { tool: 'launchChrome', params: { reference: 'borrowed-device' } },
+        { tool: 'connection', params: { action: 'launch', name: 'borrowed-device' } },
         { tool: 'dom', params: { action: 'querySelector', selector: '#b', connectionReason: 'borrowed-device' } },
       ],
       { reused: ['borrowed-device'] },
@@ -224,7 +224,7 @@ describe('killChromeOnFinish', () => {
 
     const order = calls.map(c => c.tool);
     const lastNetwork = order.lastIndexOf('network');
-    const kill = order.indexOf('killChrome');
+    const kill = calls.findIndex(c => c.tool === 'browser' && c.params.action === 'kill');
     expect(lastNetwork).toBeGreaterThan(-1);
     expect(kill).toBeGreaterThan(lastNetwork);
     expect(text(res)).not.toContain('could not read socket health');

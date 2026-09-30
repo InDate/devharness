@@ -27,7 +27,7 @@ const verifyCheckTypes = ['handlers', 'viewport', 'touch', 'overflow', 'clickabi
 
 const contentSchema = z.object({
   action: z.enum(['extractText', 'findInteractive', 'verify', 'parse']).describe('Content action: extractText (extract webpage text), findInteractive (find all interactive elements), verify (run UI verification checks), parse (run a page-parser plugin from .devharness/parsers/ against the current page; omit name to list available plugins)'),
-  connectionReason: z.string().describe('Connection reference (use the reference from launchChrome output, e.g., "unnamed-connection-default" or your renamed tab)'),
+  connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it (e.g. "unnamed-connection-default")'),
 
   // extractText parameters
   mode: z.enum(['outline', 'full', 'section']).optional().describe('Mode: outline (metadata only), full (entire page), section (specific section by heading) - for extractText action'),
@@ -92,7 +92,7 @@ export function createContentTools(puppeteerManager: PuppeteerManager, cdpManage
         const resolved = await resolveConnectionFromReason(args.connectionReason);
         if (!resolved) {
           return createErrorResponse('CONNECTION_NOT_FOUND', {
-            message: 'No Chrome browser available. Use `launchChrome` first to start a browser.'
+            message: 'No Chrome browser available. Start one with `connection` action `launch`.'
           });
         }
 

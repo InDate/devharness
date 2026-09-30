@@ -35,7 +35,7 @@ export function checkBrowserAutomation(
     if (!chromeLauncherRef.isRunning(debugPort)) {
       return createErrorResponse('CHROME_NOT_RUNNING', {
         port: debugPort,
-        message: `Chrome is not running on port ${debugPort}. Use \`launchChrome\` to start a browser.`
+        message: `Chrome is not running on port ${debugPort}. Start one with \`connection({ action: 'launch' })\`.`
       });
     }
   }
@@ -86,7 +86,7 @@ export function enhanceErrorMessage(error: any, context: string): string {
   }
 
   if (errorStr.includes('No inspectable targets')) {
-    return `${context}: Chrome debugging port is not ready yet. This can happen if Chrome hasn't fully started. Wait 2-3 seconds and try again, or use launchChrome() with auto-connect which will wait automatically.`;
+    return `${context}: Chrome debugging port is not ready yet. This can happen if Chrome hasn't fully started. Wait 2-3 seconds and try again, or use connection({ action: 'launch' }), which waits for the port itself.`;
   }
 
   if (errorStr.includes('Cannot find context with specified id')) {
@@ -94,7 +94,7 @@ export function enhanceErrorMessage(error: any, context: string): string {
   }
 
   if (errorStr.includes('Execution context was destroyed')) {
-    return `${context}: The page was reloaded or navigated away. Breakpoints may need to be re-set. Check getDebuggerStatus() and reconnect if needed.`;
+    return `${context}: The page was reloaded or navigated away. Breakpoints may need to be re-set. Check connection({ action: 'status' }) and reconnect if needed.`;
   }
 
   if (errorStr.includes('Script not found')) {
@@ -102,11 +102,11 @@ export function enhanceErrorMessage(error: any, context: string): string {
   }
 
   if (errorStr.includes('Session closed') || errorStr.includes('WebSocket')) {
-    return `${context}: The debugging session was closed. Reconnect using connectDebugger() or check if Chrome crashed with getChromeStatus().`;
+    return `${context}: The debugging session was closed. Reconnect with connection({ action: 'attach' }) or check whether Chrome crashed with connection({ action: 'browsers' }).`;
   }
 
   if (errorStr.includes('Not connected to debugger')) {
-    return `${context}: No active debugger connection. Use connectDebugger() or launchChrome() with autoConnect to establish a connection first.`;
+    return `${context}: No active debugger connection. Use connection({ action: 'launch' }) or connection({ action: 'attach' }) to establish a connection first.`;
   }
 
   if (errorStr.includes('No active page')) {
@@ -141,7 +141,7 @@ export function categorizeError(error: any): ErrorCategory {
   ) {
     return {
       category: 'connection',
-      suggestion: 'Check connection status with getDebuggerStatus() or getChromeStatus() and reconnect if needed',
+      suggestion: "Check connection({ action: 'status' }) or connection({ action: 'browsers' }) and reconnect if needed",
     };
   }
 
@@ -166,7 +166,7 @@ export function categorizeError(error: any): ErrorCategory {
   ) {
     return {
       category: 'validation',
-      suggestion: 'Validate your input parameters and check the current debugger state with getDebuggerStatus()',
+      suggestion: "Validate your input parameters and check the current debugger state with connection({ action: 'status' })",
     };
   }
 

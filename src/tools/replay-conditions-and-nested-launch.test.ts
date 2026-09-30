@@ -4,7 +4,7 @@
  * 1. Conditions could only see selector/url/cookie/localStorage, so a device
  *    identity kept in IndexedDB (the usual home for a non-extractable CryptoKey)
  *    could only be probed by proxy through some UI marker.
- * 2. Nested sequences dropped every launchChrome, so a setup sequence spanning
+ * 2. Nested sequences dropped every launch step, so a setup sequence spanning
  *    two browsers could only run when both browsers happened to exist already.
  */
 
@@ -68,11 +68,11 @@ const idbRecords = (t: string, count: number) => ({
   content: [{ type: 'text', text: t }],
   _meta: { tool: 'storage', action: 'idbGetAll', timestamp: 0, storage: { database: 'identity', store: 'keys', count } },
 });
-/** listConnections as the real tool answers it: the connections in `_meta`. */
+/** connection list as the real tool answers it: the connections in `_meta`. */
 const connectionsList = (connections: Array<{ reference: string; connected?: boolean }>) => ({
   ...text('Active debugger connections'),
   _meta: {
-    tool: 'listConnections', timestamp: 0,
+    tool: 'connection', action: 'list', timestamp: 0,
     connections: connections.map((c, i) => ({
       type: 'chrome', host: 'localhost', port: 9222 + i, active: i === 0, connected: true, paused: false, ...c,
     })),
@@ -355,9 +355,9 @@ describe('conditions read structure, not rendered text', () => {
   });
 });
 
-describe('launchChrome inside a nested sequence', () => {
+describe('a launch inside a nested sequence', () => {
   const nested = (ref: string) => seq('setup', [
-    { tool: 'launchChrome', params: { reference: ref } },
+    { tool: 'connection', params: { action: 'launch', name: ref } },
     { tool: 'navigate', params: { action: 'goto', url: 'https://example.com/', connectionReason: ref } },
   ]);
 
@@ -365,7 +365,7 @@ describe('launchChrome inside a nested sequence', () => {
     runsOnPass('setup'),
   ]);
 
-  // listConnections has to answer with the session as it IS at the moment of
+  // connection list has to answer with the session as it IS at the moment of
   // the call - a launch mid-run adds a connection, and a static list would let
   // a step-connection check see a browser that was just created as missing.
   const baseResponses = (liveRefs: string[]) => {
@@ -375,11 +375,11 @@ describe('launchChrome inside a nested sequence', () => {
         content: [{ type: 'text', text: 'URL: https://example.com/' }],
         _meta: { tool: 'navigate', action: 'info', timestamp: 0, navigate: { url: 'https://example.com/', title: 't', action: 'info' } },
       },
-      launchChrome: (params: Record<string, any>) => {
-        live.add(params.reference);
+      'connection.launch': (params: Record<string, any>) => {
+        live.add(params.name);
         return text('Chrome launched and connected');
       },
-      listConnections: () => connectionsList([...live].map(reference => ({ reference }))),
+      'connection.list': () => connectionsList([...live].map(reference => ({ reference }))),
     };
   };
 
@@ -389,8 +389,8 @@ describe('launchChrome inside a nested sequence', () => {
     const result = await executeSteps({ sequence: outer, ctx, startStep: 0, stepTimeout: 2000, totalTimeout: 20_000 });
 
     expect(result.results[0].success).toBe(true);
-    expect(calls.filter(c => c.tool === 'launchChrome')).toHaveLength(1);
-    expect(calls.find(c => c.tool === 'launchChrome')!.params.reference).toBe('member-two');
+    expect(calls.filter(c => c.tool === 'connection' && c.params.action === 'launch')).toHaveLength(1);
+    expect(calls.find(c => c.tool === 'connection' && c.params.action === 'launch')!.params.name).toBe('member-two');
   });
 
   it('does not relaunch a browser that is already connected', async () => {
@@ -398,7 +398,7 @@ describe('launchChrome inside a nested sequence', () => {
 
     await executeSteps({ sequence: outer, ctx, startStep: 0, stepTimeout: 2000, totalTimeout: 20_000 });
 
-    expect(calls.filter(c => c.tool === 'launchChrome')).toHaveLength(0);
+    expect(calls.filter(c => c.tool === 'connection' && c.params.action === 'launch')).toHaveLength(0);
   });
 
   // A setup sequence that is ONLY a launch empties out once the browser
@@ -406,7 +406,7 @@ describe('launchChrome inside a nested sequence', () => {
   // what happened - the condition held, there was simply nothing left to do.
   it('reports an emptied sub-sequence as held with nothing run, not as failed', async () => {
     const launchOnly = seq('launch-only', [
-      { tool: 'launchChrome', params: { reference: 'member-two' } },
+      { tool: 'connection', params: { action: 'launch', name: 'member-two' } },
     ]);
     const { ctx } = makeHarness(baseResponses(['device-a', 'member-two']), launchOnly);
 
@@ -428,14 +428,14 @@ describe('launchChrome inside a nested sequence', () => {
         content: [{ type: 'text', text: 'URL: https://example.com/' }],
         _meta: { tool: 'navigate', action: 'info', timestamp: 0, navigate: { url: 'https://example.com/', title: 't', action: 'info' } },
       },
-      launchChrome: text('Chrome launched and connected'),
-      listConnections: connectionsList([
+      'connection.launch': text('Chrome launched and connected'),
+      'connection.list': connectionsList([
         { reference: 'device-a', connected: true },
         { reference: 'member-two', connected: false },
       ]),
     };
     const { ctx, calls } = makeHarness(responses, seq('setup', [
-      { tool: 'launchChrome', params: { reference: 'member-two' } },
+      { tool: 'connection', params: { action: 'launch', name: 'member-two' } },
     ]));
 
     await executeSteps({
@@ -443,7 +443,7 @@ describe('launchChrome inside a nested sequence', () => {
       ctx, startStep: 0, stepTimeout: 2000, totalTimeout: 20_000,
     });
 
-    expect(calls.filter(c => c.tool === 'launchChrome')).toHaveLength(1);
+    expect(calls.filter(c => c.tool === 'connection' && c.params.action === 'launch')).toHaveLength(1);
   });
 
   // `create` hoists a uniform connection OFF the steps, so a real setup
@@ -452,7 +452,7 @@ describe('launchChrome inside a nested sequence', () => {
   // CALLER's browser, and reported success - healing the wrong browser.
   it('runs a launched setup sequence in the browser it just launched', async () => {
     const hoisted = seq('setup', [
-      { tool: 'launchChrome', params: { reference: 'member-two' } },
+      { tool: 'connection', params: { action: 'launch', name: 'member-two' } },
       { tool: 'navigate', params: { action: 'goto', url: 'https://example.com/enrol' } },
       { tool: 'inspect', params: { action: 'evaluateExpression', expression: 'mint()' } },
     ]);
@@ -474,7 +474,7 @@ describe('launchChrome inside a nested sequence', () => {
   // it, the way it always has.
   it('leaves bare steps on the caller when the launch was dropped', async () => {
     const hoisted = seq('setup', [
-      { tool: 'launchChrome', params: { reference: 'member-two' } },
+      { tool: 'connection', params: { action: 'launch', name: 'member-two' } },
       { tool: 'inspect', params: { action: 'evaluateExpression', expression: 'login()' } },
     ]);
     const { ctx, calls } = makeHarness(baseResponses(['device-a', 'member-two']), hoisted);
@@ -484,7 +484,7 @@ describe('launchChrome inside a nested sequence', () => {
       ctx, startStep: 0, stepTimeout: 2000, totalTimeout: 20_000,
     });
 
-    expect(calls.filter(c => c.tool === 'launchChrome')).toEqual([]);
+    expect(calls.filter(c => c.tool === 'connection' && c.params.action === 'launch')).toEqual([]);
     expect(calls.find(c => c.tool === 'inspect' && c.params.expression === 'login()')!.params.connectionReason)
       .toBe('device-a');
   });
@@ -495,6 +495,6 @@ describe('launchChrome inside a nested sequence', () => {
 
     await executeSteps({ sequence: outer, ctx, startStep: 0, stepTimeout: 2000, totalTimeout: 20_000 });
 
-    expect(calls.find(c => c.tool === 'launchChrome')!.params.reference).toBe('my-second-browser');
+    expect(calls.find(c => c.tool === 'connection' && c.params.action === 'launch')!.params.name).toBe('my-second-browser');
   });
 });

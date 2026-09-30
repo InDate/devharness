@@ -20,6 +20,7 @@ import { assertAsCheck, subjectOf as subjectOfCheck, waitAsCheck } from './check
 import type { CheckOutcome as CheckOutcomeRecord, RanStep } from '../proxy/registry.js';
 import { asStep, withinRun } from '../call-origin.js';
 import type { ConnectionMeta, DebuggerStatusMeta } from '../tool-response.js';
+import { addressesConnection, createsConnection, createdName, isLaunchStep } from './connection-steps.js';
 
 // Re-export replay cursor functions
 export { injectReplayCursor, showClickEffect, showKeyPress, removeReplayCursor } from '../replay-cursor.js';
@@ -68,7 +69,7 @@ export interface ExecutionContext {
    */
   connectionMap?: Record<string, string>;
   /**
-   * References this run CAUSED to be launched, filled in as `launchChrome`
+   * References this run CAUSED to be launched, filled in as `connection launch`
    * steps succeed with `reused: false`. Shared by reference with per-step ctx
    * clones and nested sequences, so ownership survives every early return the
    * executor has - a paused, failed or aborted run knows what it created just
@@ -198,7 +199,7 @@ export interface ExecutionResult {
 }
 
 export interface ConnectionAnalysis {
-  launchChromeIndex: number;
+  launchIndex: number;
   firstConnectionToolIndex: number;
   hasLaunchBeforeConnection: boolean;
 }
@@ -349,7 +350,7 @@ export function commandTakesInjectedConnection(cmd: { tool: string; params?: Rec
     const p = cmd.params || {};
     return ['selector', 'expression', 'url', 'cookie', 'localStorage', 'indexedDB'].some(key => p[key] !== undefined);
   }
-  return TOOLS_ACCEPTING_CONNECTION.includes(cmd.tool);
+  return TOOLS_ACCEPTING_CONNECTION.includes(cmd.tool) || addressesConnection(cmd);
 }
 
 // =============================================================================
@@ -640,10 +641,10 @@ export interface NestedRunResult {
 
 /**
  * Shared preparation for any sequence run INSIDE another one (a check's
- * `{ run }`, `forEach`'s `do`): decide which of its `launchChrome` steps still
+ * `{ run }`, `forEach`'s `do`): decide which of its launch steps still
  * apply, and which browser its bare steps belong to.
  *
- * Drop launchChrome steps whose browser already exists - the caller handed us a
+ * Drop launch steps whose browser already exists - the caller handed us a
  * live connection and relaunching it would throw the session away. Keep the ones
  * whose reference is NOT live: a setup sequence that spans two browsers has to be
  * able to create the second one, or it can only ever heal identity in browsers
@@ -662,16 +663,15 @@ async function prepareNestedSequence(
   const sequence = ctx.rebaseOrigin
     ? rebaseSequence(rawSequence, { baseUrl: ctx.rebaseOrigin })
     : rawSequence;
-  const liveRefs = sequence.commands.some(cmd => cmd.tool === 'launchChrome')
+  const liveRefs = sequence.commands.some(isLaunchStep)
     ? await probeLiveConnectionReferences(ctx.executeToolCall)
     : null;
   const keptLaunches: string[] = [];
   const filteredCommands = sequence.commands.filter(cmd => {
-    if (cmd.tool !== 'launchChrome') return true;
+    if (!isLaunchStep(cmd)) return true;
 
-    const recorded = typeof cmd.params?.reference === 'string'
-      ? sanitizeReference(cmd.params.reference)
-      : undefined;
+    const name = createdName(cmd);
+    const recorded = name ? sanitizeReference(name) : undefined;
     // No reference to reason about, or no readable connection list: fall back to
     // the old always-drop behaviour rather than risk killing the live browser.
     if (!recorded || !liveRefs) return false;
@@ -679,7 +679,7 @@ async function prepareNestedSequence(
     const resolved = ctx.connectionMap?.[recorded] ?? recorded;
     if (liveRefs.has(resolved)) return false;
 
-    debugLog(logPrefix, `Keeping launchChrome for "${resolved}" in nested sequence "${label}": no such connection in this session`);
+    debugLog(logPrefix, `Keeping the launch of "${resolved}" in nested sequence "${label}": no such connection in this session`);
     keptLaunches.push(resolved);
     return true;
   });
@@ -1221,38 +1221,38 @@ export function rebaseSequence(
 // =============================================================================
 
 /**
- * Analyze sequence commands to find launchChrome and determine connection requirements
+ * Analyze sequence commands to find the first launch and determine connection requirements
  */
 export function analyzeSequenceConnections(commands: RecordedCommand[]): ConnectionAnalysis {
-  let launchChromeIndex = -1;
+  let launchIndex = -1;
   let firstConnectionToolIndex = -1;
 
   for (let i = 0; i < commands.length; i++) {
-    if (commands[i].tool === 'launchChrome' && launchChromeIndex === -1) {
-      launchChromeIndex = i;
+    if (isLaunchStep(commands[i]) && launchIndex === -1) {
+      launchIndex = i;
     }
     if (commandNeedsBrowserConnection(commands[i]) && firstConnectionToolIndex === -1) {
       firstConnectionToolIndex = i;
     }
   }
 
-  const hasLaunchBeforeConnection = launchChromeIndex !== -1 &&
-    (firstConnectionToolIndex === -1 || launchChromeIndex < firstConnectionToolIndex);
+  const hasLaunchBeforeConnection = launchIndex !== -1 &&
+    (firstConnectionToolIndex === -1 || launchIndex < firstConnectionToolIndex);
 
-  return { launchChromeIndex, firstConnectionToolIndex, hasLaunchBeforeConnection };
+  return { launchIndex, firstConnectionToolIndex, hasLaunchBeforeConnection };
 }
 
 /**
- * Extract connectionReason from sequence's launchChrome command if present
+ * The name the sequence's first launch step creates, when it launches before any step needs a browser
  */
 export function extractConnectionFromSequence(
   commands: RecordedCommand[],
   analysis: ConnectionAnalysis
 ): string | undefined {
   if (analysis.hasLaunchBeforeConnection) {
-    const launchParams = commands[analysis.launchChromeIndex].params;
-    if (launchParams.reference) {
-      return sanitizeReference(launchParams.reference);
+    const name = createdName(commands[analysis.launchIndex]);
+    if (name) {
+      return sanitizeReference(name);
     }
   }
   return undefined;
@@ -1361,7 +1361,7 @@ export function sequenceNeedsConnection(commands: RecordedCommand[]): boolean {
 // =============================================================================
 
 /**
- * The connection references live in this session, as `listConnections` reports
+ * The connection references live in this session, as `connection list` reports
  * them. Returns null when that cannot be determined (probe failed, or a stubbed
  * executeToolCall returned nothing parseable) - callers must treat null as
  * "unknown" and NOT as "empty", or every per-step connection would be rejected.
@@ -1370,7 +1370,7 @@ export async function probeLiveConnectionReferences(
   executeToolCall: ExecuteToolCall
 ): Promise<Set<string> | null> {
   try {
-    const parsed = connectionsOf(await executeToolCall('listConnections', {}));
+    const parsed = connectionsOf(await executeToolCall('connection', { action: 'list' }));
     if (!parsed) return null;
     // A connection whose socket has already dropped is not somewhere a step can
     // run, so it must not count as live - otherwise a healing sequence skips the
@@ -1386,7 +1386,7 @@ export async function probeLiveConnectionReferences(
 }
 
 /**
- * The connections a `listConnections` response carries in `_meta`, or null when
+ * The connections a `connection list` response carries in `_meta`, or null when
  * it carries none (a stub) - null means "unknown", never "empty".
  */
 export function connectionsOf(response: any): ConnectionMeta[] | null {
@@ -1420,14 +1420,14 @@ export function formatMissingStepConnection(opts: {
     `The step names its own connection, so it is NOT run against` +
       ` the run-level connection${runConnection ? ` "${runConnection}"` : ''} - that would replay a` +
       ` multi-browser sequence in a single browser and report success.`,
-    `Either create it (launchChrome({ reference: "${resolved}" })) or rebind it:` +
+    `Either create it (connection({ action: 'launch', name: "${resolved}" })) or rebind it:` +
       ` replay({ action: 'run', ..., connections: { "${recorded}": "<a reference from this session>" } }).`,
   ].join(' ');
 }
 
 /**
  * The debugger's state on the context's connection, read from
- * getDebuggerStatus's `_meta`. That call answers the same way paused or
+ * `connection status`'s `_meta`. That call answers the same way paused or
  * running, so a run that is not paused makes no failed call to learn it.
  * Undefined when the connection cannot be read.
  */
@@ -1435,7 +1435,7 @@ export async function debuggerStatusOf(ctx: ExecutionContext): Promise<DebuggerS
   const { executeToolCall, connectionReason } = ctx;
   if (!connectionReason) return undefined;
   try {
-    const result = await executeToolCall('getDebuggerStatus', { reference: connectionReason });
+    const result = await executeToolCall('connection', { action: 'status', connectionReason });
     return result?._meta?.debugger;
   } catch {
     return undefined;
@@ -1520,8 +1520,9 @@ export async function autoLaunchChrome(
   // handling, and its "launch Chrome manually first" suggestion, never ran and
   // the user saw a raw tool error instead.
   try {
-    await executeToolCall('launchChrome', {
-      reference: connectionReason,
+    await executeToolCall('connection', {
+      action: 'launch',
+      name: connectionReason,
       forceNewInstance,
       ...(proxy && { proxy: true }),
     });
@@ -1623,7 +1624,7 @@ export async function navigateToStartUrl(
     cmd.tool === 'navigate' && cmd.params.action === 'goto'
   );
   const startsWithNavigate = firstNavigateIndex === 0 ||
-    (analysis.hasLaunchBeforeConnection && firstNavigateIndex === analysis.launchChromeIndex + 1);
+    (analysis.hasLaunchBeforeConnection && firstNavigateIndex === analysis.launchIndex + 1);
 
   if (startsWithNavigate) {
     return { success: true };
@@ -2232,7 +2233,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
   // A sequence whose steps name more than one connection can only be replayed
   // faithfully against those connections. `overrideConnectionReason` (the
   // run-level connectionReason) must therefore NOT be stamped onto its
-  // launchChrome steps - that would point every launch at one reference and
+  // launch steps - that would point every launch at one reference and
   // collapse the very interleaving the sequence exists to reproduce (bug-018).
   const recordedConnections = analyzeRecordedStepConnections(commands);
 
@@ -2474,22 +2475,21 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
         }
       }
 
-      // launchChrome/connectDebugger steps CREATE the reference, so a mapping has
-      // to rename the launch too or the sequence would open the recorded name and
-      // then drive a differently-named one.
+      // Launch and attach steps CREATE the name, so a mapping has to rename the
+      // launch too or the sequence would open the recorded name and then drive a
+      // differently-named one.
       let launchRenamedByMap = false;
-      if ((cmd.tool === 'launchChrome' || cmd.tool === 'connectDebugger') &&
-          typeof params.reference === 'string' && connectionMap) {
-        const mappedRef = connectionMap[sanitizeReference(params.reference)];
+      if (createsConnection(cmd) && typeof params.name === 'string' && connectionMap) {
+        const mappedRef = connectionMap[sanitizeReference(params.name)];
         if (mappedRef) {
-          params.reference = mappedRef;
+          params.name = mappedRef;
           launchRenamedByMap = true;
         }
       }
 
       // Inject the run-level connectionReason for tools that accept one, unless the
       // step names its own (per-step connection wins - multi-device sequences).
-      if (connectionReason && TOOLS_ACCEPTING_CONNECTION.includes(cmd.tool) && !params.connectionReason) {
+      if (connectionReason && (TOOLS_ACCEPTING_CONNECTION.includes(cmd.tool) || addressesConnection(cmd)) && !params.connectionReason) {
         params.connectionReason = connectionReason;
       }
 
@@ -2529,19 +2529,19 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
         return expected ? null : at;
       };
 
-      // Override launchChrome reference if custom connectionReason provided.
+      // Override the launched name if a custom connectionReason was provided.
       // Skipped for multi-connection sequences: stamping one reference onto every
       // launch would collapse them into a single browser (see recordedConnections).
       // An explicit `connections` entry for this launch is the more specific
       // instruction and must win - otherwise the map renames the launch and this
       // silently renames it back, with the two writers disagreeing and no signal.
-      if (cmd.tool === 'launchChrome' && overrideConnectionReason) {
+      if (isLaunchStep(cmd) && overrideConnectionReason) {
         if (recordedConnections.multiConnection) {
-          debugLog(logPrefix, `Not overriding launchChrome reference "${params.reference}" with "${overrideConnectionReason}": sequence spans ${recordedConnections.references.length} connections`);
+          debugLog(logPrefix, `Not overriding launched name "${params.name}" with "${overrideConnectionReason}": sequence spans ${recordedConnections.references.length} connections`);
         } else if (launchRenamedByMap) {
-          debugLog(logPrefix, `Not overriding launchChrome reference "${params.reference}" with "${overrideConnectionReason}": connections mapping already rebound this launch`);
+          debugLog(logPrefix, `Not overriding launched name "${params.name}" with "${overrideConnectionReason}": connections mapping already rebound this launch`);
         } else {
-          params.reference = overrideConnectionReason;
+          params.name = overrideConnectionReason;
         }
       }
 
@@ -2809,10 +2809,10 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
       // and leave what it borrowed. The reference is read from the response
       // rather than the params: `reused: true` means the reference already
       // existed and the browser is someone else's (issue #103).
-      if (cmd.tool === 'launchChrome' && ctx.launchedConnections) {
-        const launchMeta = execResult.result?._meta?.launchChrome;
-        if (launchMeta?.reference && launchMeta.reused === false) {
-          ctx.launchedConnections.add(launchMeta.reference);
+      if (isLaunchStep(cmd) && ctx.launchedConnections) {
+        const launchMeta = execResult.result?._meta?.launch;
+        if (launchMeta?.name && launchMeta.reused === false) {
+          ctx.launchedConnections.add(launchMeta.name);
         }
       }
 

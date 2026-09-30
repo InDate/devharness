@@ -81,7 +81,7 @@ export function createWaitTools(
         const form = forms[0] as 'selector' | 'selectorGone' | 'expression' | 'ms';
         if (form !== 'ms' && !connectionReason) {
           return createErrorResponse('WAIT_INVALID_ARGS', {
-            message: `wait({ ${form} }) requires a connectionReason (the reference from launchChrome/connectDebugger).`,
+            message: `wait({ ${form} }) requires a connectionReason (the name connection launch or attach gave it).`,
           });
         }
 
@@ -125,7 +125,7 @@ export function createWaitTools(
             return { ...createErrorResponse('WAIT_DEBUGGER_PAUSED', { condition: conditionLabel, connectionReason }), _meta: meta };
           case 'no-connection':
             return createErrorResponse('CONNECTION_NOT_FOUND', {
-              message: `No connection found for reference "${connectionReason}". Use launchChrome first, or listConnections to see active references.`,
+              message: `No connection found for reference "${connectionReason}". Start one with connection({ action: 'launch' }), or see the names in use with connection({ action: 'list' }).`,
             });
           case 'not-connected':
             return createErrorResponse('DEBUGGER_NOT_CONNECTED');

@@ -318,36 +318,38 @@ storage({
 
 ## Tab Management
 
-Manage multiple browser tabs:
+Each tab is a connection:
 
 ```javascript
-// Create a new tab
-tab({
-  action: 'create',
-  reference: 'second tab',
+// Open a new tab in the Chrome already running on port 9222
+connection({
+  action: 'launch',
+  name: 'second tab',
+  port: 9222,
   url: 'https://site2.com'
 })
 
-// List all tabs
-tab({ action: 'list' })
+// List connections, with each one's URL and title
+connection({ action: 'list' })
 
-// Switch between tabs
-tab({
+// Make a connection active and select its page
+connection({
   action: 'switch',
-  reference: 'second-tab'
+  connectionReason: 'second-tab'
 })
 
-// Rename a tab
-tab({
+// Rename a connection
+connection({
   action: 'rename',
-  reference: 'second-tab',
-  newReference: 'checkout page'
+  connectionReason: 'second-tab',
+  name: 'checkout page'
 })
 
-// Close a tab
-tab({
+// Close a connection; the last one in a Chrome kills that Chrome
+connection({
   action: 'close',
-  reference: 'checkout-page'
+  connectionReason: 'checkout-page',
+  reason: 'checkout flow checked'
 })
 ```
 

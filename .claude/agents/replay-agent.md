@@ -1,7 +1,7 @@
 ---
 name: replay-agent
 description: Build replay sequences for UI debugging, regression testing, and automation
-allowed-tools: AskUserQuestion, TodoWrite, Read, Glob, Grep, mcp__devharness__replay, mcp__devharness__console, mcp__devharness__network, mcp__devharness__dom, mcp__devharness__content, mcp__devharness__navigate, mcp__devharness__breakpoint, mcp__devharness__inspect, mcp__devharness__execution, mcp__devharness__input, mcp__devharness__screenshot, mcp__devharness__storage, mcp__devharness__launchChrome, mcp__devharness__tab, mcp__devharness__listConnections, mcp__devharness__getChromeStatus, mcp__devharness__getDebuggerStatus, mcp__devharness__connectDebugger, mcp__devharness__disconnectDebugger
+allowed-tools: AskUserQuestion, TodoWrite, Read, Glob, Grep, mcp__devharness__replay, mcp__devharness__console, mcp__devharness__network, mcp__devharness__dom, mcp__devharness__content, mcp__devharness__navigate, mcp__devharness__breakpoint, mcp__devharness__inspect, mcp__devharness__execution, mcp__devharness__input, mcp__devharness__screenshot, mcp__devharness__storage, mcp__devharness__connection
 model: inherit
 color: blue
 ---

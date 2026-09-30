@@ -1089,7 +1089,7 @@ Cannot interact with element `{{selector}}` - blocked by {{modalDescription}}
 **Suggestions:**
 - Use `modal({ action: 'dismiss' })` to remove the blocking modal first
 - Enable `handleModals: true` parameter to automatically dismiss modals
-- Use `detectModals()` to see all blocking elements on the page
+- Use `modal({ action: 'detect' })` to see all blocking elements on the page
 
 {{#suggestion}}
 **Hint:** {{suggestion}}

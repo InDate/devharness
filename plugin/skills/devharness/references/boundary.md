@@ -1,6 +1,6 @@
 # The boundary: what the app sent, and what caused it
 
-`launchChrome({ proxy: true })` puts an intercepting proxy in front of a
+`connection({ action: 'launch', proxy: true })` puts an intercepting proxy in front of a
 browser. What it holds is what reached the outside world — local reads and
 writes never appear, which is the point: it answers "what did the app do
 externally", and CDP answers the rest.

@@ -84,7 +84,7 @@ TypeScript debugging works automatically:
 **Manual Loading**:
 ```javascript
 // Register source maps from a directory (lazy - does not load immediately)
-loadSourceMaps({ directory: './dist' })
+source({ action: 'loadMaps', directory: './dist' })
 
 // Source maps load automatically when you:
 // - Set a breakpoint that needs mapping
@@ -112,7 +112,8 @@ inspect({
 })
 
 // Get source code at specific lines
-getSourceCode({
+source({
+  action: 'get',
   url: 'http://localhost:3000/app.js',
   startLine: 40,
   endLine: 60,
@@ -133,7 +134,7 @@ node --inspect=9229 server.js
 
 ```javascript
 // Connect to Node.js debugger
-connectDebugger({ reference: 'backend debug', port: 9229 })
+connection({ action: 'attach', name: 'backend debug', port: 9229 })
 
 // Set breakpoints
 breakpoint({
@@ -150,13 +151,13 @@ Debug Chrome and Node.js simultaneously:
 
 **Chrome:**
 ```javascript
-launchChrome({ reference: 'frontend debug' })
+connection({ action: 'launch', name: 'frontend debug' })
 navigate({ action: 'goto', url: 'http://localhost:3000', connectionReason: 'frontend-debug' })
 ```
 
 **Node.js (separate connection):**
 ```javascript
-connectDebugger({ reference: 'backend debug', port: 9229 })
+connection({ action: 'attach', name: 'backend debug', port: 9229 })
 breakpoint({ action: 'set', url: 'file:///app/server.js', lineNumber: 50, connectionReason: 'backend-debug' })
 ```
 
@@ -201,7 +202,7 @@ inspect({ action: 'evaluateExpression', expression: 'myVar', connectionReason: '
 
 1. **Launch and navigate**
 ```javascript
-launchChrome({ reference: 'bug hunt' })
+connection({ action: 'launch', name: 'bug hunt' })
 navigate({ action: 'goto', url: 'http://localhost:3000/problematic-page', connectionReason: 'bug-hunt' })
 ```
 

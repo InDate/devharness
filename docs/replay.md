@@ -30,7 +30,7 @@ the browser.
 
 ```javascript
 // Launch Chrome with a meaningful name
-launchChrome({ reference: "my-signup-test" })
+connection({ action: 'launch', name: "my-signup-test" })
 
 // Start recording - THIS CALL BLOCKS until you finish in the browser
 replay({ action: 'recordInteraction', connectionReason: 'my-signup-test' })
@@ -259,7 +259,7 @@ replay({ action: 'runFromLog', lines: [3, 4, 5] })
 ```
 
 Both stop at the first failing command. Both infer `connectionReason` from a
-`launchChrome`/`connectDebugger` command in the selection if you don't pass one,
+`connection` launch or attach command in the selection if you don't pass one,
 and error out if the commands need a connection and none can be determined.
 
 ## Tool-Name Validation
@@ -436,8 +436,8 @@ replay({ action: 'run', name: 'login-flow', wait: true })  // blocks, returns fu
 
 ### Auto-Launch Chrome
 
-If the sequence starts with `launchChrome`, no `connectionReason` is needed -
-the launch step's `reference` becomes the run's connection.
+If the sequence starts with a `connection` launch, no `connectionReason` is needed -
+the launch step's `name` becomes the run's connection.
 
 ```javascript
 replay({ action: 'run', sequenceId: 'seq-my-flow' })
@@ -548,18 +548,18 @@ replay({ action: 'run', name: 'smoke-test', connectionReason: 'ci-run',
 ```
 
 `killChromeOnFinish` kills the browsers the run **owns**: its own (run-level)
-connection, plus every browser a `launchChrome` step actually created. It runs
+connection, plus every browser a launch step actually created. It runs
 only after the run finishes - it is skipped on pause, breakpoint,
 click-validation failure or abort.
 
 Ownership is read from the launch itself, not guessed from the sequence: a
-`launchChrome` step against a reference that already exists hands back someone
+launch step against a name that already exists hands back someone
 else's browser (`CHROME_CONNECTION_REUSED`), and those are left running - that
 is the long-lived instance you started by hand, and killing it would take state
 you cannot get back.
 
 For the same reason the kill is **skipped entirely when another live connection
-shares the port** — a `launchChrome` step normally opens a tab in the existing
+shares the port** — a launch step normally opens a tab in the existing
 instance rather than a new process, so killing by port would take those
 browsers down too. The run says so instead: *"Chrome left running (port 9224
 also serves duo-member-two, killChromeOnFinish)"*. Disconnect or close the other
@@ -782,7 +782,8 @@ Details:
 
 - Connection injection applies to `navigate`, `content`, `input`, `console`,
   `network`, `dom`, `screenshot`, `storage`, `inspect`, `execution`,
-  `breakpoint`, `getSourceCode`, `detectModals`, `dismissModal`.
+  `breakpoint`, `source`, `modal`, and `connection`'s switch, rename, close
+  and status.
 - `request` is handled separately: it only receives a connection when the step
   sets `destination: 'browser'`, so Node-targeted sequences never drag a Chrome
   launch in.
@@ -808,7 +809,7 @@ says so in its output; re-record naming every step rather than shipping it.
 
 "Bare" means any step that would have the run-level connection injected — which
 includes the tools whose `connectionReason` is *optional* (`inspect`,
-`execution`, `storage`, `network`, `breakpoint`, `request`, `getSourceCode`),
+`execution`, `storage`, `network`, `breakpoint`, `request`, `source`),
 not just the browser-only ones. Those are the ones people actually leave off.
 `wait({ ms })` is a plain sleep and doesn't count; every other `wait` form does.
 
@@ -873,7 +874,7 @@ some steps name no connection, or whose reference is a `{{...}}` template, is
 not refused: the run-level connection reaches the bare steps, and a template
 resolves only at run time.
 
-Mapping also renames the `reference` on `launchChrome` / `connectDebugger`
+Mapping also renames the `name` on `connection` launch and attach
 steps; otherwise a mapped sequence would launch the recorded name and then drive
 a different one. Where a mapping renames a launch, it wins over the run-level
 `connectionReason`, which would otherwise rename it straight back.
@@ -884,7 +885,7 @@ original bug, re-entered through the API that exists to prevent it — so it is
 rejected before anything runs.
 
 The run-level connection is mapped too when it was *derived* from the sequence
-(e.g. from a `launchChrome` step) rather than passed explicitly; otherwise it
+(e.g. from a launch step) rather than passed explicitly; otherwise it
 would point at a reference that doesn't exist here and the `startUrl` navigation
 and cursor injection would silently no-op.
 
@@ -960,7 +961,7 @@ running too. The run says which it closed:
 #### Declaring the device, not just the browser
 
 `profile` names a persistent Chrome profile (the same ones
-`launchChrome({ profile })` creates, under `~/.devharness/profiles`):
+`connection({ action: 'launch', profile })` creates, under `~/.devharness/profiles`):
 
 ```json
 "requiredConnections": [
@@ -1075,7 +1076,7 @@ step against one `page` would relocate the same silent collapse into the
 exported test.
 
 The generators only know `navigate` and `input` steps. Anything else —
-`check`, `launchChrome`, `inspect`, `storage`, `wait`, `breakpoint` —
+`check`, `connection`, `inspect`, `storage`, `wait`, `breakpoint` —
 becomes a `// [not generated]` comment naming the step, and a sequence where
 *nothing* could be generated exports a test that **throws** rather than an empty
 one that passes. A setup sequence made of a check and a launch has no
@@ -1202,13 +1203,13 @@ A sequence already saved on disk is rewritten in place; otherwise it waits for
 ### The sequence a check runs
 
 The sequence `{ run }` names is loaded and run inline, and it shares the parent
-run's captured variables, remaining time and cancel. A `launchChrome` step
+run's captured variables, remaining time and cancel. A launch step
 inside it is skipped when that reference is already connected, and run when it
 isn't - so a setup sequence spanning two browsers can create the second one.
 
 Which browser the nested sequence's *bare* steps run in follows from that:
 
-| The nested `launchChrome` | Bare steps run in |
+| The nested launch | Bare steps run in |
 |---|---|
 | **ran** (that browser didn't exist) | the browser it just launched |
 | **skipped** (already connected), or absent | the calling run's connection |
@@ -1220,7 +1221,7 @@ in the *caller's* browser, and still reports success. A nested login sequence
 whose browser already exists keeps running in whatever browser called it. Steps
 that name their own `connectionReason` are unaffected either way.
 
-> **Two connections are not two devices.** A plain `launchChrome` reuses the
+> **Two connections are not two devices.** A plain `connection` launch reuses the
 > running instance and opens a *tab* in it, so both references share one profile
 > - one set of cookies, one localStorage, one IndexedDB. A duo test built that
 > way has a single device identity wearing two names, and a "does it propagate
@@ -1229,10 +1230,10 @@ that name their own `connectionReason` are unaffected either way.
 > point of the test is that the two sides are genuinely separate:
 >
 > ```javascript
-> launchChrome({ reference: 'duo-member-two', profile: 'member', forceNewInstance: true })
+> connection({ action: 'launch', name: 'duo-member-two', profile: 'member', forceNewInstance: true })
 > ```
 >
-> `listConnections` shows the giveaway: same `port` means same instance and
+> `connection({ action: 'list' })` shows the giveaway: same `port` means same instance and
 > therefore shared storage.
 
 A url, cookie, storage or IndexedDB check reads the tool's structured result,
@@ -1504,7 +1505,7 @@ Configure in `.devharness/config.json` (values shown are the defaults):
 
 ```javascript
 // Record interactions directly - this call blocks until you click ✓ in the browser
-launchChrome({ reference: "checkout-test" })
+connection({ action: 'launch', name: "checkout-test" })
 replay({ action: 'recordInteraction', connectionReason: 'checkout-test' })
 
 // Export as Playwright test

@@ -10,7 +10,7 @@ reaching the real system, with the decision on a replayable sequence.
 
 The seam is an intercepting proxy between the browser and the server
 (`src/proxy/intercept-proxy.ts`), started per browser by
-`launchChrome({ proxy: true })` and scoped to the app's host at launch
+`connection({ action: 'launch', proxy: true })` and scoped to the app's host at launch
 (`src/proxy/registry.ts:28`). It carries HTTP and socket frames through one
 place. CDP `Fetch` is not used anywhere in `src/` (`grep -rn 'Fetch\.' src`
 returns nothing), and the observing tools (`network`) stay on CDP, which sees

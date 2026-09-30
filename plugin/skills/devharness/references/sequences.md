@@ -221,12 +221,12 @@ Useful `run` parameters:
   `totalTimeout`
 - `variables` - substitute recorded typed text (see below)
 - `killChromeOnFinish` - tears down the browsers this run OWNS: its own
-  run-level connection, plus any browser a `launchChrome` step actually
+  run-level connection, plus any browser a launch step actually
   created. A step that reached an already-bound reference only borrowed that
   browser, so it is left running and a sequence can read from a long-lived
   instance you launched yourself without it being killed underneath you.
   Skipped for any browser whose port another live connection shares (a
-  `launchChrome` step usually opens a tab in the same instance) - the run says
+  launch step usually opens a tab in the same instance) - the run says
   which connection kept it alive
 
 Step through interactively with `step`, `finish`, `insert`, `status`, `cancel`
@@ -394,7 +394,7 @@ a live browser is reused, and a `connections` mapping wins over the
 declaration. A browser that will not launch fails the run before step 1.
 
 **`profile` makes the device durable.** Add the persistent profile the browser
-should come up on - the same ones `launchChrome({ profile })` creates:
+should come up on - the same ones `connection({ action: 'launch', profile })` creates:
 
 ```json
 { "reference": "device-a", "profile": "device-a", "role": "the enrolled device" }
@@ -468,7 +468,7 @@ batch and is refused for a multi-connection one.
 
 **Exported code.** `outputFormat: 'playwright' | 'puppeteer'` gives each recorded
 connection its own page rather than merging them into one. Only `navigate` and
-`input` steps have equivalents; everything else (`check`, `launchChrome`,
+`input` steps have equivalents; everything else (`check`, `connection`,
 `inspect`, `storage`, `wait`) becomes a `// [not generated]` comment, and a
 sequence where nothing could be generated exports a test that **throws** instead
 of an empty one that passes. Setup sequences are for `run`, not for export.
@@ -530,7 +530,7 @@ key is tried as a string and then as a number, since IndexedDB keys `42` and
 variable can drive one: `indexedDB: 'identity/keys/{{var:deviceId}}'`.
 
 The sequence a check runs shares the parent run's captured variables (`saveAs` values
-flow both ways) and inherits its remaining timeout budget. A `launchChrome` step
+flow both ways) and inherits its remaining timeout budget. A launch step
 inside it is skipped when that reference is already connected and run when it
 isn't, so a setup sequence spanning two browsers can create the second one
 itself.
@@ -543,14 +543,14 @@ launch was skipped or absent, they run in the calling run's connection, so a
 nested login sequence still works wherever it's called from. Steps naming their
 own `connectionReason` are unaffected.
 
-**Two connections are not two devices.** A plain `launchChrome` opens a tab in
+**Two connections are not two devices.** A plain `connection launch` opens a tab in
 the running instance, so both references share one profile - one cookie jar, one
 localStorage, one IndexedDB. A duo test built that way has ONE device identity
 under two names, and a cross-user propagation check passes without a second
 device existing. When the two sides must be genuinely separate, launch the
 second with its own profile:
-`launchChrome({ reference: 'duo-member-two', profile: 'member', forceNewInstance: true })`.
-Same `port` in `listConnections` means same instance, so shared storage.
+`connection({ action: 'launch', name: 'duo-member-two', profile: 'member', forceNewInstance: true })`.
+Same `port` in `connection list` means same instance, so shared storage.
 
 Nesting depth is capped by `replay.maxConditionalDepth` (default 10) and regexes
 by `replay.maxRegexLength` (default 500), both in `.cdp-tools/config.json`.

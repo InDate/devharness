@@ -73,7 +73,7 @@ child. On SIGUSR2 - from the postbuild hook, `kill -USR2 $(cat
 it restarts that child and sends `notifications/tools/list_changed`. So a
 rebuild is usually enough; no `/mcp` reconnect.
 
-- Chrome instances the old child launched are killed - call `launchChrome` again.
+- Chrome instances the old child launched are killed - call `connection` action `launch` again.
 - Managed dev servers survive and reattach; they live outside the child's lifetime.
 - The **supervisor** keeps running its own older code until the client
   reconnects. A change under `src/supervisor/` needs `/mcp`, not a rebuild.

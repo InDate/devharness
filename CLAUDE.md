@@ -11,9 +11,9 @@ restarts `build/index.js`. Everything that child held goes with it, not only the
 Chrome instances listed under Hot reload in `CONTRIBUTING.md`:
 
 - The proxy registry (`src/proxy/registry.ts`). A proxy started by
-  `launchChrome({ proxy: true })` is gone, and every event it captured with it.
+  `connection({ action: 'launch', proxy: true })` is gone, and every event it captured with it.
 - Live connections, so a `connectionReason` resolves to nothing until a fresh
-  `launchChrome`.
+  `connection launch`.
 
 A drive that checks a change has to run after the rebuild that carries the
 change. Build first, drive second. Rebuilding part-way through a drive discards

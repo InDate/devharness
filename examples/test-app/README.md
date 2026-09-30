@@ -16,17 +16,12 @@ The application will start on `http://localhost:3000` with **Node.js debugging e
 
 ### For Browser Debugging (Challenges 1-7)
 
-1. Launch Chrome with the MCP tool:
+1. Launch Chrome with the MCP tool; the launch also connects the debugger:
    ```
-   launchChrome({ port: 9222, url: "http://localhost:3000" })
-   ```
-
-2. Connect to Chrome debugger:
-   ```
-   connectDebugger({ port: 9222 })
+   connection({ action: 'launch', name: "debugging payment flow", port: 9222, url: "http://localhost:3000" })
    ```
 
-3. Start solving the challenges!
+2. Start solving the challenges!
 
 ### For Full-Stack Debugging (Challenge 8)
 
@@ -34,24 +29,22 @@ Challenge 8 requires **both** Chrome AND Node.js connections:
 
 1. **Chrome connection** (browser/client-side):
    ```
-   launchChrome({ port: 9222, url: "http://localhost:3000" })
-   connectDebugger({ port: 9222 })
-   // Returns: reference: "debugging payment flow", runtimeType: "chrome"
+   connection({ action: 'launch', name: "debugging payment flow", port: 9222, url: "http://localhost:3000" })
    ```
 
 2. **Node.js connection** (server-side):
    ```
-   connectDebugger({ port: 9229 })
-   // Returns: reference: "testing api endpoints", runtimeType: "node"
+   connection({ action: 'attach', name: "testing api endpoints", port: 9229 })
+   // Returns: reference: "testing-api-endpoints", runtimeType: "node"
    ```
 
    Note: `npm run dev` automatically starts Node.js with `--inspect=9229` flag
 
 3. **Manage connections**:
    ```
-   listConnections()           // See both connections
-   switchConnection({ reference: "debugging payment flow" })  // Switch to Chrome
-   switchConnection({ reference: "testing api endpoints" })  // Switch to Node.js
+   connection({ action: 'list' })   // See both connections
+   connection({ action: 'switch', connectionReason: "debugging-payment-flow" })  // Switch to Chrome
+   connection({ action: 'switch', connectionReason: "testing-api-endpoints" })   // Switch to Node.js
    ```
 
 4. **Important**: Breakpoints only work on the matching runtime:
@@ -138,7 +131,7 @@ Challenge 8 requires **both** Chrome AND Node.js connections:
 - `evaluateExpression` with expression `"items.length"`
 - `stepOver()` to see the bug happen
 
-**Note on Source Maps**: Source maps are now auto-detected! When you connect to the debugger, the `scriptParsed` event automatically loads source maps if available. Check `getDebuggerStatus()` to see `sourceMapCount`.
+**Note on Source Maps**: Source maps are now auto-detected! When you connect to the debugger, the `scriptParsed` event automatically loads source maps if available. Check `connection({ action: 'status', connectionReason })` to see `sourceMapCount`.
 
 **Solution**: Change loop condition from `<=` to `<`
 
@@ -238,37 +231,36 @@ Learn how to manage multiple debugger connections at once - essential for full-s
 
 **Prerequisites**:
 - Test app running with: `npm run dev` (server on port 3000, Node.js debugging on port 9229)
-- Chrome launched with debugging: `launchChrome({ port: 9222, url: "http://localhost:3000" })`
+- Chrome launched with debugging: `connection({ action: 'launch', name: "debugging payment flow", port: 9222, url: "http://localhost:3000" })`
 
 **REQUIRED for completion**: You MUST connect to BOTH Chrome AND Node.js to complete this challenge!
 
 **Tools to Use**:
-- `connectDebugger` with port `9222` (Chrome) - REQUIRED
-- `connectDebugger` with port `9229` (Node.js) - REQUIRED
-- `listConnections()` to verify both connections - REQUIRED
-- `getDebuggerStatus()` to check current connection (includes `reference`)
-- `switchConnection` with reference to change active connection - REQUIRED
+- `connection` action `launch` on port `9222` (Chrome) - REQUIRED
+- `connection` action `attach` on port `9229` (Node.js) - REQUIRED
+- `connection` action `list` to verify both connections - REQUIRED
+- `connection` action `status` to check a connection (includes `reference`)
+- `connection` action `switch` with `connectionReason` to change the active connection - REQUIRED
 - Try setting a breakpoint on each runtime to see the difference
 
 **Step-by-Step Approach** (ALL STEPS REQUIRED):
 1. **Connect to Chrome** first:
    ```
-   connectDebugger({ port: 9222 })
+   connection({ action: 'launch', name: "debugging payment flow", port: 9222, url: "http://localhost:3000" })
    ```
-   - Verify response: `reference: "debugging payment flow"`, `runtimeType: "chrome"`
-   - Check features includes: `["debugging", "browser-automation", "console-monitoring", "network-monitoring"]`
+   - Verify response: `connectionReason: "debugging-payment-flow"`
 
 2. **Connect to Node.js** server:
    ```
-   connectDebugger({ port: 9229 })
+   connection({ action: 'attach', name: "testing api endpoints", port: 9229 })
    ```
-   - Verify response: `reference: "testing api endpoints"`, `runtimeType: "node"`
+   - Verify response: `reference: "testing-api-endpoints"`, `runtimeType: "node"`
    - Check features: `["debugging"]` only (no browser automation)
    - Note: This becomes the active connection automatically
 
 3. **List all connections**:
    ```
-   listConnections()
+   connection({ action: 'list' })
    ```
    - MUST show 2 connections
    - Verify one has `"type": "chrome"`, other has `"type": "node"`
@@ -276,7 +268,7 @@ Learn how to manage multiple debugger connections at once - essential for full-s
 
 4. **Switch back to Chrome**:
    ```
-   switchConnection({ reference: "debugging payment flow" })
+   connection({ action: 'switch', connectionReason: "debugging-payment-flow" })
    ```
    - Verify active connection changed
 
@@ -289,7 +281,7 @@ Learn how to manage multiple debugger connections at once - essential for full-s
 
 6. **Switch to Node.js and try again**:
    ```
-   switchConnection({ reference: "testing api endpoints" })
+   connection({ action: 'switch', connectionReason: "testing-api-endpoints" })
    setBreakpoint({ url: "file:///path/to/test-app/dist/index.js", lineNumber: 50 })
    ```
    - Now it should work (or fail with different error if path is wrong)
@@ -330,7 +322,7 @@ Learn how to manage multiple debugger connections at once - essential for full-s
 - [ ] Challenge 5: Inspected localStorage and found key mismatch
 - [ ] Challenge 6: Found slow request using network search
 - [ ] Challenge 7: Used logpoints to discover vault password construction
-- [ ] Challenge 8: Connected to BOTH Chrome AND Node.js, used listConnections(), switched between connections, and tested runtime separation
+- [ ] Challenge 8: Connected to BOTH Chrome AND Node.js, used connection list, switched between connections, and tested runtime separation
 
 ## Success Criteria
 

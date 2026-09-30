@@ -12,10 +12,10 @@ A test page demonstrating modal/overlay detection and handling. Features:
 - Tests for automatic modal handling during browser automation
 
 **Usage:**
-1. Launch Chrome via the debugger: `launchChrome()`
-2. Navigate to this file: `navigateTo({ url: "file:///path/to/examples/modal-test.html" })`
-3. Test modal detection: `detectModals()`
-4. Test automatic handling: `clickElement({ selector: "#testButton", handleModals: true })`
+1. Launch Chrome via the debugger: `connection({ action: 'launch', name: 'modals' })`
+2. Navigate to this file: `navigate({ action: 'goto', connectionReason: 'modals', url: "file:///path/to/examples/modal-test.html" })`
+3. Test modal detection: `modal({ action: 'detect', connectionReason: 'modals' })`
+4. Test automatic handling: `input({ action: 'click', connectionReason: 'modals', selector: "#testButton", handleModals: true })`
 
 ## Adding Examples
 

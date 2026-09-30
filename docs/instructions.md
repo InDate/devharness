@@ -6,34 +6,34 @@ Chrome DevTools Protocol debugging for JavaScript/TypeScript in Chrome, Node.js,
 
 **Web apps (most common):**
 ```
-1. launchChrome({ reference: "your-descriptive-name" })  # Auto-connects, ready immediately
+1. connection({ action: 'launch', name: "your-descriptive-name" })  # Auto-connects, ready immediately
 2. navigate({ action: 'goto', connectionReason: "your-descriptive-name", url: "..." })
    # Navigation automatically caches interactive elements (links, buttons, inputs) for the page
 3. content({ action: 'findInteractive', connectionReason: "your-descriptive-name" })
    # Shows summary of all interactive elements. Use search/types to filter
-4. content({ action: 'extractText', mode: 'outline' })  # Read page content (preferred over screenshot)
+4. content({ action: 'extractText', mode: 'outline', connectionReason: "your-descriptive-name" })  # Read page content (preferred over screenshot)
 5. Use other tools as needed with connectionReason parameter
 ```
 
 **Alternative (rename later):**
 ```
-1. launchChrome()                                  # Uses default "unnamed-connection-default"
-2. tab({ action: 'rename', reference: "unnamed-connection-default", newReference: "your-name" })
+1. connection({ action: 'launch' })                # Uses default "unnamed-connection-default"
+2. connection({ action: 'rename', connectionReason: "unnamed-connection-default", name: "your-name" })
 3. Use other tools with connectionReason: "your-name"
 ```
 
 **Node.js debugging:**
 ```
 1. Start app: node --inspect=9229 app.js
-2. connectDebugger({ reference: "my-app-debug", port: 9229 })
+2. connection({ action: 'attach', name: "my-app-debug", port: 9229 })
 3. breakpoint({ action: 'set', connectionReason: "my-app-debug", ... })
 ```
 
 ## Basic Workflow
 
 1. **Connect**:
-   - `launchChrome({ reference: "name" })` - Launches AND auto-connects (ready immediately, don't call connectDebugger)
-   - `connectDebugger({ reference: "name" })` - Only for existing Node.js/remote debuggers
+   - `connection({ action: 'launch', name: "name" })` - Launches AND auto-connects (ready immediately, don't attach after it)
+   - `connection({ action: 'attach', name: "name" })` - Only for existing Node.js/remote debuggers
 2. **Navigate & interact**: Use connectionReason in all tool calls
    - `navigate({ action: 'goto', connectionReason: "name", url: "..." })`
    - `input({ action: 'click', connectionReason: "name", selector: "..." })`
@@ -64,7 +64,7 @@ Chrome DevTools Protocol debugging for JavaScript/TypeScript in Chrome, Node.js,
 - `console({ action: 'list', target })`: Read a worker's console, which reaches no page listener
 - `inspect({ action: 'searchCode' })`: Find patterns
 - `inspect({ action: 'searchFunctions' })`: Locate definitions
-- `getSourceCode`: View context
+- `source({ action: 'get' })`: View context
 
 **Modal handling:**
 - Use `handleModals: true` on `input({ action: 'click' | 'type' | 'hover' })`
@@ -73,13 +73,13 @@ Chrome DevTools Protocol debugging for JavaScript/TypeScript in Chrome, Node.js,
 - Limitation: English-only, no Shadow DOM/iframes
 
 **Multiple connections:**
-- `listConnections` → `switchConnection`
-- Each connection = separate tab/process
+- `connection({ action: 'list' })` → `connection({ action: 'switch', connectionReason })`
+- Each connection = separate tab/process; `connection launch` with a running Chrome's `port` opens a new tab in it
 
 ## Common Patterns
 
 **Bug debugging:**
-1. `launchChrome` → `navigate({ action: 'goto' })`
+1. `connection({ action: 'launch' })` → `navigate({ action: 'goto' })`
 2. `inspect({ action: 'searchCode' | 'searchFunctions' })`
 3. `breakpoint({ action: 'set' | 'setLogpoint' })`
 4. Trigger bug
@@ -107,12 +107,12 @@ Chrome DevTools Protocol debugging for JavaScript/TypeScript in Chrome, Node.js,
 
 ## Important Notes
 
-- **After `launchChrome()`**: You are ALREADY connected. Do NOT call `connectDebugger()`. Use the `reference` parameter when launching, or rename later with `tab({ action: 'rename' })`
+- **After `connection launch`**: You are ALREADY connected. Do NOT attach. Pass `name` when launching, or rename later with `connection({ action: 'rename' })`
 - **Interactive elements cache**: Navigation (goto, reload, back, forward) automatically caches all interactive elements. Cache expires after 5 minutes. `findInteractive` shows a summary by default; use `search` or `types` parameters to filter elements
 - **Logpoint limits**: Default 20 executions. Use `breakpoint({ action: 'resetCounter' })` or adjust `maxExecutions`
 - **Expression failures**: Wrapped in try-catch, shows `[Error: message]`. Search: `console({ action: 'search', pattern: "Logpoint Error" })`
 - **CDP line mapping**: May map to nearest valid line. Use `breakpoint({ action: 'validate' })` first
-- **Source maps**: Auto-handled. Use `loadSourceMaps` for manual
+- **Source maps**: Auto-handled. Use `source({ action: 'loadMaps' })` for manual
 - **File paths**: Full URLs (`http://localhost:3000/app.js`) or `file://`
 - **Network monitoring**: Must enable with `network({ action: 'enable' })`
 - **Working an issue**: `comment` on it as you go - once when you start (what you're about to change and why) and once when you finish (what you actually changed, files touched, tests added, and anything that contradicts the issue as written). The issue is the durable record; someone reviewing later reads the timeline, not your diff
@@ -147,7 +147,7 @@ Line kinds:
 
 ## Restarting devharness
 
-If devharness itself seems stuck or broken (not the target app), restart it yourself rather than asking the user to reconnect: `config({ action: 'restart' })`. Falls back to `kill -USR2 $(cat .devharness/mcp-supervisor.pid)` via Bash if that action reports `CONFIG_RESTART_NOT_SUPERVISED` (e.g. a bare `node build/index.js`, not through the supervisor). Editing devharness's own source and running `npm run build` triggers the same restart automatically via its postbuild hook - `config({ action: 'status' })` reports which build is actually answering (entry file, its timestamp, server and supervisor pids), so a rebuild that signalled the wrong supervisor is visible rather than silent. Either way, this kills any Chrome instances it launched (relaunch with `launchChrome`) but managed dev servers (`server` tool) survive and reattach automatically.
+If devharness itself seems stuck or broken (not the target app), restart it yourself rather than asking the user to reconnect: `config({ action: 'restart' })`. Falls back to `kill -USR2 $(cat .devharness/mcp-supervisor.pid)` via Bash if that action reports `CONFIG_RESTART_NOT_SUPERVISED` (e.g. a bare `node build/index.js`, not through the supervisor). Editing devharness's own source and running `npm run build` triggers the same restart automatically via its postbuild hook - `config({ action: 'status' })` reports which build is actually answering (entry file, its timestamp, server and supervisor pids), so a rebuild that signalled the wrong supervisor is visible rather than silent. Either way, this kills any Chrome instances it launched (relaunch with `connection` action `launch`) but managed dev servers (`server` tool) survive and reattach automatically.
 
 ## Tool Categories
 
@@ -158,13 +158,13 @@ actions below are the complete enums accepted by each tool.
 Nearly every tool also takes `connectionReason` to pick which connection it
 runs against (see Quick Start).
 
-**Connection**: `launchChrome`, `killChrome`, `resetChromeLauncher`, `getChromeStatus`, `connectDebugger`, `disconnectDebugger`, `getDebuggerStatus`, `listConnections`, `switchConnection`
-- These are individual tools, not actions
-- `launchChrome` also connects - don't follow it with `connectDebugger`
-- `launchChrome({ profile: 'device-a' })` uses a **named persistent profile**: a stable user-data-dir under `~/.devharness/profiles` (override per project with `chrome.persistentProfileRoot`) that survives across runs, so logins, cookies and IndexedDB persist. Naming it is what makes it persistent - there is no separate flag. It does not pin a port. Only one live Chrome may hold a profile at a time. Unnamed launches stay throwaway and are deleted on exit
-- `launchChrome({ port, forceNewInstance: true })` honours that exact port and errors if it is already taken, rather than quietly moving to another one
-
-**Tab**: `tab` (actions: list, create, rename, switch, close)
+**Connection**: `connection` (actions: launch, attach, list, switch, rename, close, status, browsers) and `browser` (actions: kill, resetLauncher)
+- `name` creates (launch, attach) or renames a connection; `connectionReason` addresses one that exists (switch, rename, close, status)
+- `launch` also connects - don't follow it with `attach`. `launch` with the `port` of a running Chrome opens a new tab in it
+- `list` gives each connection's URL and title and drops dead ones; `switch` makes a connection active and selects its page
+- `close` and both `browser` actions require a `reason`. Closing the last connection to a Chrome kills that Chrome. `browser` is separate so that allowing `connection` allows no kill
+- `connection({ action: 'launch', profile: 'device-a' })` uses a **named persistent profile**: a stable user-data-dir under `~/.devharness/profiles` (override per project with `chrome.persistentProfileRoot`) that survives across runs, so logins, cookies and IndexedDB persist. Naming it is what makes it persistent - there is no separate flag. It does not pin a port. Only one live Chrome may hold a profile at a time. Unnamed launches stay throwaway and are deleted on exit
+- `connection({ action: 'launch', port, forceNewInstance: true })` honours that exact port and errors if it is already taken, rather than quietly moving to another one
 
 **Breakpoint**: `breakpoint` (actions: set, remove, list, setLogpoint, validate, resetCounter, waitForScript, setDOMBreakpoint, setEventBreakpoint, setXHRBreakpoint, await)
 - `waitForScript`: block until a script URL loads, so you can breakpoint code that isn't parsed yet
@@ -181,15 +181,14 @@ runs against (see Quick Start).
 **Inspection**: `inspect` (actions: getCallStack, getVariables, evaluateExpression, searchCode, searchFunctions)
 - `evaluateExpression` awaits a returned Promise by default (async IIFEs resolve to their settled value; a rejection is reported as the expression's own error). Pass `awaitPromise: false` to inspect the Promise object itself. While paused at a breakpoint only already-settled promises can be resolved - a pending one fails fast because the event loop is stopped
 
-**Source**: `getSourceCode`, `loadSourceMaps`
-- Individual tools, not actions
+**Source**: `source` (actions: get, loadMaps)
 
 **Console**: `console` (actions: list, get, recent, search, clear, setObjectDepth)
 
 **Network**: `network` (actions: list, get, search, enable, disable, setConditions)
 
 **Proxy**: `proxy` (actions: status, events, sockets, body, answer, answerFrame, withdraw, answers, refuse)
-- Needs a browser launched with `launchChrome({ proxy: true })`. Holds what reached the outside world, where `network` reads what CDP saw
+- Needs a browser launched with `connection({ action: 'launch', proxy: true })`. Holds what reached the outside world, where `network` reads what CDP saw
 - An event row carries the step that owns it, a level (`observed`, `likely`, `positional`, `unprompted`) read from stored evidence, and what the page says started it (`input`, `timer`, `parser`, `preload`, `script`)
 - A timer-rooted request or send owns nothing and opens no allowance, so an app's own polling and heartbeats stay out of every step
 - `answer` answers a URL with a value instead of reaching the server; `answerFrame` replaces or drops one socket message. Stopping traffic in time is the `hold` tool
@@ -206,17 +205,16 @@ runs against (see Quick Start).
 **Input**: `input` (actions: click, type, press, hover, focus, focusNext, focusPrevious, drag, scroll, mousemove, pinch, tap, swipe)
 - `tap` / `swipe`: real touch events via `Input.dispatchTouchEvent`. Mouse actions never produce touchstart/touchmove, so a component listening only for touch cannot be driven by `click` or `drag`. `tap` takes a selector or x/y; `swipe` takes `from`/`to` and `steps` (default 10) and emits touchstart, N touchmove, touchend
 
-**Modal**: `detectModals`, `dismissModal`
-- Individual tools, not actions
+**Modal**: `modal` (actions: detect, dismiss)
 
 **Storage**: `storage` (actions: getCookies, setCookie, getLocalStorage, setLocalStorage, removeLocalStorage, getSessionStorage, setSessionStorage, removeSessionStorage, idbListDatabases, idbListStores, idbGet, idbGetAll, idbPut, idbDelete, clear, writes, authenticatorAdd, authenticatorCredentials, authenticatorRemove). authenticatorAdd puts a virtual WebAuthn authenticator on the page, so a passkey prompt is answered with no person present (`userVerified: false` for presence alone); it stands until authenticatorRemove or the tab closes
 - IndexedDB reads return typed descriptors for values JSON can't express - `{__type:'CryptoKey', algorithm, extractable, usages}` and analogues for Blob/ArrayBuffer/Map/Set/Date - so a non-extractable key is still observable. `idbPut` accepts JSON-expressible values only
 - A read never creates a database: `idbGet` on an unknown name errors rather than silently creating it
 - `clear` defaults to cookies + localStorage + sessionStorage. `indexedDB` is opt-in via `types` - dropping whole databases is far less recoverable
 
-**HTTP / assertions**: `request`, `check`, `assert`, `saveToDisk`
+**HTTP / assertions**: `request`, `check`, `assert`, `download`
 - `request`: HTTP request as a sequence step. `destination: 'node'` sends it from the MCP server process (no browser, no CORS/cookies); `destination: 'browser'` runs `fetch()` in a connected tab (that page's cookies/session/origin). `saveAs` captures the response for later steps
-- `check`: read one thing - an element (`selector` + `condition`), a value (`{{var:name.path}}` + `operator` + `right`), an `expression`, the `url`, a `cookie`, a `localStorage` key, an `indexedDB` record, traffic crossing the proxy (`traffic: { urlIncludes, method }` for requests or `{ urlIncludes, direction, textIncludes }` for frames, with `count` + `operator`), a `socket` being `open` or `closed`, or time alone (`afterMs`) - and answer held or failed. Traffic is counted by the proxy from the start of the call `stepsBack` before the check (default 1, the call just before it - every call counts, reads included), matched as a pin matches; traffic and socket checks need `launchChrome({ proxy: true })`. `withinMs` reads again until it holds. Called directly it answers without failing the call, and errors only on a check it cannot read (bad selector, paused page, no connection). As a sequence step, `holds` and `fails` set what happens next: `continue` (the pass default), `stop` (the fail default), or `{ run: '<sequence>', resumeAt }` to run another sequence inline and carry on, or resume further down. A guard is a check whose pass runs a sequence. An error stops the run whatever `fails` says
+- `check`: read one thing - an element (`selector` + `condition`), a value (`{{var:name.path}}` + `operator` + `right`), an `expression`, the `url`, a `cookie`, a `localStorage` key, an `indexedDB` record, traffic crossing the proxy (`traffic: { urlIncludes, method }` for requests or `{ urlIncludes, direction, textIncludes }` for frames, with `count` + `operator`), a `socket` being `open` or `closed`, or time alone (`afterMs`) - and answer held or failed. Traffic is counted by the proxy from the start of the call `stepsBack` before the check (default 1, the call just before it - every call counts, reads included), matched as a pin matches; traffic and socket checks need `connection({ action: 'launch', proxy: true })`. `withinMs` reads again until it holds. Called directly it answers without failing the call, and errors only on a check it cannot read (bad selector, paused page, no connection). As a sequence step, `holds` and `fails` set what happens next: `continue` (the pass default), `stop` (the fail default), or `{ run: '<sequence>', resumeAt }` to run another sequence inline and carry on, or resume further down. A guard is a check whose pass runs a sequence. An error stops the run whatever `fails` says
 - `assert`: a check whose fail stops the sequence - use `{{var:name.path}}` templates against values captured by a prior `saveAs`. A DOM assert reads for up to 5s (`timeoutMs`); written into a sequence from history it is stored as a `check` step
 - **`variables` on `run`/`runAll`**: replaces the text of recorded `input type` steps. Keys are BUILT from the selector - `var_<0-based step index>_<selector, non-alphanumerics replaced by _>` - so `#password` at step 3 is `var_3__password`, two underscores; read them off `get` or off the prompt a run returns rather than composing them by hand. A key naming no typed-text step is rejected before anything runs, with the substitutable keys listed. Substitutions reach the sequences a check's `{ run }` or a `forEach` nests into, so a key naming a step in a shared login helper lands there; `runAll` holds one map for the whole suite and accepts a key matching any member
 - **`{{env:NAME}}`**: any step param may hold it, resolved from `process.env` when the step runs. This is how a credential stays OUT of the sequence file - the file holds the token, the value lives in the environment, and neither the file nor the tool call carries the secret. An unset or empty variable fails the step and names the variable; an empty value would otherwise be typed as-is. The name must match `[A-Za-z_][A-Za-z0-9_]*`. A token-bearing step does not hold the run open for a `variables` answer, and an explicitly supplied `variables` value still wins over the environment
@@ -236,7 +234,7 @@ runs against (see Quick Start).
 - `resolve` is **human-gated**: it opens a browser overlay and only a person clicking Fixed/Not Fixed can close the issue. Don't call it unattended - it will wait ~150s and then fail with `ISSUES_RESOLVE_TIMEOUT`. Record what you found with `comment` and ask the user to run `resolve` themselves
 - `acknowledge`: acknowledge pending bugs to unblock other tools
 - **GitHub** (via the `gh` CLI; only `publish` and `sync` use the network): `publish` shows a draft and posts nothing until `confirm: true`; `sync` reconciles both ways and reports a conflict rather than overwriting when both sides changed; `import` materialises a GitHub-only issue locally; `link` stamps an existing number with no network call; `pullSequence` writes a sequence out of an issue body to disk (one authored by another GitHub account needs a person to read it and pass `confirm: true`)
-- A sequence pulled from an issue is **never run automatically**, and one using `execution`, `saveToDisk`, `server`, `request` or `download` is refused unless you pass `allowPrivilegedSteps: true`. Read it first
+- A sequence pulled from an issue is **never run automatically**, and one using `execution`, `server`, `request` or `download` is refused unless you pass `allowPrivilegedSteps: true`. Read it first
 
 **Bench**: `bench` (actions: start, stop, hold, release, picker, tick, keepStep, dropStep, flagStep, sweep, retake, capture, list, status)
 - The panel beside a driven app: it holds the page still, shows what crossed the boundary and what caused each thing, records and steps sequences, and collects element-level comments
@@ -275,9 +273,7 @@ runs against (see Quick Start).
 
 **Dashboard**: `dashboard` (actions: open, status, stop)
 
-**Debug logging**: `setDebugLogging`, `getDebugLoggingStatus`
-
-**Config**: `config` (actions: status, useLocal, useGlobal, reset, backup, cloneFromGlobal, show, listTools, reload, restart, listProfiles, resetProfile)
+**Config**: `config` (actions: status, useLocal, useGlobal, reset, backup, cloneFromGlobal, show, listTools, reload, restart, listProfiles, resetProfile, setDebugLogging, debugLoggingStatus)
 - `status`: Show where config is loaded from (local vs global)
 - `useLocal`: Switch to project-local config (.devharness/config.json)
 - `useGlobal`: Switch to global config (~/.devharness/config.json)

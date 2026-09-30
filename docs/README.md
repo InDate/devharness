@@ -38,7 +38,7 @@ claude mcp add devharness -- npx -y devharness
 
 ```javascript
 // Launch Chrome and start debugging
-launchChrome({ reference: 'my debug session' })
+connection({ action: 'launch', name: 'my debug session' })
 navigate({ action: 'goto', url: 'http://localhost:3000', connectionReason: 'my-debug-session' })
 
 // Set a breakpoint

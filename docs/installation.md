@@ -79,7 +79,7 @@ stop that:
   releases what it holds - connections, the Chrome instances it launched,
   monitor buffers, and the dev servers it owns - and exits. The supervisor
   stays connected, so the MCP connection itself survives: the next tool call
-  starts a fresh server. You will need to relaunch Chrome (`launchChrome`) and
+  starts a fresh server. You will need to relaunch Chrome (`connection` action `launch`) and
   restart dev servers (`server({ action: 'start', serverId: '...' })`); their
   config is kept.
 - **Shared dev servers are protected.** A dev server is only stopped when no
@@ -115,10 +115,10 @@ Enable debug logging to track server operations:
 
 ```javascript
 // Enable debug logging
-setDebugLogging({ enabled: true })
+config({ action: 'setDebugLogging', enabled: true })
 
 // Check status
-getDebugLoggingStatus()
+config({ action: 'debugLoggingStatus' })
 // Logs written to: .devharness/logs/debug.log
 ```
 

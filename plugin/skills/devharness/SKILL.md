@@ -1,7 +1,7 @@
 ---
 name: devharness
-description: Drive and debug a running app via the devharness MCP server - launch or attach to Chrome and Node.js, set breakpoints and logpoints, inspect call stacks and variables, watch console and network, manage dev servers, replay any earlier tool call by its history index, and record reproduction sequences that verify a fix. Use whenever a task involves running or debugging a live app, reproducing or verifying a bug, re-driving setup you already did (relaunching, re-logging in, refilling a form), or the user mentions breakpoints, Chrome DevTools, CDP, replay sequences, or devharness tools (launchChrome, navigate, breakpoint, inspect, replay, server, issues, etc.).
-compatibility: Requires the devharness MCP server to be connected (tools such as launchChrome, breakpoint, inspect, replay, server, issues). The shell commands need `devharness` on PATH (`npm i -g devharness`); without it use `npx -y devharness@<version> <command>`. Previously published as cdp-tools-mcp.
+description: Drive and debug a running app via the devharness MCP server - launch or attach to Chrome and Node.js, set breakpoints and logpoints, inspect call stacks and variables, watch console and network, manage dev servers, replay any earlier tool call by its history index, and record reproduction sequences that verify a fix. Use whenever a task involves running or debugging a live app, reproducing or verifying a bug, re-driving setup you already did (relaunching, re-logging in, refilling a form), or the user mentions breakpoints, Chrome DevTools, CDP, replay sequences, or devharness tools (connection, navigate, breakpoint, inspect, replay, server, issues, etc.).
+compatibility: Requires the devharness MCP server to be connected (tools such as connection, breakpoint, inspect, replay, server, issues). The shell commands need `devharness` on PATH (`npm i -g devharness`); without it use `npx -y devharness@<version> <command>`. Previously published as cdp-tools-mcp.
 version: 0.10.1
 ---
 
@@ -11,29 +11,29 @@ CDP debugging for JS/TS in Chrome, Node.js, or any CDP target.
 
 ## Quick start
 
-Every tool takes `connectionReason` — the name you gave the connection.
+`name` creates a connection; every later call addresses it as `connectionReason`. A call without one acts on whichever connection is active, so name it.
 
 ```
-launchChrome({ reference: "app" })              # launches AND connects; do NOT then call connectDebugger
-navigate({ action: 'goto', connectionReason: "app", url })   # caches interactive elements
-content({ action: 'findInteractive' })          # summary; filter with search/types
-content({ action: 'extractText', mode: 'outline' })          # prefer over screenshot
+connection({ action: 'launch', name: "app" })                          # launches AND connects; do NOT then attach
+navigate({ action: 'goto', connectionReason: "app", url })               # caches interactive elements
+content({ action: 'findInteractive', connectionReason: "app" })          # summary; filter with search/types
+content({ action: 'extractText', mode: 'outline', connectionReason: "app" })  # prefer over screenshot
 ```
 
-Node: `node --inspect=9229 app.js` → `connectDebugger({ reference: "api", port: 9229 })`.
-`connectDebugger` is only for existing Node/remote debuggers.
+Node: `node --inspect=9229 app.js` → `connection({ action: 'attach', name: "api", port: 9229 })`.
+`attach` is only for existing Node/remote debuggers.
 
-Launched without a reference? `tab({ action: 'rename', reference: "unnamed-connection-default", newReference: "app" })`.
+Launched without a name? `connection({ action: 'rename', connectionReason: "unnamed-connection-default", name: "app" })`.
 
-Paused: `inspect({ action: 'getCallStack' })` → `getVariables` → `evaluateExpression`.
-Watch: `console({ action: 'list' })`, `network({ action: 'list' })` (needs `network({ action: 'enable' })` first).
-Inside a worker: `inspect({ action: 'listTargets' })` → `evaluateExpression({ target, expression })`, and `console({ action: 'list', target })` — a service worker's console reaches no page listener.
+Paused: `inspect({ action: 'getCallStack', connectionReason })` → `getVariables` → `evaluateExpression`.
+Watch: `console({ action: 'list', connectionReason })`, `network({ action: 'list', connectionReason })` (needs `network({ action: 'enable', connectionReason })` first).
+Inside a worker: `inspect({ action: 'listTargets', connectionReason })` → `evaluateExpression({ target, expression })`, and `console({ action: 'list', target })` — a service worker's console reaches no page listener.
 
 ## `.devharness/` must be git-ignored
 
 State lands in `.devharness/` — config, server claims, logs, sequences, issues. Machine-local; carries pids, ports, and local paths into what may be a public repo.
 
-Before the first tool that writes there (`server`, `replay` record, `issues`, `setDebugLogging`) in a git repo:
+Before the first tool that writes there (`server`, `replay` record, `issues`, `config setDebugLogging`) in a git repo:
 
 ```
 git check-ignore -q .devharness && echo ignored || echo NOT ignored
@@ -145,11 +145,11 @@ If devharness itself is stuck (not the target app), restart it — don't wait to
 
 `config({ action: 'status' })` reports version, entry file, its timestamp, and pids — check the timestamp before believing a rebuild landed; a build signals the supervisor in its own project's pidfile, not always this session's.
 
-Restart kills Chrome instances this session launched (relaunch with `launchChrome`); managed servers survive and reattach. `config({ action: 'reload' })` hot-applies most config edits — restart is only needed for `tools.enabled`/`tools.disabled` or a genuinely stuck process.
+Restart kills Chrome instances this session launched (relaunch with `connection launch`); managed servers survive and reattach. `config({ action: 'reload' })` hot-applies most config edits — restart is only needed for `tools.enabled`/`tools.disabled` or a genuinely stuck process.
 
 ## Practices
 
-**Breakpoints** — conditional: `condition: "userId === '123'"`. Loops/hot paths: `setLogpoint` (20 executions default; `resetCounter` or `maxExecutions`). Clean up with `remove`, audit with `list`. CDP may snap to the nearest line — `validate` first. Source maps auto-load; `loadSourceMaps` to force. Paths are full URLs (`http://localhost:3000/app.js`) or `file://`.
+**Breakpoints** — conditional: `condition: "userId === '123'"`. Loops/hot paths: `setLogpoint` (20 executions default; `resetCounter` or `maxExecutions`). Clean up with `remove`, audit with `list`. CDP may snap to the nearest line — `validate` first. Source maps auto-load; `source({ action: 'loadMaps' })` to force. Paths are full URLs (`http://localhost:3000/app.js`) or `file://`.
 
 **DOM/Event/XHR breakpoints** (Chrome only) — `setDOMBreakpoint` (`subtree-modified`, `attribute-modified`, `node-removed`), `setEventBreakpoint` (click, submit, input, keydown…), `setXHRBreakpoint` (URL substring). Example: `breakpoint({ action: 'setDOMBreakpoint', selector: '.todo-list', domBreakpointType: 'subtree-modified' })`. nodeIds die on reload.
 
@@ -159,9 +159,9 @@ Restart kills Chrome instances this session launched (relaunch with `launchChrom
 
 **Modals** — `handleModals: true` on `input` click/type/hover, `dismissStrategy`: `auto` | `accept` | `reject` | `close` | `remove`. English-only, no Shadow DOM or iframes.
 
-**Code search** — `inspect({ action: 'searchCode' | 'searchFunctions' })`, then `getSourceCode`.
+**Code search** — `inspect({ action: 'searchCode' | 'searchFunctions' })`, then `source({ action: 'get' })`.
 
-**Connections** — `listConnections` → `switchConnection`. One connection per tab/process.
+**Connections** — `connection list` → `switch`. One connection per tab/process. A new tab in a running Chrome: `connection launch` with that Chrome's `port`. `browser kill` ends a Chrome process; it is a separate tool so allowing `connection` allows no kill.
 
 **Issues** — `comment` when you start (what you're changing, why) and when you finish (what changed, files, tests, anything contradicting the issue). The timeline is the durable record, not your diff. `resolve` waits on a browser overlay only a human can click — never call it unattended; `comment` instead.
 
@@ -169,7 +169,7 @@ Restart kills Chrome instances this session launched (relaunch with `launchChrom
 
 | Task | Sequence |
 |---|---|
-| Bug | `launchChrome` → `goto` → `searchCode`/`searchFunctions` → `set`/`setLogpoint` → trigger → `getCallStack` + `getVariables` → `evaluateExpression` |
+| Bug | `connection launch` → `goto` → `searchCode`/`searchFunctions` → `set`/`setLogpoint` → trigger → `getCallStack` + `getVariables` → `evaluateExpression` |
 | Performance | `network enable` → `goto` → `network search` → `network get` (timing) → `setLogpoint` in slow paths |
 | Frontend state | `dom querySelector` + `getProperties` → `storage getLocalStorage`/`getCookies` → `evaluateExpression` → `dom snapshot` |
 | UI audit | `content({ action: 'verify' })` — dead buttons, touch targets, overflow, dead links, viewport. Filter: `checks: ['handlers','touch']` from `handlers`, `viewport`, `touch`, `overflow`, `clickability`, `links`, `scroll` |

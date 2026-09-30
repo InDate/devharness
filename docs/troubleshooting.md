@@ -13,7 +13,7 @@ and exits; the supervisor stays connected and started a fresh server for your
 next call.
 
 **Solutions:**
-- Relaunch Chrome (`launchChrome`) and restart the dev server
+- Relaunch Chrome (`connection({ action: 'launch' })`) and restart the dev server
   (`server({ action: 'start', serverId: '...' })`) - its config is kept.
 - Raise or disable the threshold in `.devharness/config.json`:
   `{"session": {"idleSuspendMinutes": 0}}`. Read at supervisor startup, so it
@@ -42,8 +42,8 @@ running until you reboot.
 ### "Chrome is already running on port X"
 
 **Solutions:**
-- Use `killChrome({ reason: "restart needed" })` to stop existing instance
-- Launch on different port: `launchChrome({ port: 9224, reference: 'new session' })`
+- Use `browser({ action: 'kill', reason: "restart needed" })` to stop existing instance
+- Launch on different port: `connection({ action: 'launch', port: 9224, name: 'new session' })`
 - Check if another process is using the port: `lsof -i :9222`
 
 ### Chrome won't launch
@@ -51,7 +51,7 @@ running until you reboot.
 **Solutions:**
 - Check Chrome is installed in a standard location
 - Verify no other Chrome debugging sessions are active
-- Try `resetChromeLauncher({ reason: "stuck state" })` to reset launcher state
+- Try `browser({ action: 'resetLauncher', reason: "stuck state" })` to reset launcher state
 
 ## Breakpoint Issues
 
@@ -109,7 +109,7 @@ running until you reboot.
 
 ### Cannot connect to Node.js debugger
 
-**Problem:** `connectDebugger` fails
+**Problem:** `connection({ action: 'attach' })` fails
 
 **Solutions:**
 - Ensure Node started with `--inspect` flag
@@ -122,7 +122,7 @@ running until you reboot.
 **Solutions:**
 - Check if Node process crashed (look at terminal output)
 - Verify Node didn't restart (e.g., from nodemon)
-- Reconnect with same reference: `connectDebugger({ reference: 'same ref', port: 9229 })`
+- Reconnect with the same name: `connection({ action: 'attach', name: 'same ref', port: 9229 })`
 
 ### "Reference already in use" but no connection exists
 
@@ -130,9 +130,8 @@ running until you reboot.
 
 **Solutions:**
 - This is now auto-handled - stale connections are automatically detected and cleaned up
-- Use `tab({ action: 'list' })` which validates and cleans up dead connections
-- Use `listConnections()` which also cleans up stale references
-- As fallback, use `killChrome({ reason: "cleanup" })` then relaunch
+- Use `connection({ action: 'list' })`, which drops dead connections
+- As fallback, use `browser({ action: 'kill', reason: "cleanup" })` then relaunch
 
 ## Replay Issues
 
@@ -186,7 +185,7 @@ running until you reboot.
 **Solutions:**
 - Source maps load lazily - they load when needed
 - Check file size limits: inline (1MB), file (10MB)
-- Manually load: `loadSourceMaps({ directory: './dist' })`
+- Manually load: `source({ action: 'loadMaps', directory: './dist' })`
 
 ### Wrong file shown in call stack
 
@@ -237,7 +236,7 @@ running until you reboot.
 ### Enable debug logging
 
 ```javascript
-setDebugLogging({ enabled: true })
+config({ action: 'setDebugLogging', enabled: true })
 // Check logs at: .devharness/logs/debug.log
 ```
 
@@ -245,16 +244,16 @@ setDebugLogging({ enabled: true })
 
 ```javascript
 // List all connections
-listConnections()
+connection({ action: 'list' })
 
 // Check specific connection
-getDebuggerStatus({ reference: 'my-session' })
+connection({ action: 'status', connectionReason: 'my-session' })
 ```
 
 ### Check Chrome status
 
 ```javascript
-getChromeStatus()
+connection({ action: 'browsers' })
 // Shows running instances, ports, and recent close events
 ```
 
@@ -262,11 +261,11 @@ getChromeStatus()
 
 ```javascript
 // Kill all Chrome instances
-killChrome({ reason: "full reset" })
+browser({ action: 'kill', reason: "full reset" })
 
 // Reset launcher state
-resetChromeLauncher({ reason: "stuck" })
+browser({ action: 'resetLauncher', reason: "stuck" })
 
 // Start fresh
-launchChrome({ reference: 'fresh start' })
+connection({ action: 'launch', name: 'fresh start' })
 ```

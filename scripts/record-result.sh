@@ -12,7 +12,7 @@ RESULTS_FILE="$REPO_ROOT/examples/test-app/results.md"
 # Create results file if it doesn't exist
 if [ ! -f "$RESULTS_FILE" ]; then
   cat > "$RESULTS_FILE" << 'EOF'
-# CDP-Tools Challenge Results
+# devharness Challenge Results
 
 This file tracks completion times and answers for the test-app challenges.
 
@@ -21,7 +21,7 @@ This file tracks completion times and answers for the test-app challenges.
 EOF
 fi
 
-echo "=== CDP-Tools Challenge Results Recorder ==="
+echo "=== devharness Challenge Results Recorder ==="
 echo ""
 
 # Prompt for completion time
@@ -49,13 +49,12 @@ echo ""
 # Prompt for each challenge answer
 read -p "1. DOM Manipulation Bug: " ANSWER_1
 read -p "2. Network Request Bug: " ANSWER_2
-read -p "3. Console Error Hunt: " ANSWER_3
-read -p "4. Runtime Data Corruption: " ANSWER_4
+read -p "3. Console Errors: " ANSWER_3
+read -p "4. Variable Inspection: " ANSWER_4
 read -p "5. localStorage Bug: " ANSWER_5
-read -p "6. Hidden Debug Mode (secret code): " ANSWER_6
-read -p "7. Vault Password: " ANSWER_7
-read -p "8. State Mutation Bug: " ANSWER_8
-read -p "Bonus. Slow Request: " ANSWER_BONUS
+read -p "6. Performance Issue: " ANSWER_6
+read -p "7. Secret Vault Password: " ANSWER_7
+read -p "8. Multi-Connection Debugging: " ANSWER_8
 
 echo ""
 echo "=== Feedback ==="
@@ -79,19 +78,17 @@ ENTRY="## Run: $TIMESTAMP
 [ -n "$ANSWER_2" ] && ENTRY+="
 | 2 | Network Request | $ANSWER_2 |"
 [ -n "$ANSWER_3" ] && ENTRY+="
-| 3 | Console Error Hunt | $ANSWER_3 |"
+| 3 | Console Errors | $ANSWER_3 |"
 [ -n "$ANSWER_4" ] && ENTRY+="
-| 4 | Runtime Data Corruption | $ANSWER_4 |"
+| 4 | Variable Inspection | $ANSWER_4 |"
 [ -n "$ANSWER_5" ] && ENTRY+="
 | 5 | localStorage Bug | $ANSWER_5 |"
 [ -n "$ANSWER_6" ] && ENTRY+="
-| 6 | Hidden Debug Mode | $ANSWER_6 |"
+| 6 | Performance Issue | $ANSWER_6 |"
 [ -n "$ANSWER_7" ] && ENTRY+="
-| 7 | Vault Password | $ANSWER_7 |"
+| 7 | Secret Vault Password | $ANSWER_7 |"
 [ -n "$ANSWER_8" ] && ENTRY+="
-| 8 | State Mutation | $ANSWER_8 |"
-[ -n "$ANSWER_BONUS" ] && ENTRY+="
-| Bonus | Slow Request | $ANSWER_BONUS |"
+| 8 | Multi-Connection Debugging | $ANSWER_8 |"
 
 ENTRY+="
 "

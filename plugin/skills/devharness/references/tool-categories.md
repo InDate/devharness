@@ -7,13 +7,13 @@ actions below are the complete enums accepted by each tool.
 Nearly every tool also takes `connectionReason` to pick which connection it
 runs against (see the skill's Quick Start).
 
-**Connection**: `launchChrome`, `killChrome`, `resetChromeLauncher`, `getChromeStatus`, `connectDebugger`, `disconnectDebugger`, `getDebuggerStatus`, `listConnections`, `switchConnection`
-- These are individual tools, not actions
-- `launchChrome` also connects - don't follow it with `connectDebugger`
-- `launchChrome({ profile: 'device-a' })` uses a **named persistent profile**: a stable user-data-dir under `~/.cdp-tools/profiles` (override per project with `chrome.persistentProfileRoot`) that survives across runs, so logins, cookies and IndexedDB persist. Naming it is what makes it persistent - there is no separate flag. It does not pin a port. Only one live Chrome may hold a profile at a time. Unnamed launches stay throwaway and are deleted on exit
-- `launchChrome({ port, forceNewInstance: true })` honours that exact port and errors if it is already taken, rather than quietly moving to another one
-
-**Tab**: `tab` (actions: list, create, rename, switch, close)
+**Connection**: `connection` (actions: launch, attach, list, switch, rename, close, status, browsers) and `browser` (actions: kill, resetLauncher)
+- `name` creates (launch, attach) or renames a connection; `connectionReason` addresses one that exists (switch, rename, close, status)
+- `launch` also connects - don't follow it with `attach`. `launch` with the `port` of a running Chrome opens a new tab in it
+- `list` gives each connection's URL and title and drops dead ones; `switch` makes a connection active and selects its page
+- `close` and both `browser` actions require a `reason`. Closing the last connection to a Chrome kills that Chrome. `browser` is separate so that allowing `connection` allows no kill
+- `connection({ action: 'launch', profile: 'device-a' })` uses a **named persistent profile**: a stable user-data-dir under `~/.devharness/profiles` (override per project with `chrome.persistentProfileRoot`) that survives across runs, so logins, cookies and IndexedDB persist. Naming it is what makes it persistent - there is no separate flag. It does not pin a port. Only one live Chrome may hold a profile at a time. Unnamed launches stay throwaway and are deleted on exit
+- `connection({ action: 'launch', port, forceNewInstance: true })` honours that exact port and errors if it is already taken, rather than quietly moving to another one
 
 **Breakpoint**: `breakpoint` (actions: set, remove, list, setLogpoint, validate, resetCounter, waitForScript, setDOMBreakpoint, setEventBreakpoint, setXHRBreakpoint, await)
 - `waitForScript`: block until a script URL loads, so you can breakpoint code that isn't parsed yet
@@ -32,8 +32,7 @@ runs against (see the skill's Quick Start).
 - `listTargets` lists the service, dedicated and shared worker targets on this browser. `evaluateExpression({ target })` runs the expression inside one of them, addressed by target id or by a substring of its URL - a substring matching two targets is refused with both named. A worker's console reaches no page listener, so `console({ action: 'list' | 'recent', target })` reads it from that target; recording starts at first attach
 - `evaluateExpression` awaits a returned Promise by default (async IIFEs resolve to their settled value; a rejection is reported as the expression's own error). Pass `awaitPromise: false` to inspect the Promise object itself. While paused at a breakpoint only already-settled promises can be resolved - a pending one fails fast because the event loop is stopped
 
-**Source**: `getSourceCode`, `loadSourceMaps`
-- Individual tools, not actions
+**Source**: `source` (actions: get, loadMaps)
 
 **Console**: `console` (actions: list, get, recent, search, clear, setObjectDepth)
 - `target` on `list` and `recent` reads a worker's console instead of the page's
@@ -41,7 +40,7 @@ runs against (see the skill's Quick Start).
 **Network**: `network` (actions: list, get, search, enable, disable, setConditions)
 
 **Proxy**: `proxy` (actions: status, events, sockets, body, answer, answerFrame, withdraw, answers, refuse)
-- Needs `launchChrome({ proxy: true })`. Holds what reached the outside world, where `network` reads what CDP saw
+- Needs `connection({ action: 'launch', proxy: true })`. Holds what reached the outside world, where `network` reads what CDP saw
 - Each event carries the step that owns it, a level read from stored evidence, and what the page says started it. A timer-rooted request or send owns nothing, so an app's own polling stays out of every step
 - `answer` answers a URL with a value; `answerFrame` replaces or drops one socket message
 - Full model - roots, levels, socket shapes, ruling a payload shape, what reaches a recording: [boundary.md](boundary.md)
@@ -57,15 +56,14 @@ runs against (see the skill's Quick Start).
 **Input**: `input` (actions: click, type, press, hover, focus, focusNext, focusPrevious, drag, scroll, mousemove, pinch, tap, swipe)
 - `tap` / `swipe`: real touch events via `Input.dispatchTouchEvent`. Mouse actions never produce touchstart/touchmove, so a component listening only for touch cannot be driven by `click` or `drag`. `tap` takes a selector or x/y; `swipe` takes `from`/`to` and `steps` (default 10) and emits touchstart, N touchmove, touchend
 
-**Modal**: `detectModals`, `dismissModal`
-- Individual tools, not actions
+**Modal**: `modal` (actions: detect, dismiss)
 
 **Storage**: `storage` (actions: getCookies, setCookie, getLocalStorage, setLocalStorage, removeLocalStorage, getSessionStorage, setSessionStorage, removeSessionStorage, idbListDatabases, idbListStores, idbGet, idbGetAll, idbPut, idbDelete, clear, writes, authenticatorAdd, authenticatorCredentials, authenticatorRemove). authenticatorAdd puts a virtual WebAuthn authenticator on the page, so a passkey prompt is answered with no person present (`userVerified: false` for presence alone); it stands until authenticatorRemove or the tab closes
 - IndexedDB reads return typed descriptors for values JSON can't express - `{__type:'CryptoKey', algorithm, extractable, usages}` and analogues for Blob/ArrayBuffer/Map/Set/Date - so a non-extractable key is still observable. `idbPut` accepts JSON-expressible values only
 - A read never creates a database: `idbGet` on an unknown name errors rather than silently creating it
 - `clear` defaults to cookies + localStorage + sessionStorage. `indexedDB` is opt-in via `types` - dropping whole databases is far less recoverable
 
-**HTTP / assertions**: `request`, `check`, `assert`, `saveToDisk`
+**HTTP / assertions**: `request`, `check`, `assert`, `download`
 - `request`: HTTP request as a sequence step. `destination: 'node'` sends it from the MCP server process (no browser, no CORS/cookies); `destination: 'browser'` runs `fetch()` in a connected tab (that page's cookies/session/origin). `saveAs` captures the response for later steps
 - `check`: read one thing - an element, a value, an expression, the URL, a cookie, storage, traffic crossing the proxy (`traffic` matched as a pin, with `count`), a `socket` open or closed, or time alone (`afterMs`) - and answer held or failed; `withinMs` reads again until it holds. Called directly it never fails the call on a failed check. As a sequence step, `holds` / `fails` are `continue`, `stop`, or `{ run: '<sequence>', resumeAt }` - a guard is a check whose pass runs a sequence
 - `assert`: a check whose fail stops the sequence - use `{{var:name.path}}` templates against values captured by a prior `saveAs`
@@ -89,7 +87,7 @@ runs against (see the skill's Quick Start).
 - `publish` returns a draft and posts **nothing**; pass `confirm: true` to post it. The GitHub body is the local body verbatim plus the repro sequence, so the two stay comparable. Labels missing from the repo are created on confirm
 - `sync` reconciles both ways: it pulls body, comments, closed state and labels down, pushes local edits up, and when **both** sides changed since the last sync it reports a conflict and writes nothing. Resolve with `take: 'local'` or `take: 'remote'` on that one issue. Closing an issue upstream needs `confirm: true`
 - `import` makes a GitHub-only issue local so there is somewhere to record findings - use it when told to "work on #110". `link` adopts an existing number with no network call, and is the recovery path if a publish dies after creating the issue
-- `pullSequence` writes a sequence out of an issue to disk. Nothing is written until you ask, and nothing is ever run automatically: sequence steps are `{tool, params}` for **any** tool, so a sequence in a public issue is a script, not a macro. One authored by a GitHub account other than the one `gh` is logged in as is refused until a **person** has read it and re-run with `confirm: true` - an agent must not confirm on its own. One using `execution`, `saveToDisk`, `server`, `request` or `download` is refused unless you pass `allowPrivilegedSteps: true`. Read the step list in the response before you do
+- `pullSequence` writes a sequence out of an issue to disk. Nothing is written until you ask, and nothing is ever run automatically: sequence steps are `{tool, params}` for **any** tool, so a sequence in a public issue is a script, not a macro. One authored by a GitHub account other than the one `gh` is logged in as is refused until a **person** has read it and re-run with `confirm: true` - an agent must not confirm on its own. One using `execution`, `server`, `request` or `download` is refused unless you pass `allowPrivilegedSteps: true`. Read the step list in the response before you do
 - All of these are blocked while any bug is `pending` - `acknowledge` first
 
 **Bench**: `bench` (actions: start, stop, hold, release, picker, tick, keepStep, dropStep, flagStep, sweep, retake, capture, list, status)
@@ -123,16 +121,14 @@ runs against (see the skill's Quick Start).
 - `export`: export a sequence to file - `format: sequence | playwright | puppeteer`
 - `repeat`: instantly re-execute commands by history index - `replay({ action: 'repeat', indices: [0, 1, 2] })`. Each tool response shows its history index in its `Replay: N` footer. History also holds bench and CLI calls and every step of a sequence run, marked with the run's name
 - `run`: does not block - returns a `runId` immediately and executes in the background; poll `status({ runId })` for progress and the final result (kept 30 min in memory), `cancel({ runId })` stops it at the next step boundary. `wait: true` blocks for the full result (pre-0.7 behaviour). `startUrl` overrides the stored start URL for one run; `baseUrl` retargets every absolute URL at another deployment's origin
-- Use `global: true` with `export` to save to ~/.cdp-tools/sequences/ instead of the working directory
+- Use `global: true` with `export` to save to ~/.devharness/sequences/ instead of the working directory
 
 **Dashboard**: `dashboard` (actions: open, status, stop)
 
-**Debug logging**: `setDebugLogging`, `getDebugLoggingStatus`
-
-**Config**: `config` (actions: status, useLocal, useGlobal, reset, backup, cloneFromGlobal, show, listTools, reload, restart, listProfiles, resetProfile)
+**Config**: `config` (actions: status, useLocal, useGlobal, reset, backup, cloneFromGlobal, show, listTools, reload, restart, listProfiles, resetProfile, setDebugLogging, debugLoggingStatus)
 - `status`: Show where config is loaded from (local vs global)
-- `useLocal`: Switch to project-local config (.cdp-tools/config.json)
-- `useGlobal`: Switch to global config (~/.cdp-tools/config.json)
+- `useLocal`: Switch to project-local config (.devharness/config.json)
+- `useGlobal`: Switch to global config (~/.devharness/config.json)
 - `reset`: Reset config to defaults
 - `backup`: Create timestamped backup
 - `cloneFromGlobal`: Copy global config to local project

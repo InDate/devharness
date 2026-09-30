@@ -383,16 +383,16 @@ async function scenarioRelease() {
 
     const launch = await supervisor.request(
       'tools/call',
-      { name: 'launchChrome', arguments: { reference: 'suspend stress release', headless: true } },
+      { name: 'connection', arguments: { action: 'launch', name: 'suspend stress release', headless: true } },
       { timeoutMs: 60_000 }
     );
     // A failing tool answers with a result carrying isError, not a JSON-RPC
     // error - checking only the latter would call a broken setup a pass.
-    // A failing launchChrome used to SKIP, which meant a regression that broke
+    // A failing launch used to SKIP, which meant a regression that broke
     // Chrome entirely still exited 0 - the scenario exists to prove Chrome is
     // released, so it has to fail when Chrome never starts.
     if (launch.error || launch.result?.isError) {
-      failures.push(`launchChrome failed: ${toolText(launch).slice(0, 200)}`);
+      failures.push(`connection launch failed: ${toolText(launch).slice(0, 200)}`);
       return { passed: false, detail: 'could not launch Chrome to release', failures };
     }
 

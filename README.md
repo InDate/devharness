@@ -120,7 +120,7 @@ and Node.js through the Chrome DevTools Protocol. Beyond the above:
 - **Page checks.** `content verify` reports dead buttons, dead links, small touch
   targets, clipped overflow and horizontal scroll, from what the browser reports.
 - **Network.** Console, requests and responses, cookies and storage. With
-  `launchChrome({ proxy: true })` the browser runs through a recording proxy that
+  `connection({ action: 'launch', proxy: true })` the browser runs through a recording proxy that
   ties each request and socket message to the step that caused it and keeps the
   app's own polling apart.
 - **Dev servers.** npm scripts, Docker and Docker Compose.
@@ -136,7 +136,7 @@ A Node service by hand:
 
 ```
 1. node --inspect=9229 app.js
-2. connectDebugger({ reference: "api", port: 9229 })
+2. connection({ action: 'attach', name: "api", port: 9229 })
 3. breakpoint({ action: 'set', connectionReason: "api", file: "user.ts", line: 42 })
 4. Trigger the request.
 5. inspect({ action: 'getVariables', connectionReason: "api" })

@@ -856,10 +856,16 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
   };
 
   /** The page a connection drives, or undefined for one without a page (a Node.js target) or mid-navigation. */
-  const pageOf = async (conn: ReturnType<ConnectionManager['listConnections']>[number]) => {
+  /**
+   * The page a connection drives, or undefined for one without a page (a
+   * Node.js target) or mid-navigation. `page.title()` waits while the debugger
+   * is paused, so a paused connection reports its URL alone.
+   */
+  const pageOf = async (conn: ReturnType<ConnectionManager['listConnections']>[number]): Promise<{ url: string; title?: string } | undefined> => {
     if (!conn.puppeteerManager?.isConnected()) return undefined;
     try {
       const page = conn.puppeteerManager.getPage();
+      if (conn.cdpManager.isPaused()) return { url: page.url() };
       return { url: page.url(), title: await page.title() };
     } catch {
       return undefined;
@@ -867,11 +873,8 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
   };
 
   const list = async (): Promise<any> => {
-      // The probe evaluates in the page, which a paused debugger holds until it
-      // resumes, so a paused connection counts as live without one.
       const all = connectionManager.listConnections();
-      const alive = await Promise.all(all.map(conn =>
-        conn.cdpManager.isPaused() ? Promise.resolve(true) : connectionManager.isConnectionAlive(conn)));
+      const alive = await Promise.all(all.map(conn => connectionManager.isConnectionAlive(conn)));
       const live = all.filter((_, i) => alive[i]);
       for (const conn of all.filter((_, i) => !alive[i])) {
         await connectionManager.removeStaleConnection(conn.id);
@@ -977,21 +980,11 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
       await connection.puppeteerManager.getPage().bringToFront();
     }
 
-    let url = 'Unknown';
-    let title = 'Unknown';
-    if (connection.puppeteerManager?.isConnected()) {
-      try {
-        const page = connection.puppeteerManager.getPage();
-        url = page.url();
-        title = await page.title();
-      } catch {
-        // A page mid-navigation answers neither.
-      }
-    }
+    const page = await pageOf(connection);
     return createSuccessResponse('CONNECTION_SWITCHED', {
       reference: connection.reference || UNNAMED_CONNECTION,
-      url,
-      title,
+      url: page?.url ?? 'Unknown',
+      title: page?.title ?? (connection.cdpManager.isPaused() ? 'unread while paused' : 'Unknown'),
     });
   };
 

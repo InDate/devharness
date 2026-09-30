@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { CDPManager } from '../cdp-manager.js';
 import { SourceMapHandler } from '../sourcemap-handler.js';
 import { createTool } from '../validation-helpers.js';
+import type { ToolResponseMeta } from '../tool-response.js';
 import type { LogpointExecutionTracker } from '../logpoint-execution-tracker.js';
 import { createSuccessResponse, createErrorResponse, getErrorMessage } from '../messages.js';
 import { abortErrorFor, isAbortError, throwIfAborted } from '../utils/abort.js';
@@ -178,7 +179,7 @@ export function createBreakpointTools(
                 ? `line ${targetLine}:${targetColumn}`
                 : `line ${targetLine}`;
 
-              return createSuccessResponse('BREAKPOINT_SET_SUCCESS', {
+              const setResponse: any = createSuccessResponse('BREAKPOINT_SET_SUCCESS', {
                 url: targetUrl,
                 resolvedLine: resolvedLine,
                 resolvedLocation: resolvedLocation,
@@ -187,6 +188,11 @@ export function createBreakpointTools(
                 breakpointId: breakpoint.breakpointId,
                 condition: args.condition,
               });
+              setResponse._meta = {
+                tool: 'breakpoint', action: 'set', timestamp: Date.now(),
+                breakpoint: { url: targetUrl, line: resolvedLine },
+              } satisfies ToolResponseMeta;
+              return setResponse;
             } catch (error: any) {
               let markdown = getErrorMessage('BREAKPOINT_SET_FAILED', {
                 url: targetUrl,

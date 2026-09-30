@@ -175,3 +175,22 @@ describe('calls that take no connection', () => {
     expect(calls.filter(c => c.tool === 'execution').map(c => c.params)).toEqual([{ action: 'acknowledge' }]);
   });
 });
+
+describe('a forEach whose body attaches', () => {
+  it('attaches once and runs every iteration on that connection', async () => {
+    const { calls, replay, recorder } = makeHarness({ live: ['browser-a'] });
+    await recorder.createSequenceFromCommands('per-row', [
+      { tool: 'connection', params: { action: 'attach', name: 'api-server', port: 9229 } },
+      { tool: 'inspect', params: { action: 'evaluateExpression', expression: 'process.pid' } },
+    ]);
+    await recorder.createSequenceFromCommands('rows', [
+      { tool: 'forEach', params: { in: [1, 2, 3], as: 'row', do: 'per-row' } },
+    ]);
+
+    const result: any = await replay.handler({ action: 'run', wait: true, name: 'rows', connectionReason: 'browser-a' } as any);
+
+    expect(result.isError).toBeFalsy();
+    expect(calls.filter(c => c.tool === 'connection' && c.params.action === 'attach')).toHaveLength(1);
+    expect(connectionsOf(calls, 'inspect')).toEqual(['api-server', 'api-server', 'api-server']);
+  });
+});

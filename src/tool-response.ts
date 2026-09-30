@@ -335,6 +335,8 @@ export interface ToolResponseMeta {
   bench?: BenchToolMeta;
   /** connection launch: the readings taken during a launch that failed. */
   launchObservations?: LaunchObservationsMeta;
+  /** breakpoint set: where the breakpoint landed, 1-based, after CDP moved it to a valid line. */
+  breakpoint?: { url: string; line: number };
 }
 
 /** Structured result of a bench action. Behaviour reads this, never the

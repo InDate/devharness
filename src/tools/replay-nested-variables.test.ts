@@ -40,8 +40,8 @@ function makeHarness(nested: CommandSequence[]) {
     if (tool === 'navigate' && params.action === 'info') return pageInfo('https://app.example.com/');
     // The executor reads a typed field back and fails the step on a mismatch.
     if (tool === 'inspect' && params.action === 'evaluateExpression') {
-      const selector = String(params.expression).match(/querySelector\('([^']*)'\)/)?.[1] ?? '';
-      return { content: [{ type: 'text', text: '```json\n' + JSON.stringify(fieldValues.get(selector) ?? '') + '\n```' }] };
+      const quoted = String(params.expression).match(/querySelector\(("(?:[^"\\]|\\.)*")\)/)?.[1];
+      return { content: [{ type: 'text', text: '' }], _meta: { inspect: { value: fieldValues.get(quoted ? JSON.parse(quoted) : '') ?? '' } } };
     }
     return { content: [{ type: 'text', text: '' }] };
   }));

@@ -53,8 +53,8 @@ beforeEach(async () => {
         if (params.selector) fieldValues.set(String(params.selector), String(params.text));
       }
       if (tool === 'inspect' && params.action === 'evaluateExpression') {
-        const selector = String(params.expression).match(/querySelector\('([^']*)'\)/)?.[1] ?? '';
-        return { content: [{ type: 'text', text: '```json\n' + JSON.stringify(fieldValues.get(selector) ?? '') + '\n```' }] };
+        const quoted = String(params.expression).match(/querySelector\(("(?:[^"\\]|\\.)*")\)/)?.[1];
+        return { content: [{ type: 'text', text: '' }], _meta: { inspect: { value: fieldValues.get(quoted ? JSON.parse(quoted) : '') ?? '' } } };
       }
       return { content: [{ type: 'text', text: '' }] };
     })) as any,

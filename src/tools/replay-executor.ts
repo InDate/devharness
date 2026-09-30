@@ -435,12 +435,12 @@ export async function evaluateCondition(
         // ToolError, which any other failure does too - hence the classifier.
         const probeSelector = async () => {
           try {
-            const res: any = await executeToolCall('dom', {
+            await executeToolCall('dom', {
               action: 'querySelector',
               selector: value,
               connectionReason
             });
-            return { res };
+            return {};
           } catch (selectorError: any) {
             return {
               failure: selectorError?.message || String(selectorError),
@@ -449,6 +449,7 @@ export async function evaluateCondition(
           }
         };
 
+        // querySelector answers only when it finds the element; absence is its error.
         const attempt = await probeSelector();
         if (attempt.failure) {
           if (isElementNotFoundFailure({ errorId: attempt.errorId, text: attempt.failure })) {
@@ -461,7 +462,7 @@ export async function evaluateCondition(
             isError: true
           };
         }
-        conditionMet = (attempt.res?.content?.[0]?.text || '').includes('Element found');
+        conditionMet = true;
         break;
       }
 
@@ -470,9 +471,8 @@ export async function evaluateCondition(
           action: 'info',
           connectionReason
         });
-        // From `_meta` where it exists: the text fallback stops the URL at the
-        // first comma or space, so a data: URL or a `?ids=1,2` query compared as
-        // a truncated prefix - `{{url:EXACT}}` could never match one.
+        // From `_meta`: the rendered text ends the URL at the first comma or
+        // space, so a data: URL or a `?ids=1,2` query would compare truncated.
         const currentUrl = pageInfo?._meta?.navigate?.url ?? '';
 
         if (value.startsWith('contains:')) {
@@ -688,8 +688,8 @@ async function prepareNestedSequence(
 
     const name = createdName(cmd);
     const recorded = name ? sanitizeReference(name) : undefined;
-    // No reference to reason about, or no readable connection list: fall back to
-    // the old always-drop behaviour rather than risk killing the live browser.
+    // A step naming no connection, or a connection list that could not be
+    // read, is dropped: relaunching might replace a browser already live.
     if (!recorded || !liveRefs) return false;
 
     const resolved = ctx.connectionMap?.[recorded] ?? recorded;
@@ -717,7 +717,7 @@ async function prepareNestedSequence(
     ? launchedConnection
     : undefined;
   if (nestedConnection) {
-    await debugLog(logPrefix, `Nested sequence "${label}" runs against the browser it launched ("${nestedConnection}"), not the caller's "${ctx.connectionReason}"`);
+    await debugLog(logPrefix, `Nested sequence "${label}" runs against the connection it created ("${nestedConnection}"), not the caller's "${ctx.connectionReason}"`);
   }
 
   return { filteredSequence: { ...sequence, commands: filteredCommands }, filteredCommands, nestedConnection };
@@ -1029,6 +1029,12 @@ export async function executeForEachFlow(
   }
   const { filteredSequence, nestedConnection } =
     await prepareNestedSequence(loadResult.sequence, ctx, sequenceName, logPrefix);
+  // A launch or attach the body kept creates its connection on the first
+  // iteration; after that the name is live, and an attach again fails on it.
+  const laterSequence = {
+    ...filteredSequence,
+    commands: filteredSequence.commands.filter(cmd => !createsConnection(cmd)),
+  };
 
   const substeps: StepResult[] = [];
   let iterations = 0;
@@ -1065,7 +1071,7 @@ export async function executeForEachFlow(
 
     const elapsed = Date.now() - startedAt;
     const execResult = await executeSteps({
-      sequence: filteredSequence,
+      sequence: iterations === 1 ? filteredSequence : laterSequence,
       startStep: 0,
       ctx: {
         ...ctx,
@@ -1124,9 +1130,8 @@ export async function loadSequence(
   recorder: CommandRecorder
 ): Promise<LoadSequenceResult> {
   if (args.sequenceId) {
-    // Disk wins when the file is newer: memory used to shadow an edited
-    // sequence for the whole session, so a re-run silently executed the old
-    // version (issue #134).
+    // Disk wins when the file is newer, so a re-run executes an edited
+    // sequence rather than the copy held in memory (issue #134).
     const sequence = await recorder.getFreshSequence(args.sequenceId);
     if (!sequence) {
       return {
@@ -1267,9 +1272,9 @@ export interface RecordedConnectionAnalysis {
   /** The one reference every connection-bearing step shares, if there is one. */
   uniform?: string;
   /**
-   * True when some steps name a connection and other BROWSER steps don't - the
-   * bare steps were recorded without one, so nothing records which browser
-   * they belonged to. Such a sequence is not hoisted
+   * True when some steps name a connection and other steps that take one
+   * don't - the bare steps were recorded without one, so nothing records
+   * which browser they belonged to. Such a sequence is not hoisted
    * (that could pin every step to the one named reference) and `create` says so.
    */
   mixed: boolean;
@@ -1282,7 +1287,7 @@ export interface RecordedConnectionAnalysis {
  */
 export function analyzeRecordedStepConnections(commands: RecordedCommand[]): RecordedConnectionAnalysis {
   const references: string[] = [];
-  let bareBrowserSteps = 0;
+  let bareSteps = 0;
 
   for (const cmd of commands) {
     const raw = cmd.params?.connectionReason;
@@ -1290,14 +1295,14 @@ export function analyzeRecordedStepConnections(commands: RecordedCommand[]): Rec
       const ref = sanitizeReference(raw);
       if (!references.includes(ref)) references.push(ref);
     } else if (commandTakesInjectedConnection(cmd)) {
-      bareBrowserSteps++;
+      bareSteps++;
     }
   }
 
   return {
     references,
     ...(references.length === 1 ? { uniform: references[0] } : {}),
-    mixed: references.length > 0 && bareBrowserSteps > 0,
+    mixed: references.length > 0 && bareSteps > 0,
     multiConnection: references.length > 1,
   };
 }
@@ -1419,7 +1424,7 @@ export function formatMissingStepConnection(opts: {
   const via = mapped ? ` (mapped from recorded "${recorded}")` : '';
   return [
     `Step ${step} (${tool}) needs connection "${resolved}"${via}, which does not exist in this session.`,
-    `Active connections: ${live.length ? live.join(', ') : 'none'}.`,
+    `Connections in this session: ${live.length ? live.join(', ') : 'none'}.`,
     `The step names its own connection, so it is NOT run against` +
       ` the run-level connection${runConnection ? ` "${runConnection}"` : ''} - that would replay a` +
       ` multi-browser sequence in a single browser and report success.`,
@@ -1512,16 +1517,22 @@ export async function autoLaunchChrome(
   forceNewInstance: boolean = false,
   proxy: boolean = false
 ): Promise<AutoLaunchResult> {
-  // Validate connectionReason before launch (throws InvalidReferenceError if invalid)
-  requireValidReference(connectionReason);
+  // Answered as a result rather than thrown: this runs inside ensureConnection's
+  // catch, where a throw escapes the run's own LAUNCH_FAILED handling.
+  try {
+    requireValidReference(connectionReason);
+  } catch (invalid: any) {
+    return {
+      success: false,
+      error: invalid?.response?.content?.[0]?.text || invalid?.message || `Invalid connection name "${connectionReason}"`,
+      errorType: 'INVALID_REFERENCE',
+    };
+  }
 
   await debugLog(logPrefix, `Auto-launching Chrome with reference: ${connectionReason} (forceNewInstance=${forceNewInstance})`);
 
-  // A launch failure arrives as a THROW in production (executeToolCall rethrows
-  // isError) - and this helper is called from inside ensureConnection's catch,
-  // so letting it through escaped the run entirely: the caller's LAUNCH_FAILED
-  // handling, and its "launch Chrome manually first" suggestion, never ran and
-  // the user saw a raw tool error instead.
+  // A launch failure arrives as a throw (executeToolCall raises isError), and
+  // is answered as LAUNCH_FAILED for the same reason.
   try {
     await executeToolCall('connection', {
       action: 'launch',
@@ -1712,9 +1723,8 @@ export async function executeCommandWithRetry(
       result = await asStep(() => executeToolCall(tool, params, abortSignal));
     } catch (err: any) {
       const errorText = err?.response?.content?.[0]?.text || err?.message || '';
-      // A bare "not found" also matched CONNECTION_NOT_FOUND, SEQUENCE_NOT_FOUND
-      // and friends, so a click against a dead connection burned all five
-      // retries and 2.5s before reporting what was wrong on the first attempt.
+      // Only element-not-found is retried: a missing connection or sequence
+      // fails the same way on every attempt.
       const isElementNotFound = isElementNotFoundFailure({
         errorId: err?.response?._errorId,
         text: errorText,
@@ -1749,23 +1759,19 @@ export async function validateNavigation(
       connectionReason
     });
 
-    const infoText = infoResult?.content?.[0]?.text || '';
+    // The page's URL and title from `_meta`: the rendered text also carries
+    // the page's own title, which may say "ERR_" or "about:blank" in passing.
+    const page = infoResult?._meta?.navigate;
+    const url: string = page?.url ?? '';
+    const title: string = (page?.title ?? '').toLowerCase();
 
-    // Check for common error patterns
-    if (infoText.includes('about:blank') && expectedUrl && !expectedUrl.includes('about:blank')) {
+    if (url === 'about:blank' && expectedUrl && expectedUrl !== 'about:blank') {
       return { success: false, error: 'Page failed to load (stuck on about:blank)' };
     }
-
-    // Check for Chrome error pages
-    if (infoText.includes('chrome-error://') || infoText.includes('ERR_')) {
-      const errMatch = infoText.match(/(ERR_[A-Z_]+)/);
-      return { success: false, error: `Page failed to load: ${errMatch?.[1] || 'connection error'}` };
+    if (url.startsWith('chrome-error://')) {
+      return { success: false, error: 'Page failed to load: connection error' };
     }
-
-    // Check title for error indicators
-    const titleMatch = infoText.match(/\*\*Title:\*\*\s*([^\n]+)/);
-    const title = titleMatch?.[1]?.toLowerCase() || '';
-    if (title.includes("site can't be reached") || title.includes("this site can't be reached")) {
+    if (title.includes("site can't be reached")) {
       return { success: false, error: 'Site cannot be reached' };
     }
 
@@ -1835,7 +1841,7 @@ export async function validateTypedText(
     const evalResult = await executeToolCall('inspect', {
       action: 'evaluateExpression',
       expression: `(() => {
-        const el = document.querySelector('${selector.replace(/'/g, "\\'")}');
+        const el = document.querySelector(${JSON.stringify(selector)});
         if (!el) return '';
         // For input/textarea, use .value
         if (el.value !== undefined && el.value !== '') return el.value;
@@ -1846,16 +1852,8 @@ export async function validateTypedText(
       connectionReason
     });
 
-    let actualValue = '';
-    if (evalResult?.content?.[0]?.text) {
-      const codeBlockMatch = evalResult.content[0].text.match(/```(?:json)?\n([\s\S]*?)\n```/);
-      if (codeBlockMatch) {
-        actualValue = codeBlockMatch[1].trim();
-        if (actualValue.startsWith('"') && actualValue.endsWith('"')) {
-          actualValue = JSON.parse(actualValue);
-        }
-      }
-    }
+    const evaluated = evalResult?._meta?.inspect?.value;
+    const actualValue = typeof evaluated === 'string' ? evaluated : '';
 
     // In append mode, check if the field ends with the expected text
     // In replace mode, check for exact match
@@ -1889,6 +1887,8 @@ export interface PreClickState {
   consoleWarnCount: number;
   consoleTotalCount: number;
   networkRequestCount: number;
+  /** The network read's clock before the click, so a later read takes only what the click caused. */
+  networkSince?: number;
   url: string;
   /** ids of the most-recent console errors seen before the click (bounded by
    *  CLICK_VALIDATION_ERROR_SAMPLE), to identify which post-click errors are
@@ -1929,6 +1929,7 @@ export async function capturePreClickState(ctx: ExecutionContext): Promise<PreCl
   let consoleWarnCount = 0;
   let consoleTotalCount = 0;
   let networkRequestCount = 0;
+  let networkSince: number | undefined;
   let url = '';
   let errorIdsBeforeClick = new Set<string>();
 
@@ -1952,6 +1953,7 @@ export async function capturePreClickState(ctx: ExecutionContext): Promise<PreCl
       action: 'list', limit: 1, connectionReason
     });
     networkRequestCount = networkResult?._meta?.network?.totalCount || 0;
+    networkSince = networkResult?._meta?.network?.at;
   } catch {
     debugLog(logPrefix, 'Warning: Could not get pre-click network state');
   }
@@ -1966,7 +1968,7 @@ export async function capturePreClickState(ctx: ExecutionContext): Promise<PreCl
     debugLog(logPrefix, 'Warning: Could not get pre-click URL');
   }
 
-  return { consoleErrorCount, consoleWarnCount, consoleTotalCount, networkRequestCount, url, errorIdsBeforeClick };
+  return { consoleErrorCount, consoleWarnCount, consoleTotalCount, networkRequestCount, networkSince, url, errorIdsBeforeClick };
 }
 
 /**
@@ -2072,18 +2074,17 @@ export async function validateClickAction(
   // 4. Check for network request failures
   if (config.validateNetworkPayload) {
     try {
-      const networkResult = await executeToolCall('network', {
-        action: 'list', connectionReason
-      });
-      const newCount = networkResult?._meta?.network?.totalCount || 0;
-      if (newCount > preState.networkRequestCount) {
-        // Check for failed POST requests
-        const failedResult = await executeToolCall('network', {
-          action: 'search', method: 'POST', statusCode: '4', connectionReason
+      // Requests started since the pre-click read, so a POST that failed
+      // earlier in the session is not charged to this click. Without that
+      // clock nothing separates the two, and nothing is charged.
+      if (preState.networkSince !== undefined) {
+        const networkResult = await executeToolCall('network', {
+          action: 'list', connectionReason, since: preState.networkSince, limit: 100000,
         });
-        const failedCount = failedResult?._meta?.network?.matchCount || 0;
-        if (failedCount > 0) {
-          const msg = 'POST request returned 4xx error';
+        const rows: Array<{ method: string; status?: number }> = networkResult?._meta?.network?.requests ?? [];
+        const failedPosts = rows.filter(r => r.method === 'POST' && r.status !== undefined && r.status >= 400 && r.status < 500);
+        if (failedPosts.length > 0) {
+          const msg = `${failedPosts.length} POST request(s) answered 4xx after click`;
           if (config.networkFailMode === 'error') {
             errors.push(msg);
           } else {
@@ -2125,17 +2126,12 @@ async function gatherDiagnostics(ctx: ExecutionContext): Promise<string> {
       type: 'error',
       connectionReason
     });
-    // Counts come from `_meta`, as validateClickAction's do. Counting
-    // `**error**` in the rendered console text also counted the word inside a
-    // logged MESSAGE, and `\d{3}` over the network text matched any three
-    // digits anywhere - a timestamp, a byte count, an id in a URL.
+    // Counts from `_meta`: the rendered text carries logged messages and URLs,
+    // whose own words and digits would count too.
     const errorCount = consoleResult?._meta?.console?.errorCount ?? 0;
 
-    // `network search` REQUIRES a pattern and reads statusCode as an exact code
-    // or an "Nxx" class. Asking for `{ statusCode: '4' }` with no pattern was
-    // rejected outright, so this whole helper threw and every step failure was
-    // reported with no page state at all - and had it got through, '4' would
-    // have matched no request either.
+    // `network search` requires a pattern, and reads statusCode as an exact
+    // code or an "Nxx" class.
     const countRequests = async (statusCode: string) => {
       const result = await executeToolCall('network', {
         action: 'search',
@@ -2163,9 +2159,7 @@ async function gatherDiagnostics(ctx: ExecutionContext): Promise<string> {
 
     return ` | Page state: ${interactiveCount} interactive elements, ${errorCount} console errors, ${failedRequests} failed requests`;
   } catch (err: any) {
-    // Say why. Swallowing this silently is how a malformed network probe hid
-    // for as long as it did: every step failure simply carried no page state,
-    // and nothing anywhere said the probe had failed.
+    // Logged, so a probe that fails leaves a record of why the page state is missing.
     debugLog(ctx.logPrefix || 'executor', `Could not gather diagnostics: ${err?.message || err}`);
     return '';
   }
@@ -2826,16 +2820,8 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
       if (cmd.tool === 'breakpoint' && params.action === 'set' && params.url) {
         const requestedLine = params.lineNumber;
 
-        // Try to get the actual resolved line from the response
-        // Format: "Breakpoint set at URL:LINE" or "CDP resolved to line LINE"
-        const responseText = execResult.result?.content?.[0]?.text || '';
-        const setAtMatch = responseText.match(/Breakpoint set at [^:]+:(\d+)/);
-        const resolvedMatch = responseText.match(/CDP resolved to line (\d+)/);
-        const reportedLine = resolvedMatch
-          ? parseInt(resolvedMatch[1], 10)
-          : setAtMatch
-            ? parseInt(setAtMatch[1], 10)
-            : requestedLine;
+        // The line CDP moved the breakpoint to, from `_meta`.
+        const reportedLine: number = execResult.result?._meta?.breakpoint?.line ?? requestedLine;
 
         // Track the reported line
         expectedBreakpoints.add(`${params.url}:${reportedLine}`);
@@ -3075,7 +3061,7 @@ async function compareBehaviour(
       ?? Date.now();
 
     const http = await executeToolCall('network', {
-      action: 'list', connectionReason, since: from, until: to, limit: 50,
+      action: 'list', connectionReason, since: from, until: to, limit: 100000,
     }).catch(() => null);
     const rows = http?._meta?.network?.requests ?? [];
     const streams = await executeToolCall('network', {

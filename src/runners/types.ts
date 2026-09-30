@@ -11,6 +11,8 @@ export interface RunnerStartOptions {
   id: string;
   env?: Record<string, string>;
   port?: number;
+  /** Empty the log files before this start writes to them (native runner; docker reads its logs from docker). */
+  clearLogs?: boolean;
 }
 
 export interface RunnerStartResult {

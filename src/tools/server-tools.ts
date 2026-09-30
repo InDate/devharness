@@ -14,7 +14,7 @@ const serverSchema = z.object({
   action: z.enum(['start', 'stop', 'restart', 'list', 'logs', 'stopAll', 'setAutoRun', 'clearLogs', 'remove', 'monitorPort', 'unmonitorPort', 'listMonitored', 'acknowledgePort', 'acknowledgeStartup', 'extendStartup', 'cancelPendingRestart']),
   command: z.string().optional().describe('Command: npm run dev, flask run, docker compose up'),
   cwd: z.string().optional(),
-  id: z.string().optional().describe('Server name. start: a name saved in server list starts from its saved command, cwd and settings'),
+  id: z.string().optional().describe('Server name; start with a saved name alone uses its saved command, cwd and settings'),
   serverId: z.string().optional(),
   autoRun: z.boolean().optional(),
   env: z.record(z.string()).optional(),
@@ -25,8 +25,9 @@ const serverSchema = z.object({
   description: z.string().optional(),
   interval: z.number().optional().describe('Check interval ms'),
   global: z.boolean().optional().describe('Use ~/.devharness/'),
-  watch: z.boolean().optional().describe('Watch this server\'s files and auto-restart it on change (pause-aware: defers the restart while a breakpoint debugger is paused)'),
+  watch: z.boolean().optional().describe('Restart the server on file changes, deferred while a debugger is paused'),
   watchPaths: z.array(z.string()).optional().describe('Paths to watch when watch=true (default: [cwd])'),
+  clearLogs: z.boolean().optional().describe('start: empty its log files first (native servers)'),
 }).strict();
 
 type ServerArgs = z.infer<typeof serverSchema>;
@@ -122,7 +123,7 @@ export function createServerTools(serverManager: ServerManager) {
 
   return {
     server: createTool(
-      'Manage development servers. Actions: start (start a server from a command, or a saved one by id alone; pass watch: true to auto-restart it on file changes instead of --watch/nodemon - coordinates with a paused breakpoint debugger by deferring the restart), stop (stop a running server), restart (restart a server), list (list running servers with status), logs (get log file paths or docker command), stopAll (stop all servers), setAutoRun (enable/disable auto-start on MCP startup), cancelPendingRestart (discard a watch-mode restart that\'s queued behind a paused debugger, to keep debugging)',
+      'Development servers. Actions: start (from a command, or a saved one by id alone; watch: true restarts on file changes in place of --watch/nodemon), stop, restart, list, logs (log paths or docker command), stopAll, setAutoRun (auto-start with devharness), cancelPendingRestart (drop a watch restart queued behind a paused debugger)',
       serverSchema,
       async (args: ServerArgs) => {
         switch (args.action) {
@@ -157,6 +158,7 @@ export function createServerTools(serverManager: ServerManager) {
                 global: args.global ?? saved?.global,
                 watch: args.watch ?? saved?.watch,
                 watchPaths: args.watchPaths ?? saved?.watchPaths,
+                clearLogs: args.clearLogs,
               });
 
               // Wait briefly for port detection

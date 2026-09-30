@@ -130,6 +130,8 @@ export interface StartServerOptions {
   watch?: boolean;
   /** Paths to watch when `watch` is true (default: [cwd]) */
   watchPaths?: string[];
+  /** Empty the server's log files before it starts (native runner) */
+  clearLogs?: boolean;
 }
 
 export interface LogStats {
@@ -1227,7 +1229,7 @@ export class ServerManager {
    * Start a server
    */
   async startServer(options: StartServerOptions): Promise<{ id: string; pid: number; runnerType: RunnerType; containerId?: string; autoRestartWarning?: string }> {
-    const { command, cwd, id: serverId, autoRun, env, port, monitorPort, global: isGlobal, watch, watchPaths } = options;
+    const { command, cwd, id: serverId, autoRun, env, port, monitorPort, global: isGlobal, watch, watchPaths, clearLogs } = options;
 
     // Validate server ID for security (prevents command injection via container names)
     validateServerId(serverId);
@@ -1270,7 +1272,7 @@ export class ServerManager {
       runner.setGlobal(isGlobal ?? false);
     }
 
-    const result = await runner.start({ command, cwd, id: serverId, env, port });
+    const result = await runner.start({ command, cwd, id: serverId, env, port, clearLogs });
 
     const resolvedWatchPaths = watchPaths && watchPaths.length > 0 ? watchPaths : [cwd];
     const managed: ManagedServer = {

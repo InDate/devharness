@@ -152,6 +152,11 @@ export class NativeRunner implements Runner {
     const stdoutPath = this.getStdoutLogPath();
     const stderrPath = this.getStderrLogPath();
 
+    // Emptied before the marker, so the log holds this run alone.
+    if (options.clearLogs) {
+      await this.clearLogs();
+    }
+
     // Add restart marker to logs
     const timestamp = new Date().toISOString();
     const marker = `\n--- Server ${this.id} started at ${timestamp} ---\n`;

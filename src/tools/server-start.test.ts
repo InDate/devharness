@@ -46,6 +46,14 @@ describe('server start of a server saved under its name', () => {
     expect(serverManager.startServer).toHaveBeenCalledWith(expect.objectContaining({ command: 'node other.mjs', cwd: SAVED.cwd }));
   });
 
+  it('passes clearLogs through to the start', async () => {
+    const { serverManager, server } = makeServer();
+
+    await server.handler({ action: 'start', id: 'socket-app', clearLogs: true });
+
+    expect(serverManager.startServer).toHaveBeenCalledWith(expect.objectContaining({ id: 'socket-app', clearLogs: true }));
+  });
+
   it('still asks for a command for a name nothing is saved under', async () => {
     const { serverManager, server } = makeServer();
 

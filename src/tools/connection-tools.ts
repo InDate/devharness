@@ -27,11 +27,11 @@ import { sizeWindowToViewport } from '../window-sizing.js';
 import type { ToolResponseMeta, PausedAtMeta } from '../tool-response.js';
 
 /**
- * Check if Chrome is running and accessible on the specified port
- * Returns true if Chrome is responding to debug protocol requests
- * Returns false if port is reserved (chrome-not-running) or connection fails
+ * Whether a debugger answers on `port`: Chrome and a Node.js inspector both
+ * serve /json/version. False when the port reserver holds it (it answers
+ * "chrome-not-running") or nothing answers within a second.
  */
-async function isChromeRunning(port: number): Promise<boolean> {
+async function isDebuggerListening(port: number): Promise<boolean> {
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 1000);
@@ -58,8 +58,9 @@ async function isChromeRunning(port: number): Promise<boolean> {
 /**
  * Stamp a launch response with who owns the resulting connection.
  *
- * A replay run cannot tell from the text whether it CREATED a browser or was
- * handed one that already existed, and guessing either way is destructive: kill
+ * The text of a launch response does not show whether the run CREATED a
+ * browser or was handed one that already existed, and guessing either way is
+ * destructive: kill
  * a borrowed browser and the user loses state they cannot recover, keep an
  * owned one and every run leaks a process (issue #103).
  */
@@ -175,8 +176,8 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
           throw error;
         }
         // NOTE: the "profile already held" check deliberately happens further
-        // down, once we know this call would actually have to spawn a second
-        // Chrome. Checking here broke the standard idempotent call pattern
+        // down (profileGate), where this call is known to have to spawn a
+        // second Chrome. Checking here broke the standard idempotent call pattern
         // `connection({ action: 'launch', profile, name })`: re-calling it to make sure
         // the browser is up always errored instead of reusing the very
         // connection that holds the profile.
@@ -374,8 +375,9 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
             const consoleMonitor = new ConsoleMonitor();
             const networkMonitor = new NetworkMonitor();
 
-            // For existing browser, connect Puppeteer first and create/reuse a tab
-            // This ensures we have a target to connect CDP to (handles case where all tabs were closed)
+            // In a browser that already runs, Puppeteer connects first and opens a
+            // new tab, which gives CDP a target to connect to even when every
+            // earlier tab was closed
             let targetId: string | undefined;
             if (browserAlreadyExists) {
               await debugLog('index', `Browser exists, connecting Puppeteer and creating new tab first...`);
@@ -651,13 +653,11 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
       await debugLog('index', `attach called: host=${host}, port=${port}, defaultPort=${defaultPort}`);
 
       try {
-        // Check if Chrome/debugger is running before attempting connection
-        await debugLog('index', `Checking if Chrome is running on port ${port}...`);
-        const isRunning = await isChromeRunning(port);
-        await debugLog('index', `isChromeRunning result: ${isRunning}`);
+        await debugLog('index', `Checking for a debugger on port ${port}...`);
+        const isRunning = await isDebuggerListening(port);
+        await debugLog('index', `debugger listening on port ${port}: ${isRunning}`);
 
         if (!isRunning) {
-          await debugLog('index', `Chrome not running on port ${port}, returning error`);
           // Provide clear error message based on port type
           if (isDefaultPort && host === 'localhost') {
             return createErrorResponse('DEBUGGER_NOT_RUNNING', {
@@ -760,8 +760,8 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
           pageIndex = pages.findIndex(p => p === currentPage);
         }
 
-        // Register connection with ConnectionManager
-        // Note: consoleMonitor is always passed now (works for both Chrome and Node.js)
+        // The console monitor is passed for both runtimes: Chrome's reads the page
+        // through Puppeteer, Node's reads Runtime.consoleAPICalled over CDP
         const connectionId = connectionManager.createConnection(
           cdpManager,
           runtimeType === 'chrome' ? puppeteerManager : undefined,

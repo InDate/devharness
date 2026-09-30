@@ -27,11 +27,6 @@ import {
   WorkerTargetNotFoundError,
 } from '../worker-targets.js';
 
-// =============================================================================
-// Schema
-// =============================================================================
-
-
 /**
  * Console output recorded from a worker's own target. The page's listeners
  * never see it - a worker's console reaches no page context.
@@ -43,7 +38,7 @@ async function handleWorkerConsole(connection: any, args: ConsoleArgs) {
   if (!host || !port) return createErrorResponse('DEBUGGER_NOT_CONNECTED');
   try {
     const all = await getWorkerTargetRegistry(host, port).messages(target);
-    const limit = args.limit ?? (args.action === 'recent' ? 50 : 100);
+    const limit = args.action === 'recent' ? (args.count ?? 50) : (args.limit ?? 100);
     const filtered = args.type ? all.filter((m) => m.type === args.type) : all;
     const shown = filtered.slice(-limit);
     const rows = shown.length
@@ -71,17 +66,21 @@ async function handleWorkerConsole(connection: any, args: ConsoleArgs) {
   }
 }
 
+// =============================================================================
+// Schema
+// =============================================================================
+
 const consoleSchema = z.object({
   action: z.enum(['list', 'get', 'recent', 'search', 'clear', 'setObjectDepth'])
     .describe('Console action: list, get, recent, search, clear, setObjectDepth'),
   connectionReason: z.string()
-    .describe('Connection reference (e.g., "unnamed-connection-default" or your renamed tab)'),
+    .describe('The connection, by the name connection launch or attach gave it (e.g. "unnamed-connection-default")'),
 
   // Shared filters
   type: z.string().optional()
     .describe('Message type filter (log, error, warn, etc.)'),
   limit: z.number().optional()
-    .describe('Max messages to return (default: 100 for list, 50 for search/recent)'),
+    .describe('Max messages to return (list: default 100; search: default 50). recent takes count'),
 
   target: z.string().optional()
     .describe('Worker target whose console to read - a target id from inspect({action:"listTargets"}), or a substring of its URL. Recording starts at first attach, so output emitted before that is not held'),
@@ -308,7 +307,7 @@ function handleGet(monitor: ConsoleMonitor, args: ConsoleArgs) {
 }
 
 function handleClear(monitor: ConsoleMonitor, connectionReason: string, reason: string) {
-  console.error(`[devharness] clearConsole - Reason: ${reason}, Connection: ${connectionReason}`);
+  console.error(`[devharness] console clear - Reason: ${reason}, Connection: ${connectionReason}`);
   const count = monitor.getCount();
   monitor.clear();
   return createSuccessResponse('CONSOLE_CLEARED', { count });
@@ -345,7 +344,7 @@ export function createConsoleTools(
         const resolved = await resolveConnectionFromReason(args.connectionReason);
         if (!resolved) {
           return createErrorResponse('CONNECTION_NOT_FOUND', {
-            message: 'No Chrome browser available. Start one with `connection` action `launch`.',
+            message: `No connection named "${args.connectionReason}". \`connection({ action: 'list' })\` lists the connections this session holds.`,
           });
         }
 

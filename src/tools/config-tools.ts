@@ -9,7 +9,7 @@ import { configManager } from '../config.js';
 import { createSuccessResponse, createErrorResponse } from '../messages.js';
 import { requestSelfRestart } from '../self-restart.js';
 import { InvalidProfileNameError, ProfileInUseError } from '../chrome-launcher.js';
-import { enableDebugLogging, disableDebugLogging, isDebugEnabled } from '../debug-logger.js';
+import { enableDebugLogging, disableDebugLogging, isDebugEnabled, getLogFile } from '../debug-logger.js';
 
 const configSchema = z.object({
   action: z.enum(['status', 'useLocal', 'useGlobal', 'reset', 'backup', 'cloneFromGlobal', 'show', 'listTools', 'reload', 'restart', 'listProfiles', 'resetProfile', 'setDebugLogging', 'debugLoggingStatus'])
@@ -208,10 +208,10 @@ export function createConfigTools(profileStore?: ProfileStore, serverIdentity?: 
             if (args.enabled) {
               await enableDebugLogging();
               return createSuccessResponse('DEBUG_LOGGING_ENABLED', {
-                message: 'Debug logging enabled. Logs will be written to .devharness/logs/debug.log'
+                message: `Debug logging enabled. Logs will be written to ${getLogFile()}`
               }, {
                 enabled: true,
-                message: 'Debug logging enabled. Logs will be written to .devharness/logs/debug.log'
+                message: `Debug logging enabled. Logs will be written to ${getLogFile()}`
               });
             }
             disableDebugLogging();
@@ -228,10 +228,10 @@ export function createConfigTools(profileStore?: ProfileStore, serverIdentity?: 
             return createSuccessResponse('DEBUG_LOGGING_STATUS', {
               status: enabled ? 'enabled' : 'disabled',
               enabled,
-              logFile: '.devharness/logs/debug.log'
+              logFile: getLogFile()
             }, {
               enabled,
-              logFile: '.devharness/logs/debug.log'
+              logFile: getLogFile()
             });
           }
 

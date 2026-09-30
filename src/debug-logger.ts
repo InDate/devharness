@@ -13,7 +13,8 @@ import { translateCall } from './tools/legacy-steps.js';
 function getLogDir(): string {
   return getOutputPath('logs');
 }
-function getLogFile(): string {
+/** Where debug logging writes: the project's state directory, or the global one when there is none. */
+export function getLogFile(): string {
   return join(getLogDir(), 'debug.log');
 }
 function getHistoryFile(): string {

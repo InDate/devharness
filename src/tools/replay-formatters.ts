@@ -66,8 +66,7 @@ export function formatExecutionResults(
       if ((r.tool === 'forEach' || r.tool === 'check') && r.substeps) {
         const scope = r.tool === 'forEach'
           ? `${r.sequenceName}, item ${r.iterations} of ${r.itemsFound}`
-          : r.tool === 'check' ? `${r.check?.outcome} \`${r.check?.subject}\`, ran ${r.sequenceName}`
-          : r.sequenceName;
+          : `${r.check?.outcome} \`${r.check?.subject}\`, ran ${r.sequenceName}`;
         response += `${r.step}. **${r.tool}** (${scope})\n`;
         response += `   **Error:** ${r.error}\n`;
         // Show substeps - but skip redundant error messages
@@ -221,8 +220,7 @@ export function formatClickValidationFailure(
 
   response += `\n---\n\n**Actions**\n`;
   response += `- Inspect error: \`console({ action: 'list', type: 'error', connectionReason: '${connectionReason}' })\`\n`;
-  response += `- Retry step: \`replay({ action: 'step' })\`\n`;
-  response += `- Skip and continue: \`replay({ action: 'step', stepCount: 2 })\`\n`;
+  response += `- Retry the step: \`replay({ action: 'step' })\`\n`;
   response += `- Finish remaining: \`replay({ action: 'finish' })\`\n`;
   response += `- Cancel: \`replay({ action: 'cancel' })\`\n`;
 
@@ -292,7 +290,7 @@ export function formatDebugState(debugState: DebugState, connectionReason: strin
   if (debugState.breakpointCount > 0) {
     section += `\n**${debugState.breakpointCount} active breakpoint${debugState.breakpointCount > 1 ? 's' : ''}**\n`;
     section += `- List breakpoints: \`breakpoint({ action: 'list', connectionReason: '${connectionReason}' })\`\n`;
-    section += `- Remove all: \`breakpoint({ action: 'remove', connectionReason: '${connectionReason}', breakpointId: '<id>' })\`\n`;
+    section += `- Remove one: \`breakpoint({ action: 'remove', connectionReason: '${connectionReason}', breakpointId: '<id>' })\`\n`;
   }
 
   return section;
@@ -1032,8 +1030,7 @@ export function formatInsertResult(
     response += `\n**Total commands:** ${newTotal}`;
   }
 
-  // `export`, not `save` - the latter was removed from the action enum and a
-  // hint naming it sends the caller into a validation error.
+  // `export` is the action that writes a sequence to disk.
   response += `\n\nSave to disk: \`replay({ action: 'export', sequenceId: '${sequenceId}' })\``;
   return response;
 }
@@ -1107,7 +1104,7 @@ export function formatDeclarations(sequence: CommandSequence, persistedTo?: stri
   const tags = sequence.tags ?? [];
   lines.push(tags.length === 0
     ? "- **Tags:** none - it runs in every `runAll`, and counts as untagged in the summary split"
-    : `- **Tags:** ${tags.map(t => `\`${t}\``).join(', ')} - selectable with \`runAll({ tags: [...] })\``);
+    : `- **Tags:** ${tags.map(t => `\`${t}\``).join(', ')} - selectable with \`replay({ action: 'runAll', tags: [...] })\``);
 
   lines.push('');
   lines.push(persistedTo

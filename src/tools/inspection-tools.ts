@@ -1,5 +1,7 @@
 /**
- * Inspection Tools
+ * `inspect` reads a paused debugger's call stack and variables, evaluates
+ * JavaScript in the page or inside a worker target, searches the scripts a
+ * connection has loaded, and lists its worker targets.
  */
 
 import { z } from 'zod';
@@ -123,11 +125,7 @@ function formatSearchResultsAsToon(results: Array<{ url: string; scriptId: strin
  */
 function formatToonValue(value: any): string {
   if (value === null || value === undefined) return 'null';
-  if (typeof value === 'string') {
-    // Check if it's already a formatted string like "[Function: ...]"
-    if (value.startsWith('[') || value.startsWith('"')) return value;
-    return value;
-  }
+  if (typeof value === 'string') return value;
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   if (Array.isArray(value)) {
     if (value.length === 0) return '[]';
@@ -158,22 +156,21 @@ function extractSourceFromFullEvalLine(
   pattern: string,
   caseSensitive: boolean
 ): { lineContent: string; innerLineNumber?: number } | null {
-  // Extract content between the first ("  and last ")
-  // Pattern: eval(__webpack_require__.XX("CONTENT"))
+  // eval(__webpack_require__.XX("CONTENT")): the content starts after the
+  // opening quote and ends before the closing quote and "))", the last three
+  // characters. An escaped quote inside the content is not looked for.
   const startMatch = fullLineContent.match(/^eval\(__webpack_require__\.\w+\(["'`]/);
   if (!startMatch) {
     return null;
   }
 
   const startIdx = startMatch[0].length;
-  // Find the closing quote and parentheses - handle escaped quotes
-  let endIdx = fullLineContent.length - 3; // Assume "))" at end, quote before that
+  const endIdx = fullLineContent.length - 3;
 
-  // Extract the inner content
   let innerContent = fullLineContent.substring(startIdx, endIdx);
 
   try {
-    // Unescape the string (handles \\n, \\t, etc.)
+    // The content is a string literal, with \n, \t, \r, \\ and quotes escaped in it.
     innerContent = innerContent
       .replace(/\\n/g, '\n')
       .replace(/\\t/g, '\t')
@@ -185,7 +182,6 @@ function extractSourceFromFullEvalLine(
     return null;
   }
 
-  // Split into lines and find the one containing the pattern
   const lines = innerContent.split('\n');
   const flags = caseSensitive ? 'g' : 'gi';
 
@@ -202,7 +198,7 @@ function extractSourceFromFullEvalLine(
       regex.lastIndex = 0; // Reset for next test
     }
   } catch {
-    // If regex fails, try simple string match
+    // A pattern that is not a valid regex is matched as plain text.
     const searchPattern = caseSensitive ? pattern : pattern.toLowerCase();
     for (let i = 0; i < lines.length; i++) {
       const line = caseSensitive ? lines[i] : lines[i].toLowerCase();
@@ -215,7 +211,7 @@ function extractSourceFromFullEvalLine(
     }
   }
 
-  return null; // Pattern not found in inner content
+  return null;
 }
 
 
@@ -282,7 +278,6 @@ function workerErrorResponse(error: unknown, target: string) {
   return createErrorResponse('WORKER_EVALUATE_FAILED', { target, error: `${error}` });
 }
 
-// Consolidated inspection tool schema
 const inspectionToolSchema = z.object({
   action: z.enum(['getCallStack', 'getVariables', 'evaluateExpression', 'searchCode', 'searchFunctions', 'listTargets'])
     .describe('Inspection action: getCallStack (get call stack when paused), getVariables (get variables in call frame), evaluateExpression (evaluate JavaScript), searchCode (search code by pattern), searchFunctions (find function definitions), listTargets (list worker targets)'),
@@ -328,13 +323,12 @@ export function createInspectionTools(
     inspect: createTool(
       'Inspect and debug code. Actions: getCallStack (get call stack when paused), getVariables (get variables in call frame), evaluateExpression (evaluate JavaScript, in the page or inside a worker via `target`), searchCode (search code by pattern), searchFunctions (find function definitions), listTargets (list service/dedicated/shared worker targets)',
       inspectionToolSchema,
-      // abortSignal (#110): INTERRUPTIBLE AT A CHECKPOINT, not genuinely
-      // cancellable. `evaluateExpression` is the only action with a real wait
-      // (the bounded round-trip to the execution context, up to its own
-      // timeout), and CDP gives us no way to recall a Runtime.evaluate - so a
-      // cancel stops WAITING for it while the expression keeps running in the
-      // target. The other actions read already-captured state and only get the
-      // entry checkpoint.
+      // abortSignal (#110): a cancel stops the wait, not the work. An
+      // evaluation in the page is raced against it: CDP cannot recall a
+      // Runtime.evaluate, so the expression keeps running in the target while
+      // the call returns. Every other action - a worker evaluation, the
+      // searches, the variable and call-stack reads - checks the cancel once on
+      // entry and runs its CDP round-trips to completion.
       async (args, abortSignal?: AbortSignal) => {
         const { action, connectionReason } = args;
 
@@ -354,7 +348,7 @@ export function createInspectionTools(
               return createErrorResponse('NOT_PAUSED');
             }
 
-            // Try to map stack frames back to original sources
+            // A frame a source map covers is reported at its original source.
             const mappedStack = await Promise.all(
               callStack.map(async (frame) => {
                 const original = await sourceMapHandler.mapToOriginal(
@@ -375,12 +369,10 @@ export function createInspectionTools(
               })
             );
 
-            // Format paused location from first frame
             const pausedLocation = mappedStack.length > 0
               ? `${mappedStack[0].location.source}:${mappedStack[0].location.line}`
               : undefined;
 
-            // Format as TOON
             const toonData = '```\n' + formatCallStackAsToon(mappedStack) + '\n```';
 
             return createSuccessResponse('CALL_STACK_SUCCESS', {
@@ -404,10 +396,8 @@ export function createInspectionTools(
               const result = await targetCdpManager.getVariables(callFrameId, includeGlobal, filter, expandObjects, maxDepth, maxTokens);
               const { data, totalCount, usedDepth, requestedDepth, responseType, filterInsufficient } = result;
 
-              // Format data as TOON (Token-Oriented Object Notation)
               const toonData = '```\n' + formatVariablesAsToon(data, responseType) + '\n```';
 
-              // Select message based on responseType and filterInsufficient
               switch (responseType) {
                 case 'full':
                   return createSuccessResponse('VARIABLES_SUCCESS', {
@@ -499,7 +489,6 @@ export function createInspectionTools(
               );
               const result = detailed.formatted;
 
-              // Format result as TOON
               let formattedResult: string;
               if (result === undefined || result === 'undefined') {
                 formattedResult = '```\nundefined\n```';
@@ -508,7 +497,6 @@ export function createInspectionTools(
               } else if (typeof result === 'string') {
                 formattedResult = `\`\`\`\n${result}\n\`\`\``;
               } else {
-                // For objects/arrays, use TOON formatting
                 formattedResult = `\`\`\`\n${formatToonValue(result)}\n\`\`\``;
               }
 
@@ -543,9 +531,8 @@ export function createInspectionTools(
                 _meta: inspectMeta,
               };
             } catch (error) {
-              // The universal trap: this broad catch ends in a catch-all
-              // EVALUATE_EXPRESSION_FAILED, which would turn the user's cancel
-              // into a bogus evaluation failure. Rethrow aborts first.
+              // A cancel rethrows before the catch-all below, which would report
+              // it as EVALUATE_EXPRESSION_FAILED.
               if (isAbortError(error)) throw error;
               // The evaluated expression itself threw (CDP exceptionDetails,
               // e.g. a stack-exhaustion RangeError) - report it as an
@@ -558,17 +545,16 @@ export function createInspectionTools(
                   stack: error.exceptionStack || '(no stack available)',
                 });
               }
-              // The expression returned a Promise that cannot settle while
-              // the debugger is paused (event loop stopped) - fail fast with
-              // an explanation instead of burning the full timeout.
+              // The expression returned a Promise that cannot settle while the
+              // debugger is paused (the event loop is stopped); answered at once
+              // rather than after the timeout.
               if (error instanceof EvaluateExpressionPendingPromiseError) {
                 return createErrorResponse('EVALUATE_PROMISE_PENDING_WHILE_PAUSED', {
                   expression: error.expression,
                   connection: `, connectionReason: '${connectionReason}'`,
                 });
               }
-              // The execution context never responded within the bounded
-              // timeout - report explicitly instead of hanging forever.
+              // The execution context did not answer within the timeout.
               if (error instanceof EvaluateExpressionTimeoutError) {
                 return createErrorResponse('EVALUATE_CONTEXT_UNRESPONSIVE', {
                   connectionReason,
@@ -602,7 +588,6 @@ export function createInspectionTools(
               const allScripts = targetCdpManager.getAllScripts();
               let scriptsToSearch = allScripts;
 
-              // Filter by URL if provided
               if (urlFilter) {
                 try {
                   const urlRegex = new RegExp(urlFilter);
@@ -628,9 +613,9 @@ export function createInspectionTools(
                   let lineContent: string;
                   let displayLineNumber = match.lineNumber + 1; // Convert to 1-based
 
-                  // Check if this is a webpack eval line (truncated content starts with eval)
+                  // A webpack eval line arrives truncated; the match is read from
+                  // the source inside the full line.
                   if (isWebpackEvalLine(match.lineContent)) {
-                    // Fetch the full line content from the script
                     const fullLine = await targetCdpManager.getScriptLine(script.scriptId, match.lineNumber);
                     if (fullLine) {
                       const extracted = extractSourceFromFullEvalLine(fullLine, pattern, caseSensitive);
@@ -644,7 +629,6 @@ export function createInspectionTools(
                       lineContent = match.lineContent;
                     }
                   } else {
-                    // Regular code, use as-is
                     lineContent = match.lineContent;
                   }
 
@@ -665,7 +649,6 @@ export function createInspectionTools(
                 }
               }
 
-              // Format as TOON
               const toonData = allResults.length > 0
                 ? '```\n' + formatSearchResultsAsToon(allResults) + '\n```'
                 : 'No matches found';
@@ -720,7 +703,6 @@ export function createInspectionTools(
               const allScripts = targetCdpManager.getAllScripts();
               let scriptsToSearch = allScripts;
 
-              // Filter by URL if provided
               if (urlFilter) {
                 try {
                   const urlRegex = new RegExp(urlFilter);
@@ -730,11 +712,10 @@ export function createInspectionTools(
                 }
               }
 
-              // Build pattern to match: function name( or const name = or let name =
+              // `function name(`, `const name =`, `let name =`, `name: function`,
+              // `name: (` and `name = (`; case is the search's own flag.
               const escapedName = functionName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-              const pattern = caseSensitive
-                ? `(function\\s+${escapedName}\\s*\\(|const\\s+${escapedName}\\s*=|let\\s+${escapedName}\\s*=|${escapedName}\\s*:\\s*function|${escapedName}\\s*:\\s*\\(|${escapedName}\\s*=\\s*\\()`
-                : `(function\\s+${escapedName}\\s*\\(|const\\s+${escapedName}\\s*=|let\\s+${escapedName}\\s*=|${escapedName}\\s*:\\s*function|${escapedName}\\s*:\\s*\\(|${escapedName}\\s*=\\s*\\()`;
+              const pattern = `(function\\s+${escapedName}\\s*\\(|const\\s+${escapedName}\\s*=|let\\s+${escapedName}\\s*=|${escapedName}\\s*:\\s*function|${escapedName}\\s*:\\s*\\(|${escapedName}\\s*=\\s*\\()`;
 
               const allResults: Array<{ url: string; scriptId: string; lineNumber: number; lineContent: string }> = [];
 
@@ -752,9 +733,9 @@ export function createInspectionTools(
                   let lineContent: string;
                   let displayLineNumber = match.lineNumber + 1; // Convert to 1-based
 
-                  // Check if this is a webpack eval line (truncated content starts with eval)
+                  // A webpack eval line arrives truncated; the match is read from
+                  // the source inside the full line.
                   if (isWebpackEvalLine(match.lineContent)) {
-                    // Fetch the full line content from the script
                     const fullLine = await targetCdpManager.getScriptLine(script.scriptId, match.lineNumber);
                     if (fullLine) {
                       const extracted = extractSourceFromFullEvalLine(fullLine, pattern, caseSensitive);
@@ -768,7 +749,6 @@ export function createInspectionTools(
                       lineContent = match.lineContent.trim();
                     }
                   } else {
-                    // Regular code, use as-is
                     lineContent = match.lineContent.trim();
                   }
 
@@ -789,7 +769,6 @@ export function createInspectionTools(
                 }
               }
 
-              // Format as TOON
               const toonData = allResults.length > 0
                 ? '```\n' + formatSearchResultsAsToon(allResults) + '\n```'
                 : 'No matches found';

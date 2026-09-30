@@ -189,8 +189,9 @@ runs against (see Quick Start).
 
 **Network**: `network` (actions: list, get, search, enable, disable, setConditions)
 
-**Proxy**: `proxy` (actions: status, events, sockets, body, answer, answerFrame, withdraw, answers, refuse)
+**Proxy**: `proxy` (actions: status, events, sockets, body, answer, answerFrame, withdraw, answers, refuse, stop)
 - Needs a browser launched with `connection({ action: 'launch', proxy: true })`. Holds what reached the outside world, where `network` reads what CDP saw
+- A proxy outlives its browser. `stop` drops it under one name; it stops, with what it recorded, once no other tab's name holds it. A proxy that no connection and no open bench uses is reported once on the event stream (`kind: "proxy"`, `idle: true`) with the `stop` call in `resolve`
 - An event row carries the step that owns it, a level (`observed`, `likely`, `positional`, `unprompted`) read from stored evidence, and what the page says started it (`input`, `timer`, `parser`, `preload`, `script`)
 - A timer-rooted request or send owns nothing and opens no allowance, so an app's own polling and heartbeats stay out of every step
 - `answer` answers a URL with a value instead of reaching the server; `answerFrame` replaces or drops one socket message. Stopping traffic in time is the `hold` tool

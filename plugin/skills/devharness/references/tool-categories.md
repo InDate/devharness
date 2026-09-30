@@ -39,8 +39,9 @@ runs against (see the skill's Quick Start).
 
 **Network**: `network` (actions: list, get, search, enable, disable, setConditions)
 
-**Proxy**: `proxy` (actions: status, events, sockets, body, answer, answerFrame, withdraw, answers, refuse)
+**Proxy**: `proxy` (actions: status, events, sockets, body, answer, answerFrame, withdraw, answers, refuse, stop)
 - Needs `connection({ action: 'launch', proxy: true })`. Holds what reached the outside world, where `network` reads what CDP saw
+- A proxy outlives its browser. `stop` drops it under one name; it stops, with what it recorded, once no other tab's name holds it. A proxy that no connection and no open bench uses is reported once on the event stream (`kind: "proxy"`, `idle: true`) with the `stop` call in `resolve`
 - Each event carries the step that owns it, a level read from stored evidence, and what the page says started it. A timer-rooted request or send owns nothing, so an app's own polling stays out of every step
 - `answer` answers a URL with a value; `answerFrame` replaces or drops one socket message
 - Full model - roots, levels, socket shapes, ruling a payload shape, what reaches a recording: [boundary.md](boundary.md)

@@ -8,7 +8,7 @@
 import { z } from 'zod';
 import { createTool } from '../validation-helpers.js';
 import { createErrorResponse } from '../messages.js';
-import { getProxy, listProxies } from '../proxy/registry.js';
+import { getProxy, listProxies, namesSharing, stopProxyFor } from '../proxy/registry.js';
 import { levelOf, type ProxyEvent, type ProxyCursor } from '../proxy/intercept-proxy.js';
 
 /** A cursor as one column: the command, or the replay pass and step. */
@@ -38,8 +38,8 @@ function stampOf(e: ProxyEvent): string {
 }
 
 const proxySchema = z.object({
-  action: z.enum(['status', 'events', 'sockets', 'body', 'answer', 'answerFrame', 'withdraw', 'answers', 'refuse'])
-    .describe('status (is a proxy running for this browser), events (what crossed the boundary, newest last), sockets (what each socket did, and whether arrival names a cause on it), body (one event\'s kept payload), answer (answer a URL with a value instead of reaching the server), answerFrame (replace or drop a socket message), withdraw (remove an answer), answers (what is answered), refuse (answer every unmatched write with 403, or forward it). Stopping traffic in time is the hold tool'),
+  action: z.enum(['status', 'events', 'sockets', 'body', 'answer', 'answerFrame', 'withdraw', 'answers', 'refuse', 'stop'])
+    .describe('status (is a proxy running for this browser), events (what crossed the boundary, newest last), sockets (what each socket did, and whether arrival names a cause on it), body (one event\'s kept payload), answer (answer a URL with a value instead of reaching the server), answerFrame (replace or drop a socket message), withdraw (remove an answer), answers (what is answered), refuse (answer every unmatched write with 403, or forward it), stop (drop the proxy under this name; it stops, with what it recorded, once no other tab\'s name holds it). Stopping traffic in time is the hold tool'),
   connectionReason: z.string()
     .describe("The browser, by the name connection({ action: 'launch', proxy: true }) gave it"),
   since: z.number().optional().describe('events: epoch ms, at or after'),
@@ -69,11 +69,23 @@ export function createProxyTools() {
           });
         }
 
+        const namesOf = namesSharing(args.connectionReason);
         const meta = (extra: Record<string, unknown>) => ({
           tool: 'proxy', action: args.action, timestamp: Date.now(), ...extra,
         });
 
         switch (args.action) {
+          case 'stop': {
+            await stopProxyFor(args.connectionReason);
+            const remaining = namesSharing(namesOf.find(name => name !== args.connectionReason) ?? '');
+            return {
+              content: [{ type: 'text', text: remaining.length
+                ? `Dropped the proxy for "${args.connectionReason}". It keeps running for ${remaining.map(n => `"${n}"`).join(', ')}, other tabs of the same browser.`
+                : `Stopped the proxy for "${args.connectionReason}", and with it what it recorded. A browser still running through it loses its network until relaunched.` }],
+              _meta: meta({ proxy: { stopped: remaining.length === 0, remaining } }),
+            };
+          }
+
           case 'status': {
             const events = proxy.eventsIn();
             const allowed = proxy.listAllowedHosts();

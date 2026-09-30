@@ -3,7 +3,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createServer, request as httpRequest, type Server } from 'node:http';
-import { startProxyFor, stopProxyFor, markOnProxies, forgetCursor, getProxy, shareProxy, listProxies } from './registry.js';
+import { startProxyFor, stopProxyFor, markOnProxies, forgetCursor, getProxy, shareProxy, listProxies, namesSharing, newlyIdleProxies } from './registry.js';
 
 let origin: Server;
 let originPort = 0;
@@ -72,5 +72,26 @@ describe('a second tab opened in a proxied browser', () => {
   it('shares nothing when the first name has no proxy', () => {
     expect(shareProxy('no such tab', 'another new tab')).toBe(false);
     expect(getProxy('another new tab')).toBeUndefined();
+  });
+});
+
+describe('a proxy no name in use holds', () => {
+  it('is reported once when it goes idle, and again only after it was in use', async () => {
+    await startProxyFor('idle shop tab');
+    shareProxy('idle shop tab', 'idle cart tab');
+    let inUse = new Set(['idle-cart-tab-unrelated']);
+    const reported = () => newlyIdleProxies(name => inUse.has(name)).filter(g => g.names.includes('idle shop tab'));
+
+    expect(reported()).toEqual([{ names: ['idle shop tab', 'idle cart tab'] }]);
+    expect(reported()).toEqual([]);
+
+    inUse = new Set(['idle cart tab']);
+    expect(reported()).toEqual([]);
+    inUse = new Set();
+    expect(reported()).toEqual([{ names: ['idle shop tab', 'idle cart tab'] }]);
+
+    expect(namesSharing('idle cart tab')).toEqual(['idle shop tab', 'idle cart tab']);
+    await stopProxyFor('idle shop tab');
+    await stopProxyFor('idle cart tab');
   });
 });

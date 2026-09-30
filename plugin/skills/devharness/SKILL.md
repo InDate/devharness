@@ -76,7 +76,7 @@ Bash({ command: "devharness watch", run_in_background: true, description: "devha
 
 It exits on the first burst of new lines and prints them with the next call: itself again for a lone event, `devharness watch --follow` under a Monitor while a person works in the bench. A Monitor expires every 30 minutes; an expiry with events in it re-arms the Monitor, one with none returns to the one-off. With no watch, each event reaches you only on your next devharness call. `bench({ action: 'start' })` prints the call when no process reads the stream.
 
-Each line carries `kind` and, where there is one, `resolve` - the call that clears it. `kind: "block"` also carries `guard`, one of `port`, `breakpoint`, `pendingStartup`, `bug`, `duplicateSession`; blocks are deduplicated, one line per *new* block rather than one per blocked call. `kind: "message"` carries `from` and the message id; `kind: "annotation"` carries the selector, component and comment for an element someone picked.
+Each line carries `kind` and, where there is one, `resolve` - the call that clears it. `kind: "block"` also carries `guard`, one of `port`, `breakpoint`, `pendingStartup`, `bug`, `duplicateSession`; blocks are deduplicated, one line per *new* block rather than one per blocked call. `kind: "message"` carries `from` and the message id; `kind: "annotation"` carries the selector, component and comment for an element someone picked. `kind: "proxy"` with `idle: true` names a proxy no connection and no open bench uses, and `resolve` stops it.
 
 ## Letting someone point instead of describe
 

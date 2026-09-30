@@ -274,6 +274,38 @@ export function listProxies(): string[] {
   return [...proxies.keys()];
 }
 
+/** Every name registered against the proxy `reference` names, in the order they were registered. */
+export function namesSharing(reference: string): string[] {
+  const proxy = proxies.get(reference);
+  if (!proxy) return [];
+  return [...proxies.entries()].filter(([, p]) => p === proxy).map(([name]) => name);
+}
+
+/** Proxies already reported idle, so each idle spell is reported once. */
+const reportedIdle = new Set<InterceptProxy>();
+
+/**
+ * Proxies none of whose names `inUse` holds, reported once per idle spell: a
+ * proxy reported idle is reported again only after one of its names was in
+ * use. A proxy outlives its browser, so one nothing uses keeps its port and
+ * its recorded traffic until it is stopped.
+ */
+export function newlyIdleProxies(inUse: (name: string) => boolean): Array<{ names: string[] }> {
+  const groups = new Map<InterceptProxy, string[]>();
+  for (const [name, proxy] of proxies) groups.set(proxy, [...(groups.get(proxy) ?? []), name]);
+  const idle: Array<{ names: string[] }> = [];
+  for (const [proxy, names] of groups) {
+    if (names.some(inUse)) {
+      reportedIdle.delete(proxy);
+    } else if (!reportedIdle.has(proxy)) {
+      reportedIdle.add(proxy);
+      idle.push({ names });
+    }
+  }
+  for (const proxy of reportedIdle) if (!groups.has(proxy)) reportedIdle.delete(proxy);
+  return idle;
+}
+
 export async function stopProxyFor(reference: string): Promise<boolean> {
   const proxy = proxies.get(reference);
   if (!proxy) return false;

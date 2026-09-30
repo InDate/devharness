@@ -16,8 +16,8 @@ const STARTUP_TIME = performance.now();
  */
 
 import { enableRunLog } from './run-log.js';
-import { benchHold } from './bench-mode.js';
-import { runAs } from './session-events.js';
+import { benchHold, isBenchOpen } from './bench-mode.js';
+import { runAs, appendEvent } from './session-events.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
@@ -79,7 +79,7 @@ import { configManager } from './config.js';
 import { ToolError } from './tool-error.js';
 import type { ToolGroup } from './bench/wire.js';
 import { arriveOn, unlisted, historyPlace, entryChannel } from './call-origin.js';
-import { markNextCommand, releaseCommand, noteCallStart } from './proxy/registry.js';
+import { markNextCommand, releaseCommand, noteCallStart, newlyIdleProxies } from './proxy/registry.js';
 
 /**
  * Tools that read the app without driving it.
@@ -1388,6 +1388,22 @@ async function main() {
     }
   }, CLEANUP_INTERVAL) : null;
 
+  // A proxy outlives its browser. One that no connection and no open bench
+  // uses keeps its port and its recording; the session hears of it once per
+  // idle spell, with the call that stops it.
+  const idleProxyCheck = setInterval(() => {
+    const inUse = (name: string) => !!connectionManager.findConnectionByReference(name) || isBenchOpen(name);
+    for (const { names } of newlyIdleProxies(inUse)) {
+      void appendEvent(resolveSessionName(), 'proxy', {
+        idle: true,
+        names,
+        detail: `the proxy for ${names.map(n => `"${n}"`).join(', ')} has no live connection and no open bench`,
+        resolve: `proxy({ action: 'stop', connectionReason: '${names[0]}' })`,
+      });
+    }
+  }, 60_000);
+  idleProxyCheck.unref();
+
   // Cleanup function for graceful shutdown
   let isCleaningUp = false;
   /**
@@ -1411,6 +1427,7 @@ async function main() {
 
     try {
       if (cleanupInterval) clearInterval(cleanupInterval); // Stop periodic cleanup
+      clearInterval(idleProxyCheck);
 
       // Dev servers go first: they are detached, so if anything below hangs
       // (closing a CDP connection to a dead socket is the usual suspect) and

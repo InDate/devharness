@@ -5,7 +5,7 @@
 import type { CommandRecorder } from '../command-recorder.js';
 import type { ExecuteToolCall } from '../types.js';
 import { createTool } from '../validation-helpers.js';
-import { createErrorResponse } from '../messages.js';
+import { createErrorResponse, responseWithOnce } from '../messages.js';
 import { handleInsert, handleAddCheck, handleDeclare } from './replay-edit.js';
 import { handleHistory, handleRepeat, handleRunFromLog } from './replay-history.js';
 import { handleCreate, handleList, handleGet, handleDelete, handleExport, handleLoad, handleListSaved, handleDeleteSaved } from './replay-library.js';
@@ -32,7 +32,7 @@ export function createReplayTools(
 ) {
   return {
     replay: createTool(
-      'Record and replay command sequences for testing and automation. Actions: repeat (immediately re-execute commands by history index - use this to repeat recent actions), history (view command history), recordInteraction (record real mouse/keyboard/navigation via a browser overlay - BLOCKS until the person finishes, so do not call it unattended; tune the capture with simplifyEvents/includeHovers/preferCoordinates/preferSelectors, and add outputFormat: events|commands|review|playwright|puppeteer to dump the recording - review is a human-readable walkthrough of the captured events), create (create sequence from history indices), list (every sequence reachable: those in memory and those saved on disk), get (get sequence details; outputFormat: commands|playwright|puppeteer returns the raw command JSON or generated test code), delete (delete from memory), export (write a sequence to disk as sequence/playwright/puppeteer), load (load sequence from disk), listSaved (the saved files alone), deleteSaved (delete saved file), run (start executing a sequence in the background - returns a runId immediately; poll progress/results with status, stop it with cancel; wait: true blocks until completion and returns the full result), runAll (run every sequence in a folder of the sequences dir, or only those carrying a given tag - loads the whole tree first so cross-folder name references resolve, runs only the chosen folder, skips folders whose name starts with an underscore unless named explicitly, and reports a pass/fail line per sequence; continueOnFailure defaults true), runFromLog (execute commands from log lines), step (execute next N commands in a paused sequence), finish (complete remaining commands), insert (insert recorded commands into a sequence), addCheck (add a check step: check holds its parameters, optionally insertAfterStep - a guard is a check whose pass runs another sequence), declare (set what the sequence needs and what it is: requiredConnections - the browsers, optionally each on a persistent profile - requiredSockets - URL substrings of the WebSockets its assertions ride on - and tags, which runAll selects on; each list replaces the field, [] clears it, and the sequence is written back to its file), status (with runId: one run\'s progress or final result; without: paused session + recent runs), cancel (with runId: stop that run; without: drop the paused session, or the only executing run)',
+      'Record and replay tool-call sequences. Actions: history, repeat (re-run history indices), create (sequence from history indices), insert, addCheck, declare (the browsers, sockets and tags a sequence carries), list (memory and disk), get, delete (from memory), export (to disk as sequence/playwright/puppeteer), load, listSaved, deleteSaved, run (in the background, returning a runId; wait: true blocks), runAll (every sequence in a folder, or carrying a tag, one pass/fail line each), status, cancel, step/finish (a paused run), runFromLog (log line numbers), recordInteraction (a person\'s mouse, keyboard and navigation through a browser overlay; blocks until that person finishes)',
       replaySchema,
       async (args, abortSignal) => {
         switch (args.action) {
@@ -55,9 +55,12 @@ export function createReplayTools(
           case 'deleteSaved':
             return handleDeleteSaved(args, commandRecorder);
           case 'run':
-            return handleRun(args, commandRecorder, executeToolCall, getPageForConnection!, abortSignal, getConnectionPort);
+            return responseWithOnce(await handleRun(args, commandRecorder, executeToolCall, getPageForConnection!, abortSignal, getConnectionPort), 'REPLAY_RUN_REPLY');
           case 'runAll':
-            return handleRunAll(args, commandRecorder, executeToolCall, getPageForConnection!, abortSignal, getConnectionPort);
+            return responseWithOnce(
+              responseWithOnce(await handleRunAll(args, commandRecorder, executeToolCall, getPageForConnection!, abortSignal, getConnectionPort), 'REPLAY_RUN_ALL_REPLY'),
+              'REPLAY_RUN_REPLY'
+            );
           case 'status':
             return handleStatus(args, commandRecorder);
           case 'step':
@@ -67,9 +70,9 @@ export function createReplayTools(
           case 'insert':
             return handleInsert(args, commandRecorder);
           case 'addCheck':
-            return handleAddCheck(args, commandRecorder);
+            return responseWithOnce(await handleAddCheck(args, commandRecorder), 'REPLAY_ADD_CHECK_REPLY');
           case 'declare':
-            return handleDeclare(args, commandRecorder);
+            return responseWithOnce(await handleDeclare(args, commandRecorder), 'REPLAY_DECLARE_REPLY');
           case 'cancel':
             return handleCancel(args, commandRecorder);
           case 'repeat':

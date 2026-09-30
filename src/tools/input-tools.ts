@@ -53,11 +53,11 @@ const inputToolSchema = z.object({
 
   // swipe: gesture on an element, instead of from/to pixels
   direction: z.enum(['left', 'right', 'up', 'down']).optional()
-    .describe("swipe: gesture direction across `selector`'s box, resolved at run time. Use this rather than from/to for anything in a list - a row's coordinates move with the rows above it"),
+    .describe("swipe: direction across `selector`'s box, read at run time; in a list it holds where from/to drift with the rows above"),
   distance: z.number().optional()
-    .describe('swipe: travel in px. Default is a short, reveal-sized nudge (60% of the element, capped at 96px) because a long fast swipe commits the destructive action on rows that have ranges - pass a larger distance deliberately to over-drag'),
+    .describe('swipe: travel px (default 60% of the element, capped at 96px, a reveal nudge; further can commit a row\'s destructive action)'),
   durationMs: z.number().optional()
-    .describe('swipe: how long the gesture takes, spread across `steps` (default 300 - a deliberate drag). Velocity is a real input to gesture handling: unpaced moves go out as fast as the transport allows, which reads as a flick, and a flick is a DIFFERENT gesture - on a swipe-action row it commits the destructive action instead of revealing it. Pass a small value deliberately to test the flick'),
+    .describe('swipe: gesture ms across `steps` (default 300); a short one is a flick, which can commit a row\'s destructive action'),
 
   // scroll
   deltaX: z.number().optional().describe('Horizontal scroll px'),
@@ -160,7 +160,7 @@ export function createInputTools(
 ) {
   return {
     input: createTool(
-      'Perform browser input actions. Actions: click (click element), type (type text into element), press (press keyboard key), hover (hover over element), focus (focus element by selector), focusNext (Tab to next focusable element), focusPrevious (Shift+Tab to previous focusable element), drag (drag from one point to another), scroll (scroll wheel at position), mousemove (move mouse to position), pinch (pinch zoom gesture), tap (real touch tap - selector or x/y), swipe (real touch drag - selector + direction, or raw from/to - for touch-only gestures the mouse cannot drive)',
+      'Browser input. Actions: click, type, press (a key), hover, focus, focusNext/focusPrevious (Tab/Shift+Tab), drag (from/to), scroll (wheel at x/y), mousemove, pinch (zoom gesture), tap (real touch, selector or x/y), swipe (real touch drag, selector + direction or from/to, for gestures a mouse cannot drive)',
       inputToolSchema,
       // abortSignal (#110): input events cannot be recalled once dispatched -
       // Input.dispatchMouseEvent on the wire WILL be processed by Chrome. What

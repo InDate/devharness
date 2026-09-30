@@ -266,33 +266,32 @@ function workerErrorResponse(error: unknown, target: string) {
 }
 
 const inspectionToolSchema = z.object({
-  action: z.enum(['getCallStack', 'getVariables', 'evaluateExpression', 'searchCode', 'searchFunctions', 'listTargets'])
-    .describe('Inspection action: getCallStack (get call stack when paused), getVariables (get variables in call frame), evaluateExpression (evaluate JavaScript), searchCode (search code by pattern), searchFunctions (find function definitions), listTargets (list worker targets)'),
-  connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it (e.g. "unnamed-connection-default")'),
+  action: z.enum(['getCallStack', 'getVariables', 'evaluateExpression', 'searchCode', 'searchFunctions', 'listTargets']),
+  connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it'),
 
   // getVariables and evaluateExpression parameters
-  callFrameId: z.string().optional().describe('Call frame ID (required for getVariables, optional for evaluateExpression)'),
-  includeGlobal: z.boolean().optional().describe('Include global scope (for getVariables action, default: false)'),
-  filter: z.string().optional().describe('Regex filter for variable names (for getVariables action) - applies to ALL scopes. Required when too many variables exist'),
-  expandObjects: z.boolean().optional().describe('Expand objects/arrays (for getVariables and evaluateExpression actions, default: true)'),
-  maxDepth: z.number().optional().describe('Max expansion depth (for getVariables and evaluateExpression actions, default: 2). Auto-reduced if response too large'),
-  maxTokens: z.number().optional().describe('Max tokens for getVariables response (default: 1000). Depth auto-reduced to fit, filter required if still exceeded'),
+  callFrameId: z.string().optional().describe('Call frame ID (getVariables: required; evaluateExpression: the frame to evaluate in)'),
+  includeGlobal: z.boolean().optional().describe('getVariables: include global scope (default: false)'),
+  filter: z.string().optional().describe('getVariables: regex on variable names, across all scopes'),
+  expandObjects: z.boolean().optional().describe('getVariables/evaluateExpression: expand objects/arrays (default: true)'),
+  maxDepth: z.number().optional().describe('getVariables/evaluateExpression: max expansion depth (default: 2)'),
+  maxTokens: z.number().optional().describe('getVariables: response token budget (default: 1000)'),
 
   // evaluateExpression parameters
-  expression: z.string().optional().describe('JavaScript expression (required for evaluateExpression action). A returned Promise is awaited by default, so async IIFEs like (async () => await fetch(...))() resolve to their settled value'),
-  awaitPromise: z.boolean().optional().describe('Await a Promise returned by the expression and use its settled value (for evaluateExpression action, default: true). Pass false to inspect the Promise object itself. While paused at a breakpoint, only already-settled promises can be resolved (the event loop is stopped); a pending one fails fast'),
-  target: z.string().optional().describe('Worker target to evaluate inside - a target id from listTargets, or a substring of its URL. Omit to evaluate in the page'),
-  saveAs: z.string().optional().describe('Sequence step only (evaluateExpression): captures the evaluated value into the run\'s variable store under this name, for later {{var:name}} / {{var:name.path}} use'),
+  expression: z.string().optional().describe('evaluateExpression: the JavaScript; a returned Promise is awaited'),
+  awaitPromise: z.boolean().optional().describe('evaluateExpression: await a returned Promise (default: true); false returns the Promise itself'),
+  target: z.string().optional().describe('evaluateExpression: worker target id from listTargets, or a substring of its URL; omitted, the page'),
+  saveAs: z.string().optional().describe('Sequence step only (evaluateExpression): stores the value for later {{var:name}} / {{var:name.path}} use'),
 
   // searchCode parameters
-  pattern: z.string().optional().describe('Regex pattern (required for searchCode action)'),
-  caseSensitive: z.boolean().optional().describe('Case sensitive (for searchCode and searchFunctions actions, default: false)'),
-  isRegex: z.boolean().optional().describe('Treat as regex (for searchCode action, default: true)'),
-  urlFilter: z.string().optional().describe('URL filter regex (for searchCode and searchFunctions actions)'),
-  limit: z.number().optional().describe('Max results (for searchCode action default: 100, for searchFunctions default: 50)'),
+  pattern: z.string().optional().describe('searchCode: pattern'),
+  caseSensitive: z.boolean().optional().describe('searchCode/searchFunctions: case sensitive (default: false)'),
+  isRegex: z.boolean().optional().describe('searchCode: pattern is a regex (default: true)'),
+  urlFilter: z.string().optional().describe('searchCode/searchFunctions: script URL regex'),
+  limit: z.number().optional().describe('Max results (searchCode default 100, searchFunctions 50)'),
 
   // searchFunctions parameters
-  functionName: z.string().optional().describe('Function name (required for searchFunctions action)'),
+  functionName: z.string().optional().describe('searchFunctions: function name'),
 }).strict();
 
 export function createInspectionTools(

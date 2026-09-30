@@ -16,7 +16,7 @@ const sourceSchema = z.object({
   startLine: z.number().optional().describe('get: start line number'),
   endLine: z.number().optional().describe('get: end line number'),
   directory: z.string().optional().describe('loadMaps: the directory whose .js.map files, subdirectories included, are registered'),
-  connectionReason: z.string().optional().describe('get: the connection, by the name connection launch or attach gave it (e.g. "unnamed-connection-default")'),
+  connectionReason: z.string().optional().describe('get: the connection, by the name connection launch or attach gave it'),
 }).strict();
 
 type SourceArgs = z.infer<typeof sourceSchema>;

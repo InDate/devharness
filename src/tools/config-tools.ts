@@ -12,16 +12,15 @@ import { InvalidProfileNameError, ProfileInUseError } from '../chrome-launcher.j
 import { enableDebugLogging, disableDebugLogging, isDebugEnabled, getLogFile } from '../debug-logger.js';
 
 const configSchema = z.object({
-  action: z.enum(['status', 'useLocal', 'useGlobal', 'reset', 'backup', 'cloneFromGlobal', 'show', 'listTools', 'reload', 'restart', 'listProfiles', 'resetProfile', 'setDebugLogging', 'debugLoggingStatus'])
-    .describe('Config action: status (show config location info), useLocal (switch to project config), useGlobal (switch to global config), reset (reset to defaults), backup (backup current config), cloneFromGlobal (copy global to local), show (display current config), listTools (list all toggleable tools with status and dependencies), reload (re-read config.json from disk now - also happens automatically on file edits), restart (restart devharness itself if stuck or broken), listProfiles (list named persistent Chrome profiles), resetProfile (wipe and recreate the named persistent Chrome profile given in `profile`), setDebugLogging (turn debug logging on or off with `enabled`), debugLoggingStatus (whether debug logging is on, and where it writes)'),
+  action: z.enum(['status', 'useLocal', 'useGlobal', 'reset', 'backup', 'cloneFromGlobal', 'show', 'listTools', 'reload', 'restart', 'listProfiles', 'resetProfile', 'setDebugLogging', 'debugLoggingStatus']),
   seedFromGlobal: z.boolean().optional()
-    .describe('For useLocal action: if true (default), seeds new local config from global if it exists'),
+    .describe('useLocal: seed a new local config from the global one (default true)'),
   path: z.string().optional()
-    .describe('useLocal: explicit project dir to use as "local" (overrides server cwd)'),
+    .describe('useLocal: project dir to use as local, in place of the server cwd'),
   profile: z.string().optional()
-    .describe('resetProfile: name of the persistent Chrome profile (as given to connection launch as profile) to wipe and recreate empty. Refused while a Chrome launched by devharness still holds that profile - kill it first.'),
+    .describe('resetProfile: the persistent Chrome profile name, as connection launch took it'),
   enabled: z.boolean().optional()
-    .describe('setDebugLogging: true to turn debug logging on, false to turn it off'),
+    .describe('setDebugLogging: on or off'),
 }).strict();
 
 type ConfigArgs = z.infer<typeof configSchema>;
@@ -46,7 +45,7 @@ export interface ServerIdentity {
 export function createConfigTools(profileStore?: ProfileStore, serverIdentity?: ServerIdentity) {
   return {
     config: createTool(
-      'Manage devharness configuration. Actions: status (show where config is loaded from), useLocal (switch to project-local config), useGlobal (switch to global ~/.devharness config), reset (reset to defaults), backup (create timestamped backup), cloneFromGlobal (copy global config to local), show (display current settings), listTools (list all toggleable tools with their status and dependencies), reload (re-read config.json now; edits also hot-reload automatically within ~250ms), restart (restart devharness itself if stuck or broken), listProfiles (list named persistent Chrome profiles and where they live), resetProfile (wipe and recreate a named persistent Chrome profile, clearing its cookies/localStorage/IndexedDB), setDebugLogging (turn debug logging on or off), debugLoggingStatus (whether debug logging is on)',
+      'devharness configuration. Actions: status (where config loads from), useLocal, useGlobal (project or ~/.devharness config), reset (to defaults), backup (timestamped), cloneFromGlobal (global to local), show, listTools (toggleable tools, status and dependencies), reload (re-read config.json; edits also reload within ~250ms), restart (devharness itself, when stuck or broken), listProfiles (persistent Chrome profiles), resetProfile (wipe one, clearing its storage), setDebugLogging, debugLoggingStatus',
       configSchema,
       async (args: ConfigArgs) => {
         switch (args.action) {

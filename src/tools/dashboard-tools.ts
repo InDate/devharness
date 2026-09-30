@@ -12,8 +12,7 @@ import type { DashboardInstance } from '../dashboard/index.js';
 import type { SessionInfo } from '../session-detector.js';
 
 const dashboardSchema = z.object({
-  action: z.enum(['open', 'status', 'stop'])
-    .describe('Dashboard action: open (get URL to open dashboard), status (show hub status), stop (stop the hub if this session is the hub)'),
+  action: z.enum(['open', 'status', 'stop']),
 }).strict();
 
 type DashboardArgs = z.infer<typeof dashboardSchema>;

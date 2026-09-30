@@ -144,14 +144,14 @@ function navigationOutcome(result: ActionResult<unknown>, action: string, target
 
 // Consolidated schema for page navigation tools
 const navigateSchema = z.object({
-  action: z.enum(['goto', 'reload', 'back', 'forward', 'info']).describe('Page navigation action: goto (navigate to URL), reload (reload page), back (go back), forward (go forward), info (get page info)'),
-  connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it (e.g. "unnamed-connection-default")'),
+  action: z.enum(['goto', 'reload', 'back', 'forward', 'info']),
+  connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it'),
   // Parameters for goto action
   url: z.string().optional().describe('URL to navigate to (required for goto action)'),
-  waitUntil: z.enum(['load', 'domcontentloaded', 'networkidle0', 'networkidle2']).optional().describe('When to consider navigation complete (for goto and reload actions, default: load)'),
+  waitUntil: z.enum(['load', 'domcontentloaded', 'networkidle0', 'networkidle2']).optional().describe('goto/reload: when navigation counts as complete (default load)'),
   // Parameters for reload action
-  ignoreCache: z.boolean().optional().describe('Clear browser cache before reloading (for reload action, default: false)'),
-  timeout: z.number().optional().describe('Maximum time to wait for reload in ms (for reload action, default: 30000ms)'),
+  ignoreCache: z.boolean().optional().describe('reload: clear the cache first (default false)'),
+  timeout: z.number().optional().describe('reload: max wait ms (default 30000)'),
 }).strict();
 
 export function createPageTools(

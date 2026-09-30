@@ -4,9 +4,10 @@
  * Loads and formats user-facing messages from docs/messages.md
  */
 
-import { readFileSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { replyReturnsToAgent } from './call-origin.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -208,14 +209,33 @@ class MessageManager {
     return once ? `${body}\n\n${this.formatMessage(once, variables)}` : body;
   }
 
-  /** Returns the once block on the first call for that id, nothing after. */
+  /**
+   * Returns the once block on the first reply for that id in this session that
+   * returns to an agent, nothing after. The shown ids are held in memory per record path and, where
+   * a path is set, in that file too, so a server restarted within the same
+   * session reads them back and the block stays shown once.
+   */
   private takeOnce(id: string, template: MessageTemplate): string | undefined {
-    if (!template.once || this.saidOnce.has(id)) return undefined;
-    this.saidOnce.add(id);
+    if (!template.once || !replyReturnsToAgent()) return undefined;
+    const path = this.onceRecordPath();
+    const key = path ?? '';
+    const shown = this.onceShown.get(key) ?? new Set<string>();
+    this.onceShown.set(key, shown);
+    if (path) readOnceRecord(path).forEach(shownId => shown.add(shownId));
+    if (shown.has(id)) return undefined;
+    shown.add(id);
+    if (path) writeOnceRecord(path, shown);
     return template.once;
   }
 
-  private saidOnce = new Set<string>();
+  private onceShown = new Map<string, Set<string>>();
+  private onceRecordPath: () => string | undefined = () => undefined;
+
+  /** Sets where the shown once-block ids of the current session are kept; a
+   *  source returning undefined keeps them in memory only. */
+  setOnceRecordPath(source: () => string | undefined): void {
+    this.onceRecordPath = source;
+  }
 
   /**
    * Get a complete message template with metadata
@@ -558,6 +578,27 @@ class MessageManager {
   }
 }
 
+/** The ids a record file holds; a missing or unreadable file holds none. */
+function readOnceRecord(path: string): string[] {
+  try {
+    const ids = JSON.parse(readFileSync(path, 'utf-8'));
+    return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+/** A failed write leaves the ids in memory and costs only a repeat after the
+ *  next restart, so it is logged and never fails the tool call. */
+function writeOnceRecord(path: string, ids: Set<string>): void {
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify([...ids]));
+  } catch (error) {
+    console.error(`[devharness] Failed to write once-block record ${path}: ${error}`);
+  }
+}
+
 // Export singleton instance
 export const messages = new MessageManager();
 
@@ -566,6 +607,34 @@ export const messages = new MessageManager();
  */
 export function getMessage(id: string, variables?: Record<string, any>): string {
   return messages.getMessage(id, variables);
+}
+
+/**
+ * A reply built in code, with the once-per-session block of message `id`
+ * appended the first time that block is due. The message carries only that
+ * block, so a reply with no template of its own still sheds its detail after
+ * one reading.
+ */
+export function withOnce(text: string, id: string, variables?: Record<string, any>): string {
+  const once = messages.hasMessage(id) ? messages.getMessage(id, variables).trim() : '';
+  return once ? `${text}\n\n${once}` : text;
+}
+
+/**
+ * A response with the once-per-session block of message `id` appended to its
+ * last text part. An error response is returned as it is: error text holds
+ * what recovery needs on every call, and a block spent on it would be read
+ * beside a failure rather than a result.
+ */
+export function responseWithOnce<R extends { content?: Array<{ type: string; text?: string }>; isError?: boolean }>(
+  response: R,
+  id: string,
+  variables?: Record<string, any>
+): R {
+  if (!response?.content || response.isError) return response;
+  const last = [...response.content].reverse().find(part => part.type === 'text' && typeof part.text === 'string');
+  if (last) last.text = withOnce(last.text!, id, variables);
+  return response;
 }
 
 /**

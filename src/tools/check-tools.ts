@@ -10,6 +10,7 @@
 
 import { z } from 'zod';
 import { createTool } from '../validation-helpers.js';
+import { responseWithOnce } from '../messages.js';
 import type { ToolResponseMeta } from '../tool-response.js';
 import type { ExecuteToolCall } from '../types.js';
 import { CHECK_OPERATORS, ELEMENT_CONDITIONS, SOCKET_CONDITIONS, assertAsCheck, formOf, runCheck, waitAsCheck, type CheckSpec } from './check-engine.js';
@@ -19,7 +20,7 @@ export const checkOutcomeSchema = z.union([
   z.enum(['continue', 'stop']),
   z.object({
     run: z.string().describe('Name of the sequence to run'),
-    resumeAt: z.number().int().optional().describe('0-based step of this sequence to resume at once it has run; forward only. Omitted, the run carries on at the next step'),
+    resumeAt: z.number().int().optional().describe('0-based step of this sequence to resume at once it has run, forward only'),
   }).strict(),
 ]);
 export type CheckOutcome = z.infer<typeof checkOutcomeSchema>;
@@ -41,17 +42,17 @@ export const checkSchema = z.object({
     method: z.string().optional().describe('A request: only this method'),
     direction: z.enum(['sent', 'received']).optional().describe('A frame: only this way'),
     textIncludes: z.string().optional().describe('A frame: what its payload carries. A lone "key":value pair compares that top-level JSON field; anything else is a substring'),
-  }).strict().optional().describe('Traffic crossing the proxy since the start of the call stepsBack before the check, matched as a pin matches it: a request by urlIncludes + method, a frame by urlIncludes + direction + textIncludes. Needs the browser launched with proxy: true'),
-  stepsBack: z.number().int().min(0).optional().describe('traffic: count from the start of the call this many back - 1 (default) is the call before the check, whose traffic has usually crossed by the time the check runs; 0 counts from the check itself. Every call counts, in a run each step'),
-  count: z.number().int().min(0).optional().describe('traffic: how many crossings, compared by operator (default gte). equals, lte and lt read until withinMs ends, since a later crossing can break them'),
-  socket: z.string().optional().describe("A socket whose URL carries this, with condition open (default) or closed. Needs the browser launched with proxy: true"),
-  afterMs: z.number().int().min(0).max(600000).optional().describe('Read nothing until this much time has passed. On its own, a check that holds once it has - a timer'),
+  }).strict().optional().describe('Traffic crossing the proxy: a request by urlIncludes + method, a frame by urlIncludes + direction + textIncludes. Needs a browser launched with proxy: true'),
+  stepsBack: z.number().int().min(0).optional().describe('traffic: count from the start of the call this many back (default 1, the call before the check; 0, the check itself)'),
+  count: z.number().int().min(0).optional().describe('traffic: how many crossings, compared by operator (default gte)'),
+  socket: z.string().optional().describe("A socket whose URL carries this, with condition open (default) or closed. Needs proxy: true"),
+  afterMs: z.number().int().min(0).max(600000).optional().describe('Read nothing until this much time has passed; alone, a timer'),
   withinMs: z.number().int().min(0).max(600000).optional().describe('Read again until it holds, for at most this long after afterMs. 0 or omitted reads once'),
   pollMs: z.number().int().min(25).max(5000).optional().describe('Time between reads (default 100)'),
   message: z.string().optional().describe('What a failure means, reported in its place'),
-  holds: checkOutcomeSchema.optional().describe('Sequence step: what happens when it holds - continue (default), stop, or { run, resumeAt }'),
-  fails: checkOutcomeSchema.optional().describe('Sequence step: what happens when it fails - stop (default), continue, or { run, resumeAt }'),
-  connectionReason: z.string().optional().describe('Which browser it reads. Injected from the run for sequence steps'),
+  holds: checkOutcomeSchema.optional().describe('Sequence step, on hold: continue (default), stop, or { run, resumeAt }'),
+  fails: checkOutcomeSchema.optional().describe('Sequence step, on failure: stop (default), continue, or { run, resumeAt }'),
+  connectionReason: z.string().optional().describe('Which browser it reads'),
 }).strict();
 
 export type CheckArgs = z.infer<typeof checkSchema>;
@@ -94,7 +95,7 @@ export function createCheckTools(
 ) {
   return {
     check: createTool(
-      'Check one thing and answer held or failed: an element (selector + condition), a value ({{var:...}} + operator + right), a JS expression, the URL, a cookie, a localStorage key, an IndexedDB record, traffic crossing the proxy (traffic + count) or a socket being open or closed - or time alone (afterMs). withinMs reads again until it holds; afterMs waits before the first read. Called directly it answers without failing. As a sequence step, holds and fails say what happens next: continue, stop, or { run: "<sequence>", resumeAt } to run another sequence and resume. assert is a check whose failure stops the run; wait is a check with a time limit.',
+      'Check one thing, answering held or failed: an element (selector + condition), a value ({{var:...}} + operator + right), a JS expression, the URL, a cookie, a localStorage key, an IndexedDB record, proxy traffic (traffic + count), a socket, or time alone (afterMs). withinMs reads again until it holds. As a sequence step, holds/fails pick continue, stop or running another sequence.',
       checkSchema,
       async (args: CheckArgs, abortSignal?: AbortSignal) => {
         const subjects = subjectsOf(args);
@@ -134,7 +135,7 @@ export function createCheckTools(
           : `**Check failed:** \`${reading.subject}\`${took}\n\n${args.message ? `${args.message}\n\n` : ''}`
             + `${reading.lastError ? `The last read failed: ${reading.lastError}. ` : reading.detail ? `${reading.detail}. ` : ''}`
             + `**Found:** ${reading.found ?? 'nothing'}`;
-        return { content: [{ type: 'text', text }], _meta: meta };
+        return responseWithOnce({ content: [{ type: 'text', text }], _meta: meta }, 'CHECK_REPLY');
       }
     ),
   };

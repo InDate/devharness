@@ -7,7 +7,7 @@
  */
 import { z } from 'zod';
 import { createTool } from '../validation-helpers.js';
-import { createErrorResponse } from '../messages.js';
+import { createErrorResponse, responseWithOnce } from '../messages.js';
 import { getProxy, listProxies, namesSharing, stopProxyFor } from '../proxy/registry.js';
 import { levelOf, type ProxyEvent, type ProxyCursor } from '../proxy/intercept-proxy.js';
 
@@ -38,20 +38,19 @@ function stampOf(e: ProxyEvent): string {
 }
 
 const proxySchema = z.object({
-  action: z.enum(['status', 'events', 'sockets', 'body', 'answer', 'answerFrame', 'withdraw', 'answers', 'refuse', 'stop'])
-    .describe('status (is a proxy running for this browser), events (what crossed the boundary, newest last), sockets (what each socket did, and whether arrival names a cause on it), body (one event\'s kept payload), answer (answer a URL with a value instead of reaching the server), answerFrame (replace or drop a socket message), withdraw (remove an answer), answers (what is answered), refuse (answer every unmatched write with 403, or forward it), stop (drop the proxy under this name; it stops, with what it recorded, once no other tab\'s name holds it). Stopping traffic in time is the hold tool'),
+  action: z.enum(['status', 'events', 'sockets', 'body', 'answer', 'answerFrame', 'withdraw', 'answers', 'refuse', 'stop']),
   connectionReason: z.string()
     .describe("The browser, by the name connection({ action: 'launch', proxy: true }) gave it"),
   since: z.number().optional().describe('events: epoch ms, at or after'),
   until: z.number().optional().describe('events: epoch ms, before'),
   id: z.string().optional().describe('body: the event id. withdraw: the answer id'),
-  urlIncludes: z.string().optional().describe('events: only what crossed to a URL containing this - Chrome talks to Google constantly through the same proxy and those are not the app. answer/answerFrame: substring of the URL the answer applies to'),
+  urlIncludes: z.string().optional().describe('events: only URLs containing this. answer/answerFrame: the URL substring the answer applies to'),
   method: z.string().optional().describe('answer: only this HTTP method'),
-  step: z.coerce.number().int().min(0).optional().describe('answer/answerFrame: only while this replay step (0-based) is in flight, so the answer applies at one position in a run and the same call at another position reaches the server'),
-  unmatchedWrites: z.enum(['refuse', 'forward']).optional().describe('refuse: what an unmatched POST/PUT/PATCH/DELETE meets - refuse answers it 403 and records it as refused; forward is the default'),
+  step: z.coerce.number().int().min(0).optional().describe('answer/answerFrame: only while this 0-based replay step is in flight'),
+  unmatchedWrites: z.enum(['refuse', 'forward']).optional().describe('refuse: an unmatched POST/PUT/PATCH/DELETE is refused (403, recorded) or forwarded (default)'),
   status: z.number().optional().describe('answer: status to answer with (default 200)'),
   contentType: z.string().optional().describe('answer: content-type to answer with (default application/json)'),
-  value: z.string().optional().describe('answer: the body to answer with. answerFrame: what to send in the message\'s place - omit to drop it so nothing arrives'),
+  value: z.string().optional().describe('answer: the body to answer with. answerFrame: the message sent in its place; omitted, it is dropped'),
   textIncludes: z.string().optional().describe('answerFrame: substring of the message payload that selects it'),
   direction: z.enum(['sent', 'received']).optional().describe('answerFrame: only messages going this way'),
 }).strict();
@@ -59,7 +58,7 @@ const proxySchema = z.object({
 export function createProxyTools() {
   return {
     proxy: createTool(
-      'Read and steer the intercepting proxy a browser was launched through: what crossed the boundary, and what to answer with instead.',
+      'Read and steer the intercepting proxy a browser was launched through. Actions: status, events (what crossed the boundary, newest last), sockets (what each socket did: reply or push), body (one event\'s kept payload), answer (a URL answered with a value in place of the server), answerFrame (a socket message replaced or dropped), withdraw (an answer), answers (the ones in force), refuse (unmatched writes answered 403, or forwarded), stop (drop the proxy under this name). Holding traffic in time is the hold tool.',
       proxySchema,
       async (args) => {
         const proxy = getProxy(args.connectionReason);
@@ -152,12 +151,12 @@ export function createProxyTools() {
                 ? `${e.id}  ${cmd}${e.method} ${e.url} ${e.status ?? 'pending'}${sure}${e.evidence?.initiator ? ` <${e.evidence.initiator}>` : ''}${e.answeredAs ? ` [${e.answeredAs}]` : ''}`
                 : `${e.id}  ${cmd}${e.direction === 'out' ? '->' : '<-'} ${e.url} ${e.size}b${sure}${e.evidence?.initiator ? ` <${e.evidence.initiator}>` : ''}${e.answeredAs ? ` [${e.answeredAs}]` : ''}`;
             });
-            return {
+            return responseWithOnce({
               content: [{ type: 'text', text: events.length === 0
                 ? `Nothing matching crossed the boundary in that window.${elsewhere ? ` ${elsewhere} went elsewhere.` : ''}`
                 : `${events.length} event(s)${elsewhere ? `, ${elsewhere} elsewhere` : ''}\n\n${lines.join('\n')}` }],
               _meta: meta({ proxyEvents: events, elsewhere }),
-            };
+            }, 'PROXY_EVENTS_REPLY');
           }
 
           case 'sockets': {
@@ -197,10 +196,10 @@ export function createProxyTools() {
               ...(args.contentType ? { headers: { 'content-type': args.contentType } } : {}),
               body: args.value ?? '',
             });
-            return {
+            return responseWithOnce({
               content: [{ type: 'text', text: `Answering ${pin.method ?? 'any'} *${pin.urlIncludes}*${pin.step !== undefined ? ` under step ${pin.step}` : ''} as ${pin.id}.` }],
               _meta: meta({ proxy: { pin } }),
-            };
+            }, 'PROXY_ANSWER_REPLY');
           }
 
           case 'answerFrame': {
@@ -211,11 +210,11 @@ export function createProxyTools() {
               ...(args.step !== undefined ? { step: args.step } : {}),
               ...(args.value !== undefined ? { replaceWith: args.value } : {}),
             });
-            return {
+            return responseWithOnce({
               content: [{ type: 'text', text:
                 `${pin.replaceWith === undefined ? 'Dropping' : 'Replacing'} messages ${pin.field ? `whose field ${pin.field.key} is ${JSON.stringify(pin.field.value)}` : `containing "${pin.textIncludes}"`}${pin.step !== undefined ? ` under step ${pin.step}` : ''} as ${pin.id}.` }],
               _meta: meta({ proxy: { pin } }),
-            };
+            }, 'PROXY_ANSWER_REPLY');
           }
 
           case 'withdraw': {

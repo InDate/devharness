@@ -18,7 +18,7 @@ import type { ServerManager } from '../server-manager.js';
 import { detectAutoRestartCommand } from '../server-manager.js';
 import { ChromeLauncher, ChromeBinaryAbsentError, ChromeLaunchFailure, InvalidProfileNameError, ProfileInUseError, ProfileLockedError, normalizeProfileName, resolveLaunchPort, decideProfileReuse } from '../chrome-launcher.js';
 import { createTool } from '../validation-helpers.js';
-import { createSuccessResponse, createErrorResponse } from '../messages.js';
+import { createSuccessResponse, createErrorResponse, responseWithOnce } from '../messages.js';
 import { configManager } from '../config.js';
 import { debugLog } from '../debug-logger.js';
 import { validateReference, requireValidReference, sanitizeReference, UNNAMED_CONNECTION } from '../reference-validator.js';
@@ -91,21 +91,21 @@ export function shareBrowserProxy(
 
 const connectionSchema = z.object({
   action: z.enum(['launch', 'attach', 'list', 'switch', 'rename', 'close', 'status', 'browsers']),
-  name: z.string().optional().describe('launch/attach: the name later calls address this connection by, as connectionReason (3 descriptive words; launch defaults to "unnamed-connection-default"). rename: the new name'),
+  name: z.string().optional().describe('launch/attach: the name later calls pass as connectionReason (3 descriptive words; launch defaults to "unnamed-connection-default"). rename: the new name'),
   connectionReason: z.string().optional().describe('switch/rename/close/status: the connection to act on'),
   reason: z.string().optional().describe('close: why the connection is closed'),
   url: z.string().optional().describe('launch: URL to open (default: blank page)'),
-  port: z.number().optional().describe('launch: the debugging port (default: this session\'s reserved port); a port that already has a Chrome opens a tab in it. Always honoured when given - with forceNewInstance the call errors if that exact port is already taken. attach: the debugger port (default: the reserved port; Node.js is usually 9229)'),
+  port: z.number().optional().describe('launch: debugging port (default: this session\'s reserved port); a Chrome already on it gets a tab. attach: debugger port (Node.js usually 9229)'),
   host: z.string().optional().describe('attach: the debugger host (default: localhost)'),
   autoConnect: z.boolean().optional().describe('launch: connect the debugger after launch (default: true)'),
-  forceNewInstance: z.boolean().optional().describe('launch: always spawn a fresh Chrome process instead of reusing or tabbing into an existing one. Without `port`, a free port is chosen; with `port`, the call errors if it is in use. Errors if `name` is already bound to a live connection.'),
-  bringToFront: z.boolean().optional().describe('launch/switch: select this tab and bring Chrome in front of other apps, which moves keyboard focus to Chrome (default: false)'),
+  forceNewInstance: z.boolean().optional().describe('launch: a fresh Chrome process, never a tab in an existing one'),
+  bringToFront: z.boolean().optional().describe('launch/switch: select this tab and raise Chrome, taking keyboard focus (default: false)'),
   headless: z.boolean().optional().describe('launch: no visible window (default: false)'),
-  width: z.number().optional().describe('launch: viewport width in CSS px. Sizes the real OS window, so the page keeps tracking window resizes; larger than the display is clamped and reported. Headless emulates instead.'),
-  height: z.number().optional().describe('launch: viewport height in CSS px, sized like `width`'),
-  profile: z.string().optional().describe('launch: named persistent Chrome profile, e.g. "device-a". It maps to a stable user-data-dir under ~/.devharness/profiles (per project with chrome.persistentProfileRoot) and is never deleted, so cookies, localStorage and IndexedDB survive across runs. Created on first use; does not pin a port. Wipe it with config({action:"resetProfile", profile:"device-a"}). One live Chrome per profile.'),
-  proxy: z.boolean().optional().describe('launch: route this browser through an intercepting proxy, so a response or a socket frame can be held and served in its place. Off by default: Chrome shows its unsupported-flag banner and HTTP/1.1 is forced.'),
-  chromeArgs: z.array(z.string()).optional().describe('launch: extra Chrome command-line flags, merged after the managed defaults. The CDP_TOOLS_EXTRA_CHROME_ARGS env var (space-separated) is always merged too. Ignored when an existing Chrome on the port is reused.'),
+  width: z.number().optional().describe('launch: viewport width in CSS px'),
+  height: z.number().optional().describe('launch: viewport height in CSS px'),
+  profile: z.string().optional().describe('launch: named persistent Chrome profile, e.g. "device-a", whose storage survives across runs'),
+  proxy: z.boolean().optional().describe('launch: route this browser through an intercepting proxy, so a response or socket frame can be held and served in its place (default: false)'),
+  chromeArgs: z.array(z.string()).optional().describe('launch: extra Chrome command-line flags, merged after the managed defaults'),
 }).strict();
 
 type ConnectionArgs = z.infer<typeof connectionSchema>;
@@ -1058,7 +1058,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
           });
         }
         switch (args.action) {
-          case 'launch': return launch(args);
+          case 'launch': return responseWithOnce(await launch(args), 'CONNECTION_LAUNCH_REPLY');
           case 'attach': return attach(args);
           case 'list': return list();
           case 'switch': return switchTo(args);

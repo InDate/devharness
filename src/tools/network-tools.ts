@@ -7,42 +7,41 @@ import { promises as fs } from 'fs';
 import { join } from 'path';
 import { StoredNetworkRequest } from '../network-monitor.js';
 import { createTool } from '../validation-helpers.js';
-import { createSuccessResponse, createErrorResponse, formatCodeBlock } from '../messages.js';
+import { createSuccessResponse, createErrorResponse, formatCodeBlock, responseWithOnce } from '../messages.js';
 import type { Page } from 'puppeteer-core';
 import { getOutputPath } from '../helpers/paths.js';
 import type { ToolResponseMeta, NetworkToolMeta } from '../tool-response.js';
 
 // Consolidated network tool schema
 const networkToolSchema = z.object({
-  action: z.enum(['list', 'get', 'search', 'enable', 'disable', 'setConditions', 'sockets', 'streams'])
-    .describe('Network action: list (list network requests), get (get specific request details), search (search requests by pattern), enable (enable network monitoring), disable (disable network monitoring), setConditions (set network conditions), sockets (WebSocket lifecycle: what opened, what closed, what errored - puppeteer surfaces no page event for these, so they come from the CDP Network domain), streams (EventSource messages: an SSE response body never completes, so the HTTP record holds headers and nothing else)'),
-  connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it (e.g. "unnamed-connection-default")'),
+  action: z.enum(['list', 'get', 'search', 'enable', 'disable', 'setConditions', 'sockets', 'streams']),
+  connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it'),
 
   // list action parameters
-  resourceType: z.string().optional().describe('Filter by resource type (for list and search actions)'),
-  limit: z.number().optional().describe('Max results to return (for list action default: 100, for search action default: 50)'),
-  offset: z.number().optional().describe('Number of results to skip (for list action, default: 0)'),
+  resourceType: z.string().optional().describe('list/search: resource type filter'),
+  limit: z.number().optional().describe('Max results (list default 100, search 50)'),
+  offset: z.number().optional().describe('list: results to skip (default 0)'),
 
   // get action parameters
-  id: z.string().optional().describe('Request ID (required for get action)'),
-  includeBody: z.boolean().optional().describe('If true, saves response body to disk and returns file path (for get action, default: false)'),
+  id: z.string().optional().describe('get: request ID'),
+  includeBody: z.boolean().optional().describe('get: save the response body to disk and return its path (default false)'),
 
   // search action parameters
-  pattern: z.string().optional().describe('Regex pattern to search for (required for search action)'),
-  method: z.string().optional().describe('Filter by HTTP method (for search action)'),
-  statusCode: z.string().optional().describe('Filter by status code (for search action)'),
-  flags: z.string().optional().describe('Regex flags (for search action, default: "")'),
+  pattern: z.string().optional().describe('search: regex pattern'),
+  method: z.string().optional().describe('search: HTTP method filter'),
+  statusCode: z.string().optional().describe('search: status code filter'),
+  flags: z.string().optional().describe('search: regex flags'),
 
   // windowing, for attributing traffic to the action that caused it
-  since: z.number().optional().describe('list/sockets/streams: epoch ms. Only traffic that started at or after this. Read `at` off a previous response, act, then pass it back to get exactly what that action caused'),
-  until: z.number().optional().describe('list/sockets/streams: epoch ms. Only traffic that started before this. With `since`, brackets one action'),
+  since: z.number().optional().describe('list/sockets/streams: epoch ms; only traffic started at or after this'),
+  until: z.number().optional().describe('list/sockets/streams: epoch ms; only traffic started before this'),
 
   // sockets and streams action parameters
-  frames: z.boolean().optional().describe('sockets/streams: include the frame (or event) log per socket or stream - what crossed it, oldest first, with text and binary payloads truncated. Off by default: a sync transport carries thousands of frames and the lifecycle alone answers whether it stayed up'),
-  socketUrl: z.string().optional().describe('sockets/streams: only sockets or streams whose URL contains this substring. Match the app\'s own path to leave dev-server transports out'),
+  frames: z.boolean().optional().describe('sockets/streams: include each one\'s frame or event log, oldest first, payloads truncated (default false)'),
+  socketUrl: z.string().optional().describe('sockets/streams: only those whose URL contains this substring'),
 
   // setConditions action parameters
-  preset: z.enum(['offline', 'slow-3g', 'fast-3g', 'fast-4g', 'online']).optional().describe('Network condition preset (required for setConditions action)'),
+  preset: z.enum(['offline', 'slow-3g', 'fast-3g', 'fast-4g', 'online']).optional().describe('setConditions: the preset'),
 }).strict();
 
 /**
@@ -149,7 +148,7 @@ export function createNetworkTools(
 
   return {
     network: createTool(
-      'Monitor and manage network requests. Actions: list (list requests with optional type filter and pagination), get (get specific request by ID), search (search requests by regex pattern), enable (enable network monitoring), disable (disable network monitoring), setConditions (set network throttling conditions), sockets (WebSocket lifecycle and frames), streams (EventSource messages)',
+      'Network traffic of a browser connection. Actions: list (requests, filtered and paged), get (one request by ID), search (requests by regex), enable, disable (monitoring), setConditions (throttling preset), sockets (WebSocket opens, closes, errors and frames), streams (EventSource messages)',
       networkToolSchema,
       async (args) => {
         const { action, connectionReason } = args;
@@ -184,7 +183,7 @@ export function createNetworkTools(
                 : 'No EventSource streams seen on this connection. A stream is recorded when its first message arrives, so one that has delivered nothing yet is not listed.')
               : `${streams.length} stream(s)\n\n${lines.join('\n')}`;
 
-            return {
+            return responseWithOnce({
               content: [{ type: 'text', text }],
               _meta: {
                 tool: 'network', action: 'streams', timestamp: Date.now(),
@@ -195,7 +194,7 @@ export function createNetworkTools(
                   ...(args.frames ? { eventLog: budget.take(eventsIn(s, args.since, args.until)) } : {}),
                 })),
               },
-            };
+            }, 'NETWORK_SOCKETS_STREAMS_REPLY');
           }
 
           case 'sockets': {
@@ -246,7 +245,7 @@ export function createNetworkTools(
                 : 'No WebSockets seen on this connection. Monitoring starts when the connection does, so a socket opened before then is not counted.')
               : `${health.total} WebSocket(s): ${health.open} open, ${health.closed} closed, ${health.errored} with frame errors\n\n${lines.join('\n')}`;
 
-            return {
+            return responseWithOnce({
               content: [{ type: 'text', text }],
               _meta: {
                 tool: 'network', action: 'sockets', timestamp: Date.now(), sockets: health,
@@ -266,7 +265,7 @@ export function createNetworkTools(
                   ...(args.frames ? { frameLog: budget.take(framesIn(s, args.since, args.until)) } : {}),
                 })),
               },
-            };
+            }, 'NETWORK_SOCKETS_STREAMS_REPLY');
           }
 
           case 'list': {

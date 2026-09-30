@@ -23,6 +23,7 @@ interface Place {
   run?: string;
   step?: boolean;
   recorded?: boolean;
+  inner?: boolean;
 }
 
 const place = new AsyncLocalStorage<Place>();
@@ -66,4 +67,25 @@ export function entryChannel(): CallChannel | undefined {
   const here = place.getStore();
   if (!here || here.recorded || here.run !== undefined) return undefined;
   return here.from;
+}
+
+/**
+ * Run `work` as a call made by another call, a run's step or the bench. Its
+ * reply returns to the code that made it, and any part of it reaches an agent
+ * only as that code passes it on.
+ */
+export function asInnerCall<T>(work: () => T): T {
+  const outer = place.getStore();
+  return place.run({ ...(outer ?? { from: 'mcp' }), inner: true }, work);
+}
+
+/**
+ * Whether the reply being built returns to an agent whole: a call over MCP or
+ * the CLI, outside any other call and any bench request. A once-per-session
+ * block spent on any other reply would never be read.
+ */
+export function replyReturnsToAgent(): boolean {
+  const here = place.getStore();
+  if (!here) return true;
+  return here.inner !== true && here.from !== 'bench';
 }

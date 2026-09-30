@@ -30,13 +30,13 @@ import type { ToolResponseMeta } from '../tool-response.js';
 import { WAIT_TIMEOUT_MS, presenceExpression, runCheck, waitAsCheck } from './check-engine.js';
 
 const waitSchema = z.object({
-  selector: z.string().optional().describe('Wait until an element matching this CSS selector exists. Supports extended selectors: :has-text("text") partial match, :text("text") exact match. Survives navigations that happen mid-wait.'),
-  selectorGone: z.string().optional().describe('Wait until NO element matches this CSS selector (spinner removed, modal closed). Same selector syntax as selector.'),
-  expression: z.string().optional().describe('Wait until this SYNCHRONOUS JavaScript expression evaluates truthy, e.g. "window.__probeResult !== \'PENDING\'". Re-evaluated from the MCP side on an interval - do not use await/promises; kick async work off in a prior step, store its result in a global, and wait on the global here.'),
-  ms: z.number().int().positive().max(300000).optional().describe('Fixed sleep in milliseconds. Last resort - prefer selector/expression, which return as soon as the condition holds and fail loudly on timeout instead of silently waiting too little (or too long).'),
-  timeoutMs: z.number().int().positive().max(300000).optional().describe('Give up after this many ms (default: 15000). On timeout the step fails (isError) - in a sequence that stops the run, same as any other failed step.'),
+  selector: z.string().optional().describe('Until an element matches this CSS selector; :has-text("x") partial, :text("x") exact'),
+  selectorGone: z.string().optional().describe('Until NO element matches this selector (spinner removed, modal closed)'),
+  expression: z.string().optional().describe('Until this SYNCHRONOUS JavaScript expression is truthy; no await'),
+  ms: z.number().int().positive().max(300000).optional().describe('Fixed sleep ms, a last resort'),
+  timeoutMs: z.number().int().positive().max(300000).optional().describe('Give up after this many ms (default 15000); the step then fails'),
   pollIntervalMs: z.number().int().min(25).max(5000).optional().describe('Interval between condition checks in ms (default: 100)'),
-  connectionReason: z.string().optional().describe('Connection reference (required for selector/selectorGone/expression; not used for ms). In a sequence the run-level connection is injected automatically, like every other step.'),
+  connectionReason: z.string().optional().describe('selector/selectorGone/expression: the connection; a run supplies its own'),
 }).strict();
 
 type WaitArgs = z.infer<typeof waitSchema>;
@@ -57,7 +57,7 @@ export function createWaitTools(
 ) {
   return {
     wait: createTool(
-      'Wait as a sequence step - the primitive for "the previous step kicked off async work". Exactly one of: selector (element appears), selectorGone (element disappears), expression (synchronous JS predicate polls truthy), ms (fixed sleep, last resort). Condition forms poll from the MCP side, so they survive navigations mid-wait and never depend on in-page timers or promises; on timeout the step fails cleanly instead of hanging.',
+      'Wait as a sequence step for async work a previous step started. Exactly one of: selector (appears), selectorGone (disappears), expression (synchronous JS turns truthy), ms (fixed sleep). Polls from outside the page, so it survives navigation.',
       waitSchema,
       // abortSignal: in a sequence this is the RUN's signal. On abort the
       // engine THROWS an abort-shaped error (never returns an isError

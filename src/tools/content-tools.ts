@@ -23,28 +23,28 @@ const elementTypes = ['link', 'button', 'text', 'email', 'password', 'number', '
 const verifyCheckTypes = ['handlers', 'viewport', 'touch', 'overflow', 'clickability', 'links', 'scroll'] as const;
 
 const contentSchema = z.object({
-  action: z.enum(['extractText', 'findInteractive', 'verify', 'parse']).describe('Content action: extractText (extract webpage text), findInteractive (find all interactive elements), verify (run UI verification checks), parse (run a page-parser plugin from .devharness/parsers/ against the current page; omit name to list available plugins)'),
-  connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it (e.g. "unnamed-connection-default")'),
+  action: z.enum(['extractText', 'findInteractive', 'verify', 'parse']),
+  connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it'),
 
   // extractText parameters
-  mode: z.enum(['outline', 'full', 'section']).optional().describe('Mode: outline (metadata only), full (entire page), section (specific section by heading) - for extractText action'),
-  section: z.string().optional().describe('Section heading (for extractText with mode=section)'),
-  save: z.boolean().optional().describe('Save extracted text to disk (.devharness/extracts/) - for extractText action'),
+  mode: z.enum(['outline', 'full', 'section']).optional().describe('extractText: outline (headings and metadata), full (entire page), section (one section by heading)'),
+  section: z.string().optional().describe('extractText section: the heading'),
+  save: z.boolean().optional().describe('extractText: save to .devharness/extracts/'),
 
   // findInteractive parameters
-  types: z.array(z.enum(elementTypes)).optional().describe('Filter by element types (for findInteractive action)'),
-  showHidden: z.boolean().optional().describe('Include hidden elements (for findInteractive action, default: false)'),
+  types: z.array(z.enum(elementTypes)).optional().describe('findInteractive: element types'),
+  showHidden: z.boolean().optional().describe('findInteractive: include hidden elements (default false)'),
 
   // Shared parameters
-  search: z.string().optional().describe('Search term to filter results (for extractText, findInteractive actions)'),
-  limit: z.number().optional().describe('Max results to return (for findInteractive action, default: 50)'),
+  search: z.string().optional().describe('extractText/findInteractive: search term filter'),
+  limit: z.number().optional().describe('findInteractive: max results (default 50)'),
 
   // verify parameters
-  checks: z.array(z.enum(verifyCheckTypes)).optional().describe('UI checks to run (for verify action): handlers (dead buttons via CDP), viewport (position), touch (target size), overflow (clipping), clickability (z-index blocking - expensive), links (dead hrefs), scroll (horizontal). Default: all except clickability'),
+  checks: z.array(z.enum(verifyCheckTypes)).optional().describe('verify: handlers (dead buttons), viewport (position), touch (target size), overflow (clipping), clickability (z-index blocking, slow), links (dead hrefs), scroll (horizontal). Default: all but clickability'),
 
   // parse parameters
-  name: z.string().optional().describe('Parser plugin name to run (for parse action). Omit to list available plugins in .devharness/parsers/.'),
-  waitMs: z.number().optional().describe("Max ms to wait for the plugin's waitFor predicate before extracting (for parse action, default: 8000; 0 to skip waiting)"),
+  name: z.string().optional().describe('parse: plugin name; omitted, lists the plugins'),
+  waitMs: z.number().optional().describe("parse: max ms to wait for the plugin's waitFor predicate (default 8000; 0 skips)"),
 }).strict();
 
 export function createContentTools(resolveConnectionFromReason: (connectionReason: string) => Promise<any>, clickableCache: ClickableCache) {
@@ -70,7 +70,7 @@ export function createContentTools(resolveConnectionFromReason: (connectionReaso
 
   return {
     content: createTool(
-      'Primary tool for page content. Prefer over screenshots. Actions: extractText (extract webpage text with outline/full/section modes), findInteractive (find all interactive elements like links, buttons, inputs with summary or filtered view), verify (run CDP-based UI verification for dead buttons, viewport issues, touch targets, overflow clipping), parse (run a page-parser plugin from .devharness/parsers/ against the current page — omit name to list available plugins)',
+      'Primary tool for page content; prefer over screenshots. Actions: extractText (page text as outline, full or one section), findInteractive (links, buttons, inputs), verify (UI checks: dead buttons, viewport, touch targets, clipping), parse (a page-parser plugin from .devharness/parsers/)',
       contentSchema,
       // abortSignal (#110): INTERRUPTIBLE AT A CHECKPOINT. The only real wait
       // here is `parse`'s plugin `waitFor` predicate (up to waitMs, default

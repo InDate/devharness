@@ -71,29 +71,28 @@ async function handleWorkerConsole(connection: any, args: ConsoleArgs) {
 // =============================================================================
 
 const consoleSchema = z.object({
-  action: z.enum(['list', 'get', 'recent', 'search', 'clear', 'setObjectDepth'])
-    .describe('Console action: list, get, recent, search, clear, setObjectDepth'),
+  action: z.enum(['list', 'get', 'recent', 'search', 'clear', 'setObjectDepth']),
   connectionReason: z.string()
-    .describe('The connection, by the name connection launch or attach gave it (e.g. "unnamed-connection-default")'),
+    .describe('The connection, by the name connection launch or attach gave it'),
 
   // Shared filters
   type: z.string().optional()
     .describe('Message type filter (log, error, warn, etc.)'),
   limit: z.number().optional()
-    .describe('Max messages to return (list: default 100; search: default 50). recent takes count'),
+    .describe('Max messages (list default 100, search 50)'),
 
   target: z.string().optional()
-    .describe('Worker target whose console to read - a target id from inspect({action:"listTargets"}), or a substring of its URL. Recording starts at first attach, so output emitted before that is not held'),
+    .describe('Worker target id from inspect listTargets, or a URL substring; its output is held from first attach on'),
 
   // list-specific
   offset: z.number().optional()
-    .describe('Messages to skip (for list action, default: 0)'),
+    .describe('list: messages to skip (default 0)'),
 
   // get-specific
   id: z.string().optional()
     .describe('Message ID (required for get)'),
   full: z.boolean().optional()
-    .describe('Return full message without smart truncation (default: false)'),
+    .describe('get: the whole message, untruncated (default false)'),
   textOffset: z.number().optional()
     .describe('Character offset for text extraction'),
   textLimit: z.number().optional()

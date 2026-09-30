@@ -11,12 +11,12 @@ import { resolveSelector, isExtendedSelector, cleanupResolvedSelector } from '..
 
 // Consolidated schema for DOM tools
 const domSchema = z.object({
-  action: z.enum(['querySelector', 'getProperties', 'snapshot', 'hitTest']).describe('DOM action: querySelector (find element by selector), getProperties (get detailed element properties), snapshot (get full DOM snapshot), hitTest (for every match: is it the topmost element at its own centre, and if not what covers it)'),
-  connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it (e.g. "unnamed-connection-default")'),
+  action: z.enum(['querySelector', 'getProperties', 'snapshot', 'hitTest']),
+  connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it'),
   // Parameters for querySelector and getProperties actions
-  selector: z.string().optional().describe('CSS selector (required for querySelector, getProperties and hitTest). Supports extended selectors: :has-text("text") for partial match, :text("text") for exact match. Example: button:has-text("Submit")'),
+  selector: z.string().optional().describe('CSS selector; :has-text("x") partial, :text("x") exact'),
   // Parameters for snapshot action
-  maxDepth: z.number().optional().describe('Maximum depth for DOM snapshot (default: 5, for snapshot action)'),
+  maxDepth: z.number().optional().describe('snapshot: max depth (default 5)'),
 }).strict();
 
 export function createDOMTools(

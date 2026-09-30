@@ -7,7 +7,7 @@ import type { CDPManager } from '../cdp-manager.js';
 import { PuppeteerManager } from '../puppeteer-manager.js';
 import { executeWithPauseDetection, actionFailureResponse } from '../debugger-aware-wrapper.js';
 import { createTool } from '../validation-helpers.js';
-import { createSuccessResponse, createErrorResponse, formatCodeBlock } from '../messages.js';
+import { createSuccessResponse, createErrorResponse, formatCodeBlock, responseWithOnce } from '../messages.js';
 import type { StorageToolMeta } from '../tool-response.js';
 
 export { describeStructuredValue } from '../structured-value.js';
@@ -42,32 +42,32 @@ const storageSchema = z.object({
     'idbListDatabases', 'idbListStores', 'idbGet', 'idbGetAll', 'idbPut', 'idbDelete',
     'clear', 'writes',
     'authenticatorAdd', 'authenticatorCredentials', 'authenticatorRemove',
-  ]).describe('Storage action: getCookies, setCookie, getLocalStorage, setLocalStorage, removeLocalStorage (delete one localStorage key), getSessionStorage, setSessionStorage, removeSessionStorage (delete one sessionStorage key), idbListDatabases, idbListStores, idbGet, idbGetAll, idbPut, idbDelete, clear (clear storage), writes (localStorage and sessionStorage writes as they happened, which no state read can show - these cross no network boundary, so a step that only wrote locally has no other evidence), authenticatorAdd (a virtual WebAuthn authenticator on this page, answering passkey prompts), authenticatorCredentials (the passkeys it holds), authenticatorRemove'),
-  connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it (e.g. "unnamed-connection-default")'),
-  since: z.number().optional().describe('writes: epoch ms. Only writes at or after this, so a step\'s own writes separate from the rest'),
-  until: z.number().optional().describe('writes: epoch ms. Only writes before this'),
+  ]),
+  connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it'),
+  since: z.number().optional().describe('writes: epoch ms; only writes at or after this'),
+  until: z.number().optional().describe('writes: epoch ms; only writes before this'),
 
   // Parameters for getCookies action
-  url: z.string().optional().describe('URL to get cookies for (optional for getCookies action)'),
+  url: z.string().optional().describe('getCookies: the URL to read cookies for'),
   // Parameters for setCookie action
-  name: z.string().optional().describe('Cookie name (required for setCookie action)'),
-  value: z.string().optional().describe('Cookie/storage value (required for setCookie and setLocalStorage actions)'),
-  domain: z.string().optional().describe('Cookie domain (optional for setCookie action)'),
-  path: z.string().optional().describe('Cookie path (optional for setCookie action)'),
-  expires: z.number().optional().describe('Cookie expiration timestamp (optional for setCookie action)'),
-  httpOnly: z.boolean().optional().describe('HTTP only cookie (optional for setCookie action, default: false)'),
-  secure: z.boolean().optional().describe('Secure cookie (optional for setCookie action, default: false)'),
+  name: z.string().optional().describe('setCookie: cookie name'),
+  value: z.string().optional().describe('setCookie/set*Storage: the value'),
+  domain: z.string().optional().describe('setCookie: domain'),
+  path: z.string().optional().describe('setCookie: path (default /)'),
+  expires: z.number().optional().describe('setCookie: expiry, epoch seconds'),
+  httpOnly: z.boolean().optional().describe('setCookie: HTTP only (default false)'),
+  secure: z.boolean().optional().describe('setCookie: secure (default false)'),
   // Parameters for localStorage/sessionStorage and IndexedDB key lookups
-  key: z.union([z.string(), z.number()]).optional().describe('Storage key. Optional for getLocalStorage/getSessionStorage (omit to read the whole store), required for setLocalStorage/setSessionStorage/removeLocalStorage/removeSessionStorage/idbGet/idbDelete. Numbers are only meaningful for IndexedDB keys'),
+  key: z.union([z.string(), z.number()]).optional().describe('Storage or IndexedDB key; omitted on get*Storage, the whole store'),
   // Parameters for IndexedDB actions
-  db: z.string().optional().describe('IndexedDB database name (required for idbListStores/idbGet/idbGetAll/idbPut/idbDelete)'),
-  store: z.string().optional().describe('IndexedDB object store name (required for idbGet/idbGetAll/idbPut/idbDelete)'),
-  record: z.any().optional().describe('Value to write for idbPut. Must be JSON-expressible - structured-clone-only types (CryptoKey, Blob/File, ArrayBuffer, Map/Set) cannot be created from JSON and so cannot be written through this tool'),
-  limit: z.number().optional().describe('Maximum records to return for idbGetAll (default: 50)'),
+  db: z.string().optional().describe('IndexedDB database name'),
+  store: z.string().optional().describe('IndexedDB object store name'),
+  record: z.any().optional().describe('idbPut: the JSON-expressible value to write'),
+  limit: z.number().optional().describe('idbGetAll: max records (default 50)'),
   // Parameters for clear action
-  reason: z.string().optional().describe('Why storage needs to be cleared (required for clear action)'),
-  userVerified: z.boolean().optional().describe('authenticatorAdd: whether the authenticator reports the user verified (default: true)'),
-  types: z.array(z.enum(['cookies', 'localStorage', 'sessionStorage', 'indexedDB'])).optional().describe('Storage types to clear (for clear action, default: cookies + localStorage + sessionStorage; indexedDB must be requested explicitly)'),
+  reason: z.string().optional().describe('clear: why storage is cleared'),
+  userVerified: z.boolean().optional().describe('authenticatorAdd: report the user verified (default true)'),
+  types: z.array(z.enum(['cookies', 'localStorage', 'sessionStorage', 'indexedDB'])).optional().describe('clear: types to clear (default cookies, localStorage, sessionStorage; indexedDB only when listed)'),
 }).strict();
 
 /** The target an ACTION_FAILED reply names for a web storage call. */
@@ -89,15 +89,7 @@ export function createStorageTools(
 ) {
   return {
     storage: createTool(
-      'Access and manage browser storage (cookies, localStorage, sessionStorage, IndexedDB). ' +
-      'Cookies: getCookies, setCookie. ' +
-      'localStorage: getLocalStorage (omit key to read the whole store), setLocalStorage, removeLocalStorage (delete one key). ' +
-      'sessionStorage: getSessionStorage, setSessionStorage, removeSessionStorage - a full peer of localStorage. ' +
-      'IndexedDB: idbListDatabases, idbListStores({db}), idbGet({db,store,key}), idbGetAll({db,store,limit}), idbPut({db,store,record,key?}), idbDelete({db,store,key}). ' +
-      'IndexedDB reads return values that JSON cannot represent as typed descriptors instead of dropping them - e.g. {__type:"CryptoKey",keyType,algorithm,extractable,usages}, and the same for Blob/File, ArrayBuffer and typed arrays, Map, Set, Date, RegExp and BigInt; cycles come back as {__type:"Circular",path}. That makes a non-extractable key assertable even though its material cannot be read. ' +
-      'Very large values are bounded rather than returned whole: an oversized read is marked with {__type:"BudgetExceeded"} (plus "__budgetExceeded" at the top level) and a long string comes back as {__type:"String",length,truncated:true,value}, so a partial read is always distinguishable from a complete one. ' +
-      'idbPut is the reverse and is limited: "record" must be JSON-expressible, so structured-clone-only values (CryptoKey, Blob/File, ArrayBuffer, Map/Set) cannot be written through this tool - create those in-page with inspect({action:"evaluateExpression"}). ' +
-      'clear wipes storage by type (cookies, localStorage, sessionStorage, and indexedDB when explicitly requested).',
+      'Browser storage: cookies (getCookies, setCookie), localStorage and sessionStorage (get, set and remove each; a get without key reads the whole store), IndexedDB (idbListDatabases, idbListStores, idbGet, idbGetAll, idbPut, idbDelete), clear, writes (the localStorage and sessionStorage writes as they happened), and a virtual WebAuthn authenticator answering passkey prompts (authenticatorAdd, authenticatorCredentials, authenticatorRemove).',
       storageSchema,
       async (args) => {
         const { action, connectionReason } = args;
@@ -230,13 +222,13 @@ export function createStorageTools(
           const text = writes.length === 0
             ? 'No localStorage or sessionStorage writes recorded. Capture starts with the connection, so a write made before then is not held. IndexedDB emits no write event and is not covered.'
             : `${writes.length} write(s)\n\n${lines.join('\n')}`;
-          return {
+          return responseWithOnce({
             content: [{ type: 'text', text }],
             _meta: {
               tool: 'storage', action: 'writes', timestamp: Date.now(),
               storage: { writes },
             },
-          };
+          }, 'STORAGE_WRITES_REPLY');
         }
 
         if (!targetPuppeteerManager.isConnected()) {
@@ -679,7 +671,7 @@ export function createStorageTools(
             const markdown = idb.found
               ? `## IndexedDB Record\n\n**Database:** ${idb.database}\n**Store:** ${idb.store}\n**Key:** ${JSON.stringify(idb.key)}\n\n${formatCodeBlock(idb.value)}`
               : `## IndexedDB Record\n\n**Database:** ${idb.database}\n**Store:** ${idb.store}\n**Key:** ${JSON.stringify(idb.key)}\n\nNo record found for this key.`;
-            return {
+            return responseWithOnce({
               content: [{ type: 'text', text: markdown }],
               _meta: {
                 tool: 'storage',
@@ -687,7 +679,7 @@ export function createStorageTools(
                 timestamp: Date.now(),
                 storage: { database: idb.database, store: idb.store, found: !!idb.found },
               },
-            };
+            }, 'STORAGE_IDB_READ_REPLY');
           }
 
           case 'idbGetAll': {
@@ -700,7 +692,7 @@ export function createStorageTools(
 
             const truncatedNote = idb.truncated ? ` (showing ${idb.count} of ${idb.total}, raise "limit" to see more)` : '';
             const markdown = `## IndexedDB Records\n\n**Database:** ${idb.database}\n**Store:** ${idb.store}\n**Count:** ${idb.count}${truncatedNote}\n\n${formatCodeBlock(idb.records)}`;
-            return {
+            return responseWithOnce({
               content: [{ type: 'text', text: markdown }],
               _meta: {
                 tool: 'storage',
@@ -713,7 +705,7 @@ export function createStorageTools(
                   ...(idb.total !== undefined && { total: idb.total }),
                 },
               },
-            };
+            }, 'STORAGE_IDB_READ_REPLY');
           }
 
           case 'idbPut': {

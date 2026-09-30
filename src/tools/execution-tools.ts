@@ -12,7 +12,7 @@ import { hold, isHeld, release } from '../hold.js';
 
 const executionSchema = z.object({
   action: z.enum(['pause', 'resume', 'stepOver', 'stepInto', 'stepOut', 'acknowledge']).describe('Execution control action to perform'),
-  connectionReason: z.string().optional().describe('The connection, by the name connection launch or attach gave it (e.g. "unnamed-connection-default"). Required for every action except acknowledge, which without one acknowledges every paused connection'),
+  connectionReason: z.string().optional().describe('The connection, by the name connection launch or attach gave it; acknowledge without one covers every paused connection'),
 }).strict();
 
 export function createExecutionTools(

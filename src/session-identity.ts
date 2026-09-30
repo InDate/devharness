@@ -47,10 +47,16 @@ export function getClaudeShortId(): string | undefined {
  * why it is the fallback rather than the default.
  */
 export function resolveSessionName(detectedShortId?: string): string {
+  return resolveRestartStableSessionName(detectedShortId) ?? `pid-${process.pid}`;
+}
+
+/** resolveSessionName without the pid form: undefined where no source names
+ *  the session, so a record keyed on it is never written under a name the next
+ *  restart replaces. */
+export function resolveRestartStableSessionName(detectedShortId?: string): string | undefined {
   return readCurrentSessionId()?.slice(0, 8)
     ?? getClaudeShortId()
-    ?? detectedShortId
-    ?? `pid-${process.pid}`;
+    ?? detectedShortId;
 }
 
 /**

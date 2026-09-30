@@ -30,16 +30,15 @@ import {
 } from '../session-messages.js';
 
 const messageSchema = z.object({
-  action: z.enum(['sessions', 'send', 'read', 'reply'])
-    .describe('sessions (list reachable sessions and this one\'s mailbox path), send (write to another session), read (take new messages from this session\'s mailbox), reply (answer a message by id)'),
+  action: z.enum(['sessions', 'send', 'read', 'reply']),
   to: z.string().optional()
     .describe('send: recipient mailbox id, as reported by action sessions'),
   text: z.string().optional()
     .describe('send/reply: the message body'),
   replyTo: z.string().optional()
-    .describe('reply: id of the message being answered - the reply goes to its sender'),
+    .describe('reply: id of the message answered; the reply goes to its sender'),
   waitForReplyMs: z.number().int().positive().max(300000).optional()
-    .describe('send/reply: hold the call open until a message arrives in this session\'s mailbox, or this many ms elapse (max 300000). Returns on any arrival, not only a tagged reply.'),
+    .describe('send/reply: hold the call open until any message arrives here, for at most this many ms'),
   pollIntervalMs: z.number().int().min(100).max(5000).optional()
     .describe('send/reply: interval between mailbox checks while waiting (default 500)'),
 }).strict();

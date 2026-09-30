@@ -31,35 +31,34 @@ import type { ToolGroup } from '../bench/wire.js';
 import { createSequenceDriver, getSequencesRoot, labelFor } from '../bench-mode/sequence-driver.js';
 
 const benchSchema = z.object({
-  action: z.enum(['start', 'stop', 'tick', 'hold', 'release', 'picker', 'list', 'status', 'keepStep', 'dropStep', 'flagStep', 'sweep', 'retake', 'capture'])
-    .describe('start (open the bench with the page running and the picker idle), hold/release (hold every layer of the page or let it all run, without closing the bench - driving the app needs it running), picker (arm or disarm, via armed), tick (run forward by steps or budgetMs), stop (release the page and close), keepStep/dropStep (settle the recorded step capture is held on), sweep (report the note captures no sequence refers to, and with remove:true delete them), retake (take a capture\'s region again and compare), capture (read a capture file\'s record and element facts), list, status'),
+  action: z.enum(['start', 'stop', 'tick', 'hold', 'release', 'picker', 'list', 'status', 'keepStep', 'dropStep', 'flagStep', 'sweep', 'retake', 'capture']),
   connectionReason: z.string()
     .describe('The connection, by the name connection launch or attach gave it'),
   steps: z.number().int().positive().max(1000).optional()
-    .describe('tick: callbacks to run before holding again (default 1). The exact unit - one callback is one thing the page does'),
+    .describe('tick: callbacks to run before holding again (default 1)'),
   budgetMs: z.number().int().positive().max(60000).optional()
-    .describe('tick: instead of steps, run callbacks until at least this much page time has been spent. Reports where it landed, which is rarely the number asked for'),
+    .describe('tick: in place of steps, run callbacks until at least this much page time has passed'),
   armed: z.boolean().optional()
     .describe('picker: true arms Chrome\'s element picker, false disarms it so clicks reach the app'),
   remove: z.boolean().optional()
-    .describe('sweep: delete what it reports. Omitted it only reports - a capture is evidence, and the count is worth reading before it goes'),
+    .describe('sweep: delete what it reports (default: report only)'),
   limit: z.number().int().positive().max(500).optional()
     .describe('list: most recent N annotations (default 20)'),
   url: z.string().optional()
-    .describe('start: go here first, then open the pane against it. With no browser on this reference yet, one is launched at this url - so a single call opens the page and the pane'),
+    .describe('start: navigate here first; with no browser on this reference, one is launched at it'),
   sequence: z.string().optional()
-    .describe('start: open the pane with this sequence selected, so the person lands on the run being discussed rather than picking it out of a list'),
+    .describe('start: open the pane with this sequence selected'),
   reason: z.string().optional()
-    .describe('flagStep: one short line naming what is wrong. Not a paragraph - it is the headline the person reads first'),
+    .describe('flagStep: one short line naming what is wrong, the headline the person reads first'),
   detail: z.string().optional()
-    .describe('flagStep: one more line of context under the headline, where it helps. Omit when the headline says enough'),
+    .describe('flagStep: an optional second line of context under the headline'),
   options: z.array(z.object({
     selector: z.string().describe('a selector that would work here'),
     note: z.string().describe('what makes this one hold up, in a few words'),
   })).optional()
-    .describe('flagStep: selectors the person can lock in with one click, one row each. Offer only ones checked against the page'),
+    .describe('flagStep: selectors checked against the page, one row each, for the person to lock in with one click'),
   step: z.number().int().min(0).optional()
-    .describe('start: with sequence, run it to this step (0-based) and hold there - the state that step produces is what is on screen when the pane opens'),
+    .describe('start: with sequence, run it to this 0-based step and hold there'),
   capture: z.string().optional()
     .describe('retake/capture: path of a capture file, any version of its series'),
   against: z.number().int().positive().optional()
@@ -210,7 +209,7 @@ export function createBenchTools(
   catalogue: () => ToolGroup[],
 ) {
   const bench = createTool(
-      'Open the bench beside a driven app: hold the page still, read what crossed its boundary and what caused each thing, record and step sequences, and collect element-level comments. Actions: start (open the bench with the page running and the picker idle), hold/release, picker, tick (run a held page forward by steps or budgetMs), stop (release the page and close), keepStep/dropStep/flagStep (settle a recorded step), sweep, retake, capture, list, status.',
+      'Open the bench beside a driven app: hold the page still, read what crossed its boundary and what caused each thing, record and step sequences, and collect element-level comments. Actions: start (the page running, the picker idle), hold/release (the whole page, with the bench left open), picker (armed or disarmed), tick (run a held page forward by steps or budgetMs), stop (release the page and close), keepStep/dropStep/flagStep (settle a recorded step), sweep (note captures no sequence cites), retake (a capture\'s region again, compared), capture (a capture file\'s record and element facts), list, status.',
       benchSchema,
       async (args: BenchArgs) => {
         const { action, connectionReason } = args;

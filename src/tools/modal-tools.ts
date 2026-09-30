@@ -16,14 +16,14 @@ import { createTool } from '../validation-helpers.js';
 
 const modalSchema = z.object({
   action: z.enum(['detect', 'dismiss']),
-  connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it (e.g. "unnamed-connection-default")'),
+  connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it'),
   minZIndex: z.number().optional().describe('detect/dismiss: min z-index to consider'),
   minViewportCoverage: z.number().optional().describe('detect/dismiss: min viewport coverage (0-1, default: 0.25)'),
-  includeBackdrops: z.boolean().optional().describe('detect/dismiss: include backdrop/overlay elements. dismiss detects with the same options, so an index from detect names the same modal'),
+  includeBackdrops: z.boolean().optional().describe('detect/dismiss: include backdrop/overlay elements; the same options keep detect\'s index valid for dismiss'),
   selector: z.string().optional().describe('dismiss: CSS selector of the modal to dismiss'),
   index: z.number().optional().describe('dismiss: modal index (1-based)'),
-  strategy: z.enum(['accept', 'reject', 'close', 'remove', 'auto']).optional().describe('dismiss: accept (click accept/agree), reject (click reject/decline), close (click close/X), remove (remove from DOM), auto (smart selection based on modal type; default)'),
-  retryAttempts: z.number().optional().describe('dismiss: number of retry attempts when clicking buttons (default: 3)'),
+  strategy: z.enum(['accept', 'reject', 'close', 'remove', 'auto']).optional().describe('dismiss: accept, reject, close (click that button), remove (from the DOM), auto (by modal type; default)'),
+  retryAttempts: z.number().optional().describe('dismiss: click retries (default 3)'),
 }).strict();
 
 /**

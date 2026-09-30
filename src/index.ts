@@ -68,17 +68,17 @@ import { createIssuesTools } from './tools/issues-tools.js';
 import { createMessageTools } from './tools/message-tools.js';
 import { startSessionEndpoint, type SessionEndpoint } from './session-endpoint.js';
 import { runCli, isCliCommand, isVersionFlag, readPackageVersion } from './cli/index.js';
-import { getClaudeSessionId, resolveSessionName } from './session-identity.js';
-import { createDashboardTools, setDashboardInstance, getDashboardInstance, setSessionInfo, getDuplicateSessionInfo } from './tools/dashboard-tools.js';
+import { getClaudeSessionId, resolveSessionName, resolveRestartStableSessionName } from './session-identity.js';
+import { createDashboardTools, setDashboardInstance, getDashboardInstance, setSessionInfo, getSessionInfo, getDuplicateSessionInfo } from './tools/dashboard-tools.js';
 import { initializeDashboard, shutdownDashboard, type DashboardInstance, type ConnectionInfo as DashboardConnectionInfo } from './dashboard/index.js';
 import { Orchestrator } from './log-processor/orchestrator.js';
-import { mkdirSync, existsSync, readFileSync, readdirSync, statSync } from 'fs';
+import { mkdirSync, existsSync, readFileSync, readdirSync, statSync, promises as fsPromises } from 'fs';
 import { homedir } from 'os';
 import { ServerManager } from './server-manager.js';
 import { configManager } from './config.js';
 import { ToolError } from './tool-error.js';
 import type { ToolGroup } from './bench/wire.js';
-import { arriveOn, unlisted, historyPlace, entryChannel } from './call-origin.js';
+import { arriveOn, unlisted, historyPlace, entryChannel, asInnerCall } from './call-origin.js';
 import { markNextCommand, releaseCommand, noteCallStart, newlyIdleProxies } from './proxy/registry.js';
 
 /**
@@ -109,7 +109,7 @@ function observes(toolName: string, args: Record<string, unknown> | undefined): 
 import { checkPortFailures, checkBreakpointPause, checkBugBlocking, checkPendingStartups, checkDuplicateSession, prependToResponse, appendToResponse, buildStatusSuffix, type StatusLineItem } from './tool-response.js';
 import { recordBlockEvent, clearBlockEvents } from './block-events.js';
 import { createStartupGate } from './startup-gate.js';
-import { createErrorResponse } from './messages.js';
+import { createErrorResponse, messages } from './messages.js';
 import { setChromeLauncher } from './error-helpers.js';
 import { createServer } from 'net';
 import { readFile } from 'fs/promises';
@@ -117,7 +117,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { debugLog, enableDebugLogging, enableHistoryLogging, setStartupMetrics } from './debug-logger.js';
 import { deriveConnectionReference, sanitizeReference, InvalidReferenceError } from './reference-validator.js';
-import { initializePaths, resolveStateDir } from './helpers/paths.js';
+import { initializePaths, resolveStateDir, getOutputPath } from './helpers/paths.js';
 import { cleanupStaleTempFiles, cleanupStaleTempFilesSync } from './atomic-write.js';
 import { createSessionDetector, type SessionInfo, type SessionDetector } from './session-detector.js';
 import { serverClaims } from './server-claims.js';
@@ -513,7 +513,8 @@ async function executeToolCall(calledName: string, calledParams: Record<string, 
   }
 
   // The MCP handler refuses before it gets here; a CLI call arrives here first.
-  if (entryChannel() === 'cli') {
+  const cliEntry = entryChannel() === 'cli';
+  if (cliEntry) {
     const held = pageHeldRefusal(toolName, params);
     if (held) throw new ToolError(held);
   }
@@ -533,11 +534,12 @@ async function executeToolCall(calledName: string, calledParams: Record<string, 
     index = commandRecorder.getCurrentHistoryIndex();
   }
 
+  const run = () => index === null
+    ? tool.handler(validation.data, abortSignal)
+    : unlisted(() => tool.handler(validation.data, abortSignal));
   let result: any;
   try {
-    result = index === null
-      ? await tool.handler(validation.data, abortSignal)
-      : await unlisted(() => tool.handler(validation.data, abortSignal));
+    result = await (cliEntry ? run() : asInnerCall(run));
   } catch (error) {
     if (index !== null) {
       commandRecorder.attachResult(index, error instanceof ToolError || error instanceof InvalidReferenceError
@@ -1057,6 +1059,13 @@ async function main() {
   // Initialize path configuration early (before any file operations)
   const pathConfig = initializePaths();
   console.error(`[devharness] Path config: global=${pathConfig.globalBase}, workingDir=${pathConfig.workingDirBase ?? 'none (using global fallback)'}`);
+
+  // A rebuild restarts this process within the same session; the once-block
+  // record kept under the session's name holds each block to one showing.
+  messages.setOnceRecordPath(() => {
+    const sessionName = resolveRestartStableSessionName(getSessionInfo()?.shortId);
+    return sessionName ? getOutputPath('once', `${sessionName}.json`, { global: true }) : undefined;
+  });
 
   // Clean up stale temp files from previous crashed/killed processes
   // Run in background - don't block startup

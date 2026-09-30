@@ -1858,6 +1858,55 @@ Results are kept in memory for 30 minutes after the run settles. Pass `wait: tru
 
 ---
 
+## REPLAY_RUN_REPLY
+
+**Type:** info
+
+**Once per session:**
+
+How the options of `run` and `runAll` act:
+
+- `envFile`: a relative path resolves against the project directory (the one holding .devharness); an absolute path is used as it is. The file's values take precedence over the server's environment, which stays unmodified, so two runs may name different files. A missing file, or a line that is neither blank, a `#` comment nor `NAME=value`, fails the run before its first step. A credential held there stays out of the sequence file and out of the call, and an edit to the file applies without a client restart.
+- `baseUrl`: the startUrl, the command params and a declared connection's launch url each keep their path and query and take this origin, in the sequence and in every sequence a check's `run` or a `forEach` reaches. On `runAll` it applies to every sequence in the suite. A resume after a pause (`step`, `finish`) runs without it.
+- `stepTimeout`: a step running past min(stepTimeout, remaining totalTimeout) fails the run at that step. A `wait` step runs on its own `timeoutMs`, and totalTimeout still caps it.
+- `strict`: console output is counted per connection from the start of the run, so output present before the run does not fail it. A sequence can pass functionally and still log; strict fails the second case.
+- `requireSockets`: socket closures and frame errors are counted from the start of the run, so a socket already down before it does not fail it, and a drop that recovered before the last step still does - a final assertion reads only the end state. A sequence declaring `requiredSockets` gets this check on every run, and that check also fails a declared socket that is missing or never opened, which a closure count cannot detect.
+- `killChromeOnFinish`: acts after a finished run, not after a pause or an abort. It kills the run's own connection and the browsers its launch steps created. A step that reached an already-bound reference borrowed that browser, which stays running, so a browser launched outside the run survives. A browser whose port another live connection shares stays running too (a launch step usually opens a tab in the same instance), and the run reports the connection holding it. On `runAll` only the last sequence carries it, so a preamble's browser survives between sequences and a suite stopped early leaves its browsers up.
+- `connections`: applies only to steps carrying their own connectionReason; `replay({ action: 'get', outputFormat: 'commands' })` lists them.
+- `status` without a runId returns the paused session and the recent runs; `cancel` without one drops the paused session, or stops the one executing run.
+
+---
+
+## REPLAY_RUN_ALL_REPLY
+
+**Type:** info
+
+**Once per session:**
+
+`runAll` loads every sequence under the sequences directory before it runs any, so a check's `run` or a `forEach`'s `do` resolves by sequence name wherever that sequence lives. It runs the chosen folder only. A folder whose name starts with `_` holds helpers and preambles, which fail when run on their own, so it runs only when `folder` names it. One `variables` map covers the whole suite, and a sequence with recorded variables runs on its recorded values where the map has none.
+
+---
+
+## REPLAY_DECLARE_REPLY
+
+**Type:** info
+
+**Once per session:**
+
+Each list passed to `declare` replaces that field, and `[]` clears it. A `profile` is the browser's identity: its storage survives between runs, so a device enrolled once stays enrolled. `forceNewInstance` defaults to true, and to false with a profile, since one live Chrome holds a profile. A `requiredSockets` entry matches a substring of the socket URL; the app's own path survives `baseUrl`, where an origin does not.
+
+---
+
+## REPLAY_ADD_CHECK_REPLY
+
+**Type:** info
+
+**Once per session:**
+
+`check` takes what the check tool takes: one subject, and `holds`/`fails` each `'continue'`, `'stop'` or `{ run: '<sequence>', resumeAt }`. `resumeAt` is a 0-based step of this sequence as it stands before the check goes in, forward only. A guard is a check whose pass runs another sequence: `{ selector: '.cookie-banner', condition: 'present', holds: { run: 'dismiss-cookies' }, fails: 'continue' }`.
+
+---
+
 ## REPLAY_BENCH_PLAYING
 
 **Type:** success
@@ -2194,6 +2243,10 @@ Execution paused at {{location}}
 **Summary:** Variables found
 
 {{sequenceName}}: {{variableCount}} customizable parameter(s)
+
+**Once per session:**
+
+A key is built from its step: var_<0-based step index>_<selector, non-alphanumerics replaced by _>, so '#password' at step 3 is `var_3__password`, with two underscores. The keys listed below are exact. A key naming no typed-text step is rejected; on `runAll` it is checked against the union of the whole suite's keys. A replacement also reaches the sequences a check's `run` or a `forEach` nests into. For a credential, `{{env:NAME}}` in the step keeps the value out of the sequence file and out of this call; a value passed in `variables` still takes precedence over the environment.
 
 ---
 
@@ -3903,6 +3956,10 @@ Request to {{url}} failed ({{destination}}): {{error}}
 
 Condition met after {{elapsedMs}}ms ({{polls}} checks): waited for {{condition}}
 
+**Once per session:**
+
+A condition form polls from the MCP side: each read runs in whatever document the page has at the time, so a navigation mid-wait costs one read, and nothing depends on in-page timers or promises. An `expression` is synchronous: async work starts in a prior step and stores its result in a global, and the wait reads the global, e.g. `window.__probeResult !== 'PENDING'`. A timeout fails the step, which stops a run like any failed step.
+
 ---
 
 ## WAIT_SLEEP_COMPLETE
@@ -3925,6 +3982,10 @@ Timed out after {{timeoutMs}}ms ({{polls}} checks) waiting for {{condition}}{{la
 - The condition never became true - check it is the right selector/expression for the page you are on
 - If the page is still loading or async work is slow, raise `timeoutMs`
 - Use `content({ action: 'findInteractive' })` or `screenshot` to see the current page state
+
+**Once per session:**
+
+A condition form polls from the MCP side: each read runs in whatever document the page has at the time, so a navigation mid-wait costs one read, and nothing depends on in-page timers or promises. An `expression` is synchronous: async work starts in a prior step and stores its result in a global, and the wait reads the global, e.g. `window.__probeResult !== 'PENDING'`. A timeout fails the step, which stops a run like any failed step.
 
 ---
 
@@ -4319,6 +4380,10 @@ Read {{sequencesRead}} sequence file(s); {{stillCited}} capture(s) are still cit
 
 {{list}}
 
+**Once per session:**
+
+Without `remove: true` a sweep only reports: a capture is evidence, so the list is read before anything goes.
+
 ---
 
 ## BENCH_RETAKEN
@@ -4340,6 +4405,10 @@ The picture at {{path}} is before, after and the difference side by side: change
 **Code:** BENCH_RETAKE_FAILED
 
 Could not take the capture again: {{reason}}
+
+**Once per session:**
+
+Without `remove: true` a sweep only reports: a capture is evidence, so the list is read before anything goes.
 
 ---
 
@@ -4400,5 +4469,85 @@ Could not read {{path}}: {{reason}}
 **Code:** BENCH_NOT_ACTIVE
 
 `{{action}}` needs the bench open on "{{connection}}". Open it with `bench({ action: 'start', connectionReason: '{{connection}}' })`.
+
+---
+
+## CHECK_REPLY
+
+**Type:** info
+
+**Once per session:**
+
+Called directly, a check answers held or failed and the call itself succeeds; `assert` is a check whose failure stops a run, and `wait` a check with a time limit. `stepsBack` counts traffic from the start of an earlier call: the default 1 is the call before the check, whose traffic has usually crossed by the time the check runs, and every call counts, in a run each step. A traffic match follows a pin's rules. With `count`, the operators `equals`, `lte` and `lt` read until `withinMs` ends, since a later crossing can break them. As a sequence step, `connectionReason` comes from the run, and a `{ run }` outcome with no `resumeAt` carries on at the next step.
+
+---
+
+## STORAGE_IDB_READ_REPLY
+
+**Type:** info
+
+**Once per session:**
+
+An IndexedDB read returns a value JSON cannot represent as a typed descriptor in its place: `{__type:"CryptoKey",keyType,algorithm,extractable,usages}`, and the same for Blob/File, ArrayBuffer and typed arrays, Map, Set, Date, RegExp and BigInt; a cycle comes back as `{__type:"Circular",path}`. A non-extractable key is so assertable though its material is unreadable. A very large value is bounded: an oversized read carries `{__type:"BudgetExceeded"}` (and `"__budgetExceeded"` at the top level), and a long string comes back as `{__type:"String",length,truncated:true,value}`, so a partial read is distinguishable from a complete one. `idbPut` writes JSON-expressible records only; a structured-clone-only value (CryptoKey, Blob/File, ArrayBuffer, Map/Set) is created in the page with `inspect({ action: 'evaluateExpression' })`.
+
+---
+
+## STORAGE_WRITES_REPLY
+
+**Type:** info
+
+**Once per session:**
+
+A localStorage or sessionStorage write crosses no network boundary and a later state read shows only the final value, so for a step that only wrote locally this list is its one piece of evidence. `since` and `until` bound it to one step's window.
+
+---
+
+## CONNECTION_LAUNCH_REPLY
+
+**Type:** info
+
+**Once per session:**
+
+A given `port` is always honoured: a Chrome already on it gets a tab, and with `forceNewInstance` the call errors when that port is taken. `forceNewInstance` without `port` picks a free port, and errors when `name` is already bound to a live connection. `width` and `height` size the real OS window, so the page keeps tracking window resizes; a size larger than the display is clamped and reported, and a headless launch emulates the size. A `profile` maps to a stable user-data-dir under ~/.devharness/profiles (per project with `chrome.persistentProfileRoot`), created on first use and never deleted, so cookies, localStorage and IndexedDB survive; it pins no port, one live Chrome holds it, and `config({ action: 'resetProfile', profile })` wipes it. With `proxy: true` Chrome shows its unsupported-flag banner and HTTP/1.1 is forced. `chromeArgs` merges after the managed defaults, the `CDP_TOOLS_EXTRA_CHROME_ARGS` env var (space-separated) merges too, and both are ignored when an existing Chrome on the port is reused.
+
+---
+
+## NETWORK_SOCKETS_STREAMS_REPLY
+
+**Type:** info
+
+**Once per session:**
+
+Puppeteer surfaces no page event for a WebSocket, so its lifecycle is read from the CDP Network domain. An SSE response body never completes, so its HTTP record holds headers only, and its messages are read here. Frame logs are off by default: a sync transport carries thousands of frames, and the lifecycle alone shows whether it stayed up. A `socketUrl` naming the app's own path leaves dev-server transports out, and `since`/`until` bound the counts to one action's window.
+
+---
+
+## PROXY_EVENTS_REPLY
+
+**Type:** info
+
+**Once per session:**
+
+Chrome talks to Google's services constantly through the same proxy, and those calls are not the app's; `urlIncludes` naming the app's host or path leaves them out. `since` and `until` bound the list to one action's window.
+
+---
+
+## PROXY_ANSWER_REPLY
+
+**Type:** info
+
+**Once per session:**
+
+An answer with `step` applies while that replay step is in flight, so the same call at another position in the run reaches the server. `withdraw` with the answer's id removes it.
+
+---
+
+## ASSERT_REPLY
+
+**Type:** info
+
+**Once per session:**
+
+The DOM form polls until the condition holds and reports what it found; a wait loop hand-written inside `inspect({ action: 'evaluateExpression' })` invites acting on the page from the same step. Its `timeoutMs` stays below the evaluation timeout, so a failure reports what it found in place of "did not respond". `hittable` means the point at the element's centre lands inside it, which is what a click needs. The value form reads `{{var:name.path}}` values a prior `request` or `inspect` step captured with `saveAs`, resolved before assert runs.
 
 ---

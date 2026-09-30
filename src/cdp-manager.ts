@@ -1754,11 +1754,9 @@ export class CDPManager {
       );
     `;
 
-    try {
-      await Runtime.evaluate({ expression: consoleExpression });
-    } catch (error) {
-      // Ignore errors if console injection fails
-    }
+    // Sent without waiting: a pause requested on an idle page stops at this
+    // evaluation, which then answers only once the page resumes.
+    Runtime.evaluate({ expression: consoleExpression }).catch(() => {});
   }
 
   /**

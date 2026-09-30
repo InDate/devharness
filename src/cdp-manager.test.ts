@@ -662,3 +662,23 @@ describe('CDPManager.evaluateExpressionDetailed() - exact raw capture for saveAs
     expect(detailed.rawCaptured).toBe(false);
   });
 });
+
+describe('CDPManager.injectConsoleLink()', () => {
+  // A pause requested on an idle page takes effect at the next JavaScript the
+  // page runs, and the console link is JavaScript: its evaluation is held until
+  // the page resumes, and a breakpoint set waiting on it held with it.
+  it('returns without waiting for the page to run the link', async () => {
+    const cdpManager = new CDPManager();
+    const evaluate = vi.fn(() => new Promise(() => {}));
+    (cdpManager as any).client = { Runtime: { evaluate }, Debugger: {} };
+    (cdpManager as any).state.connected = true;
+
+    const settled = await Promise.race([
+      cdpManager.injectConsoleLink('http://app/app.js', 2, 'Breakpoint set at').then(() => 'returned'),
+      new Promise(resolve => setTimeout(() => resolve('still waiting'), 200)),
+    ]);
+
+    expect(settled).toBe('returned');
+    expect(evaluate).toHaveBeenCalledTimes(1);
+  });
+});

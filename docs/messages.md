@@ -648,7 +648,7 @@ Logpoint {{breakpointId}} execution counter reset. It can now execute {{maxExecu
 
 **Type:** success
 
-Execution paused
+Pause requested. Execution stops at the next statement the page runs: at once when a script is running, otherwise when one next starts. `connection({ action: 'status' })` reports `paused: true` once it has.
 
 ---
 

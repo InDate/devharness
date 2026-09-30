@@ -954,7 +954,7 @@ Page reloaded successfully{{#clickableElements}}
 {{action}} on `{{selector}}` did not run: {{error}}
 
 **Suggestions:**
-- The selector matched; the failure is in the action, not in finding the element
+- The error above is the action's own; an absent element answers ELEMENT_NOT_FOUND instead
 - Check the connection is still alive and the page has not navigated mid-action
 
 ---

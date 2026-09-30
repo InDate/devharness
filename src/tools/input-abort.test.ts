@@ -94,7 +94,7 @@ function makeInput(page: any) {
     consoleMonitor: {},
     networkMonitor: {},
   });
-  const { input } = createInputTools({} as any, resolve as any);
+  const { input } = createInputTools(resolve as any);
   return input;
 }
 

@@ -3,8 +3,7 @@
  */
 
 import { z } from 'zod';
-import type { ConnectionManager } from '../connection-manager.js';
-import { executeWithPauseDetection, formatActionResult, actionFailureResponse } from '../debugger-aware-wrapper.js';
+import { executeWithPauseDetection, actionFailureResponse, type ActionResult } from '../debugger-aware-wrapper.js';
 import { checkBrowserAutomation } from '../error-helpers.js';
 import { createTool } from '../validation-helpers.js';
 import { configManager } from '../config.js';
@@ -74,11 +73,6 @@ const inputToolSchema = z.object({
   settleTimeout: z.number().optional().describe('DOM settle timeout ms'),
 }).strict();
 
-/**
- * Wrapper to execute input actions while bypassing the replay blocker overlay.
- * Sets __cdpReplayClickInProgress flag before the action and clears it after.
- * This allows CDP-dispatched events to pass through the overlay's event listeners.
- */
 /** Click a selector through `clickElement`, which a tab that is not in front can take. */
 async function clickSelector(
   page: any,
@@ -107,6 +101,10 @@ async function hoverSelector(page: any, selector: string): Promise<void> {
   }
 }
 
+/**
+ * Run an input action with __cdpReplayClickInProgress set, so the replay
+ * blocker overlay's event listeners let CDP-dispatched events through.
+ */
 async function withReplayBypass<T>(page: any, action: () => Promise<T>): Promise<T> {
   await page.evaluate(() => { (globalThis as any).__cdpReplayClickInProgress = true; });
   try {
@@ -145,8 +143,19 @@ export async function ambiguousSelectorWarning(page: any, selector: string, raw:
   return undefined;
 }
 
+/**
+ * An action that stopped at a breakpoint or failed, answered as that;
+ * undefined when it ran. A failed dispatch returns no result, and read
+ * without this each action reported success over it.
+ */
+function stoppedResponse(result: ActionResult, action: string, target: string): any | undefined {
+  if (result.pausedAtBreakpoint && result.success) {
+    return createSuccessResponse('ACTION_PAUSED_AT_BREAKPOINT', { action, selector: target, ...result.pauseInfo });
+  }
+  return actionFailureResponse(result, action, target);
+}
+
 export function createInputTools(
-  connectionManager: ConnectionManager,
   resolveConnectionFromReason: (connectionReason: string) => Promise<any>
 ) {
   return {
@@ -210,1343 +219,1347 @@ export function createInputTools(
 
         await checkAborted();
 
-        switch (action) {
-          case 'click': {
-            const { selector: rawSelector, clickCount = 1, handleModals = false, dismissStrategy = 'auto', x, y } = args;
+        try {
+          switch (action) {
+            case 'click': {
+              const { selector: rawSelector, clickCount = 1, handleModals = false, dismissStrategy = 'auto', x, y } = args;
 
-            // Coordinate-based click (for canvas/3D apps)
-            if (typeof x === 'number' && typeof y === 'number') {
-              await checkAborted(); // last exit before the click goes on the wire
-              await withReplayBypass(page, () => page.mouse.click(x, y, { clickCount }));
-              return {
-                content: [{
-                  type: 'text',
-                  text: `Clicked at coordinates (${x}, ${y})`
-                }]
-              };
-            }
-
-            if (!rawSelector) {
-              return {
-                content: [
-                  {
+              // Coordinate-based click (for canvas/3D apps)
+              if (typeof x === 'number' && typeof y === 'number') {
+                await checkAborted(); // last exit before the click goes on the wire
+                await withReplayBypass(page, () => page.mouse.click(x, y, { clickCount }));
+                return {
+                  content: [{
                     type: 'text',
-                    text: `## Error\n\nMissing required parameter: \`selector\` or coordinates (\`x\`, \`y\`)\n\n**Action:** click\n\n**Suggestion:** Provide a CSS selector for the element to click, or x/y coordinates for coordinate-based clicking.`,
-                  },
-                ],
-                isError: true,
-              };
-            }
-
-            // Capture pre-click URL for validation metadata
-            const preClickUrl = page.url();
-
-            // Resolve extended selectors (like :has-text())
-            let selector = rawSelector;
-            let selectorWarning: string | undefined;
-            if (isExtendedSelector(rawSelector)) {
-              const resolved = await resolveSelector(page, rawSelector);
-              if ('error' in resolved) {
-                return createErrorResponse('ELEMENT_NOT_FOUND', {
-                  selector: rawSelector,
-                  suggestion: resolved.suggestion,
-                });
+                    text: `Clicked at coordinates (${x}, ${y})`
+                  }]
+                };
               }
-              selector = resolved.selector;
-              selectorWarning = resolved.warning;
-            }
-            {
-              const ambiguous = await ambiguousSelectorWarning(page, selector, rawSelector);
-              if (ambiguous) selectorWarning = selectorWarning ? `${selectorWarning} ${ambiguous}` : ambiguous;
-            }
-            await checkAborted(); // after selector resolution, before any dispatch
 
-            const result = await executeWithPauseDetection(
-              targetCdpManager,
-              async () => {
-                // Check if element exists and is clickable
-                const element = await page.$(selector);
-                if (!element) {
-                  return {
-                    error: `Element not found: ${selector}`,
-                  };
+              if (!rawSelector) {
+                return {
+                  content: [
+                    {
+                      type: 'text',
+                      text: `## Error\n\nMissing required parameter: \`selector\` or coordinates (\`x\`, \`y\`)\n\n**Action:** click\n\n**Suggestion:** Provide a CSS selector for the element to click, or x/y coordinates for coordinate-based clicking.`,
+                    },
+                  ],
+                  isError: true,
+                };
+              }
+
+              // Capture pre-click URL for validation metadata
+              const preClickUrl = page.url();
+
+              // Resolve extended selectors (like :has-text())
+              let selector = rawSelector;
+              let selectorWarning: string | undefined;
+              if (isExtendedSelector(rawSelector)) {
+                const resolved = await resolveSelector(page, rawSelector);
+                if ('error' in resolved) {
+                  return createErrorResponse('ELEMENT_NOT_FOUND', {
+                    selector: rawSelector,
+                    suggestion: resolved.suggestion,
+                  });
                 }
+                selector = resolved.selector;
+                selectorWarning = resolved.warning;
+              }
+              {
+                const ambiguous = await ambiguousSelectorWarning(page, selector, rawSelector);
+                if (ambiguous) selectorWarning = selectorWarning ? `${selectorWarning} ${ambiguous}` : ambiguous;
+              }
+              await checkAborted(); // after selector resolution, before any dispatch
 
-                // Check if element is blocked by modal
-                const blockingCheck = await isElementBlocked(page, selector);
-
-                if (blockingCheck.blocked && blockingCheck.blockingModal) {
-                  if (handleModals) {
-                    // Auto-dismiss modal. Dismissal DISPATCHES too (an Escape
-                    // key or a click on the dismiss control), so it needs its
-                    // own pre-dispatch checkpoint - not just the one before the
-                    // real action below.
-                    await checkAborted();
-                    const dismissResult = await dismissModalHelper(
-                      page,
-                      blockingCheck.blockingModal.selector,
-                      dismissStrategy
-                    );
-
-                    // Check if dismissal was successful
-                    if (!dismissResult.success) {
-                      return {
-                        error: `Failed to dismiss blocking modal: ${dismissResult.error || 'Unknown error'}`,
-                        blockingModal: blockingCheck.blockingModal,
-                      };
-                    }
-
-                    // Re-check if element is still blocked
-                    const recheckBlocking = await isElementBlocked(page, selector);
-                    if (recheckBlocking.blocked) {
-                      return {
-                        error: `Element still blocked after dismissing modal`,
-                        blockingModal: recheckBlocking.blockingModal,
-                      };
-                    }
-                  } else {
-                    // Return error with modal information
+              const result = await executeWithPauseDetection(
+                targetCdpManager,
+                async () => {
+                  // Check if element exists and is clickable
+                  const element = await page.$(selector);
+                  if (!element) {
                     return {
-                      error: `Element is blocked by modal`,
-                      blockingModal: blockingCheck.blockingModal,
-                      suggestion: `Enable handleModals parameter or call modal with action dismiss first`,
+                      error: `Element not found: ${selector}`,
                     };
                   }
-                }
 
-                // Check if element has click handlers
-                const hasClickHandler = await page.evaluate((sel: string) => {
-                  const el = (globalThis as any).document.querySelector(sel);
-                  if (!el) return false;
+                  // Check if element is blocked by modal
+                  const blockingCheck = await isElementBlocked(page, selector);
 
-                  // Check for onclick attribute
-                  if (el.onclick) return true;
+                  if (blockingCheck.blocked && blockingCheck.blockingModal) {
+                    if (handleModals) {
+                      // Auto-dismiss modal. Dismissal DISPATCHES too (a click on
+                      // the dismiss control, or the modal's removal), so it needs
+                      // its own pre-dispatch checkpoint - not just the one before
+                      // the real action below.
+                      await checkAborted();
+                      const dismissResult = await dismissModalHelper(
+                        page,
+                        blockingCheck.blockingModal.selector,
+                        dismissStrategy
+                      );
 
-                  // Check for addEventListener listeners (limited - can't detect all)
-                  // Check if element or ancestors have event listeners by testing common patterns
-                  let current = el;
-                  while (current) {
-                    // Check for common click-related attributes
-                    if (current.hasAttribute('onclick')) return true;
-                    if (current.hasAttribute('data-action')) return true;
+                      // Check if dismissal was successful
+                      if (!dismissResult.success) {
+                        return {
+                          error: `Failed to dismiss blocking modal: ${dismissResult.error || 'Unknown error'}`,
+                          blockingModal: blockingCheck.blockingModal,
+                        };
+                      }
 
-                    // Check for interactive elements that typically have handlers
-                    const tag = current.tagName.toLowerCase();
-                    if (tag === 'button' || tag === 'a' || tag === 'input') return true;
-
-                    // Check for cursor pointer (often indicates clickable)
-                    const style = (globalThis as any).window.getComputedStyle(current);
-                    if (style.cursor === 'pointer') return true;
-
-                    current = current.parentElement;
+                      // Re-check if element is still blocked
+                      const recheckBlocking = await isElementBlocked(page, selector);
+                      if (recheckBlocking.blocked) {
+                        return {
+                          error: `Element still blocked after dismissing modal`,
+                          blockingModal: recheckBlocking.blockingModal,
+                        };
+                      }
+                    } else {
+                      // Return error with modal information
+                      return {
+                        error: `Element is blocked by modal`,
+                        blockingModal: blockingCheck.blockingModal,
+                        suggestion: `Enable handleModals parameter or call modal with action dismiss first`,
+                      };
+                    }
                   }
 
-                  return false;
-                }, selector);
+                  // Check if element has click handlers
+                  const hasClickHandler = await page.evaluate((sel: string) => {
+                    const el = (globalThis as any).document.querySelector(sel);
+                    if (!el) return false;
 
-                // Perform the click - use wrapper to bypass replay blocker overlay
-                await checkAborted(); // last exit before the click goes on the wire
-                await withReplayBypass(page, () => clickSelector(page, selector, { clickCount }));
+                    // Check for onclick attribute
+                    if (el.onclick) return true;
 
-                // Check if breakpoint was hit during click - if so, skip post-click evaluation
-                // which would hang because page JS is paused
-                if (targetCdpManager.isPaused()) {
+                    // Check for addEventListener listeners (limited - can't detect all)
+                    // Check if element or ancestors have event listeners by testing common patterns
+                    let current = el;
+                    while (current) {
+                      // Check for common click-related attributes
+                      if (current.hasAttribute('onclick')) return true;
+                      if (current.hasAttribute('data-action')) return true;
+
+                      // Check for interactive elements that typically have handlers
+                      const tag = current.tagName.toLowerCase();
+                      if (tag === 'button' || tag === 'a' || tag === 'input') return true;
+
+                      // Check for cursor pointer (often indicates clickable)
+                      const style = (globalThis as any).window.getComputedStyle(current);
+                      if (style.cursor === 'pointer') return true;
+
+                      current = current.parentElement;
+                    }
+
+                    return false;
+                  }, selector);
+
+                  // Perform the click - use wrapper to bypass replay blocker overlay
+                  await checkAborted(); // last exit before the click goes on the wire
+                  await withReplayBypass(page, () => clickSelector(page, selector, { clickCount }));
+
+                  // Check if breakpoint was hit during click - if so, skip post-click evaluation
+                  // which would hang because page JS is paused
+                  if (targetCdpManager.isPaused()) {
+                    return {
+                      selector,
+                      clickCount,
+                      hasClickHandler,
+                      postClickState: null,
+                      pausedDuringClick: true,
+                    };
+                  }
+
+                  // Get post-click state
+                  const postClickState = await page.evaluate((clickedSelector: string) => {
+                    const focused = (globalThis as any).document.activeElement;
+                    let focusInfo = null;
+                    if (focused && focused !== (globalThis as any).document.body) {
+                      const tag = focused.tagName.toLowerCase();
+                      const text = focused.textContent?.trim().substring(0, 30) || '';
+                      const ariaLabel = focused.getAttribute('aria-label') || '';
+                      const placeholder = focused.getAttribute('placeholder') || '';
+                      const type = focused.getAttribute('type') || '';
+                      focusInfo = {
+                        tag,
+                        type: type || undefined,
+                        text: text || ariaLabel || placeholder || undefined,
+                        isInput: ['input', 'textarea', 'select'].includes(tag),
+                      };
+                    }
+
+                    // Get tabbable elements
+                    const tabbable = Array.from((globalThis as any).document.querySelectorAll(
+                      'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])'
+                    )).filter((el: any) => {
+                      const style = (globalThis as any).window.getComputedStyle(el);
+                      return style.display !== 'none' && style.visibility !== 'hidden' && !el.disabled;
+                    });
+
+                    // Helper to format element for display
+                    const formatEl = (el: any) => {
+                      const tag = el.tagName.toLowerCase();
+                      const text = el.textContent?.trim().substring(0, 20) || el.getAttribute('aria-label') || el.getAttribute('placeholder') || '';
+                      const type = el.getAttribute('type');
+                      if (tag === 'input') {
+                        return `${tag}[${type || 'text'}]${text ? ` "${text}"` : ''}`;
+                      }
+                      return `${tag}${text ? ` "${text}"` : ''}`;
+                    };
+
+                    let prevTabbable: string[] = [];
+                    let nextTabbable: string[] = [];
+                    if (focused) {
+                      const currentIndex = tabbable.indexOf(focused);
+                      if (currentIndex !== -1) {
+                        // Previous 5 tabbable elements
+                        prevTabbable = tabbable.slice(Math.max(0, currentIndex - 5), currentIndex).map(formatEl);
+                        // Next 5 tabbable elements
+                        nextTabbable = tabbable.slice(currentIndex + 1, currentIndex + 6).map(formatEl);
+                      }
+                    }
+
+                    // Get child interactive elements of clicked element
+                    let childInteractive: string[] = [];
+                    try {
+                      const clickedEl = (globalThis as any).document.querySelector(clickedSelector);
+                      if (clickedEl) {
+                        const children = clickedEl.querySelectorAll('a[href], button, input, select, textarea');
+                        childInteractive = Array.from(children).slice(0, 10).map((el: any) => formatEl(el));
+                      }
+                    } catch (e) {
+                      // Selector may have been cleaned up, ignore
+                    }
+
+                    return {
+                      focusInfo,
+                      prevTabbable,
+                      nextTabbable,
+                      childInteractive,
+                      url: (globalThis as any).window.location.href,
+                    };
+                  }, selector);
+
                   return {
                     selector,
                     clickCount,
                     hasClickHandler,
-                    postClickState: null,
-                    pausedDuringClick: true,
+                    postClickState,
+                    warning: !hasClickHandler ? 'Element may not have a click handler attached. Click was performed but may not trigger any action.' : undefined,
                   };
+                },
+                'click'
+              );
+
+              // If paused at breakpoint, return immediately - don't try any more page interactions
+              if (result.pausedAtBreakpoint || result.result?.pausedDuringClick) {
+                // The page is paused, so the observer is left in it rather than collected
+                if (shouldDetectChanges) {
+                  domChangeMonitor.drop(connectionReason);
                 }
 
-                // Get post-click state
-                const postClickState = await page.evaluate((clickedSelector: string) => {
-                  const focused = (globalThis as any).document.activeElement;
-                  let focusInfo = null;
-                  if (focused && focused !== (globalThis as any).document.body) {
-                    const tag = focused.tagName.toLowerCase();
-                    const text = focused.textContent?.trim().substring(0, 30) || '';
-                    const ariaLabel = focused.getAttribute('aria-label') || '';
-                    const placeholder = focused.getAttribute('placeholder') || '';
-                    const type = focused.getAttribute('type') || '';
-                    focusInfo = {
-                      tag,
-                      type: type || undefined,
-                      text: text || ariaLabel || placeholder || undefined,
-                      isInput: ['input', 'textarea', 'select'].includes(tag),
-                    };
-                  }
+                // Get pause info if we detected pause inside the action
+                const pauseInfo = result.pauseInfo || (result.result?.pausedDuringClick ? (() => {
+                  const info = targetCdpManager.getPausedInfo();
+                  return info.location ? {
+                    url: info.location.url,
+                    lineNumber: info.location.lineNumber,
+                  } : undefined;
+                })() : undefined);
 
-                  // Get tabbable elements
-                  const tabbable = Array.from((globalThis as any).document.querySelectorAll(
-                    'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])'
-                  )).filter((el: any) => {
-                    const style = (globalThis as any).window.getComputedStyle(el);
-                    return style.display !== 'none' && style.visibility !== 'hidden' && !el.disabled;
-                  });
-
-                  // Helper to format element for display
-                  const formatEl = (el: any) => {
-                    const tag = el.tagName.toLowerCase();
-                    const text = el.textContent?.trim().substring(0, 20) || el.getAttribute('aria-label') || el.getAttribute('placeholder') || '';
-                    const type = el.getAttribute('type');
-                    if (tag === 'input') {
-                      return `${tag}[${type || 'text'}]${text ? ` "${text}"` : ''}`;
-                    }
-                    return `${tag}${text ? ` "${text}"` : ''}`;
-                  };
-
-                  let prevTabbable: string[] = [];
-                  let nextTabbable: string[] = [];
-                  if (focused) {
-                    const currentIndex = tabbable.indexOf(focused);
-                    if (currentIndex !== -1) {
-                      // Previous 5 tabbable elements
-                      prevTabbable = tabbable.slice(Math.max(0, currentIndex - 5), currentIndex).map(formatEl);
-                      // Next 5 tabbable elements
-                      nextTabbable = tabbable.slice(currentIndex + 1, currentIndex + 6).map(formatEl);
-                    }
-                  }
-
-                  // Get child interactive elements of clicked element
-                  let childInteractive: string[] = [];
-                  try {
-                    const clickedEl = (globalThis as any).document.querySelector(clickedSelector);
-                    if (clickedEl) {
-                      const children = clickedEl.querySelectorAll('a[href], button, input, select, textarea');
-                      childInteractive = Array.from(children).slice(0, 10).map((el: any) => formatEl(el));
-                    }
-                  } catch (e) {
-                    // Selector may have been cleaned up, ignore
-                  }
-
-                  return {
-                    focusInfo,
-                    prevTabbable,
-                    nextTabbable,
-                    childInteractive,
-                    url: (globalThis as any).window.location.href,
-                  };
-                }, selector);
-
-                return {
-                  selector,
-                  clickCount,
-                  hasClickHandler,
-                  postClickState,
-                  warning: !hasClickHandler ? 'Element may not have a click handler attached. Click was performed but may not trigger any action.' : undefined,
-                };
-              },
-              'click'
-            );
-
-            // If paused at breakpoint, return immediately - don't try any more page interactions
-            if (result.pausedAtBreakpoint || result.result?.pausedDuringClick) {
-              // The page is paused, so the observer is left in it rather than collected
-              if (shouldDetectChanges) {
-                domChangeMonitor.drop(connectionReason);
-              }
-
-              // Get pause info if we detected pause inside the action
-              const pauseInfo = result.pauseInfo || (result.result?.pausedDuringClick ? (() => {
-                const info = targetCdpManager.getPausedInfo();
-                return info.location ? {
-                  url: info.location.url,
-                  lineNumber: info.location.lineNumber,
-                } : undefined;
-              })() : undefined);
-
-              return createSuccessResponse('ACTION_PAUSED_AT_BREAKPOINT', {
-                action: 'click',
-                selector: rawSelector,
-                ...pauseInfo,
-              });
-            }
-
-            // Collect DOM changes
-            let changesText = '';
-            let changes: DOMChanges | null = null;
-            if (shouldDetectChanges) {
-              changes = await domChangeMonitor.stopObserving(connectionReason, { settleTimeout, signal: abortSignal });
-              changesText = formatDOMChanges(changes);
-            }
-
-            // Clean up temporary selector attribute
-            await cleanupResolvedSelector(page, selector);
-
-            // Check if element was not found
-            if (!result.result || result.result.error) {
-              // Check if error is due to blocking modal
-              if (result.result?.blockingModal) {
-                return createErrorResponse('ELEMENT_BLOCKED_BY_MODAL', {
+                return createSuccessResponse('ACTION_PAUSED_AT_BREAKPOINT', {
+                  action: 'click',
                   selector: rawSelector,
-                  modalType: result.result.blockingModal.type,
-                  modalDescription: result.result.blockingModal.description,
-                  modalSelector: result.result.blockingModal.selector,
-                  suggestion: result.result.suggestion,
-                  availableStrategies: result.result.blockingModal.dismissStrategies,
+                  ...pauseInfo,
                 });
               }
-              const failed = actionFailureResponse(result, 'click', rawSelector);
-              if (failed) return failed;
-              return createErrorResponse('ELEMENT_NOT_FOUND', { selector: rawSelector });
-            }
 
-            // Build post-click info string
-            const postClick = result.result.postClickState;
-            let postClickInfo = '';
-            if (postClick?.focusInfo) {
-              const f = postClick.focusInfo;
-              if (f.isInput) {
-                postClickInfo = `\n**Focus:** ${f.tag}${f.type ? `[type="${f.type}"]` : ''} ${f.text ? `"${f.text}"` : ''}`;
-              } else if (f.tag !== 'body') {
-                postClickInfo = `\n**Focus:** ${f.tag}${f.text ? ` "${f.text}"` : ''}`;
+              // Collect DOM changes
+              let changesText = '';
+              let changes: DOMChanges | null = null;
+              if (shouldDetectChanges) {
+                changes = await domChangeMonitor.stopObserving(connectionReason, { settleTimeout, signal: abortSignal });
+                changesText = formatDOMChanges(changes);
               }
-            }
-            if (postClick?.prevTabbable?.length > 0) {
-              postClickInfo += `\n**Prev tab:** ${postClick.prevTabbable.join(' ← ')}`;
-            }
-            if (postClick?.nextTabbable?.length > 0) {
-              postClickInfo += `\n**Next tab:** ${postClick.nextTabbable.join(' → ')}`;
-            }
-            if (postClick?.childInteractive?.length > 0) {
-              postClickInfo += `\n**Contains:** ${postClick.childInteractive.join(', ')}`;
-            }
 
-            // Build _meta for click validation
-            const postClickUrl = postClick?.url || page.url();
-            const clickMeta: ToolResponseMeta = {
-              tool: 'input',
-              action: 'click',
-              timestamp: Date.now(),
-              click: {
-                selector: rawSelector,
-                preClickUrl,
-                postClickUrl,
-                navigationOccurred: preClickUrl !== postClickUrl,
-                hasClickHandler: result.result.hasClickHandler ?? false,
-                domChanges: changes ? {
-                  mutationCount: changes.mutationCount,
-                  added: changes.added?.length || 0,
-                  removed: changes.removed?.length || 0,
-                  shown: changes.shown?.length || 0,
-                  hidden: changes.hidden?.length || 0,
-                } : null,
-              },
-            };
+              // Clean up temporary selector attribute
+              await cleanupResolvedSelector(page, selector);
 
-            // Return success with warning if no click handler detected
-            if (result.result.warning) {
-              const response = createSuccessResponse('ELEMENT_CLICK_WARNING', { selector: rawSelector, warning: selectorWarning });
-              response._meta = clickMeta;
-              return response;
-            }
+              // Check if element was not found
+              if (!result.result || result.result.error) {
+                // Check if error is due to blocking modal
+                if (result.result?.blockingModal) {
+                  return createErrorResponse('ELEMENT_BLOCKED_BY_MODAL', {
+                    selector: rawSelector,
+                    modalType: result.result.blockingModal.type,
+                    modalDescription: result.result.blockingModal.description,
+                    modalSelector: result.result.blockingModal.selector,
+                    suggestion: result.result.suggestion,
+                    availableStrategies: result.result.blockingModal.dismissStrategies,
+                  });
+                }
+                const failed = actionFailureResponse(result, 'click', rawSelector);
+                if (failed) return failed;
+                return createErrorResponse('ELEMENT_NOT_FOUND', { selector: rawSelector });
+              }
 
-            // Include warning about multiple matches if applicable
-            if (selectorWarning) {
+              // Build post-click info string
+              const postClick = result.result.postClickState;
+              let postClickInfo = '';
+              if (postClick?.focusInfo) {
+                const f = postClick.focusInfo;
+                if (f.isInput) {
+                  postClickInfo = `\n**Focus:** ${f.tag}${f.type ? `[type="${f.type}"]` : ''} ${f.text ? `"${f.text}"` : ''}`;
+                } else if (f.tag !== 'body') {
+                  postClickInfo = `\n**Focus:** ${f.tag}${f.text ? ` "${f.text}"` : ''}`;
+                }
+              }
+              if (postClick?.prevTabbable?.length > 0) {
+                postClickInfo += `\n**Prev tab:** ${postClick.prevTabbable.join(' ← ')}`;
+              }
+              if (postClick?.nextTabbable?.length > 0) {
+                postClickInfo += `\n**Next tab:** ${postClick.nextTabbable.join(' → ')}`;
+              }
+              if (postClick?.childInteractive?.length > 0) {
+                postClickInfo += `\n**Contains:** ${postClick.childInteractive.join(', ')}`;
+              }
+
+              // Build _meta for click validation
+              const postClickUrl = postClick?.url || page.url();
+              const clickMeta: ToolResponseMeta = {
+                tool: 'input',
+                action: 'click',
+                timestamp: Date.now(),
+                click: {
+                  selector: rawSelector,
+                  preClickUrl,
+                  postClickUrl,
+                  navigationOccurred: preClickUrl !== postClickUrl,
+                  hasClickHandler: result.result.hasClickHandler ?? false,
+                  domChanges: changes ? {
+                    mutationCount: changes.mutationCount,
+                    added: changes.added?.length || 0,
+                    removed: changes.removed?.length || 0,
+                    shown: changes.shown?.length || 0,
+                    hidden: changes.hidden?.length || 0,
+                  } : null,
+                },
+              };
+
+              // A missing click handler and an ambiguous selector are both said,
+              // alongside what the click changed.
+              const warnings = [result.result.warning, selectorWarning].filter(Boolean);
+              if (warnings.length > 0) {
+                return {
+                  content: [
+                    {
+                      type: 'text',
+                      text: `Clicked element \`${rawSelector}\`${changesText}${postClickInfo}\n\n${warnings.map(w => `**Warning:** ${w}`).join('\n')}`,
+                    },
+                  ],
+                  _meta: clickMeta,
+                };
+              }
+
+              // Default success response with post-click info and changes
               return {
                 content: [
                   {
                     type: 'text',
-                    text: `Clicked element \`${rawSelector}\`${changesText}${postClickInfo}\n\n**Warning:** ${selectorWarning}`,
+                    text: `Clicked element: \`${rawSelector}\`${changesText}${postClickInfo}`,
                   },
                 ],
                 _meta: clickMeta,
               };
             }
 
-            // Default success response with post-click info and changes
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: `Clicked element: \`${rawSelector}\`${changesText}${postClickInfo}`,
-                },
-              ],
-              _meta: clickMeta,
-            };
-          }
+            case 'type': {
+              const { selector: rawSelector, text, delay = 0, handleModals = false, dismissStrategy = 'auto', append = false } = args;
 
-          case 'type': {
-            const { selector: rawSelector, text, delay = 0, handleModals = false, dismissStrategy = 'auto', append = false } = args;
-
-            if (!rawSelector) {
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: `## Error\n\nMissing required parameter: \`selector\`\n\n**Action:** type\n\n**Suggestion:** Provide a CSS selector for the input element.`,
-                  },
-                ],
-                isError: true,
-              };
-            }
-
-            if (!text) {
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: `## Error\n\nMissing required parameter: \`text\`\n\n**Action:** type\n\n**Suggestion:** Provide text to type into the element.`,
-                  },
-                ],
-                isError: true,
-              };
-            }
-
-            // Resolve extended selectors (like :has-text())
-            let selector = rawSelector;
-            let selectorWarning: string | undefined;
-            if (isExtendedSelector(rawSelector)) {
-              const resolved = await resolveSelector(page, rawSelector);
-              if ('error' in resolved) {
-                return createErrorResponse('ELEMENT_NOT_FOUND', {
-                  selector: rawSelector,
-                  suggestion: resolved.suggestion,
-                });
+              if (!rawSelector) {
+                return {
+                  content: [
+                    {
+                      type: 'text',
+                      text: `## Error\n\nMissing required parameter: \`selector\`\n\n**Action:** type\n\n**Suggestion:** Provide a CSS selector for the input element.`,
+                    },
+                  ],
+                  isError: true,
+                };
               }
-              selector = resolved.selector;
-              selectorWarning = resolved.warning;
-            }
-            {
-              const ambiguous = await ambiguousSelectorWarning(page, selector, rawSelector);
-              if (ambiguous) selectorWarning = selectorWarning ? `${selectorWarning} ${ambiguous}` : ambiguous;
-            }
-            await checkAborted(); // after selector resolution, before any dispatch
 
-            const result = await executeWithPauseDetection(
-              targetCdpManager,
-              async () => {
-                // Check if element exists first
-                const element = await page.$(selector);
-                if (!element) {
-                  return { error: `Element not found: ${selector}` };
-                }
-
-                // Check if element is blocked by modal
-                const blockingCheck = await isElementBlocked(page, selector);
-
-                if (blockingCheck.blocked && blockingCheck.blockingModal) {
-                  if (handleModals) {
-                    // Auto-dismiss modal. Dismissal DISPATCHES too (an Escape
-                    // key or a click on the dismiss control), so it needs its
-                    // own pre-dispatch checkpoint - not just the one before the
-                    // real action below.
-                    await checkAborted();
-                    const dismissResult = await dismissModalHelper(
-                      page,
-                      blockingCheck.blockingModal.selector,
-                      dismissStrategy
-                    );
-
-                    // Check if dismissal was successful
-                    if (!dismissResult.success) {
-                      return {
-                        error: `Failed to dismiss blocking modal: ${dismissResult.error || 'Unknown error'}`,
-                        blockingModal: blockingCheck.blockingModal,
-                      };
-                    }
-
-                    // Re-check if element is still blocked
-                    const recheckBlocking = await isElementBlocked(page, selector);
-                    if (recheckBlocking.blocked) {
-                      return {
-                        error: `Element still blocked after dismissing modal`,
-                        blockingModal: recheckBlocking.blockingModal,
-                      };
-                    }
-                  } else {
-                    // Return error with modal information
-                    return {
-                      error: `Element is blocked by modal`,
-                      blockingModal: blockingCheck.blockingModal,
-                      suggestion: `Enable handleModals parameter or call modal with action dismiss first`,
-                    };
-                  }
-                }
-
-                // Clear existing text first (unless append mode)
-                await checkAborted(); // last exit before keystrokes go on the wire
-                if (!append) {
-                  await withReplayBypass(page, async () => {
-                    await clickSelector(page, selector, { clickCount: 3 });
-                    await page.keyboard.press('Backspace');
-                  });
-                  // Abortable between clear and retype: the clear that went
-                  // out stays out, but the new text is not dispatched.
-                  await checkAborted();
-                }
-                // Type new text - use wrapper to bypass replay blocker overlay
-                await withReplayBypass(page, () => page.type(selector, text, { delay }));
-
-                // Get the actual value after typing
-                const currentValue = await page.$eval(selector, (el: unknown) => {
-                  const element = el as { value?: string; textContent?: string | null };
-                  if ('value' in element && element.value !== undefined) {
-                    return element.value;
-                  }
-                  return element.textContent || '';
-                });
-
-                return { selector, text, currentValue };
-              },
-              'typeText'
-            );
-
-            // If paused at breakpoint, return immediately - don't try any more page interactions
-            if (result.pausedAtBreakpoint) {
-              if (shouldDetectChanges) {
-                domChangeMonitor.drop(connectionReason);
+              if (!text) {
+                return {
+                  content: [
+                    {
+                      type: 'text',
+                      text: `## Error\n\nMissing required parameter: \`text\`\n\n**Action:** type\n\n**Suggestion:** Provide text to type into the element.`,
+                    },
+                  ],
+                  isError: true,
+                };
               }
-              return createSuccessResponse('ACTION_PAUSED_AT_BREAKPOINT', {
-                action: 'type',
-                selector: rawSelector,
-                ...result.pauseInfo,
-              });
-            }
 
-            // Collect DOM changes
-            let changesText = '';
-            if (shouldDetectChanges) {
-              const changes = await domChangeMonitor.stopObserving(connectionReason, { settleTimeout, signal: abortSignal });
-              changesText = formatDOMChanges(changes);
-            }
-
-            // Clean up temporary selector attribute
-            await cleanupResolvedSelector(page, selector);
-
-            // Check if element was not found
-            if (result.result?.error) {
-              // Check if error is due to blocking modal
-              if (result.result?.blockingModal) {
-                return createErrorResponse('ELEMENT_BLOCKED_BY_MODAL', {
-                  selector: rawSelector,
-                  modalType: result.result.blockingModal.type,
-                  modalDescription: result.result.blockingModal.description,
-                  modalSelector: result.result.blockingModal.selector,
-                  suggestion: result.result.suggestion,
-                  availableStrategies: result.result.blockingModal.dismissStrategies,
-                });
-              }
-              const failed = actionFailureResponse(result, 'type', rawSelector);
-              if (failed) return failed;
-              return createErrorResponse('ELEMENT_NOT_FOUND', { selector: rawSelector });
-            }
-
-            // Include warning about multiple matches if applicable
-            if (selectorWarning) {
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: `Typed into element \`${rawSelector}\`${changesText}\n\nCurrent value: ${result.result?.currentValue}\n\n**Warning:** ${selectorWarning}`,
-                  },
-                ],
-              };
-            }
-
-            // Default success response with changes
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: `Text typed into \`${rawSelector}\`: "${text}"${changesText}`,
-                },
-              ],
-            };
-          }
-
-          case 'press': {
-            const { key } = args;
-
-            if (!key) {
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: `## Error\n\nMissing required parameter: \`key\`\n\n**Action:** press\n\n**Suggestion:** Provide a key name to press (e.g., "Enter", "Tab", "Escape").`,
-                  },
-                ],
-                isError: true,
-              };
-            }
-
-            // Use wrapper to bypass replay blocker overlay for key press
-            await checkAborted(); // last exit before the key press goes on the wire
-            await withReplayBypass(page, () =>
-              executeWithPauseDetection(
-                targetCdpManager,
-                () => page.keyboard.press(key as any),
-                'pressKey'
-              )
-            );
-
-            return createSuccessResponse('KEY_PRESS_SUCCESS', {
-              key
-            });
-          }
-
-          case 'hover': {
-            const { selector: rawSelector, handleModals = false, dismissStrategy = 'auto' } = args;
-
-            if (!rawSelector) {
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: `## Error\n\nMissing required parameter: \`selector\`\n\n**Action:** hover\n\n**Suggestion:** Provide a CSS selector for the element to hover over.`,
-                  },
-                ],
-                isError: true,
-              };
-            }
-
-            // Resolve extended selectors (like :has-text())
-            let selector = rawSelector;
-            let selectorWarning: string | undefined;
-            if (isExtendedSelector(rawSelector)) {
-              const resolved = await resolveSelector(page, rawSelector);
-              if ('error' in resolved) {
-                return createErrorResponse('ELEMENT_NOT_FOUND', {
-                  selector: rawSelector,
-                  suggestion: resolved.suggestion,
-                });
-              }
-              selector = resolved.selector;
-              selectorWarning = resolved.warning;
-            }
-            {
-              const ambiguous = await ambiguousSelectorWarning(page, selector, rawSelector);
-              if (ambiguous) selectorWarning = selectorWarning ? `${selectorWarning} ${ambiguous}` : ambiguous;
-            }
-            await checkAborted(); // after selector resolution, before any dispatch
-
-            const result = await executeWithPauseDetection(
-              targetCdpManager,
-              async () => {
-                // Check if element exists first
-                const element = await page.$(selector);
-                if (!element) {
-                  return { error: `Element not found: ${selector}` };
-                }
-
-                // Check if element is blocked by modal
-                const blockingCheck = await isElementBlocked(page, selector);
-
-                if (blockingCheck.blocked && blockingCheck.blockingModal) {
-                  if (handleModals) {
-                    // Auto-dismiss modal. Dismissal DISPATCHES too (an Escape
-                    // key or a click on the dismiss control), so it needs its
-                    // own pre-dispatch checkpoint - not just the one before the
-                    // real action below.
-                    await checkAborted();
-                    const dismissResult = await dismissModalHelper(
-                      page,
-                      blockingCheck.blockingModal.selector,
-                      dismissStrategy
-                    );
-
-                    // Check if dismissal was successful
-                    if (!dismissResult.success) {
-                      return {
-                        error: `Failed to dismiss blocking modal: ${dismissResult.error || 'Unknown error'}`,
-                        blockingModal: blockingCheck.blockingModal,
-                      };
-                    }
-
-                    // Re-check if element is still blocked
-                    const recheckBlocking = await isElementBlocked(page, selector);
-                    if (recheckBlocking.blocked) {
-                      return {
-                        error: `Element still blocked after dismissing modal`,
-                        blockingModal: recheckBlocking.blockingModal,
-                      };
-                    }
-                  } else {
-                    // Return error with modal information
-                    return {
-                      error: `Element is blocked by modal`,
-                      blockingModal: blockingCheck.blockingModal,
-                      suggestion: `Enable handleModals parameter or call modal with action dismiss first`,
-                    };
-                  }
-                }
-
-                await checkAborted(); // last exit before the hover goes on the wire
-                await withReplayBypass(page, () => hoverSelector(page, selector));
-                return { selector };
-              },
-              'hoverElement'
-            );
-
-            // If paused at breakpoint, return immediately - don't try any more page interactions
-            if (result.pausedAtBreakpoint) {
-              if (shouldDetectChanges) {
-                domChangeMonitor.drop(connectionReason);
-              }
-              return createSuccessResponse('ACTION_PAUSED_AT_BREAKPOINT', {
-                action: 'hover',
-                selector: rawSelector,
-                ...result.pauseInfo,
-              });
-            }
-
-            // Collect DOM changes
-            let changesText = '';
-            if (shouldDetectChanges) {
-              const changes = await domChangeMonitor.stopObserving(connectionReason, { settleTimeout, signal: abortSignal });
-              changesText = formatDOMChanges(changes);
-            }
-
-            // Clean up temporary selector attribute
-            await cleanupResolvedSelector(page, selector);
-
-            // Check if element was not found
-            if (result.result?.error) {
-              // Check if error is due to blocking modal
-              if (result.result?.blockingModal) {
-                return createErrorResponse('ELEMENT_BLOCKED_BY_MODAL', {
-                  selector: rawSelector,
-                  modalType: result.result.blockingModal.type,
-                  modalDescription: result.result.blockingModal.description,
-                  modalSelector: result.result.blockingModal.selector,
-                  suggestion: result.result.suggestion,
-                  availableStrategies: result.result.blockingModal.dismissStrategies,
-                });
-              }
-              const failed = actionFailureResponse(result, 'hover', rawSelector);
-              if (failed) return failed;
-              return createErrorResponse('ELEMENT_NOT_FOUND', { selector: rawSelector });
-            }
-
-            // Include warning about multiple matches if applicable
-            if (selectorWarning) {
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: `Hovered over element \`${rawSelector}\`${changesText}\n\n**Warning:** ${selectorWarning}`,
-                  },
-                ],
-              };
-            }
-
-            // Default success response with changes
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: `Hovered over element: \`${rawSelector}\`${changesText}`,
-                },
-              ],
-            };
-          }
-
-          case 'focus': {
-            const { selector: rawSelector } = args;
-
-            if (!rawSelector) {
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: `## Error\n\nMissing required parameter: \`selector\`\n\n**Action:** focus\n\n**Suggestion:** Provide a CSS selector for the element to focus.`,
-                  },
-                ],
-                isError: true,
-              };
-            }
-
-            // Resolve extended selectors (like :has-text())
-            let selector = rawSelector;
-            let selectorWarning: string | undefined;
-            if (isExtendedSelector(rawSelector)) {
-              const resolved = await resolveSelector(page, rawSelector);
-              if ('error' in resolved) {
-                return createErrorResponse('ELEMENT_NOT_FOUND', {
-                  selector: rawSelector,
-                  suggestion: resolved.suggestion,
-                });
-              }
-              selector = resolved.selector;
-              selectorWarning = resolved.warning;
-            }
-            {
-              const ambiguous = await ambiguousSelectorWarning(page, selector, rawSelector);
-              if (ambiguous) selectorWarning = selectorWarning ? `${selectorWarning} ${ambiguous}` : ambiguous;
-            }
-
-            const result = await executeWithPauseDetection(
-              targetCdpManager,
-              async () => {
-                // Check if element exists first
-                const element = await page.$(selector);
-                if (!element) {
-                  return { error: `Element not found: ${selector}` };
-                }
-
-                // Focus the element
-                await checkAborted(); // last exit before the focus is dispatched
-                await withReplayBypass(page, () => page.focus(selector));
-
-                // Get focused element info
-                const focusInfo = await getFocusedElementInfo(page);
-
-                return { selector, focusInfo };
-              },
-              'focus'
-            );
-
-            // Clean up temporary selector attribute
-            await cleanupResolvedSelector(page, selector);
-
-            {
-              const failed = actionFailureResponse(result, 'focus', rawSelector);
-              if (failed) return failed;
-            }
-            if (result.result?.error) {
-              return createErrorResponse('ELEMENT_NOT_FOUND', { selector: rawSelector });
-            }
-
-            const focusInfo = result.result?.focusInfo;
-
-            return createSuccessResponse('ELEMENT_FOCUS_SUCCESS', {
-              description: focusInfo?.description || 'Unknown element',
-              selector: focusInfo?.selector || rawSelector,
-              nextTabbable: focusInfo?.nextTabbable?.length ? focusInfo.nextTabbable.join(' → ') : undefined,
-              warning: selectorWarning || undefined
-            });
-          }
-
-          case 'focusNext': {
-            const { count = 1 } = args;
-
-            const result = await executeWithPauseDetection(
-              targetCdpManager,
-              async () => {
-                // Press Tab count times - use wrapper to bypass replay blocker overlay
-                await withReplayBypass(page, async () => {
-                  for (let i = 0; i < count; i++) {
-                    // Abortable between Tabs: dispatched presses stay
-                    // dispatched, but no further ones go out.
-                    throwIfAborted(abortSignal);
-                    await page.keyboard.press('Tab');
-                    // Small delay between tabs for stability
-                    if (i < count - 1) {
-                      await abortableSleep(50, abortSignal);
-                    }
-                  }
-                });
-
-                // Get focused element info
-                const focusInfo = await getFocusedElementInfo(page);
-                return { focusInfo, tabCount: count };
-              },
-              'focusNext'
-            );
-
-            const focusInfo = result.result?.focusInfo;
-
-            return createSuccessResponse('FOCUS_NEXT_SUCCESS', {
-              count: count > 1 ? count : undefined,
-              description: focusInfo?.description || 'No element focused (may have reached end of page)',
-              selector: focusInfo?.selector || 'none',
-              nextTabbable: focusInfo?.nextTabbable?.length ? focusInfo.nextTabbable.join(' → ') : undefined
-            });
-          }
-
-          case 'focusPrevious': {
-            const { count = 1 } = args;
-
-            const result = await executeWithPauseDetection(
-              targetCdpManager,
-              async () => {
-                // Press Shift+Tab count times - use wrapper to bypass replay blocker overlay
-                await withReplayBypass(page, async () => {
-                  for (let i = 0; i < count; i++) {
-                    // Abortable between Tabs (not mid-chord: Shift down/Tab/
-                    // Shift up always complete together so no modifier is
-                    // left held down).
-                    throwIfAborted(abortSignal);
-                    await page.keyboard.down('Shift');
-                    await page.keyboard.press('Tab');
-                    await page.keyboard.up('Shift');
-                    // Small delay between tabs for stability
-                    if (i < count - 1) {
-                      await abortableSleep(50, abortSignal);
-                    }
-                  }
-                });
-
-                // Get focused element info
-                const focusInfo = await getFocusedElementInfo(page);
-                return { focusInfo, tabCount: count };
-              },
-              'focusPrevious'
-            );
-
-            const focusInfo = result.result?.focusInfo;
-
-            return createSuccessResponse('FOCUS_PREVIOUS_SUCCESS', {
-              count: count > 1 ? count : undefined,
-              description: focusInfo?.description || 'No element focused (may have reached start of page)',
-              selector: focusInfo?.selector || 'none',
-              nextTabbable: focusInfo?.nextTabbable?.length ? focusInfo.nextTabbable.join(' → ') : undefined
-            });
-          }
-
-          case 'drag': {
-            const { from, to, steps = 10 } = args;
-
-            if (!from || !to) {
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: `## Error\n\nMissing required parameters: \`from\` and \`to\`\n\n**Action:** drag\n\n**Suggestion:** Provide starting and ending coordinates. Example: from: {x: 100, y: 100}, to: {x: 200, y: 200}`,
-                  },
-                ],
-                isError: true,
-              };
-            }
-
-            const result = await executeWithPauseDetection(
-              targetCdpManager,
-              async () => {
-                // Use wrapper to bypass replay blocker overlay for entire drag operation
-                return await withReplayBypass(page, async () => {
-                  const mouse = page.mouse;
-
-                  // Abortable before anything is dispatched.
-                  throwIfAborted(abortSignal);
-
-                  // Move to start position
-                  await mouse.move(from.x, from.y);
-
-                  // Press mouse button
-                  await mouse.down();
-
-                  // Calculate intermediate steps for smooth drag
-                  const deltaX = (to.x - from.x) / steps;
-                  const deltaY = (to.y - from.y) / steps;
-
-                  try {
-                    for (let i = 1; i <= steps; i++) {
-                      // Abortable between steps: movement already dispatched
-                      // stays dispatched, the rest of the drag does not go out.
-                      throwIfAborted(abortSignal);
-                      const currentX = from.x + deltaX * i;
-                      const currentY = from.y + deltaY * i;
-                      await mouse.move(currentX, currentY);
-                      // Small delay for smoother drag
-                      await abortableSleep(10, abortSignal);
-                    }
-                  } catch (err) {
-                    // A cancel mid-drag must not leave the button held down.
-                    if (isAbortError(err)) {
-                      try { await mouse.up(); } catch { /* best-effort */ }
-                    }
-                    throw err;
-                  }
-
-                  // Release mouse button
-                  await mouse.up();
-
-                  return {
-                    from,
-                    to,
-                    steps,
-                    distance: Math.sqrt(Math.pow(to.x - from.x, 2) + Math.pow(to.y - from.y, 2)),
-                  };
-                });
-              },
-              'drag'
-            );
-
-            if (result.pausedAtBreakpoint) {
-              return createSuccessResponse('ACTION_PAUSED_AT_BREAKPOINT', {
-                action: 'drag',
-                ...result.pauseInfo,
-              });
-            }
-
-            const dragResult = result.result;
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: `Dragged from (${dragResult?.from.x}, ${dragResult?.from.y}) to (${dragResult?.to.x}, ${dragResult?.to.y})\n**Distance:** ${dragResult?.distance.toFixed(1)}px over ${dragResult?.steps} steps`,
-                },
-              ],
-            };
-          }
-
-          case 'scroll': {
-            const { deltaX = 0, deltaY = 0, x, y } = args;
-
-            if (deltaX === 0 && deltaY === 0) {
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: `## Error\n\nAt least one of \`deltaX\` or \`deltaY\` must be non-zero\n\n**Action:** scroll\n\n**Suggestion:** Provide scroll amounts. Example: deltaY: 300 (scroll down), deltaY: -300 (scroll up)`,
-                  },
-                ],
-                isError: true,
-              };
-            }
-
-            const result = await executeWithPauseDetection(
-              targetCdpManager,
-              async () => {
-                // Use wrapper to bypass replay blocker overlay for scroll operation
-                return await withReplayBypass(page, async () => {
-                  const mouse = page.mouse;
-
-                  // Abortable before anything is dispatched.
-                  throwIfAborted(abortSignal);
-
-                  // If coordinates provided, move to that position first
-                  if (x !== undefined && y !== undefined) {
-                    await mouse.move(x, y);
-                  }
-
-                  // Perform scroll
-                  await mouse.wheel({ deltaX, deltaY });
-
-                  // Get current scroll position
-                  const scrollPosition = await page.evaluate(() => ({
-                    scrollX: (globalThis as any).window.scrollX,
-                    scrollY: (globalThis as any).window.scrollY,
-                    maxScrollX: (globalThis as any).document.documentElement.scrollWidth - (globalThis as any).window.innerWidth,
-                    maxScrollY: (globalThis as any).document.documentElement.scrollHeight - (globalThis as any).window.innerHeight,
-                  }));
-
-                  return {
-                    deltaX,
-                    deltaY,
-                    position: x !== undefined && y !== undefined ? { x, y } : undefined,
-                    scrollPosition,
-                  };
-                });
-              },
-              'scroll'
-            );
-
-            if (result.pausedAtBreakpoint) {
-              return createSuccessResponse('ACTION_PAUSED_AT_BREAKPOINT', {
-                action: 'scroll',
-                ...result.pauseInfo,
-              });
-            }
-
-            const scrollResult = result.result;
-            const directionParts: string[] = [];
-            if (deltaY > 0) directionParts.push(`down ${deltaY}px`);
-            if (deltaY < 0) directionParts.push(`up ${Math.abs(deltaY)}px`);
-            if (deltaX > 0) directionParts.push(`right ${deltaX}px`);
-            if (deltaX < 0) directionParts.push(`left ${Math.abs(deltaX)}px`);
-
-            const positionInfo = scrollResult?.position
-              ? ` at (${scrollResult.position.x}, ${scrollResult.position.y})`
-              : '';
-
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: `Scrolled ${directionParts.join(' and ')}${positionInfo}\n**Page position:** (${scrollResult?.scrollPosition.scrollX}, ${scrollResult?.scrollPosition.scrollY}) of (${scrollResult?.scrollPosition.maxScrollX}, ${scrollResult?.scrollPosition.maxScrollY})`,
-                },
-              ],
-            };
-          }
-
-          case 'mousemove': {
-            const { x, y } = args;
-
-            if (x === undefined || y === undefined) {
-              return {
-                content: [
-                  {
-                    type: 'text',
-                    text: `## Error\n\nMissing required parameters: \`x\` and \`y\`\n\n**Action:** mousemove\n\n**Suggestion:** Provide coordinates. Example: x: 100, y: 200`,
-                  },
-                ],
-                isError: true,
-              };
-            }
-
-            const result = await executeWithPauseDetection(
-              targetCdpManager,
-              async () => {
-                // Use wrapper to bypass replay blocker overlay for mousemove
-                throwIfAborted(abortSignal); // last exit before dispatch
-                await withReplayBypass(page, () => page.mouse.move(x, y));
-
-                // Get element at the mouse position
-                const elementInfo = await page.evaluate((mouseX: number, mouseY: number) => {
-                  const el = (globalThis as any).document.elementFromPoint(mouseX, mouseY);
-                  if (!el) return null;
-
-                  const tag = el.tagName.toLowerCase();
-                  const text = el.textContent?.trim().substring(0, 30) || '';
-                  const id = el.id ? `#${el.id}` : '';
-                  const className = el.className && typeof el.className === 'string'
-                    ? `.${el.className.trim().split(/\s+/).slice(0, 2).join('.')}`
-                    : '';
-
-                  return {
-                    tag,
-                    text: text || undefined,
-                    selector: id || className || tag,
-                  };
-                }, x, y);
-
-                return { x, y, elementInfo };
-              },
-              'mousemove'
-            );
-
-            if (result.pausedAtBreakpoint) {
-              return createSuccessResponse('ACTION_PAUSED_AT_BREAKPOINT', {
-                action: 'mousemove',
-                ...result.pauseInfo,
-              });
-            }
-
-            const moveResult = result.result;
-            const elementDesc = moveResult?.elementInfo
-              ? `\n**Element at position:** \`${moveResult.elementInfo.selector}\`${moveResult.elementInfo.text ? ` "${moveResult.elementInfo.text}"` : ''}`
-              : '';
-
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: `Mouse moved to (${moveResult?.x}, ${moveResult?.y})${elementDesc}`,
-                },
-              ],
-            };
-          }
-
-          case 'tap':
-          case 'swipe': {
-            // Real touch events. Mouse actions do not produce touchstart/
-            // touchmove, so a component that listens only for touch cannot be
-            // driven by click or drag at all.
-            const isSwipe = args.action === 'swipe';
-
-            let start = isSwipe ? args.from : (typeof args.x === 'number' && typeof args.y === 'number' ? { x: args.x, y: args.y } : undefined);
-            // A gesture across an element: its geometry is read now, because a
-            // row's coordinates move with whatever is above it and a sequence
-            // cannot know them in advance. Without this, gesture-revealed
-            // actions get faked with a programmatic click in page JS, which
-            // proves nothing about the gesture.
-            let selectorEnd: { x: number; y: number } | undefined;
-            if ((!isSwipe || args.direction) && !start && args.selector) {
-              const rawSelector = args.selector;
+              // Resolve extended selectors (like :has-text())
               let selector = rawSelector;
-              if (isExtendedSelector(selector)) {
-                const resolved = await resolveSelector(page, selector);
+              let selectorWarning: string | undefined;
+              if (isExtendedSelector(rawSelector)) {
+                const resolved = await resolveSelector(page, rawSelector);
                 if ('error' in resolved) {
-                  return createErrorResponse('ELEMENT_NOT_FOUND', { selector: rawSelector, suggestion: resolved.suggestion });
+                  return createErrorResponse('ELEMENT_NOT_FOUND', {
+                    selector: rawSelector,
+                    suggestion: resolved.suggestion,
+                  });
                 }
                 selector = resolved.selector;
+                selectorWarning = resolved.warning;
               }
-              const box = await page.evaluate((sel: string) => {
-                const el = (globalThis as any).document.querySelector(sel);
-                if (!el) return null;
-                el.scrollIntoView({ block: 'center', inline: 'center' });
-                const r = el.getBoundingClientRect();
-                const doc = (globalThis as any).document.documentElement;
-                return {
-                  x: r.x + r.width / 2, y: r.y + r.height / 2,
-                  width: r.width, height: r.height,
-                  viewW: doc.clientWidth, viewH: doc.clientHeight,
-                };
-              }, selector);
-              await cleanupResolvedSelector(page, selector);
-              if (!box) return createErrorResponse('ELEMENT_NOT_FOUND', { selector: rawSelector });
-              start = { x: box.x, y: box.y };
-              if (args.direction) {
-                const along = (args.direction === 'left' || args.direction === 'right') ? box.width : box.height;
-                // Deliberately short. A swipe-action row has ranges - a nudge
-                // peeks, further opens, further still commits the destructive
-                // action - and 60% of a wide row lands in the last one. Travel
-                // far enough to reveal, and let a caller that WANTS the
-                // over-drag ask for it.
-                const travel = args.distance ?? Math.min(Math.round(along * 0.6), 96);
-                const dx = args.direction === 'left' ? -travel : args.direction === 'right' ? travel : 0;
-                const dy = args.direction === 'up' ? -travel : args.direction === 'down' ? travel : 0;
-                // Stay on-screen: a gesture ending outside the viewport lands
-                // nowhere and reads as an unresponsive component.
-                selectorEnd = {
-                  x: Math.max(1, Math.min(box.viewW - 1, box.x + dx)),
-                  y: Math.max(1, Math.min(box.viewH - 1, box.y + dy)),
-                };
+              {
+                const ambiguous = await ambiguousSelectorWarning(page, selector, rawSelector);
+                if (ambiguous) selectorWarning = selectorWarning ? `${selectorWarning} ${ambiguous}` : ambiguous;
               }
-            }
+              await checkAborted(); // after selector resolution, before any dispatch
 
-            if (!start) {
-              return createErrorResponse('INVALID_PARAMETER', {
-                parameter: isSwipe ? 'from' : 'selector/x,y',
-                value: 'missing',
-                message: isSwipe
-                  ? 'swipe needs from:{x,y} and to:{x,y}, or selector + direction.'
-                  : 'tap needs either a selector or x and y.'
-              });
-            }
-            if (isSwipe && !args.to && !selectorEnd) {
-              return createErrorResponse('INVALID_PARAMETER', {
-                parameter: 'to',
-                value: 'missing',
-                message: 'swipe needs to:{x,y}, or direction alongside selector.'
-              });
-            }
+              const result = await executeWithPauseDetection(
+                targetCdpManager,
+                async () => {
+                  // Check if element exists first
+                  const element = await page.$(selector);
+                  if (!element) {
+                    return { error: `Element not found: ${selector}` };
+                  }
 
-            const end = isSwipe ? (args.to ?? selectorEnd!) : start;
-            const steps = Math.max(1, args.steps ?? 10);
+                  // Check if element is blocked by modal
+                  const blockingCheck = await isElementBlocked(page, selector);
 
-            const result = await executeWithPauseDetection(
-              targetCdpManager,
-              async () => {
-                const client = await page.createCDPSession();
-                const point = (x: number, y: number) => ({ x: Math.round(x), y: Math.round(y) });
-                try {
-                  return await withReplayBypass(page, async () => {
-                    throwIfAborted(abortSignal);
-                    await client.send('Input.dispatchTouchEvent', {
-                      type: 'touchStart',
-                      touchPoints: [point(start!.x, start!.y)],
-                    });
-                    if (isSwipe) {
-                      // Paced by default. Unpaced, the moves arrive within a few
-                      // ms of each other - velocity of several px/ms, which
-                      // gesture handlers read as a flick. On a row whose flick
-                      // means "commit the destructive action", the safe-looking
-                      // call (no timing given, short travel) would fire it.
-                      // Distance does not protect against this; only pacing
-                      // does.
-                      const perStep = (args.durationMs ?? 300) / steps;
-                      for (let i = 1; i <= steps; i++) {
-                        throwIfAborted(abortSignal);
-                        await client.send('Input.dispatchTouchEvent', {
-                          type: 'touchMove',
-                          touchPoints: [point(
-                            start!.x + ((end.x - start!.x) * i) / steps,
-                            start!.y + ((end.y - start!.y) * i) / steps
-                          )],
-                        });
-                        if (perStep > 0 && i < steps) await abortableSleep(perStep, abortSignal);
+                  if (blockingCheck.blocked && blockingCheck.blockingModal) {
+                    if (handleModals) {
+                      // Auto-dismiss modal. Dismissal DISPATCHES too (a click on
+                      // the dismiss control, or the modal's removal), so it needs
+                      // its own pre-dispatch checkpoint - not just the one before
+                      // the real action below.
+                      await checkAborted();
+                      const dismissResult = await dismissModalHelper(
+                        page,
+                        blockingCheck.blockingModal.selector,
+                        dismissStrategy
+                      );
+
+                      // Check if dismissal was successful
+                      if (!dismissResult.success) {
+                        return {
+                          error: `Failed to dismiss blocking modal: ${dismissResult.error || 'Unknown error'}`,
+                          blockingModal: blockingCheck.blockingModal,
+                        };
                       }
+
+                      // Re-check if element is still blocked
+                      const recheckBlocking = await isElementBlocked(page, selector);
+                      if (recheckBlocking.blocked) {
+                        return {
+                          error: `Element still blocked after dismissing modal`,
+                          blockingModal: recheckBlocking.blockingModal,
+                        };
+                      }
+                    } else {
+                      // Return error with modal information
+                      return {
+                        error: `Element is blocked by modal`,
+                        blockingModal: blockingCheck.blockingModal,
+                        suggestion: `Enable handleModals parameter or call modal with action dismiss first`,
+                      };
                     }
-                    // touchEnd carries no points: the contact has lifted.
-                    await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-                    return { from: point(start!.x, start!.y), to: point(end.x, end.y), steps: isSwipe ? steps : 0 };
+                  }
+
+                  // Clear existing text first (unless append mode)
+                  await checkAborted(); // last exit before keystrokes go on the wire
+                  if (!append) {
+                    await withReplayBypass(page, async () => {
+                      await clickSelector(page, selector, { clickCount: 3 });
+                      await page.keyboard.press('Backspace');
+                    });
+                    // Abortable between clear and retype: the clear that went
+                    // out stays out, but the new text is not dispatched.
+                    await checkAborted();
+                  }
+                  // Type new text - use wrapper to bypass replay blocker overlay
+                  await withReplayBypass(page, () => page.type(selector, text, { delay }));
+
+                  // Get the actual value after typing
+                  const currentValue = await page.$eval(selector, (el: unknown) => {
+                    const element = el as { value?: string; textContent?: string | null };
+                    if ('value' in element && element.value !== undefined) {
+                      return element.value;
+                    }
+                    return element.textContent || '';
                   });
-                } finally {
-                  await client.detach();
+
+                  return { selector, text, currentValue };
+                },
+                'typeText'
+              );
+
+              // If paused at breakpoint, return immediately - don't try any more page interactions
+              if (result.pausedAtBreakpoint) {
+                if (shouldDetectChanges) {
+                  domChangeMonitor.drop(connectionReason);
                 }
-              },
-              args.action
-            );
+                return createSuccessResponse('ACTION_PAUSED_AT_BREAKPOINT', {
+                  action: 'type',
+                  selector: rawSelector,
+                  ...result.pauseInfo,
+                });
+              }
 
-            const r = result.result;
-            if (!r) {
-              return createErrorResponse('INVALID_PARAMETER', {
-                parameter: args.action,
-                value: 'no result',
-                message: `${args.action} dispatched but returned no result — the page may have navigated mid-gesture.`
-              });
-            }
-            return {
-              content: [{
-                type: 'text',
-                text: isSwipe
-                  ? `Swiped (touch) from (${r.from.x},${r.from.y}) to (${r.to.x},${r.to.y}) in ${r.steps} steps`
-                  : `Tapped (touch) at (${r.from.x},${r.from.y})`,
-              }],
-            };
-          }
+              // Collect DOM changes
+              let changesText = '';
+              if (shouldDetectChanges) {
+                const changes = await domChangeMonitor.stopObserving(connectionReason, { settleTimeout, signal: abortSignal });
+                changesText = formatDOMChanges(changes);
+              }
 
-          case 'pinch': {
-            const { x, y, scaleFactor } = args;
+              // Clean up temporary selector attribute
+              await cleanupResolvedSelector(page, selector);
 
-            if (scaleFactor === undefined) {
+              // A failed dispatch, an absent element or a blocking modal
+              if (!result.result || result.result.error) {
+                // Check if error is due to blocking modal
+                if (result.result?.blockingModal) {
+                  return createErrorResponse('ELEMENT_BLOCKED_BY_MODAL', {
+                    selector: rawSelector,
+                    modalType: result.result.blockingModal.type,
+                    modalDescription: result.result.blockingModal.description,
+                    modalSelector: result.result.blockingModal.selector,
+                    suggestion: result.result.suggestion,
+                    availableStrategies: result.result.blockingModal.dismissStrategies,
+                  });
+                }
+                const failed = actionFailureResponse(result, 'type', rawSelector);
+                if (failed) return failed;
+                return createErrorResponse('ELEMENT_NOT_FOUND', { selector: rawSelector });
+              }
+
+              // Include warning about multiple matches if applicable
+              if (selectorWarning) {
+                return {
+                  content: [
+                    {
+                      type: 'text',
+                      text: `Typed into element \`${rawSelector}\`${changesText}\n\nCurrent value: ${result.result?.currentValue}\n\n**Warning:** ${selectorWarning}`,
+                    },
+                  ],
+                };
+              }
+
+              // Default success response with changes
               return {
                 content: [
                   {
                     type: 'text',
-                    text: `## Error\n\nMissing required parameter: \`scaleFactor\`\n\n**Action:** pinch\n\n**Suggestion:** Provide a scale factor. Example: scaleFactor: 2.0 (zoom in 2x), scaleFactor: 0.5 (zoom out 50%)`,
+                    text: `Text typed into \`${rawSelector}\`: "${text}"${changesText}`,
                   },
                 ],
-                isError: true,
               };
             }
 
-            const result = await executeWithPauseDetection(
-              targetCdpManager,
-              async () => {
-                // Get viewport center if coordinates not provided
-                const viewport = page.viewport();
-                const centerX = x ?? (viewport?.width ?? 800) / 2;
-                const centerY = y ?? (viewport?.height ?? 600) / 2;
+            case 'press': {
+              const { key } = args;
 
-                // Create CDP session for synthesizePinchGesture
-                const client = await page.createCDPSession();
+              if (!key) {
+                return {
+                  content: [
+                    {
+                      type: 'text',
+                      text: `## Error\n\nMissing required parameter: \`key\`\n\n**Action:** press\n\n**Suggestion:** Provide a key name to press (e.g., "Enter", "Tab", "Escape").`,
+                    },
+                  ],
+                  isError: true,
+                };
+              }
 
-                try {
-                  // Use wrapper to bypass replay blocker overlay for pinch gesture
-                  return await withReplayBypass(page, async () => {
-                    // Last exit before the gesture goes on the wire (once
-                    // dispatched, the whole synthesized pinch runs in Chrome).
-                    throwIfAborted(abortSignal);
-                    await client.send('Input.synthesizePinchGesture', {
-                      x: centerX,
-                      y: centerY,
-                      scaleFactor,
-                      relativeSpeed: 300, // pixels per second
-                      gestureSourceType: 'touch',
-                    });
+              await checkAborted(); // last exit before the key press goes on the wire
+              const result = await withReplayBypass(page, () =>
+                executeWithPauseDetection(
+                  targetCdpManager,
+                  async () => { await page.keyboard.press(key as any); return true; },
+                  'pressKey'
+                )
+              );
+              {
+                const stopped = stoppedResponse(result, 'press', key);
+                if (stopped) return stopped;
+              }
 
-                    return {
-                      x: centerX,
-                      y: centerY,
-                      scaleFactor,
-                      action: scaleFactor > 1 ? 'zoom in' : 'zoom out',
-                    };
-                  });
-                } finally {
-                  await client.detach();
-                }
-              },
-              'pinch'
-            );
-
-            if (result.pausedAtBreakpoint) {
-              return createSuccessResponse('ACTION_PAUSED_AT_BREAKPOINT', {
-                action: 'pinch',
-                ...result.pauseInfo,
+              return createSuccessResponse('KEY_PRESS_SUCCESS', {
+                key
               });
             }
 
-            const pinchResult = result.result;
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: `Pinch ${pinchResult?.action} at (${pinchResult?.x}, ${pinchResult?.y}) with scale factor ${pinchResult?.scaleFactor}`,
-                },
-              ],
-            };
-          }
+            case 'hover': {
+              const { selector: rawSelector, handleModals = false, dismissStrategy = 'auto' } = args;
 
-          default:
-            return createErrorResponse('INVALID_ACTION', {
-              action,
-              validActions: 'click, type, press, hover, focus, focusNext, focusPrevious, drag, scroll, mousemove, pinch'
-            });
+              if (!rawSelector) {
+                return {
+                  content: [
+                    {
+                      type: 'text',
+                      text: `## Error\n\nMissing required parameter: \`selector\`\n\n**Action:** hover\n\n**Suggestion:** Provide a CSS selector for the element to hover over.`,
+                    },
+                  ],
+                  isError: true,
+                };
+              }
+
+              // Resolve extended selectors (like :has-text())
+              let selector = rawSelector;
+              let selectorWarning: string | undefined;
+              if (isExtendedSelector(rawSelector)) {
+                const resolved = await resolveSelector(page, rawSelector);
+                if ('error' in resolved) {
+                  return createErrorResponse('ELEMENT_NOT_FOUND', {
+                    selector: rawSelector,
+                    suggestion: resolved.suggestion,
+                  });
+                }
+                selector = resolved.selector;
+                selectorWarning = resolved.warning;
+              }
+              {
+                const ambiguous = await ambiguousSelectorWarning(page, selector, rawSelector);
+                if (ambiguous) selectorWarning = selectorWarning ? `${selectorWarning} ${ambiguous}` : ambiguous;
+              }
+              await checkAborted(); // after selector resolution, before any dispatch
+
+              const result = await executeWithPauseDetection(
+                targetCdpManager,
+                async () => {
+                  // Check if element exists first
+                  const element = await page.$(selector);
+                  if (!element) {
+                    return { error: `Element not found: ${selector}` };
+                  }
+
+                  // Check if element is blocked by modal
+                  const blockingCheck = await isElementBlocked(page, selector);
+
+                  if (blockingCheck.blocked && blockingCheck.blockingModal) {
+                    if (handleModals) {
+                      // Auto-dismiss modal. Dismissal DISPATCHES too (a click on
+                      // the dismiss control, or the modal's removal), so it needs
+                      // its own pre-dispatch checkpoint - not just the one before
+                      // the real action below.
+                      await checkAborted();
+                      const dismissResult = await dismissModalHelper(
+                        page,
+                        blockingCheck.blockingModal.selector,
+                        dismissStrategy
+                      );
+
+                      // Check if dismissal was successful
+                      if (!dismissResult.success) {
+                        return {
+                          error: `Failed to dismiss blocking modal: ${dismissResult.error || 'Unknown error'}`,
+                          blockingModal: blockingCheck.blockingModal,
+                        };
+                      }
+
+                      // Re-check if element is still blocked
+                      const recheckBlocking = await isElementBlocked(page, selector);
+                      if (recheckBlocking.blocked) {
+                        return {
+                          error: `Element still blocked after dismissing modal`,
+                          blockingModal: recheckBlocking.blockingModal,
+                        };
+                      }
+                    } else {
+                      // Return error with modal information
+                      return {
+                        error: `Element is blocked by modal`,
+                        blockingModal: blockingCheck.blockingModal,
+                        suggestion: `Enable handleModals parameter or call modal with action dismiss first`,
+                      };
+                    }
+                  }
+
+                  await checkAborted(); // last exit before the hover goes on the wire
+                  await withReplayBypass(page, () => hoverSelector(page, selector));
+                  return { selector };
+                },
+                'hoverElement'
+              );
+
+              // If paused at breakpoint, return immediately - don't try any more page interactions
+              if (result.pausedAtBreakpoint) {
+                if (shouldDetectChanges) {
+                  domChangeMonitor.drop(connectionReason);
+                }
+                return createSuccessResponse('ACTION_PAUSED_AT_BREAKPOINT', {
+                  action: 'hover',
+                  selector: rawSelector,
+                  ...result.pauseInfo,
+                });
+              }
+
+              // Collect DOM changes
+              let changesText = '';
+              if (shouldDetectChanges) {
+                const changes = await domChangeMonitor.stopObserving(connectionReason, { settleTimeout, signal: abortSignal });
+                changesText = formatDOMChanges(changes);
+              }
+
+              // Clean up temporary selector attribute
+              await cleanupResolvedSelector(page, selector);
+
+              // A failed dispatch, an absent element or a blocking modal
+              if (!result.result || result.result.error) {
+                // Check if error is due to blocking modal
+                if (result.result?.blockingModal) {
+                  return createErrorResponse('ELEMENT_BLOCKED_BY_MODAL', {
+                    selector: rawSelector,
+                    modalType: result.result.blockingModal.type,
+                    modalDescription: result.result.blockingModal.description,
+                    modalSelector: result.result.blockingModal.selector,
+                    suggestion: result.result.suggestion,
+                    availableStrategies: result.result.blockingModal.dismissStrategies,
+                  });
+                }
+                const failed = actionFailureResponse(result, 'hover', rawSelector);
+                if (failed) return failed;
+                return createErrorResponse('ELEMENT_NOT_FOUND', { selector: rawSelector });
+              }
+
+              // Include warning about multiple matches if applicable
+              if (selectorWarning) {
+                return {
+                  content: [
+                    {
+                      type: 'text',
+                      text: `Hovered over element \`${rawSelector}\`${changesText}\n\n**Warning:** ${selectorWarning}`,
+                    },
+                  ],
+                };
+              }
+
+              // Default success response with changes
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: `Hovered over element: \`${rawSelector}\`${changesText}`,
+                  },
+                ],
+              };
+            }
+
+            case 'focus': {
+              const { selector: rawSelector } = args;
+
+              if (!rawSelector) {
+                return {
+                  content: [
+                    {
+                      type: 'text',
+                      text: `## Error\n\nMissing required parameter: \`selector\`\n\n**Action:** focus\n\n**Suggestion:** Provide a CSS selector for the element to focus.`,
+                    },
+                  ],
+                  isError: true,
+                };
+              }
+
+              // Resolve extended selectors (like :has-text())
+              let selector = rawSelector;
+              let selectorWarning: string | undefined;
+              if (isExtendedSelector(rawSelector)) {
+                const resolved = await resolveSelector(page, rawSelector);
+                if ('error' in resolved) {
+                  return createErrorResponse('ELEMENT_NOT_FOUND', {
+                    selector: rawSelector,
+                    suggestion: resolved.suggestion,
+                  });
+                }
+                selector = resolved.selector;
+                selectorWarning = resolved.warning;
+              }
+              {
+                const ambiguous = await ambiguousSelectorWarning(page, selector, rawSelector);
+                if (ambiguous) selectorWarning = selectorWarning ? `${selectorWarning} ${ambiguous}` : ambiguous;
+              }
+
+              const result = await executeWithPauseDetection(
+                targetCdpManager,
+                async () => {
+                  // Check if element exists first
+                  const element = await page.$(selector);
+                  if (!element) {
+                    return { error: `Element not found: ${selector}` };
+                  }
+
+                  // Focus the element
+                  await checkAborted(); // last exit before the focus is dispatched
+                  await withReplayBypass(page, () => page.focus(selector));
+
+                  // Get focused element info
+                  const focusInfo = await getFocusedElementInfo(page);
+
+                  return { selector, focusInfo };
+                },
+                'focus'
+              );
+
+              // Clean up temporary selector attribute
+              await cleanupResolvedSelector(page, selector);
+
+              {
+                const failed = actionFailureResponse(result, 'focus', rawSelector);
+                if (failed) return failed;
+              }
+              if (result.result?.error) {
+                return createErrorResponse('ELEMENT_NOT_FOUND', { selector: rawSelector });
+              }
+
+              const focusInfo = result.result?.focusInfo;
+
+              return createSuccessResponse('ELEMENT_FOCUS_SUCCESS', {
+                description: focusInfo?.description || 'Unknown element',
+                selector: focusInfo?.selector || rawSelector,
+                nextTabbable: focusInfo?.nextTabbable?.length ? focusInfo.nextTabbable.join(' → ') : undefined,
+                warning: selectorWarning || undefined
+              });
+            }
+
+            case 'focusNext': {
+              const { count = 1 } = args;
+
+              const result = await executeWithPauseDetection(
+                targetCdpManager,
+                async () => {
+                  // Press Tab count times - use wrapper to bypass replay blocker overlay
+                  await withReplayBypass(page, async () => {
+                    for (let i = 0; i < count; i++) {
+                      // Abortable between Tabs: dispatched presses stay
+                      // dispatched, but no further ones go out.
+                      throwIfAborted(abortSignal);
+                      await page.keyboard.press('Tab');
+                      // Small delay between tabs for stability
+                      if (i < count - 1) {
+                        await abortableSleep(50, abortSignal);
+                      }
+                    }
+                  });
+
+                  // Get focused element info
+                  const focusInfo = await getFocusedElementInfo(page);
+                  return { focusInfo, tabCount: count };
+                },
+                'focusNext'
+              );
+              {
+                const stopped = stoppedResponse(result, 'focusNext', 'Tab');
+                if (stopped) return stopped;
+              }
+
+              const focusInfo = result.result?.focusInfo;
+
+              return createSuccessResponse('FOCUS_NEXT_SUCCESS', {
+                count: count > 1 ? count : undefined,
+                description: focusInfo?.description || 'No element focused (may have reached end of page)',
+                selector: focusInfo?.selector || 'none',
+                nextTabbable: focusInfo?.nextTabbable?.length ? focusInfo.nextTabbable.join(' → ') : undefined
+              });
+            }
+
+            case 'focusPrevious': {
+              const { count = 1 } = args;
+
+              const result = await executeWithPauseDetection(
+                targetCdpManager,
+                async () => {
+                  // Press Shift+Tab count times - use wrapper to bypass replay blocker overlay
+                  await withReplayBypass(page, async () => {
+                    for (let i = 0; i < count; i++) {
+                      // Abortable between Tabs (not mid-chord: Shift down/Tab/
+                      // Shift up always complete together so no modifier is
+                      // left held down).
+                      throwIfAborted(abortSignal);
+                      await page.keyboard.down('Shift');
+                      await page.keyboard.press('Tab');
+                      await page.keyboard.up('Shift');
+                      // Small delay between tabs for stability
+                      if (i < count - 1) {
+                        await abortableSleep(50, abortSignal);
+                      }
+                    }
+                  });
+
+                  // Get focused element info
+                  const focusInfo = await getFocusedElementInfo(page);
+                  return { focusInfo, tabCount: count };
+                },
+                'focusPrevious'
+              );
+              {
+                const stopped = stoppedResponse(result, 'focusPrevious', 'Shift+Tab');
+                if (stopped) return stopped;
+              }
+
+              const focusInfo = result.result?.focusInfo;
+
+              return createSuccessResponse('FOCUS_PREVIOUS_SUCCESS', {
+                count: count > 1 ? count : undefined,
+                description: focusInfo?.description || 'No element focused (may have reached start of page)',
+                selector: focusInfo?.selector || 'none',
+                nextTabbable: focusInfo?.nextTabbable?.length ? focusInfo.nextTabbable.join(' → ') : undefined
+              });
+            }
+
+            case 'drag': {
+              const { from, to, steps = 10 } = args;
+
+              if (!from || !to) {
+                return {
+                  content: [
+                    {
+                      type: 'text',
+                      text: `## Error\n\nMissing required parameters: \`from\` and \`to\`\n\n**Action:** drag\n\n**Suggestion:** Provide starting and ending coordinates. Example: from: {x: 100, y: 100}, to: {x: 200, y: 200}`,
+                    },
+                  ],
+                  isError: true,
+                };
+              }
+
+              const result = await executeWithPauseDetection(
+                targetCdpManager,
+                async () => {
+                  // Use wrapper to bypass replay blocker overlay for entire drag operation
+                  return await withReplayBypass(page, async () => {
+                    const mouse = page.mouse;
+
+                    // Abortable before anything is dispatched.
+                    throwIfAborted(abortSignal);
+
+                    // Move to start position
+                    await mouse.move(from.x, from.y);
+
+                    // Press mouse button
+                    await mouse.down();
+
+                    // Calculate intermediate steps for smooth drag
+                    const deltaX = (to.x - from.x) / steps;
+                    const deltaY = (to.y - from.y) / steps;
+
+                    try {
+                      for (let i = 1; i <= steps; i++) {
+                        // Abortable between steps: movement already dispatched
+                        // stays dispatched, the rest of the drag does not go out.
+                        throwIfAborted(abortSignal);
+                        const currentX = from.x + deltaX * i;
+                        const currentY = from.y + deltaY * i;
+                        await mouse.move(currentX, currentY);
+                        // Small delay for smoother drag
+                        await abortableSleep(10, abortSignal);
+                      }
+                    } catch (err) {
+                      // A cancel mid-drag must not leave the button held down.
+                      if (isAbortError(err)) {
+                        try { await mouse.up(); } catch { /* best-effort */ }
+                      }
+                      throw err;
+                    }
+
+                    // Release mouse button
+                    await mouse.up();
+
+                    return {
+                      from,
+                      to,
+                      steps,
+                      distance: Math.sqrt(Math.pow(to.x - from.x, 2) + Math.pow(to.y - from.y, 2)),
+                    };
+                  });
+                },
+                'drag'
+              );
+
+              {
+                const stopped = stoppedResponse(result, 'drag', `(${from.x}, ${from.y})`);
+                if (stopped) return stopped;
+              }
+
+              const dragResult = result.result;
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: `Dragged from (${dragResult?.from.x}, ${dragResult?.from.y}) to (${dragResult?.to.x}, ${dragResult?.to.y})\n**Distance:** ${dragResult?.distance.toFixed(1)}px over ${dragResult?.steps} steps`,
+                  },
+                ],
+              };
+            }
+
+            case 'scroll': {
+              const { deltaX = 0, deltaY = 0, x, y } = args;
+
+              if (deltaX === 0 && deltaY === 0) {
+                return {
+                  content: [
+                    {
+                      type: 'text',
+                      text: `## Error\n\nAt least one of \`deltaX\` or \`deltaY\` must be non-zero\n\n**Action:** scroll\n\n**Suggestion:** Provide scroll amounts. Example: deltaY: 300 (scroll down), deltaY: -300 (scroll up)`,
+                    },
+                  ],
+                  isError: true,
+                };
+              }
+
+              const result = await executeWithPauseDetection(
+                targetCdpManager,
+                async () => {
+                  // Use wrapper to bypass replay blocker overlay for scroll operation
+                  return await withReplayBypass(page, async () => {
+                    const mouse = page.mouse;
+
+                    // Abortable before anything is dispatched.
+                    throwIfAborted(abortSignal);
+
+                    // If coordinates provided, move to that position first
+                    if (x !== undefined && y !== undefined) {
+                      await mouse.move(x, y);
+                    }
+
+                    // Perform scroll
+                    await mouse.wheel({ deltaX, deltaY });
+
+                    // Get current scroll position
+                    const scrollPosition = await page.evaluate(() => ({
+                      scrollX: (globalThis as any).window.scrollX,
+                      scrollY: (globalThis as any).window.scrollY,
+                      maxScrollX: (globalThis as any).document.documentElement.scrollWidth - (globalThis as any).window.innerWidth,
+                      maxScrollY: (globalThis as any).document.documentElement.scrollHeight - (globalThis as any).window.innerHeight,
+                    }));
+
+                    return {
+                      deltaX,
+                      deltaY,
+                      position: x !== undefined && y !== undefined ? { x, y } : undefined,
+                      scrollPosition,
+                    };
+                  });
+                },
+                'scroll'
+              );
+
+              {
+                const stopped = stoppedResponse(result, 'scroll', 'page');
+                if (stopped) return stopped;
+              }
+
+              const scrollResult = result.result;
+              const directionParts: string[] = [];
+              if (deltaY > 0) directionParts.push(`down ${deltaY}px`);
+              if (deltaY < 0) directionParts.push(`up ${Math.abs(deltaY)}px`);
+              if (deltaX > 0) directionParts.push(`right ${deltaX}px`);
+              if (deltaX < 0) directionParts.push(`left ${Math.abs(deltaX)}px`);
+
+              const positionInfo = scrollResult?.position
+                ? ` at (${scrollResult.position.x}, ${scrollResult.position.y})`
+                : '';
+
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: `Scrolled ${directionParts.join(' and ')}${positionInfo}\n**Page position:** (${scrollResult?.scrollPosition.scrollX}, ${scrollResult?.scrollPosition.scrollY}) of (${scrollResult?.scrollPosition.maxScrollX}, ${scrollResult?.scrollPosition.maxScrollY})`,
+                  },
+                ],
+              };
+            }
+
+            case 'mousemove': {
+              const { x, y } = args;
+
+              if (x === undefined || y === undefined) {
+                return {
+                  content: [
+                    {
+                      type: 'text',
+                      text: `## Error\n\nMissing required parameters: \`x\` and \`y\`\n\n**Action:** mousemove\n\n**Suggestion:** Provide coordinates. Example: x: 100, y: 200`,
+                    },
+                  ],
+                  isError: true,
+                };
+              }
+
+              const result = await executeWithPauseDetection(
+                targetCdpManager,
+                async () => {
+                  // Use wrapper to bypass replay blocker overlay for mousemove
+                  throwIfAborted(abortSignal); // last exit before dispatch
+                  await withReplayBypass(page, () => page.mouse.move(x, y));
+
+                  // Get element at the mouse position
+                  const elementInfo = await page.evaluate((mouseX: number, mouseY: number) => {
+                    const el = (globalThis as any).document.elementFromPoint(mouseX, mouseY);
+                    if (!el) return null;
+
+                    const tag = el.tagName.toLowerCase();
+                    const text = el.textContent?.trim().substring(0, 30) || '';
+                    const id = el.id ? `#${el.id}` : '';
+                    const className = el.className && typeof el.className === 'string'
+                      ? `.${el.className.trim().split(/\s+/).slice(0, 2).join('.')}`
+                      : '';
+
+                    return {
+                      tag,
+                      text: text || undefined,
+                      selector: id || className || tag,
+                    };
+                  }, x, y);
+
+                  return { x, y, elementInfo };
+                },
+                'mousemove'
+              );
+
+              {
+                const stopped = stoppedResponse(result, 'mousemove', `(${x}, ${y})`);
+                if (stopped) return stopped;
+              }
+
+              const moveResult = result.result;
+              const elementDesc = moveResult?.elementInfo
+                ? `\n**Element at position:** \`${moveResult.elementInfo.selector}\`${moveResult.elementInfo.text ? ` "${moveResult.elementInfo.text}"` : ''}`
+                : '';
+
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: `Mouse moved to (${moveResult?.x}, ${moveResult?.y})${elementDesc}`,
+                  },
+                ],
+              };
+            }
+
+            case 'tap':
+            case 'swipe': {
+              // Real touch events. Mouse actions do not produce touchstart/
+              // touchmove, so a component that listens only for touch cannot be
+              // driven by click or drag at all.
+              const isSwipe = args.action === 'swipe';
+
+              let start = isSwipe ? args.from : (typeof args.x === 'number' && typeof args.y === 'number' ? { x: args.x, y: args.y } : undefined);
+              // A gesture across an element: its geometry is read now, because a
+              // row's coordinates move with whatever is above it and a sequence
+              // cannot know them in advance. Without this, gesture-revealed
+              // actions get faked with a programmatic click in page JS, which
+              // proves nothing about the gesture.
+              let selectorEnd: { x: number; y: number } | undefined;
+              if ((!isSwipe || args.direction) && !start && args.selector) {
+                const rawSelector = args.selector;
+                let selector = rawSelector;
+                if (isExtendedSelector(selector)) {
+                  const resolved = await resolveSelector(page, selector);
+                  if ('error' in resolved) {
+                    return createErrorResponse('ELEMENT_NOT_FOUND', { selector: rawSelector, suggestion: resolved.suggestion });
+                  }
+                  selector = resolved.selector;
+                }
+                const box = await page.evaluate((sel: string) => {
+                  const el = (globalThis as any).document.querySelector(sel);
+                  if (!el) return null;
+                  el.scrollIntoView({ block: 'center', inline: 'center' });
+                  const r = el.getBoundingClientRect();
+                  const doc = (globalThis as any).document.documentElement;
+                  return {
+                    x: r.x + r.width / 2, y: r.y + r.height / 2,
+                    width: r.width, height: r.height,
+                    viewW: doc.clientWidth, viewH: doc.clientHeight,
+                  };
+                }, selector);
+                await cleanupResolvedSelector(page, selector);
+                if (!box) return createErrorResponse('ELEMENT_NOT_FOUND', { selector: rawSelector });
+                start = { x: box.x, y: box.y };
+                if (args.direction) {
+                  const along = (args.direction === 'left' || args.direction === 'right') ? box.width : box.height;
+                  // Deliberately short. A swipe-action row has ranges - a nudge
+                  // peeks, further opens, further still commits the destructive
+                  // action - and 60% of a wide row lands in the last one. Travel
+                  // far enough to reveal, and let a caller that WANTS the
+                  // over-drag ask for it.
+                  const travel = args.distance ?? Math.min(Math.round(along * 0.6), 96);
+                  const dx = args.direction === 'left' ? -travel : args.direction === 'right' ? travel : 0;
+                  const dy = args.direction === 'up' ? -travel : args.direction === 'down' ? travel : 0;
+                  // Stay on-screen: a gesture ending outside the viewport lands
+                  // nowhere and reads as an unresponsive component.
+                  selectorEnd = {
+                    x: Math.max(1, Math.min(box.viewW - 1, box.x + dx)),
+                    y: Math.max(1, Math.min(box.viewH - 1, box.y + dy)),
+                  };
+                }
+              }
+
+              if (!start) {
+                return createErrorResponse('INVALID_PARAMETER', {
+                  parameter: isSwipe ? 'from' : 'selector/x,y',
+                  value: 'missing',
+                  message: isSwipe
+                    ? 'swipe needs from:{x,y} and to:{x,y}, or selector + direction.'
+                    : 'tap needs either a selector or x and y.'
+                });
+              }
+              if (isSwipe && !args.to && !selectorEnd) {
+                return createErrorResponse('INVALID_PARAMETER', {
+                  parameter: 'to',
+                  value: 'missing',
+                  message: 'swipe needs to:{x,y}, or direction alongside selector.'
+                });
+              }
+
+              const end = isSwipe ? (args.to ?? selectorEnd!) : start;
+              const steps = Math.max(1, args.steps ?? 10);
+
+              const result = await executeWithPauseDetection(
+                targetCdpManager,
+                async () => {
+                  const client = await page.createCDPSession();
+                  const point = (x: number, y: number) => ({ x: Math.round(x), y: Math.round(y) });
+                  try {
+                    return await withReplayBypass(page, async () => {
+                      throwIfAborted(abortSignal);
+                      await client.send('Input.dispatchTouchEvent', {
+                        type: 'touchStart',
+                        touchPoints: [point(start!.x, start!.y)],
+                      });
+                      if (isSwipe) {
+                        // Paced by default. Unpaced, the moves arrive within a few
+                        // ms of each other - velocity of several px/ms, which
+                        // gesture handlers read as a flick. On a row whose flick
+                        // means "commit the destructive action", the safe-looking
+                        // call (no timing given, short travel) would fire it.
+                        // Distance does not protect against this; only pacing
+                        // does.
+                        const perStep = (args.durationMs ?? 300) / steps;
+                        for (let i = 1; i <= steps; i++) {
+                          throwIfAborted(abortSignal);
+                          await client.send('Input.dispatchTouchEvent', {
+                            type: 'touchMove',
+                            touchPoints: [point(
+                              start!.x + ((end.x - start!.x) * i) / steps,
+                              start!.y + ((end.y - start!.y) * i) / steps
+                            )],
+                          });
+                          if (perStep > 0 && i < steps) await abortableSleep(perStep, abortSignal);
+                        }
+                      }
+                      // touchEnd carries no points: the contact has lifted.
+                      await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+                      return { from: point(start!.x, start!.y), to: point(end.x, end.y), steps: isSwipe ? steps : 0 };
+                    });
+                  } finally {
+                    await client.detach();
+                  }
+                },
+                args.action
+              );
+
+              {
+                const stopped = stoppedResponse(result, args.action, `(${Math.round(start.x)}, ${Math.round(start.y)})`);
+                if (stopped) return stopped;
+              }
+              const r = result.result!;
+              return {
+                content: [{
+                  type: 'text',
+                  text: isSwipe
+                    ? `Swiped (touch) from (${r.from.x},${r.from.y}) to (${r.to.x},${r.to.y}) in ${r.steps} steps`
+                    : `Tapped (touch) at (${r.from.x},${r.from.y})`,
+                }],
+              };
+            }
+
+            case 'pinch': {
+              const { x, y, scaleFactor } = args;
+
+              if (scaleFactor === undefined) {
+                return {
+                  content: [
+                    {
+                      type: 'text',
+                      text: `## Error\n\nMissing required parameter: \`scaleFactor\`\n\n**Action:** pinch\n\n**Suggestion:** Provide a scale factor. Example: scaleFactor: 2.0 (zoom in 2x), scaleFactor: 0.5 (zoom out 50%)`,
+                    },
+                  ],
+                  isError: true,
+                };
+              }
+
+              const result = await executeWithPauseDetection(
+                targetCdpManager,
+                async () => {
+                  // Get viewport center if coordinates not provided
+                  const viewport = page.viewport();
+                  const centerX = x ?? (viewport?.width ?? 800) / 2;
+                  const centerY = y ?? (viewport?.height ?? 600) / 2;
+
+                  // Create CDP session for synthesizePinchGesture
+                  const client = await page.createCDPSession();
+
+                  try {
+                    // Use wrapper to bypass replay blocker overlay for pinch gesture
+                    return await withReplayBypass(page, async () => {
+                      // Last exit before the gesture goes on the wire (once
+                      // dispatched, the whole synthesized pinch runs in Chrome).
+                      throwIfAborted(abortSignal);
+                      await client.send('Input.synthesizePinchGesture', {
+                        x: centerX,
+                        y: centerY,
+                        scaleFactor,
+                        relativeSpeed: 300, // pixels per second
+                        gestureSourceType: 'touch',
+                      });
+
+                      return {
+                        x: centerX,
+                        y: centerY,
+                        scaleFactor,
+                        action: scaleFactor > 1 ? 'zoom in' : 'zoom out',
+                      };
+                    });
+                  } finally {
+                    await client.detach();
+                  }
+                },
+                'pinch'
+              );
+
+              {
+                const stopped = stoppedResponse(result, 'pinch', 'page');
+                if (stopped) return stopped;
+              }
+
+              const pinchResult = result.result;
+              return {
+                content: [
+                  {
+                    type: 'text',
+                    text: `Pinch ${pinchResult?.action} at (${pinchResult?.x}, ${pinchResult?.y}) with scale factor ${pinchResult?.scaleFactor}`,
+                  },
+                ],
+              };
+            }
+
+            default:
+              return createErrorResponse('INVALID_ACTION', {
+                action,
+                validActions: 'click, type, press, hover, focus, focusNext, focusPrevious, drag, scroll, mousemove, pinch, tap, swipe'
+              });
+          }
+        } finally {
+          // An early return leaves the observer started above in the page; a
+          // paused page never answers its removal, so there it is dropped.
+          if (shouldDetectChanges && domChangeMonitor.isObserving(connectionReason)) {
+            if (targetCdpManager.isPaused()) domChangeMonitor.drop(connectionReason);
+            else await domChangeMonitor.stopObserving(connectionReason, { settleTimeout: 0 }).catch(() => {});
+          }
         }
       }
     ),

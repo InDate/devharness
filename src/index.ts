@@ -581,7 +581,7 @@ const allTools = {
   ...(configManager.isToolEnabled('page') ? toolset('page', createPageTools(resolveConnectionFromReason, clickableCache, executeToolCall)) : {}),
   ...(configManager.isToolEnabled('dom') ? toolset('dom', createDOMTools(resolveConnectionFromReason)) : {}),
   ...(configManager.isToolEnabled('screenshot') ? toolset('screenshot', createScreenshotTools(connectionManager, resolveConnectionFromReason)) : {}),
-  ...(configManager.isToolEnabled('input') ? toolset('input', createInputTools(connectionManager, resolveConnectionFromReason)) : {}),
+  ...(configManager.isToolEnabled('input') ? toolset('input', createInputTools(resolveConnectionFromReason)) : {}),
   ...(configManager.isToolEnabled('content') ? toolset('content', createContentTools(connectionManager, resolveConnectionFromReason, clickableCache)) : {}),
   ...(configManager.isToolEnabled('modal') ? toolset('modal', createModalTools(resolveConnectionFromReason)) : {}),
   ...(configManager.isToolEnabled('bench') ? toolset('bench', createBenchTools(sourceMapHandler, commandRecorder, executeToolCall, resolveConnectionFromReason, toolCatalogue)) : {}),

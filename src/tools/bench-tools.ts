@@ -45,6 +45,7 @@ import {
   type SequenceDriver,
   getBenchSession,
   pageHeldElsewhere,
+  runningBench,
   selectSequence,
   gotoSequenceStep,
   keepRecordedStep,
@@ -1648,6 +1649,22 @@ export function createBenchTools(
 
         switch (action) {
           case 'start': {
+            // An open bench is answered as it stands: nothing navigates, no
+            // sequence opens, and the picker is left as it is.
+            const running = runningBench(connection);
+            if (running) {
+              const unapplied = [args.url ? `url ${args.url}` : '', args.sequence ? `sequence "${args.sequence}"` : '']
+                .filter(Boolean).join(' and ');
+              const response = createSuccessResponse('BENCH_ALREADY_OPEN', {
+                connection,
+                benchUrl: running.benchUrl,
+                held: running.frozen ? 'held' : 'running',
+                pickerState: running.pickerArmed ? 'armed' : 'idle',
+                unapplied: unapplied || undefined,
+              });
+              return { ...response, _meta: buildMeta('start', { active: true, alreadyOpen: true, connection, state: running }) };
+            }
+
             let page = targetPuppeteerManager.getPage();
 
             // A second session on the same tab would drive the first one's

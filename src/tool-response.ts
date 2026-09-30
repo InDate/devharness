@@ -344,8 +344,10 @@ export interface ToolResponseMeta {
 export interface BenchToolMeta {
   action: 'start' | 'stop' | 'tick' | 'hold' | 'release' | 'picker' | 'list' | 'status'
     | 'keepStep' | 'dropStep' | 'flagStep' | 'sweep' | 'retake' | 'capture';
-  /** Whether the page is frozen with the picker armed, after this call. */
+  /** Whether the bench is open on the connection, after this call. */
   active?: boolean;
+  /** start: the bench was already open, and was answered as it stood. */
+  alreadyOpen?: boolean;
   connection?: string;
   state?: BenchReport;
   /** tick: what the step asked for, and what it actually did. */

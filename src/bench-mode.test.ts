@@ -47,6 +47,7 @@ import {
   commentSequenceStep,
   cancelRecordingSequence,
   capturesInFlight,
+  runningBench,
   type SequenceDriver,
 } from './bench-mode.js';
 
@@ -1562,6 +1563,32 @@ describe('freeze and picker as independent toggles', () => {
     await startBare(client);
 
     expect(getBenchSession(CONNECTION)).toMatchObject({ frozen: false, pickerArmed: false });
+  });
+
+  it('a second start on an open bench leaves the picker as it stands', async () => {
+    const client = createFakeClient();
+    await startBare(client);
+    const inspectModes = () => client.sent.filter((call: any) => call.method === 'Overlay.setInspectMode').length;
+
+    const before = inspectModes();
+    await startBare(client);
+    expect(getBenchSession(CONNECTION)).toMatchObject({ pickerArmed: false });
+    expect(inspectModes()).toBe(before);
+
+    await setPicker(CONNECTION, true);
+    const armed = inspectModes();
+    await startBare(client);
+    expect(getBenchSession(CONNECTION)).toMatchObject({ pickerArmed: true });
+    expect(inspectModes()).toBe(armed);
+  });
+
+  it('reports an open bench as running, and a stopped one as not', async () => {
+    const client = createFakeClient();
+    await startBare(client);
+
+    expect(runningBench(CONNECTION)).toMatchObject({ connection: CONNECTION });
+    await stopBench(CONNECTION);
+    expect(runningBench(CONNECTION)).toBeUndefined();
   });
 
   it('holds and arms on demand, both from the pane', async () => {

@@ -103,7 +103,7 @@ runs against (see the skill's Quick Start).
 - Closing the bench tab ends it: the page is released back to real time, the debugger detaches and the server shuts down. `stop` does the same from the agent side. Annotations are written as they are saved, so neither loses anything
 - `sweep` reports the note captures no sequence refers to any more, and with `remove: true` deletes them. It reads every sequence store, so a capture another sequence cites is never taken, and needs no browser
 - Full reference, including pausing a run and the boundary panel: [bench.md](bench.md)
-- Nothing blocks. `start` returns as soon as the bench is open; notes land on the session event stream as they are saved, and in the step of the sequence file they were written against. Keep working while the person writes
+- Nothing blocks. `start` returns as soon as the bench is open, and on a bench already open it reports that and changes nothing - `picker` arms or disarms the picker; notes land on the session event stream as they are saved, and in the step of the sequence file they were written against. Keep working while the person writes
 - While frozen, anything waiting on a timer stops - including a navigation's load timers. `stop` before driving the page with other tools
 
 **Messages**: `message` (actions: sessions, send, read, reply)

@@ -4242,6 +4242,17 @@ Read the whole sequence against the page and tell the person what will not survi
 
 ---
 
+## BENCH_ALREADY_OPEN
+
+**Type:** success
+**Summary:** Bench already open on {{connection}}
+
+Bench: `{{benchUrl}}` - the page is {{held}} and the picker is {{pickerState}}; neither was changed.{{#unapplied}} Not applied from this call: {{unapplied}}. Open it in the bench, or stop the bench and start it again with it.{{/unapplied}}
+
+`bench({ action: 'picker', connectionReason: '{{connection}}', armed: true })` arms the picker; `armed: false` disarms it.
+
+---
+
 ## BENCH_STARTED
 
 **Type:** success

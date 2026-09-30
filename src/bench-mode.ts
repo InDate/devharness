@@ -1312,6 +1312,22 @@ export function isBenchOpen(connection: string): boolean {
   return sessions.has(connection);
 }
 
+/**
+ * A page or tab of a session that no longer exists. A session outlives the
+ * browser it was opened in when that browser is killed rather than its tab
+ * closed: the tab's close never fires.
+ */
+function pageGone(held?: Page): boolean {
+  return held !== undefined && (held.isClosed?.() === true || held.browser?.()?.connected === false);
+}
+
+/** The bench open on this connection, when its page and its tab are still there. */
+export function runningBench(connection: string): BenchReport | undefined {
+  const session = sessions.get(connection);
+  if (!session || pageGone(session.page) || pageGone(session.benchPage)) return undefined;
+  return getStateOf(session);
+}
+
 /** The pick waiting for a comment, if the person has made one. */
 export function getPendingPick(connection: string): AnnotationTarget | null {
   return sessions.get(connection)?.pending ?? null;
@@ -4337,20 +4353,13 @@ export async function startBench(params: {
     ? (fileName: string) => sourceMapHandler.getOriginalContent(fileName)
     : undefined;
 
-  // A session outlives the browser it was opened in when that browser is
-  // killed rather than its tab closed: the tab's close never fires. Its page,
-  // tab and CDP session are all gone, so it is ended and a new one begun.
+  // A session whose page or tab has gone is ended and a new one begun; one
+  // still standing is answered as it stands, its picker left as it is.
   const stale = sessions.get(connection);
-  const gone = (held?: Page) => held !== undefined
-    && (held.isClosed?.() === true || held.browser?.()?.connected === false);
-  if (stale && (gone(stale.page) || gone(stale.benchPage))) {
+  if (stale && (pageGone(stale.page) || pageGone(stale.benchPage))) {
     await stopBench(connection).catch(() => {});
   }
-  const existing = sessions.get(connection);
-  if (existing) {
-    await setInspectMode(existing, true);
-    return getBenchSession(connection)!;
-  }
+  if (sessions.has(connection)) return getBenchSession(connection)!;
 
   const client = await page.createCDPSession();
   await client.send('DOM.enable');

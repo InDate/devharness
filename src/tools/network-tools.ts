@@ -138,9 +138,8 @@ function frameLines(sock: any, frames: any[]): string[] {
 export function createNetworkTools(
   resolveConnectionFromReason: (connectionReason: string) => Promise<any>
 ) {
-  // A Node.js target from connection attach resolves with no page. Falling back to the
-  // default managers there reads or changes another connection while reporting
-  // it as the named one.
+  // A Node.js target from connection attach resolves with no page, and so no
+  // network to read; it is answered as that rather than with an empty list.
   const noPage = (connectionReason: string) => createErrorResponse('CONNECTION_NOT_FOUND', {
     message: `Connection "${connectionReason}" has no browser page to monitor (a Node.js debugger target has no page). Network monitoring requires a browser connection.`
   });

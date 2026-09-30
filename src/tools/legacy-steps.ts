@@ -4,9 +4,9 @@
  * `browser`, and the single-operation tools into `source`, `modal`,
  * `download` and `config`.
  *
- * Saved sequences, sequences pulled from GitHub, `history.log` and direct
- * callers (the CLI, the bench, internal code) still carry the old names. Each
- * is rewritten where it enters: when a sequence file or pulled sequence is
+ * Saved sequences, sequences pulled from GitHub, `history.log`, and calls typed
+ * at the CLI or in the bench's Tools tab can carry the old names. Each is
+ * rewritten where it enters: when a sequence file or pulled sequence is
  * read, when a history line is read, and in `executeToolCall` before the call
  * is validated and recorded, so history holds the new form. `listTools` lists
  * the new names only.

@@ -69,8 +69,7 @@ describe('inspect searchCode/searchFunctions honour connectionReason', () => {
 
   it('searchCode reports NOT connected based on the referenced connection', async () => {
     otherCdp.isConnected.mockReturnValue(false);
-    // The default connection is still connected - if the handler consulted it
-    // instead, this would wrongly succeed.
+    // Only the named connection is read, and it reports not connected.
     const result = await inspect.handler({
       action: 'searchCode',
       connectionReason: 'other-tab',

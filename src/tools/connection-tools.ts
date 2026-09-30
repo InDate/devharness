@@ -155,7 +155,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
   }
 
   const launch = async (args: ConnectionArgs): Promise<any> => {
-      // Validate reference FIRST, before launching Chrome
+      // Validate the name FIRST, before launching Chrome
       const userReference = args.name;
       if (userReference) {
         requireValidReference(userReference); // Throws InvalidReferenceError if invalid
@@ -266,7 +266,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
       const url = args.url;
       const autoConnect = args.autoConnect ?? true;
 
-      // Check if a connection with this reference already exists - reuse it instead of creating a new tab
+      // A live connection under this name is reused rather than a new tab opened
       // Use validated lookup to auto-cleanup dead connections (e.g., if Chrome was killed externally)
       // Under forceNewInstance we still run this lookup, but a live match is an
       // error rather than a reuse: a fresh process bound to an already-bound
@@ -480,8 +480,8 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
             const currentPage = puppeteerManager.getPage();
             const pageIndex = pages.findIndex(p => p === currentPage);
 
-            // Register connection with user-provided reference or default
-            // Reference was already validated at the start of the handler
+            // Registered under the name given, validated at the start of the
+            // handler, or under the default
             let connectionReference = UNNAMED_CONNECTION;
             if (userReference) {
               // Use the sanitized version (lowercase with hyphens)
@@ -632,11 +632,10 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
   };
 
   const attach = async (args: ConnectionArgs): Promise<any> => {
-      // Validate reference
-      // Validate and get sanitized reference (throws if invalid)
+      // The name in its stored form; throws when it is not three words
       const reference = requireValidReference(args.name!);
 
-      // Check for duplicate reference - use validated lookup to auto-cleanup dead connections
+      // A name held by a live connection is refused; one held by a dead connection is freed by the lookup
       const existingConnection = await connectionManager.findConnectionByReferenceValidated(reference);
       if (existingConnection) {
         return createErrorResponse('REFERENCE_IN_USE', {

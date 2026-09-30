@@ -157,7 +157,7 @@ export async function dismissModalByStrategy(
     }
   }
 
-  // If no buttons worked, fall back to DOM removal
+  // Removal is left to the caller, as strategy "remove", rather than done here.
   if (buttonSelectors.length === 0) {
     return {
       success: false,

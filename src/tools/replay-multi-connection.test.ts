@@ -157,7 +157,7 @@ describe('create preserves a two-connection recording', () => {
 
   it('leaves an ambiguous (partly bare) recording per-step and says so', async () => {
     const { replay, recorder } = makeHarness();
-    // driven through the active connection...
+    // recorded bare, as recordings made before every call named its connection are...
     await recorder.recordCommand('dom', { action: 'querySelector', selector: '#a' });
     // ...and explicitly
     await recorder.recordCommand('dom', { action: 'querySelector', selector: '#b', connectionReason: MEMBER });
@@ -571,8 +571,8 @@ describe('warnings that were unreachable', () => {
   it('warns about bare steps in a sequence that ALSO spans connections', async () => {
     const { replay, recorder } = makeHarness();
     await recordDuo(recorder);
-    // A tool whose connectionReason is optional, called without one: the
-    // recording does not capture which browser it belonged to.
+    // A step recorded without a connectionReason, as recordings made before
+    // every call had to name one hold: nothing records which browser it belonged to.
     await recorder.recordCommand('inspect', { action: 'evaluateExpression', expression: '1' });
 
     const res = await replay.handler({ action: 'create', name: 'mixed-duo', indices: [0, 1, 2, 3] } as any);

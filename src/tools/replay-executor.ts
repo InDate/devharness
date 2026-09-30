@@ -334,18 +334,6 @@ export function commandNeedsBrowserConnection(cmd: { tool: string; params?: Reco
 }
 
 /**
- * Whether a bare step will have the run-level connection injected into it -
- * i.e. whether leaving it bare is AMBIGUOUS about which browser it belongs to.
- *
- * Deliberately wider than `commandNeedsBrowserConnection`, which answers a
- * different question (does this drag a Chrome launch in?). `inspect`,
- * `execution`, `storage` and friends take an optional connectionReason, so a
- * recording made without one captures nothing about which browser it ran
- * against - and on replay it silently lands wherever the run-level connection
- * points. Measuring ambiguity with the narrower predicate missed exactly those
- * tools, which are the ones people actually leave bare.
- */
-/**
  * Actions of connection-taking tools that run without one: a bare `execution
  * acknowledge` acknowledges every paused connection, and `source loadMaps`
  * registers maps for the whole session. A connection stamped onto either
@@ -357,6 +345,18 @@ function actsWithoutConnection(cmd: { tool: string; params?: Record<string, any>
     || (cmd.tool === 'source' && action === 'loadMaps');
 }
 
+/**
+ * Whether a bare step will have the run-level connection injected into it -
+ * i.e. whether leaving it bare is AMBIGUOUS about which browser it belongs to.
+ *
+ * Deliberately wider than `commandNeedsBrowserConnection`, which answers a
+ * different question (does this drag a Chrome launch in?). A step of
+ * `inspect`, `execution`, `storage` and the other target-agnostic tools
+ * recorded without a connectionReason - which recordings made before every
+ * call had to name one hold - captures nothing about which browser it ran
+ * against, and on replay it lands wherever the run-level connection points.
+ * Measuring ambiguity with the narrower predicate missed exactly those tools.
+ */
 export function commandTakesInjectedConnection(cmd: { tool: string; params?: Record<string, any> }): boolean {
   if (actsWithoutConnection(cmd)) return false;
   // wait({ ms }) is a plain sleep - no connection is injected, nothing ambiguous.
@@ -1268,8 +1268,8 @@ export interface RecordedConnectionAnalysis {
   uniform?: string;
   /**
    * True when some steps name a connection and other BROWSER steps don't - the
-   * recording was driven partly through the active connection, so we cannot tell
-   * which browser the bare steps belonged to. Such a sequence is not hoisted
+   * bare steps were recorded without one, so nothing records which browser
+   * they belonged to. Such a sequence is not hoisted
    * (that could pin every step to the one named reference) and `create` says so.
    */
   mixed: boolean;

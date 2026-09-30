@@ -230,6 +230,100 @@ export interface HistoryDetail {
   result?: string;
 }
 
+/** One tracked issue, as the Issues tab lists it; times are epoch milliseconds. */
+export interface IssueRow {
+  id: number;
+  type: 'bug' | 'feature';
+  status: 'pending' | 'acknowledged' | 'in_progress' | 'fixed' | 'implemented';
+  title: string;
+  /** Markdown, shown as written. */
+  body: string;
+  labels: string[];
+  comments: Array<{ at: number; text: string }>;
+  /** The repro sequence's file in the issues folder, where one is linked. */
+  sequenceFile?: string;
+  reportedAt: number;
+  resolvedAt?: number;
+  /** How the issue stands against GitHub, from what the tracker recorded at the last sync; absent while it is local only. */
+  github?: IssueSync;
+}
+
+/**
+ * One linked issue against GitHub, read from the local file alone. It holds
+ * what changed here since the two last agreed; what changed upstream needs
+ * `issues sync`, which asks GitHub.
+ */
+export interface IssueSync {
+  number: number;
+  /** owner/name, where the link recorded one; otherwise the repo gh infers for the project. */
+  repo?: string;
+  /** When the two last agreed; absent for a link never synced. */
+  syncedAt?: number;
+  /** The body differs from the one hashed at the last sync, so the next sync pushes it. */
+  bodyChanged: boolean;
+  /** Comments carrying no GitHub marker, so the next sync pushes them. */
+  unpushedComments: number;
+}
+
+/** A note written against a step of a saved sequence, for quoting into an issue. */
+export interface SequenceNote {
+  sequence: string;
+  /** The file, relative to its sequences folder; an issue's `sequenceFile` names one the same way. */
+  file: string;
+  /** 1-based, as the step list numbers it. */
+  step: number;
+  stepLabel: string;
+  comment: string;
+  at: string;
+  url: string;
+  selector?: string;
+  component?: string;
+  /** file:line, from a dev build's JSX source. */
+  source?: string;
+  /** Capture files taken with the note. */
+  screenshots?: string[];
+}
+
+/** A dev server devharness manages, as the Servers tab lists it. */
+export interface ServerRow {
+  id: string;
+  command: string;
+  cwd: string;
+  running: boolean;
+  pid: number;
+  port?: number;
+  /** How long it has run, as `12m 3s`. */
+  uptime: string;
+  runnerType: string;
+  autoRun: boolean;
+}
+
+/**
+ * The end of one server's log, read from the file devharness writes it to.
+ * A runner with no log file (Docker) answers with the command that shows its
+ * logs instead.
+ */
+export interface ServerLog {
+  path?: string;
+  /** The last bytes of the file, cut back to a whole first line. */
+  text?: string;
+  /** The file's whole size in bytes, so the page can say how much it holds. */
+  size?: number;
+  command?: string;
+  /** Why nothing could be read: no such server, or no log kept. */
+  unavailable?: string;
+}
+
+/** A tool call starred from History, listed under Favourites on the Tools tab. */
+export interface ToolFavourite {
+  id: string;
+  tool: string;
+  /** The History row's label: the action and what it acted on. */
+  label: string;
+  args: Record<string, unknown>;
+  at: number;
+}
+
 /** One tool as `listTools` gives it, for the tools tab. */
 export interface ToolCard {
   name: string;
@@ -243,6 +337,20 @@ export interface ToolGroup {
   name: string;
   tools: ToolCard[];
 }
+
+/** Names devharness holds, offered as values in the tools tab's form. */
+export interface ToolValues {
+  /** Live connections, by name. */
+  connections: string[];
+  /** Managed servers, running or saved. */
+  servers: string[];
+  /** Sequences in memory or saved on disk. */
+  sequences: string[];
+  /** Named persistent Chrome profiles. */
+  profiles: string[];
+}
+
+export const NO_TOOL_VALUES: ToolValues = { connections: [], servers: [], sequences: [], profiles: [] };
 
 /** What a call from the tools tab returned: the response text, and whether it failed. */
 export interface ToolRun {

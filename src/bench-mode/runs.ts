@@ -77,6 +77,20 @@ export async function playHere(connection: string, name: string): Promise<void> 
 }
 
 /**
+ * Open a sequence in the bench's own browser and run it through one step,
+ * then hold there, as an issue's note is gone to: the page stands where the
+ * note was written. `step` is 0-based. The run goes on after the answer, so
+ * the bench shows it arriving.
+ */
+export async function playToStep(connection: string, name: string, step: number): Promise<void> {
+  const session = sessions.get(connection);
+  if (session) await letGoForRun(session);
+  await selectSequence(connection, name);
+  void gotoSequenceStep(connection, step)
+    .catch(error => debugLog('bench', `running ${name} to step ${step + 1} failed: ${error}`));
+}
+
+/**
  * Rename a saved sequence, its activity file and every step that runs it, and
  * drop the copy held in memory under the old name. Answers with the failure
  * text, or with how many steps elsewhere now name it.

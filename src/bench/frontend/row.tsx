@@ -29,6 +29,12 @@ export interface RowSlots {
   send?: () => void;
   up?: () => void;
   down?: () => void;
+  /** Keep this call under Favourites on the Tools tab. */
+  star?: () => void;
+  /** Stop what this row runs, such as a server. */
+  stop?: () => void;
+  /** Empty what this row has gathered, such as a server's logs. */
+  clear?: () => void;
   remove?: () => void;
 }
 
@@ -44,6 +50,9 @@ export interface RowSlotTitles {
   up?: string;
   down?: string;
   hide?: string;
+  star?: string;
+  stop?: string;
+  clear?: string;
 }
 
 /**
@@ -61,6 +70,9 @@ const SLOTS: Array<{ key: keyof RowSlots; glyph?: string; text?: string; title: 
   { key: 'send', glyph: 'arrow', title: 'hand this to the session', off: 'nothing on this row to hand to the session' },
   { key: 'up', glyph: 'up', title: 'list this under the step above, on every run', off: 'no step above to list this under' },
   { key: 'down', glyph: 'down', title: 'list this under the step below, on every run', off: 'no step below to list this under' },
+  { key: 'stop', glyph: 'stop', title: 'stop this', off: 'nothing on this row is running' },
+  { key: 'clear', glyph: 'clear', title: 'empty this', off: 'nothing on this row to empty' },
+  { key: 'star', glyph: 'star', title: 'keep this under Favourites on the Tools tab', off: 'this row cannot be kept as a favourite' },
 ];
 
 export function Row({

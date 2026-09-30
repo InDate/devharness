@@ -2814,15 +2814,43 @@ Failed to copy sequence "{{sequenceName}}"
 
 ---
 
+## ISSUES_NEWEST_COMMENTS
+
+**Type:** success
+**Summary:** Newest {{shown}} of {{total}} comments on {{type}} #{{id}} - {{title}}
+
+{{comments}}
+
+---
+
 ## ISSUES_COMMENT_ADDED
 
 **Type:** success
-**Summary:** Comment added to {{type}} #{{id}}
+**Summary:** Comment added to {{type}} #{{id}} - {{title}}
 
-**Comment added to {{type}} #{{id}}** - {{title}}
+---
 
-**Comments ({{commentCount}}):**
-{{timeline}}
+## ISSUES_EDITED
+
+**Type:** success
+**Summary:** Edited {{type}} #{{id}}: {{changed}}
+
+**Edited {{type}} #{{id}}** - {{title}}
+
+Changed: {{changed}}
+{{#linked}}
+
+Linked to GitHub {{linked}}: the next `issues({ action: 'sync' })` pushes this change.
+{{/linked}}
+
+---
+
+## ISSUES_NOTHING_TO_EDIT
+
+**Type:** error
+**Code:** ISSUES_NOTHING_TO_EDIT
+
+Nothing to change on issue #{{id}}: pass `title`, `body`, `labels` or `sequenceName`.
 
 ---
 

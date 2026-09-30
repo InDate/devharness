@@ -85,7 +85,7 @@ async function readSequence(issue: TrackedIssue): Promise<unknown | null> {
 
 /** The local body as it is compared, hashed, and pushed: sequence blocks and
  *  the upstream-only marker removed. */
-function localProse(issue: TrackedIssue): string {
+export function localProse(issue: TrackedIssue): string {
   return stripLocalMarker(stripSequenceBlocks(issue.body)).trim();
 }
 

@@ -23,6 +23,7 @@
   --wait: #0f8a98;
   --variable: #6f8f1f;
   --done: #238636;
+  --feature: #8250df;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -44,6 +45,7 @@
     --wait: #5fd3de;
     --variable: #b6d65c;
     --done: #56d364;
+    --feature: #b392f0;
   }
 }
 
@@ -434,7 +436,7 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
 .bodyfoot .tool:focus { outline: none; }
 .bodyfoot .tool:focus-visible { outline: 1px solid var(--accent); }
 
-/* In the UI tab each row is a card with the note's border. The left rule
+/* In the Sequence tab each row is a card with the note's border. The left rule
    keeps the colour it carries everywhere - caused, the app's own, a storage
    write, a note - so the card changes the frame and not the reading. */
 .activitycards {
@@ -626,10 +628,340 @@ textarea.notewords::placeholder { color: var(--muted); }
 .historyrow .whererun { color: var(--sequence); }
 .historyfacts { margin: 0; color: var(--muted); font: 11px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; }
 
+/* A tab's count: servers running, issues open. */
+.tabcount {
+  margin-left: 5px; padding: 0 6px; border-radius: 2em; background: var(--panel);
+  font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums;
+}
+nav button.on .tabcount { color: var(--fg); }
+
+/* One managed dev server. Running and stopped read by the words at the right
+   end and the weight of the row, not a hue: every hue already names a kind. */
+.crossed.serverrow { border-left: 2px solid var(--line); }
+.crossed.serverrow.running { border-left-color: var(--fg); }
+.serverrow.stopped .rowhead .what { color: var(--muted); }
+.serverrow .rowhead .dir { color: var(--muted); }
+.rowlabel > .servercmd {
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--muted); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.servercmdfull { overflow-wrap: anywhere; }
+.logstream {
+  padding: 0 6px; border: 0; border-radius: 4px; background: none; cursor: pointer;
+  font: inherit; color: var(--muted);
+}
+.logstream.on { color: var(--fg); background: var(--bg); }
+.logstream:focus-visible { outline: 1px solid var(--accent); }
+.logpath { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.pbox .pboxbody.logtail { max-height: 360px; white-space: pre-wrap; }
+
+/* The Issues tab, laid out as GitHub lays out issues: a bordered list whose
+   head holds the Open and Closed counts, and a page per issue with a timeline
+   of comment boxes and a sidebar. Open marks take the accent and closed ones
+   the done-green; GitHub's own green and purple would collide with traffic
+   green and sequence indigo. A pending status is alert-red, the one state
+   that blocks tools until it is acknowledged. */
+/* The filter, the sync box and the list share one frame - 14px at the sides,
+   10px above and below, 6px corners - and sit 12px apart with no margin of
+   their own, so the three read as one column. */
+.issues { display: flex; flex-direction: column; gap: 12px; }
+.issues > * { margin: 0; }
+.issuefilter {
+  font: inherit; font-size: 13px; line-height: 20px; padding: 9px 14px; width: 100%;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--fg);
+}
+.issuefilter:focus { outline: none; border-color: var(--accent); background: var(--bg); }
+.issuebox { border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.issueboxhead { display: flex; gap: 14px; padding: 10px 14px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.issueside {
+  display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none;
+  font: inherit; font-size: 13px; color: var(--muted); cursor: pointer;
+}
+.issueside.on { color: var(--fg); font-weight: 600; }
+.issueside:hover { color: var(--fg); }
+.issuemark { flex: 0 0 auto; display: block; }
+.issuemark.open { color: var(--accent); }
+.issuemark.closed { color: var(--done); }
+.issueempty { margin: 0; padding: 32px 14px; text-align: center; color: var(--muted); }
+.issuelist { list-style: none; margin: 0; padding: 0; }
+.issueline { display: flex; align-items: flex-start; gap: 10px; padding: 9px 14px; }
+.issueline + .issueline { border-top: 1px solid var(--line); }
+.issueline:hover { background: var(--panel); }
+.issueline > .issuemark { margin-top: 2px; }
+.issuemain { flex: 1; min-width: 0; }
+.issuetitleline { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.issuetitle {
+  padding: 0; border: 0; background: none; text-align: left; cursor: pointer;
+  font: inherit; font-size: 14px; font-weight: 600; color: var(--fg);
+}
+.issuetitle:hover { color: var(--accent); }
+.issuesub { margin-top: 2px; font-size: 12px; color: var(--muted); }
+.issuecount {
+  flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; margin-top: 2px;
+  padding: 0; border: 0; background: none; font: inherit; font-size: 12px; color: var(--muted); cursor: pointer;
+}
+.issuecount:hover { color: var(--accent); }
+.issuelabel {
+  display: inline-block; font: inherit; font-size: 11px; font-weight: 500; line-height: 18px; padding: 0 7px;
+  border: 1px solid var(--line); border-radius: 2em; color: var(--fg); background: var(--panel); cursor: pointer;
+}
+.issuelabel:hover { border-color: var(--accent); color: var(--accent); }
+/* An issue's type. A bug takes the alert red, the colour of something wrong;
+   a feature takes the violet no other part of the bench uses. */
+/* Inline, not a flex box: a flex box takes its baseline from the icon, which
+   lifted the word above the text beside it. */
+.issuetype {
+  display: inline; padding: 0; border: 0; background: none;
+  font: inherit; font-weight: 500; cursor: pointer;
+}
+.issuetype svg { display: inline-block; vertical-align: -2px; margin-right: 3px; }
+.issuetype:hover { text-decoration: underline; }
+.issuetype:focus-visible { outline: 1px solid currentColor; outline-offset: 1px; }
+.issuetype-bug { color: var(--alert); }
+.issuetype-feature { color: var(--feature); }
+.issuelabel:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.issuestatus.issue-pending { color: var(--alert); }
+/* The tracker against GitHub. Changes waiting to push read in the body colour
+   at weight, with no hue: every hue in the bench already names a kind. */
+.issuesync {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 10px 14px;
+  border: 1px solid var(--line); border-radius: 6px; font-size: 12px; color: var(--muted);
+}
+.issuesync.waiting { border-color: var(--muted); }
+.issuesynchead { font-weight: 600; color: var(--fg); }
+.issuesyncrepo { font-weight: 400; color: var(--muted); }
+.issuesyncfacts { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.issuesyncnote { flex-basis: 100%; }
+.issuesyncbtn { border: 1px solid var(--line); }
+.issuesyncsaid {
+  flex-basis: 100%; margin: 4px 0 0; max-height: 200px; overflow: auto; white-space: pre-wrap;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--fg);
+}
+.issuesync code { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.issuesyncout { color: var(--fg); font-weight: 600; }
+.issueside-facts p + p { margin-top: 3px; }
+.issuetitle:focus-visible, .issueside:focus-visible, .issuecount:focus-visible, .issueback:focus-visible {
+  outline: 1px solid var(--accent); outline-offset: 2px;
+}
+
+.issueback {
+  padding: 0; margin-bottom: 10px; border: 0; background: none; font: inherit; font-size: 12px; color: var(--muted); cursor: pointer;
+}
+.issueback:hover { color: var(--accent); }
+.issuepagetitle { margin: 0; font-size: 22px; font-weight: 400; line-height: 1.3; overflow-wrap: anywhere; }
+.issuepageid { color: var(--muted); font-weight: 300; }
+.issuepagesub {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0 16px; padding-bottom: 14px;
+  border-bottom: 1px solid var(--line); font-size: 13px; color: var(--muted);
+}
+.issuestate {
+  display: inline-flex; align-items: center; gap: 5px; padding: 3px 12px 3px 9px;
+  border-radius: 2em; font-weight: 500; color: var(--bg);
+}
+.issuestate.open { background: var(--accent); }
+.issuestate.closed { background: var(--done); }
+.issuestate .issuemark { color: var(--bg); }
+.issuecols { display: grid; grid-template-columns: minmax(0, 1fr) clamp(180px, 24%, 296px); gap: 24px; align-items: start; }
+.issuetimeline { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 16px; }
+.issuecomment { border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.issuecommenthead { padding: 7px 14px; background: var(--panel); border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+.issuecommentbody { padding: 12px 14px; }
+.issuecommentbody > .quiet { margin: 0; font-style: italic; }
+.issueevent { display: flex; align-items: center; gap: 8px; padding-left: 14px; font-size: 12px; color: var(--muted); }
+.issueside-facts { display: flex; flex-direction: column; }
+.issueside-facts section { padding: 0 0 12px; margin-bottom: 12px; border-bottom: 1px solid var(--line); }
+.issueside-facts h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.issueside-facts p { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
+.issuelabels { display: flex; flex-wrap: wrap; gap: 4px; }
+.issuemono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px !important; }
+.composetabs { display: flex; gap: 2px; padding: 4px 8px 0; border-bottom: 1px solid var(--line); }
+.composetab {
+  margin-bottom: -1px; padding: 5px 12px; border: 1px solid transparent; border-radius: 6px 6px 0 0;
+  background: none; font: inherit; font-size: 12px; color: var(--muted); cursor: pointer;
+}
+.composetab.on { color: var(--fg); background: var(--bg); border-color: var(--line); border-bottom-color: var(--bg); }
+.composetab:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
+.composetext {
+  display: block; width: 100%; min-height: 110px; resize: vertical; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--fg);
+  font: 13px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+.composetext:focus { outline: none; border-color: var(--accent); background: var(--bg); }
+.composepreview { min-height: 110px; padding: 2px 0; }
+.composepreview > .quiet { margin: 0; }
+.composefoot { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.composefailure { min-width: 0; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.issuepagehead { display: flex; align-items: flex-start; gap: 12px; }
+.issuepagehead .issuepagetitle { flex: 1; min-width: 0; }
+.issueeditbtn { flex: 0 0 auto; margin-top: 4px; border: 1px solid var(--line); }
+.issueeditor { display: flex; flex-direction: column; gap: 8px; }
+.issueresolvebtn { flex: 0 0 auto; margin-top: 4px; }
+.issueresolving { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
+.issueresolving b { color: var(--fg); }
+.sequencelink { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.sequencelink .issueeditfield { flex: 1; min-width: 0; font-size: 12px; padding: 3px 6px; }
+.sequencelink .bad { flex-basis: 100%; margin: 0; font-size: 12px; }
+.issueeditfield {
+  font: inherit; font-size: 13px; padding: 5px 10px; width: 100%;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--fg);
+}
+.issueeditfield:focus { outline: none; border-color: var(--accent); background: var(--bg); }
+.issueedittitle { font-size: 18px; }
+.composenotes {
+  align-self: center; display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; margin-bottom: 3px;
+  border: 0; border-radius: 6px; background: none; font: inherit; font-size: 12px; color: var(--muted); cursor: pointer;
+}
+.composenotes:hover, .composenotes.on { color: var(--fg); background: var(--panel); }
+.composenotes:focus-visible { outline: 1px solid var(--accent); }
+.composenotecount { font-size: 11px; padding: 0 5px; border-radius: 2em; background: var(--line); font-variant-numeric: tabular-nums; }
+/* The notes written in sequences, to quote into the text below. */
+.notepicker { display: flex; flex-direction: column; gap: 6px; padding: 8px 14px; border-bottom: 1px solid var(--line); }
+.notepicker > .hint { margin: 0; }
+.notepicker .issuefilter { padding: 5px 10px; line-height: inherit; }
+.notelist { max-height: 320px; overflow: auto; margin: 0; }
+.notelist .notefull { cursor: auto; }
+.noteown { color: var(--fg); font-weight: 600; }
+@media (max-width: 640px) {
+  .issuecols { grid-template-columns: minmax(0, 1fr); }
+  .issuepagetitle { font-size: 18px; }
+}
+
+/* Markdown from an issue, spaced as GitHub spaces it. */
+.markdown { font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.markdown > :first-child { margin-top: 0; }
+.markdown > :last-child { margin-bottom: 0; }
+.markdown p, .markdown ul, .markdown ol, .markdown blockquote, .markdown pre { margin: 0 0 12px; }
+.markdown h3, .markdown h4, .markdown h5, .markdown h6 { margin: 18px 0 8px; font-weight: 600; line-height: 1.25; }
+.markdown h3 { font-size: 17px; padding-bottom: 5px; border-bottom: 1px solid var(--line); }
+.markdown h4 { font-size: 15px; }
+.markdown h5, .markdown h6 { font-size: 13px; }
+.markdown ul, .markdown ol { padding-left: 22px; }
+.markdown li + li { margin-top: 3px; }
+.markdown li.task { list-style: none; margin-left: -18px; display: flex; gap: 6px; align-items: baseline; }
+.markdown blockquote { padding: 0 12px; color: var(--muted); border-left: 3px solid var(--line); }
+.markdown code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; padding: 1px 5px; border-radius: 5px; background: var(--panel); }
+.markdown pre { padding: 12px 14px; border-radius: 6px; background: var(--panel); overflow: auto; }
+.markdown pre code { padding: 0; background: none; white-space: pre; }
+.markdown hr { border: 0; border-top: 2px solid var(--line); margin: 18px 0; }
+.markdown a { color: var(--accent); text-decoration: none; }
+.markdown a:hover { text-decoration: underline; }
+
 /* The tools tab: one fold per toolset, one row per tool, the same rows as History. */
 .toolsets .panelsec h3 .secsummary { min-width: 0; overflow: hidden; }
 .toolmarks { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-end; }
 .toolmark { display: inline-flex; align-items: center; color: var(--muted); }
+/* The Tools tab: a list of tools on the left, shutting to a strip of marks,
+   and the chosen tool on the right with its actions as tabs. */
+.toolsplit { display: grid; grid-template-columns: 208px minmax(0, 1fr); gap: 14px; align-items: start; }
+.toolsplit.railshut { grid-template-columns: 40px minmax(0, 1fr); }
+.toolrail {
+  position: sticky; top: calc(8px + var(--holdbar, 0px));
+  max-height: calc(100vh - 150px); overflow: auto;
+  display: flex; flex-direction: column; gap: 8px;
+  border-right: 1px solid var(--line); padding-right: 10px;
+}
+.railshut .toolrail { padding-right: 4px; align-items: center; gap: 4px; }
+.railhead { display: flex; align-items: center; gap: 6px; }
+.railfilter {
+  flex: 1; min-width: 0; font: inherit; font-size: 12px; padding: 4px 7px;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg);
+}
+.railfilter:focus-visible { outline: none; border-color: var(--accent); }
+.railtoggle {
+  flex: 0 0 auto; width: 24px; height: 24px; padding: 0;
+  font: inherit; font-size: 15px; line-height: 1;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--muted); cursor: pointer;
+}
+.railtoggle:hover { color: var(--accent); border-color: var(--accent); }
+.railgroup { display: flex; flex-direction: column; gap: 1px; }
+.railshut .railgroup { align-items: center; padding-top: 4px; border-top: 1px solid var(--line); }
+.railgrouphead { font-size: 11px; color: var(--muted); padding: 2px 6px; }
+.toolline {
+  display: flex; align-items: center; gap: 7px; width: 100%;
+  font: inherit; font-size: 12.5px; text-align: left; padding: 4px 6px;
+  border: 0; border-radius: 6px; background: none; color: var(--fg); cursor: pointer;
+}
+.railshut .toolline { width: auto; padding: 5px; justify-content: center; }
+.toolline svg { color: var(--muted); flex: 0 0 auto; }
+.toolline:hover { background: var(--panel); }
+.toolline.chosen { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+.toolline.chosen svg { color: var(--accent); }
+.toollinename { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toollinecount { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.toolline:focus-visible, .railtoggle:focus-visible,
+.jsontoggle:focus-visible, .resetbtn:focus-visible, .runbtn:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.tooldetail { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.tooldetail > .hint { margin: 4px 0; }
+.detailhead { display: flex; align-items: center; gap: 7px; min-width: 0; min-height: 34px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.detailhead b { font-size: 14px; line-height: 20px; }
+.detailhead .toolgist { flex: 1; min-width: 0; color: var(--muted); font-size: 12px; line-height: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.detailhead .resetbtn, .detailhead .runbtn { flex: 0 0 auto; line-height: 18px; }
+.actiongist { font-size: 12px; color: var(--muted); margin: -2px 0 4px; }
+.actionfield { font-weight: 600; }
+.toolpick { display: none; }
+@media (max-width: 640px) {
+  .toolsplit, .toolsplit.railshut { grid-template-columns: minmax(0, 1fr); }
+  .toolrail { display: none; }
+  /* The dropdown carries the tool's mark itself, in its closed face and in each option. */
+  .detailhead .toolname, .detailhead > .toolmark { display: none; }
+  .toolpick, .toolpick::picker(select) { appearance: base-select; }
+  .toolpick {
+    display: flex; align-items: center; gap: 4px; flex: 0 1 auto; min-width: 0;
+    font: inherit; font-size: 14px; font-weight: 600; line-height: 20px; padding: 0 4px; margin-left: -5px;
+    border: 1px solid transparent; border-radius: 6px; background: none; color: var(--fg); cursor: pointer;
+  }
+  .toolpick:hover, .toolpick:focus-visible { outline: none; border-color: var(--line); }
+  .toolpick > button { display: flex; padding: 0; border: 0; background: none; font: inherit; color: inherit; }
+  .toolpick selectedcontent, .toolpick option { display: flex; align-items: center; gap: 7px; }
+  .toolpick svg { flex: 0 0 auto; color: var(--muted); }
+  .toolpick::picker-icon { color: var(--muted); }
+  .toolpick::picker(select) {
+    max-height: 60vh; padding: 4px; margin-top: 4px;
+    border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg);
+  }
+  .toolpick optgroup { font-size: 11px; font-weight: 400; color: var(--muted); }
+  .toolpick option { font-size: 12.5px; font-weight: 400; color: var(--fg); padding: 3px 6px; border-radius: 6px; }
+  .toolpick option:hover { background: var(--panel); }
+  .toolpick option:checked { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+  .toolpick option:checked svg { color: var(--accent); }
+  .toolpick option::checkmark { display: none; }
+}
+/* Every option the action takes, one row each. An empty field is an option
+   left out of the payload, so its row reads quieter than a filled one. */
+.optionform { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 14px; align-items: center; }
+.optionrow { display: contents; }
+.optionname { font-size: 12px; color: var(--fg); white-space: nowrap; }
+.optionrow.unset .optionname { color: var(--muted); }
+.optionfield {
+  font: inherit; font-size: 12px; min-width: 0; width: 100%; box-sizing: border-box;
+  padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg); color: var(--fg);
+}
+.optionfield.short { justify-self: start; width: auto; min-width: 12ch; }
+.optionfield.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.optionfield::placeholder { color: var(--muted); opacity: .6; }
+.optionrow.unset .optionfield { border-style: dashed; }
+.optionfield:focus { outline: none; border-color: var(--accent); border-style: solid; }
+.optionname .paramneeded { margin-left: 2px; color: var(--alert); }
+.toolbody { display: flex; flex-direction: column; gap: 10px; }
+.toolbody > .hint { margin: 0; }
+.toolfoot { display: flex; align-items: center; gap: 8px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 12px; }
+.toolfoot .bad { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jsontoggle {
+  font: inherit; font-size: 12px; padding: 0; border: 0; background: none; color: var(--muted); cursor: pointer;
+}
+.jsontoggle:hover { color: var(--accent); }
+.resetbtn {
+  font: inherit; font-size: 12px; padding: 3px 8px; border: 0; border-radius: 6px;
+  background: none; color: var(--muted); cursor: pointer;
+}
+.resetbtn:hover { color: var(--fg); background: var(--panel); }
+.runbtn {
+  font: inherit; font-size: 12px; font-weight: 500; padding: 3px 14px; border: 0; border-radius: 6px;
+  background: var(--accent); color: var(--bg); cursor: pointer;
+}
+.runbtn:hover { background: color-mix(in srgb, var(--accent) 85%, var(--fg)); }
+.runbtn:disabled { opacity: .45; cursor: default; }
 .toolmark svg { display: block; }
 .toolrow .rowlabel > .toolmark { flex: 0 0 auto; }
 .crossed.toolrow { border-left: 2px solid var(--line); }
@@ -649,13 +981,11 @@ textarea.notewords::placeholder { color: var(--muted); }
 .toolparam dd { margin: 0; color: var(--muted); font: 11px/1.5 -apple-system, sans-serif; }
 textarea.toolargs {
   display: block; width: 100%; box-sizing: border-box; margin: 0; padding: 8px 10px;
-  border: 0; outline: none; resize: vertical; background: var(--bg); color: var(--fg);
+  border: 1px solid var(--line); border-radius: 6px; outline: none; resize: vertical; background: var(--bg); color: var(--fg);
   font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
 }
-.toolbody .bodyfoot { margin-top: 0; }
 .toolactions { margin: 4px 0 0; }
 .crossed.toolrow.actionrow .rowlabel > .what { font-weight: 500; }
-.toolbody .bodyfoot .tool[disabled] { opacity: 0.4; cursor: default; }
 
 /* Recording a sequence. The steps land on their own; what the page asks for is
    the part only the person driving knows - what it is for, and where the run

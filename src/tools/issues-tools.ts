@@ -6,6 +6,8 @@
 import { z } from 'zod';
 import { promises as fs } from 'fs';
 import { join } from 'path';
+import { execFileSync } from 'child_process';
+import { userInfo } from 'os';
 import { createTool } from '../validation-helpers.js';
 import { createSuccessResponse, createErrorResponse } from '../messages.js';
 import type { ExecuteToolCall } from '../types.js';
@@ -25,6 +27,7 @@ import {
   getIssues,
   updateIssueStatus,
   updateIssueSequenceFile,
+  updateIssueFields,
   addIssueComment,
   acknowledgeAllBugs,
   getPendingBugs,
@@ -40,6 +43,7 @@ import {
   handlePublish, handleSync, handleImport, handleLink, handlePullSequence,
 } from '../github/issue-actions.js';
 import { configManager } from '../config.js';
+import { stripCommentMarker } from '../github/gh-issues.js';
 import { activityPathFor } from '../sequence-activity.js';
 
 /** GitHub actions can be switched off in config - the override path a user
@@ -52,45 +56,46 @@ function isGithubEnabled(): boolean {
   }
 }
 const issuesSchema = z.object({
-  action: z.enum(['list', 'create', 'workOn', 'resolve', 'acknowledge', 'comment',
-    'publish', 'sync', 'import', 'link', 'pullSequence'])
-    .describe('Issue action: list (list all issues, or one issue in full by id), create (create new issue), workOn (start working on issue), resolve (opens an interactive browser verification flow and waits for a PERSON to click Fixed/Not Fixed - a human must physically confirm before the issue is marked fixed/implemented, so an agent cannot close an issue this way and should use `comment` to record findings instead), acknowledge (acknowledge pending bugs), comment (append a comment to an issue)'),
+  action: z.enum(['list', 'create', 'edit', 'workOn', 'resolve', 'acknowledge', 'comment',
+    'publish', 'sync', 'import', 'link', 'pullSequence']),
   id: z.number().optional()
-    .describe('Issue ID (list, workOn, resolve, comment, publish, link, pullSequence). On list it returns that one issue in full and the other filters do not apply.'),
+    .describe('Issue ID. On list, that one issue in full, other filters ignored'),
   type: z.enum(['bug', 'feature']).optional()
-    .describe('Issue type (required for create, optional filter for list)'),
+    .describe('create: required. list: filter'),
   status: z.enum(['pending', 'acknowledged', 'in_progress', 'fixed', 'implemented']).optional()
-    .describe('Issue status (optional filter for list)'),
+    .describe('list: filter'),
   title: z.string().optional()
-    .describe('Short one-line issue title (required for create)'),
+    .describe('create/edit: one-line title'),
   body: z.string().optional()
-    .describe('Markdown body: steps to reproduce, expected/actual, code blocks, etc (optional for create)'),
+    .describe('create/edit: Markdown body (repro steps, expected/actual); edit replaces it'),
   labels: z.array(z.string()).optional()
-    .describe('Labels to attach (create) or filter by - matches issues with ANY of the given labels (list)'),
+    .describe('create: labels. edit: the replacement labels. list: issues with ANY of them'),
   text: z.string().optional()
-    .describe('Comment text in Markdown (required for comment action)'),
+    .describe('comment: Markdown text'),
+  newest: z.number().int().positive().optional()
+    .describe('list with id: only the newest N comments, oldest first, no body'),
   sequenceName: z.string().optional()
-    .describe('Name of existing sequence to link (for create - moves sequence to issues folder)'),
+    .describe('create/edit: existing sequence to link, copied into the issues folder'),
   startUrl: z.string().optional()
-    .describe('Starting URL for manual issue verification (required for create when no sequenceName provided)'),
+    .describe('create: URL verification starts at; required without sequenceName'),
   connectionReason: z.string().optional()
-    .describe('Browser connection reference (for workOn - to replay sequence)'),
+    .describe('workOn: browser connection the sequence replays in'),
   connections: z.record(z.string()).optional()
-    .describe("workOn/resolve: rebind a multi-connection repro sequence's recorded references onto this session - { \"<recorded reference>\": \"<reference here>\" }"),
+    .describe('workOn/resolve: { "<recorded reference>": "<reference here>" } for a multi-connection sequence'),
   keepBrowserOpen: z.boolean().optional()
-    .describe('Keep browser tab open after verification (default: false, closes tab after resolve)'),
+    .describe('resolve: keep the tab open afterwards (default false)'),
   search: z.string().optional()
-    .describe('Search term to filter issues by title, body, comments, or recording name (for list)'),
+    .describe('list: text in title, body, comments or recording name'),
   includeCompleted: z.boolean().optional()
-    .describe('Include fixed/implemented issues in list (default: false, only shows active issues)'),
+    .describe('list: include fixed/implemented issues (default false)'),
   includeSequence: z.boolean().optional()
-    .describe('Include sequence recording for issue (default: true). When false, no sequence is created and Chrome does not open.'),
+    .describe('create: record a sequence (default true); false opens no Chrome'),
   confirm: z.boolean().optional()
-    .describe('publish/sync: actually write to GitHub (default false - publish only drafts, sync only reports upstream closes). pullSequence: accept a sequence authored by another GitHub account - only after a person has read it'),
+    .describe('publish/sync: write to GitHub (default false: a draft, or a report). pullSequence: accept another account\'s sequence, once a person has read it'),
   github: z.number().int().positive().optional()
     .describe('Upstream GitHub issue number (import, link)'),
   repo: z.string().optional()
-    .describe('owner/name override; default is the repo gh infers from the project directory'),
+    .describe('owner/name; default, the repo gh infers from the project directory'),
   take: z.enum(['local', 'remote']).optional()
     .describe('sync: resolve a conflict on one issue by declaring a winner'),
   fromComment: z.number().int().positive().optional()
@@ -167,6 +172,41 @@ async function carryActivity(from: string, to: string, move: boolean): Promise<v
   } catch {
     // No activity recorded for it.
   }
+}
+
+/**
+ * The person a verification is recorded against: git's user.name for the
+ * project, then the OS account. A read that fails falls through, so the
+ * record always names someone.
+ */
+function verifierName(): string {
+  try {
+    const name = execFileSync('git', ['config', 'user.name'], { encoding: 'utf-8', timeout: 2000 }).trim();
+    if (name) return name;
+  } catch {
+    // No git, or no user.name set.
+  }
+  try {
+    return userInfo().username;
+  } catch {
+    return 'unknown';
+  }
+}
+
+/**
+ * The comment every verification leaves on its issue, fixed or not: the
+ * outcome, when it ran, who ran it, whether a sequence was replayed, and what
+ * the person wrote. The timeline then holds each attempt, including the ones
+ * that failed.
+ */
+function verificationRecord(outcome: 'Fixed' | 'Not fixed' | 'Replay failed', sequenceFile: string | undefined, comment: string | undefined): string {
+  const at = new Date().toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
+  // One line: Markdown joins lines with no blank between them into one paragraph.
+  const lines = [
+    `**Verification: ${outcome}** · ${at} · run by ${verifierName()} · ${sequenceFile ? `replayed \`${sequenceFile}\`` : 'no sequence replayed'}`,
+  ];
+  if (comment?.trim()) lines.push('', ...comment.trim().split('\n').map(line => `> ${line}`));
+  return lines.join('\n');
 }
 
 function formatIssuesList(issues: TrackedIssue[]): string {
@@ -265,11 +305,6 @@ function formatIssueDetails(issue: TrackedIssue): string {
   return lines.join('\n');
 }
 
-function formatCommentTimeline(issue: TrackedIssue): string {
-  if (issue.comments.length === 0) return 'No comments yet.';
-  return issue.comments.map(c => `- ${c.timestamp.toISOString()}: ${c.text}`).join('\n');
-}
-
 // =============================================================================
 // Tool Export
 // =============================================================================
@@ -282,7 +317,7 @@ export function createIssuesTools(
 ) {
   return {
     issues: createTool(
-      'Track and manage bugs and features as Markdown issues (title, Markdown body, labels, comments). Actions: list (show all issues with optional filters, or one issue in full by id), create (create new issue with title/body/labels, optionally linking a sequence), workOn (start working on issue with auto-replay), resolve (HUMAN-ONLY interactive verification: opens a browser overlay and waits for a person to confirm the fix before marking fixed/implemented - an agent calling it waits until the overlay times out, so use `comment` instead), acknowledge (acknowledge pending bugs to unblock tools), comment (append a Markdown comment to an issue), publish/sync/import/link/pullSequence (GitHub, via the gh CLI; only publish and sync use the network)',
+      'Bugs and features as Markdown issues (title, body, labels, comments). Actions: list (all, filtered, or one by id), create, edit, workOn (start on an issue, replaying its sequence), resolve (a PERSON confirms the fix in a browser overlay; an agent calling it waits until the overlay times out, so record findings with comment), acknowledge (pending bugs, which block tools until acknowledged), comment, publish/sync/import/link/pullSequence (GitHub through the gh CLI)',
       issuesSchema,
       async (args, abortSignal) => {
         // Initialize tracker on first use
@@ -297,6 +332,19 @@ export function createIssuesTools(
                 return createErrorResponse('ISSUES_NOT_FOUND', {
                   id: args.id,
                   message: 'No issue carries that ID.',
+                });
+              }
+              if (args.newest !== undefined) {
+                const newest = issue.comments.slice(-args.newest);
+                return createSuccessResponse('ISSUES_NEWEST_COMMENTS', {
+                  id: issue.id,
+                  type: issue.type,
+                  title: issue.title,
+                  shown: newest.length,
+                  total: issue.comments.length,
+                  comments: newest.length > 0
+                    ? newest.map(c => `- ${c.timestamp.toISOString()}: ${stripCommentMarker(c.text)}`).join('\n')
+                    : 'No comments yet.',
                 });
               }
               return createSuccessResponse('ISSUES_LIST', {
@@ -461,6 +509,72 @@ export function createIssuesTools(
               type: issue.type,
               title: issue.title,
               sequenceFile: issue.sequenceFile || null,
+            });
+          }
+
+          case 'edit': {
+            if (!args.id) {
+              return createErrorResponse('ISSUES_MISSING_ID', {
+                message: 'Issue ID is required',
+              });
+            }
+            if (args.title === undefined && args.body === undefined && args.labels === undefined && args.sequenceName === undefined) {
+              return createErrorResponse('ISSUES_NOTHING_TO_EDIT', { id: args.id });
+            }
+            if (args.title !== undefined && !args.title.trim()) {
+              return createErrorResponse('ISSUES_MISSING_TITLE', {
+                message: 'An issue keeps a title - an empty one would leave the list with nothing to show',
+              });
+            }
+
+            const edited = await updateIssueFields(args.id, {
+              ...(args.title !== undefined && { title: args.title.trim() }),
+              ...(args.body !== undefined && { body: args.body }),
+              ...(args.labels !== undefined && { labels: args.labels }),
+            });
+            if (!edited) {
+              return createErrorResponse('ISSUES_NOT_FOUND', {
+                id: args.id,
+                message: `Issue #${args.id} not found`,
+              });
+            }
+
+            // A linked sequence is copied into the issues folder under the
+            // issue's own filename, as create does, so workOn and resolve
+            // replay it; the original stays where it was.
+            if (args.sequenceName !== undefined) {
+              const sourcePath = getSequencePath ? await getSequencePath(args.sequenceName) : null;
+              if (!sourcePath) {
+                return createErrorResponse('ISSUES_SEQUENCE_NOT_FOUND', {
+                  sequenceName: args.sequenceName,
+                  message: `Sequence "${args.sequenceName}" not found`,
+                });
+              }
+              const filename = generateSequenceFilename(edited.type, edited.id, edited.title);
+              const destPath = join(getIssueSequencesDir(), filename);
+              try {
+                await fs.copyFile(sourcePath, destPath);
+                await carryActivity(sourcePath, destPath, false);
+                await updateIssueSequenceFile(edited.id, filename);
+              } catch (error: any) {
+                return createErrorResponse('ISSUES_SEQUENCE_COPY_FAILED', {
+                  sequenceName: args.sequenceName,
+                  error: error.message,
+                });
+              }
+            }
+
+            return createSuccessResponse('ISSUES_EDITED', {
+              id: edited.id,
+              type: edited.type,
+              title: edited.title,
+              changed: [
+                args.title !== undefined && 'title',
+                args.body !== undefined && 'body',
+                args.labels !== undefined && 'labels',
+                args.sequenceName !== undefined && `sequence (${args.sequenceName})`,
+              ].filter(Boolean).join(', '),
+              linked: edited.github !== undefined ? `#${edited.github}` : undefined,
             });
           }
 
@@ -822,6 +936,7 @@ export function createIssuesTools(
                 replayText = replayResult?.content?.[0]?.text || '';
               } catch (replayError: any) {
                 await closeVerificationTab();
+                await addIssueComment(issue.id, verificationRecord('Replay failed', issue.sequenceFile, undefined));
                 return createErrorResponse('ISSUES_REPLAY_FAILED', {
                   id: issue.id,
                   type: issue.type,
@@ -841,6 +956,7 @@ export function createIssuesTools(
 
               if (replayFailed) {
                 await closeVerificationTab();
+                await addIssueComment(issue.id, verificationRecord('Replay failed', issue.sequenceFile, undefined));
 
                 // Return error immediately with replay details
                 return createErrorResponse('ISSUES_REPLAY_FAILED', {
@@ -933,10 +1049,7 @@ export function createIssuesTools(
               replayDetails = replayResult.content[0].text;
             }
 
-            // Fold the verification comment into the issue's permanent Markdown timeline
-            if (verification.comment) {
-              await addIssueComment(args.id, verification.comment);
-            }
+            await addIssueComment(args.id, verificationRecord(verification.resolved ? 'Fixed' : 'Not fixed', issue.sequenceFile || undefined, verification.comment));
 
             if (verification.resolved) {
               // User confirmed resolution
@@ -1002,14 +1115,12 @@ export function createIssuesTools(
               });
             }
 
-            const updated = await addIssueComment(args.id, args.text);
+            await addIssueComment(args.id, args.text);
 
             return createSuccessResponse('ISSUES_COMMENT_ADDED', {
               id: issue.id,
               type: issue.type,
               title: issue.title,
-              commentCount: updated?.comments.length ?? issue.comments.length,
-              timeline: formatCommentTimeline(updated ?? issue),
             });
           }
 

@@ -33,6 +33,14 @@ export function Glyph({ of }: { of: string }) {
     undo: <><path d="M3 8a5 5 0 1 0 1.6-3.6" /><path d="M2.8 2.2v3.2H6" /></>,
     clear: <><path d="M3 4.4h10" /><path d="M6.4 4.4V3h3.2v1.4" /><path d="M4.4 4.4l.7 9h5.8l.7-9" /></>,
     tick: <path d="M3 8.4l3.2 3.2L13 4.8" />,
+    // A beetle: body, head, and three legs a side.
+    bug: <><path d="M6.2 5.4a1.8 1.8 0 0 1 3.6 0" /><ellipse cx="8" cy="9.4" rx="3.1" ry="4" /><path d="M8 6.2v7.2" /><path d="M4.9 8H2.8M4.9 10.6H3M11.1 8h2.1M11.1 10.6H13M5.5 6.4 4.3 5.2M10.5 6.4l1.2-1.2" /></>,
+    // A four-point sparkle and a small one: something new.
+    feature: <><path d="M7 2.2l1.2 3.3 3.3 1.2-3.3 1.2L7 11.2 5.8 7.9 2.5 6.7l3.3-1.2z" /><path d="M12.2 10.4v3.4M10.5 12.1h3.4" /></>,
+    star: <path d="M8 1.9l1.8 3.8 4.1.5-3 2.9.8 4.1L8 11.2l-3.7 2 .8-4.1-3-2.9 4.1-.5z" />,
+    starred: <path d="M8 1.9l1.8 3.8 4.1.5-3 2.9.8 4.1L8 11.2l-3.7 2 .8-4.1-3-2.9 4.1-.5z" fill="currentColor" />,
+    // Two opening quotation marks: words taken from elsewhere into the text.
+    quote: <><path d="M6.8 4C4.6 4.9 3.4 6.7 3.4 9.3V12h3.1V9H4.6" /><path d="M12.6 4c-2.2.9-3.4 2.7-3.4 5.3V12h3.1V9h-1.9" /></>,
     note: <><path d="M3.5 2.5h6.5l2.5 2.5v8.5h-9z" /><path d="M10 2.5V5h2.5" /><path d="M5.5 8h5M5.5 10.5h3.5" /></>,
     save: <><path d="M3 2.8h8.2l1.8 1.8v8.6H3z" /><path d="M5.4 2.8v3.4h5V2.8" /><path d="M5.4 13.2V9.4h5.2v3.8" /></>,
     cross: <><path d="M4 4l8 8" /><path d="M12 4l-8 8" /></>,

@@ -5,7 +5,9 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { Traffic, Scope } from './boundary.js';
 import { toggleVariables, useVariablesHidden } from './variables-shown.js';
 import { History } from './history.js';
-import { Tools } from './tools.js';
+import { Tools, type ToolSeed } from './tools.js';
+import { Issues } from './issues.js';
+import { Servers } from './servers.js';
 import { About } from './sequence.js';
 import { Editing } from './editing.js';
 import { Glyph } from './glyph.js';
@@ -73,7 +75,7 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
   base: string;
   /** Go to where a held layer, or the sequence, is read in full. */
   onGo: (layer: 'code' | 'ui' | 'network' | 'sequence' | 'sequences') => void;
-  /** Show the UI tab, whose head the variables button toggles. */
+  /** Show the Sequence tab, whose head the variables button toggles. */
   onVariables: () => void;
   onNew: () => void;
   /** The sequence open on the session, and whether a run is going in it; a recording reports nothing. */
@@ -784,35 +786,57 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
   );
 }
 
-type Tab = 'editing' | 'traffic' | 'history' | 'tools';
+type Tab = 'editing' | 'traffic' | 'history' | 'tools' | 'servers' | 'issues';
 
-/** The tab's word in the address, and back. A word no tab has opens UI. */
-const TAB_WORDS: Record<Tab, string> = { editing: 'ui', traffic: 'traffic', history: 'history', tools: 'tools' };
+/** The tab's word in the address, and back. A word no tab has opens Sequence. */
+const TAB_WORDS: Record<Tab, string> = { editing: 'sequence', traffic: 'traffic', history: 'history', tools: 'tools', servers: 'servers', issues: 'issues' };
 
 /**
- * Where the bench stands, as the address holds it: the tab and the open
- * sequence. Each move pushes an entry, so the browser's back and forward
- * return to the list after a sequence is opened, and to the tab before.
+ * Where the bench stands, as the address holds it: the tab, the open
+ * sequence, and within a tab the issue open on Issues and the tool and action
+ * chosen on Tools. Each move pushes an entry, so the browser's back and
+ * forward return to the list after a sequence or an issue is opened, to the
+ * tool chosen before, and to the tab before.
  */
-interface Place { tab: Tab; sequence: string | null }
+interface Place {
+  tab: Tab;
+  sequence: string | null;
+  issue: number | null;
+  tool: string | null;
+  action: string | null;
+}
+
+/** A tab's own place, cleared: a tab opened from its button opens on its list. */
+const TAB_START = { issue: null, tool: null, action: null } as const;
 
 function placeOf(): Place {
   const query = new URLSearchParams(location.search);
   const word = query.get('tab');
   const tab = (Object.keys(TAB_WORDS) as Tab[]).find(key => TAB_WORDS[key] === word) ?? 'editing';
-  return { tab, sequence: query.get('sequence') || null };
+  const issue = Number(query.get('issue'));
+  return {
+    tab,
+    sequence: query.get('sequence') || null,
+    issue: tab === 'issues' && Number.isInteger(issue) && issue > 0 ? issue : null,
+    tool: tab === 'tools' ? query.get('tool') || null : null,
+    action: tab === 'tools' ? query.get('action') || null : null,
+  };
 }
 
 function addressOf(place: Place): string {
   const query = new URLSearchParams();
   if (place.tab !== 'editing') query.set('tab', TAB_WORDS[place.tab]);
   if (place.sequence) query.set('sequence', place.sequence);
+  if (place.issue !== null) query.set('issue', String(place.issue));
+  if (place.tool) query.set('tool', place.tool);
+  if (place.action) query.set('action', place.action);
   const search = query.toString();
   return `${location.pathname}${search ? `?${search}` : ''}`;
 }
 
 function samePlace(a: Place, b: Place): boolean {
-  return a.tab === b.tab && a.sequence === b.sequence;
+  return a.tab === b.tab && a.sequence === b.sequence && a.issue === b.issue
+    && a.tool === b.tool && a.action === b.action;
 }
 
 async function postTo(path: string, body?: Record<string, unknown>): Promise<void> {
@@ -824,14 +848,37 @@ async function postTo(path: string, body?: Record<string, unknown>): Promise<voi
 }
 
 function Bench() {
-  const [tab, setTab] = useState<Tab>(() => placeOf().tab);
-  // Asked for from the footing, answered on UI: a recording produces steps, so
+  const [at, setAt] = useState<Place>(placeOf);
+  const tab = at.tab;
+  // Asked for from the footing, answered on Sequence: a recording produces steps, so
   // it is written where they are read.
   const [starting, setStarting] = useState(false);
   // The tab a capture was started from, to go back to once it is kept or
-  // dropped: every capture opens on UI, where the reel it lands in is.
+  // dropped: every capture opens on Sequence, where the reel it lands in is.
   const [shotFrom, setShotFrom] = useState<Exclude<Tab, 'editing'> | null>(null);
   const [busy, setBusy] = useState(false);
+  // The call a History row's Go to opens the Tools tab on; the Tools tab
+  // button clears it, so the tab opened from its button starts empty.
+  const [toolSeed, setToolSeed] = useState<ToolSeed | null>(null);
+  // The counts on the Servers and Issues tabs: servers running, issues open.
+  const [counts, setCounts] = useState<{ servers?: number; issues?: number }>({});
+  useEffect(() => {
+    let live = true;
+    const read = async () => {
+      const [servers, issues] = await Promise.all([
+        fetch(`${BASE}/servers`).then(res => (res.ok ? res.json() : null)).catch(() => null),
+        fetch(`${BASE}/issues`).then(res => (res.ok ? res.json() : null)).catch(() => null),
+      ]) as [Array<{ running: boolean }> | null, unknown[] | null];
+      if (!live) return;
+      setCounts({
+        ...(servers && { servers: servers.filter(server => server.running).length }),
+        ...(issues && { issues: issues.length }),
+      });
+    };
+    void read();
+    const timer = setInterval(read, 5000);
+    return () => { live = false; clearInterval(timer); };
+  }, []);
   /** The sequence the session last reported open; undefined before the first report. */
   const shown = useRef<string | null | undefined>(undefined);
   /**
@@ -843,9 +890,11 @@ function Bench() {
 
   const go = (next: Place) => {
     if (!samePlace(next, placeOf())) history.pushState(null, '', addressOf(next));
-    setTab(next.tab);
+    setAt(next);
   };
-  const goTab = (next: Tab) => go({ tab: next, sequence: placeOf().sequence });
+  const goTab = (next: Tab) => go({ ...TAB_START, tab: next, sequence: placeOf().sequence });
+  /** A move within the tab shown, such as opening an issue or choosing a tool. */
+  const goWithin = (within: Partial<Omit<Place, 'tab' | 'sequence'>>) => go({ ...placeOf(), ...within });
 
   const reach = (sequence: string | null) => {
     if (sequence === shown.current) return;
@@ -858,7 +907,7 @@ function Bench() {
         // A select the session refused leaves the address naming a sequence
         // that is not open; it is set back to the one that is.
         if (shown.current !== undefined && shown.current !== placeOf().sequence) {
-          history.replaceState(null, '', addressOf({ tab: placeOf().tab, sequence: shown.current }));
+          history.replaceState(null, '', addressOf({ ...placeOf(), sequence: shown.current }));
         }
       }, 1000));
   };
@@ -871,18 +920,18 @@ function Bench() {
       if (pending.current.sequence === name) pending.current = null;
       return;
     }
-    const at = placeOf();
-    if (at.sequence === name) return;
-    const next = addressOf({ tab: at.tab, sequence: name });
+    const here = placeOf();
+    if (here.sequence === name) return;
+    const next = addressOf({ ...here, sequence: name });
     if (first) history.replaceState(null, '', next);
     else history.pushState(null, '', next);
   };
 
   useEffect(() => {
     const onPop = () => {
-      const at = placeOf();
-      setTab(at.tab);
-      reach(at.sequence);
+      const back = placeOf();
+      setAt(back);
+      reach(back.sequence);
     };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
@@ -890,7 +939,7 @@ function Bench() {
 
   const home = () => {
     if (busy) return;
-    go({ tab: 'editing', sequence: null });
+    go({ ...TAB_START, tab: 'editing', sequence: null });
     reach(null);
   };
 
@@ -902,7 +951,7 @@ function Bench() {
           onClick={home}>bench</h1>
         <nav>
           <button class={tab === 'editing' ? 'on' : ''} onClick={() => goTab('editing')}>
-            UI
+            Sequence
           </button>
           <button class={tab === 'traffic' ? 'on' : ''} onClick={() => goTab('traffic')}>
             Traffic
@@ -910,8 +959,16 @@ function Bench() {
           <button class={tab === 'history' ? 'on' : ''} onClick={() => goTab('history')}>
             History
           </button>
-          <button class={tab === 'tools' ? 'on' : ''} onClick={() => goTab('tools')}>
+          <button class={tab === 'tools' ? 'on' : ''} onClick={() => { setToolSeed(null); goTab('tools'); }}>
             Tools
+          </button>
+          <button class={tab === 'servers' ? 'on' : ''} onClick={() => goTab('servers')}
+            title={counts.servers === undefined ? undefined : `${counts.servers} running`}>
+            Servers{counts.servers !== undefined && <span class="tabcount">{counts.servers}</span>}
+          </button>
+          <button class={tab === 'issues' ? 'on' : ''} onClick={() => goTab('issues')}
+            title={counts.issues === undefined ? undefined : `${counts.issues} open`}>
+            Issues{counts.issues !== undefined && <span class="tabcount">{counts.issues}</span>}
           </button>
         </nav>
         {/* The state disc is drawn here by the footing, which reads the state,
@@ -929,8 +986,27 @@ function Bench() {
         />
       )}
       {tab === 'traffic' && <Traffic base={BASE} />}
-      {tab === 'history' && <History base={BASE} />}
-      {tab === 'tools' && <Tools base={BASE} />}
+      {tab === 'history' && <History base={BASE} onGoTo={seed => {
+        setToolSeed(seed);
+        go({
+          ...TAB_START, tab: 'tools', sequence: placeOf().sequence, tool: seed.tool,
+          action: typeof seed.args.action === 'string' ? seed.args.action : null,
+        });
+      }} />}
+      {tab === 'servers' && <Servers base={BASE} />}
+      {tab === 'issues' && (
+        <Issues base={BASE} issue={at.issue} onIssue={issue => goWithin({ issue })}
+          onGoToNote={(sequence, step) => {
+            // The run is started here and the address follows it, so the
+            // Sequence tab opens on the sequence the note belongs to.
+            void postTo('/sequence/playto', { name: sequence, step });
+            go({ ...TAB_START, tab: 'editing', sequence });
+          }} />
+      )}
+      {tab === 'tools' && (
+        <Tools base={BASE} client={`${CLIENT_ID}-hold`} seed={toolSeed}
+          tool={at.tool} action={at.action} onPlace={(tool, action) => goWithin({ tool, action })} />
+      )}
       <Footing
         base={BASE}
         onSequence={onSequence}

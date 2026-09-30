@@ -28,7 +28,7 @@ import { readCapture } from './capture-file.js';
 import { deletePayload, listPayloads, readPayload } from './saved-payloads.js';
 import { decodePng, encodePng } from './png.js';
 import { diffPixels, sideBySide } from './pixel-diff.js';
-import type { BenchView, BoundaryState, CaptureKind, CaptureRect, FactKind, RuleCatalogueEntry, SequenceOutline, HistoryEntry, HistoryDetail, ToolGroup, ToolRun } from './bench/wire.js';
+import type { BenchView, BoundaryState, CaptureKind, CaptureRect, FactKind, RuleCatalogueEntry, SequenceOutline, HistoryEntry, HistoryDetail, ToolGroup, ToolRun, ToolValues, IssueRow, SequenceNote, ToolFavourite, ServerRow, ServerLog } from './bench/wire.js';
 import type { RunsView } from './bench/wire.js';
 import type { ActivityMove, ExpectedValue, KindCount } from './bench/kinds.js';
 
@@ -76,10 +76,22 @@ export interface BenchHandlers {
   runFromHome: (name: string) => Promise<string | undefined>;
   /** Open a sequence and play it in the bench's own browser. */
   playHere: (name: string) => Promise<void>;
+  /** Open a sequence in the bench's own browser and run it through `step` (0-based). */
+  playToStep: (name: string, step: number) => Promise<void>;
   renameFromHome: (from: string, to: string) => Promise<{ failure?: string; references: number }>;
   historyDetail: (index: number) => Promise<HistoryDetail | undefined>;
   /** Every tool this devharness serves, by the toolset that built it. */
   tools: () => Promise<ToolGroup[]>;
+  toolValues: () => Promise<ToolValues>;
+  /** The tracked issues; fixed and implemented ones only with `includeCompleted`. */
+  issues: (includeCompleted: boolean) => Promise<IssueRow[]>;
+  servers: () => Promise<ServerRow[]>;
+  serverLog: (id: string, stream: 'stdout' | 'stderr') => Promise<ServerLog>;
+  favourites: () => Promise<ToolFavourite[]>;
+  addFavourite: (call: { tool: string; label: string; args: Record<string, unknown> }) => Promise<ToolFavourite[]>;
+  removeFavourite: (id: string) => Promise<ToolFavourite[]>;
+  /** Every note in the saved sequences, for quoting into an issue. */
+  sequenceNotes: () => Promise<SequenceNote[]>;
   callTool: (tool: string, args: Record<string, unknown>) => Promise<ToolRun>;
   /** The payload kept for one event, for reading and for holding. */
   proxyBody: (id: string) => Promise<string | null>;
@@ -347,6 +359,39 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
         if (req.method === 'GET' && route === '/tools') {
           return send(res, 200, JSON.stringify(await handlers.tools()), 'application/json');
         }
+        if (req.method === 'GET' && route === '/servers/log') {
+          const query = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams;
+          const stream = query.get('stream') === 'stderr' ? 'stderr' : 'stdout';
+          return send(res, 200, JSON.stringify(await handlers.serverLog(query.get('id') ?? '', stream)), 'application/json');
+        }
+        if (req.method === 'GET' && route === '/servers') {
+          return send(res, 200, JSON.stringify(await handlers.servers()), 'application/json');
+        }
+        if (req.method === 'GET' && route === '/favourites') {
+          return send(res, 200, JSON.stringify(await handlers.favourites()), 'application/json');
+        }
+        if (req.method === 'POST' && route === '/favourites/add') {
+          const body = await readJson(req);
+          const args = body.args && typeof body.args === 'object' && !Array.isArray(body.args)
+            ? body.args as Record<string, unknown>
+            : {};
+          const added = await handlers.addFavourite({ tool: String(body.tool ?? ''), label: String(body.label ?? ''), args });
+          return send(res, 200, JSON.stringify(added), 'application/json');
+        }
+        if (req.method === 'POST' && route === '/favourites/remove') {
+          const body = await readJson(req);
+          return send(res, 200, JSON.stringify(await handlers.removeFavourite(String(body.id ?? ''))), 'application/json');
+        }
+        if (req.method === 'GET' && route === '/issues/notes') {
+          return send(res, 200, JSON.stringify(await handlers.sequenceNotes()), 'application/json');
+        }
+        if (req.method === 'GET' && route === '/issues') {
+          const all = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams.get('all') === '1';
+          return send(res, 200, JSON.stringify(await handlers.issues(all)), 'application/json');
+        }
+        if (req.method === 'GET' && route === '/tools/values') {
+          return send(res, 200, JSON.stringify(await handlers.toolValues()), 'application/json');
+        }
         if (req.method === 'POST' && route === '/tools/call') {
           const body = await readJson(req);
           const args = body.args && typeof body.args === 'object' && !Array.isArray(body.args)
@@ -515,6 +560,9 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
             case '/sequence/cancel': await handlers.cancelSequence(); break;
             case '/sequence/delete': await handlers.removeSequence(String(body.name ?? '')); break;
             case '/runs/here': await handlers.playHere(String(body.name ?? '')); break;
+            case '/sequence/playto':
+              await handlers.playToStep(String(body.name ?? ''), Math.max(0, Number(body.step) || 0));
+              break;
             case '/runs/start':
               return send(res, 200, JSON.stringify({ failure: (await handlers.runFromHome(String(body.name ?? ''))) ?? null }), 'application/json');
             case '/sequence/rename':

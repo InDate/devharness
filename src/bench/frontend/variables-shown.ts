@@ -1,7 +1,7 @@
 /**
- * Whether the variables at the head of the UI tab list their rows.
+ * Whether the variables at the head of the Sequence tab list their rows.
  *
- * The footing's variables button sets it and the UI tab reads it: they are
+ * The footing's variables button sets it and the Sequence tab reads it: they are
  * separate components, and the button is on screen on every tab.
  */
 import { useEffect, useState } from 'preact/hooks';

@@ -130,7 +130,7 @@ function cadence(ms: number): string {
 }
 
 /**
- * Everything that crossed, in the rows the UI tab lists under each step: the
+ * Everything that crossed, in the rows the Sequence tab lists under each step: the
  * same card, the same actions, the same hidden kinds. Repeats still arriving
  * sit above the stream, counted in place.
  */

@@ -5,7 +5,11 @@ import { holdableLayers, holdReading } from '../hold.js';
 import type { BenchHandlers } from '../bench-control.js';
 import { getProxy, checkOutcomesFor } from '../proxy/registry.js';
 import { levelOf, causeOf } from '../proxy/intercept-proxy.js';
-import type { BenchView, BoundaryEvent, BoundaryState, HiddenKind } from '../bench/wire.js';
+import { getIssues } from '../issue-tracker.js';
+import { addFavourite, readFavourites, removeFavourite } from './favourites.js';
+import { bodyHash, commentGithubId, stripCommentMarker } from '../github/gh-issues.js';
+import { localProse } from '../github/issue-actions.js';
+import { NO_TOOL_VALUES, type BenchView, type BoundaryEvent, type BoundaryState, type HiddenKind } from '../bench/wire.js';
 import type { ActivityMove, ExpectedValue, KindCount } from '../bench/kinds.js';
 import { discardPick, highlightAnnotation, moveAnnotation, noteAtStep, noteTargetFor, notifyAnnotation, removeAnnotation, rewordAnnotation, saveAnnotation } from './annotations.js';
 import { beginCapture, cancelCapture, captureBenchScreenshot, discardBenchScreenshot, readMoreFacts, retakeCapture, saveBenchScreenshot, seriesOfNotes, setFactChoice } from './captures.js';
@@ -14,7 +18,7 @@ import { changeHold, haltSequence, openDevtools, resumePausedRun, setHeld, setPi
 import { stepTraffic, tickBench } from './page-hold.js';
 import { addRecordingTimer, addRecordingVariable, cancelRecordingSequence, chooseStepSelector, dropRecordedStep, editRecordingVariable, flagRecordedStep, keepRecordedStep, recordSequence, stopRecordingSequence } from './recording.js';
 import { clearBoundaryRule, hiddenOf, hideKind, nameTarget, namesOf, persistRules, ruleFrom, rulesOf, savePayloadFor, setBoundaryName, setBoundaryRule, setHiddenMode, setHiddenUse, setResponseMode, setResponseUse, unhideKind, useFrom } from './rules.js';
-import { baselineSequence, playHere, renameFromHome, runFromHome, runsView, stopRun } from './runs.js';
+import { baselineSequence, playHere, playToStep, renameFromHome, runFromHome, runsView, stopRun } from './runs.js';
 import { cancelSequence, commentSequenceStep, describeSequence, dismissSequenceFailure, editSequenceStep, getSequenceState, gotoSequenceStep, insertSequenceCheck, insertSequenceTimer, moveSequenceStep, playSequence, removeSequence, removeSequenceStep, removeSequenceVariable, selectSequence, setSequenceBaseUrl, setSequenceVariable, stepSequence } from './sequence.js';
 import { type BenchSession, sessions } from './session.js';
 import { openSequence, openSteps, recordedStepOf, summariseBoundary, writeEvents } from './traffic.js';
@@ -188,11 +192,41 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
     runs: () => runsView(),
     runFromHome: (name: string) => runFromHome(connection, name),
     playHere: (name: string) => playHere(connection, name),
+    playToStep: (name: string, step: number) => playToStep(connection, name, step),
     renameFromHome: (from: string, to: string) => renameFromHome(connection, from, to),
     stopRun: (target: { runId?: string; connection?: string }) => stopRun(target),
     history: async () => sessions.get(connection)?.sequences?.history() ?? [],
     historyDetail: async (index: number) => sessions.get(connection)?.sequences?.historyDetail(index),
     tools: async () => sessions.get(connection)?.sequences?.tools() ?? [],
+    toolValues: async () => (await sessions.get(connection)?.sequences?.toolValues()) ?? NO_TOOL_VALUES,
+    servers: async () => (await sessions.get(connection)?.sequences?.servers()) ?? [],
+    serverLog: async (id: string, stream: 'stdout' | 'stderr') =>
+      (await sessions.get(connection)?.sequences?.serverLog(id, stream)) ?? { unavailable: 'no bench session' },
+    favourites: () => readFavourites(),
+    addFavourite: (call: { tool: string; label: string; args: Record<string, unknown> }) => addFavourite(call),
+    removeFavourite: (id: string) => removeFavourite(id),
+    sequenceNotes: async () => (await sessions.get(connection)?.sequences?.notes()) ?? [],
+    issues: async (includeCompleted: boolean) => (await getIssues({ includeCompleted })).map(issue => ({
+      id: issue.id,
+      type: issue.type,
+      status: issue.status,
+      title: issue.title,
+      body: issue.body,
+      labels: issue.labels,
+      comments: issue.comments.map(comment => ({ at: comment.timestamp.getTime(), text: stripCommentMarker(comment.text) })),
+      ...(issue.sequenceFile && { sequenceFile: issue.sequenceFile }),
+      reportedAt: issue.reportedAt.getTime(),
+      ...(issue.resolvedAt && { resolvedAt: issue.resolvedAt.getTime() }),
+      ...(issue.github !== undefined && {
+        github: {
+          number: issue.github,
+          ...(issue.githubRepo && { repo: issue.githubRepo }),
+          ...(issue.githubSyncedAt && { syncedAt: issue.githubSyncedAt.getTime() }),
+          bodyChanged: issue.githubBodyHash !== undefined && bodyHash(localProse(issue)) !== issue.githubBodyHash,
+          unpushedComments: issue.comments.filter(comment => commentGithubId(comment.text) === null).length,
+        },
+      }),
+    })),
     callTool: async (tool: string, args: Record<string, unknown>) => {
       const sequences = sessions.get(connection)?.sequences;
       if (!sequences) throw new Error('This bench holds no replay side to run tools through');

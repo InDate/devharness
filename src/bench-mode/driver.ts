@@ -1,5 +1,5 @@
 import type { Annotation, AnnotationTarget, StepTraffic } from '../annotation.js';
-import type { RuleCatalogueEntry, HistoryDetail, HistoryEntry, ToolGroup, ToolRun, SequenceCard, SequenceOutline, SequenceStep, SequenceVariable } from '../bench/wire.js';
+import type { RuleCatalogueEntry, HistoryDetail, HistoryEntry, SequenceNote, ServerLog, ServerRow, ToolGroup, ToolRun, ToolValues, SequenceCard, SequenceOutline, SequenceStep, SequenceVariable } from '../bench/wire.js';
 import type { ActivityMove, ExpectedValue, KindCount } from '../bench/kinds.js';
 
 /** What the bench needs from the replay side: read the session, drive the run. */
@@ -15,6 +15,14 @@ export interface SequenceDriver {
   historyDetail: (index: number) => HistoryDetail | undefined;
   /** Every tool this devharness serves, by the toolset that built it. */
   tools: () => ToolGroup[];
+  /** Every note in the saved sequences, the issues folder's included, newest first. */
+  notes: () => Promise<SequenceNote[]>;
+  /** Names devharness holds, offered as values in the tools tab's form. */
+  toolValues: () => Promise<ToolValues>;
+  /** The dev servers devharness manages, running or not. */
+  servers: () => Promise<ServerRow[]>;
+  /** The end of one server's stdout or stderr log. */
+  serverLog: (id: string, stream: 'stdout' | 'stderr') => Promise<ServerLog>;
   /** Run one tool with `args`, as a call arriving from the bench. */
   callTool: (tool: string, args: Record<string, unknown>) => Promise<ToolRun>;
   /** The open step-through session, or null. */

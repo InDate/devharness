@@ -27,7 +27,7 @@ import { getEventStreamPath, streamReaders, watchCall } from '../session-events.
 import type { ToolResponseMeta, BenchToolMeta } from '../tool-response.js';
 import { readCapture, readRecord, versionsOf, forget } from '../capture-file.js';
 import { startBench, stopBench, tickBench, setHeld, setPicker, getBenchSession, pageHeldElsewhere, runningBench, selectSequence, gotoSequenceStep, keepRecordedStep, dropRecordedStep, flagRecordedStep, type Annotation, type SequenceState, capturesInFlight, retakeCapture } from '../bench-mode.js';
-import type { ToolGroup } from '../bench/wire.js';
+import { NO_TOOL_VALUES, type ServerLog, type ServerRow, type ToolGroup, type ToolValues } from '../bench/wire.js';
 import { createSequenceDriver, getSequencesRoot, labelFor } from '../bench-mode/sequence-driver.js';
 
 const benchSchema = z.object({
@@ -207,6 +207,9 @@ export function createBenchTools(
   executeToolCall: (tool: string, args: Record<string, unknown>) => Promise<any>,
   resolveConnectionFromReason: (connectionReason: string) => Promise<any>,
   catalogue: () => ToolGroup[],
+  values: () => Promise<ToolValues> = async () => NO_TOOL_VALUES,
+  servers: () => Promise<ServerRow[]> = async () => [],
+  serverLog: (id: string, stream: 'stdout' | 'stderr') => Promise<ServerLog> = async () => ({ unavailable: 'no server manager' }),
 ) {
   const bench = createTool(
       'Open the bench beside a driven app: hold the page still, read what crossed its boundary and what caused each thing, record and step sequences, and collect element-level comments. Actions: start (the page running, the picker idle), hold/release (the whole page, with the bench left open), picker (armed or disarmed), tick (run a held page forward by steps or budgetMs), stop (release the page and close), keepStep/dropStep/flagStep (settle a recorded step), sweep (note captures no sequence cites), retake (a capture\'s region again, compared), capture (a capture file\'s record and element facts), list, status.',
@@ -363,7 +366,7 @@ export function createBenchTools(
               connection,
               sessionName,
               sourceMapHandler,
-              sequences: createSequenceDriver(commandRecorder, executeToolCall, catalogue),
+              sequences: createSequenceDriver(commandRecorder, executeToolCall, catalogue, values, servers, serverLog),
               // A tab in the same browser, so it can be dragged into Chrome's
               // split view beside the frozen app.
               openBench: async (url: string) => {

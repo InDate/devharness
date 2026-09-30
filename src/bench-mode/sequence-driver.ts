@@ -23,7 +23,7 @@ import type { ActivityMove, ExpectedValue, KindCount } from '../bench/kinds.js';
 import type { SequenceDriver } from './driver.js';
 import { getBenchSession } from './session.js';
 import type { Annotation, AnnotationTarget } from '../annotation.js';
-import type { BoundaryRule, HiddenKind, RuleCatalogueEntry, ToolGroup } from '../bench/wire.js';
+import { NO_TOOL_VALUES, type BoundaryRule, type HiddenKind, type RuleCatalogueEntry, type SequenceNote, type ServerLog, type ServerRow, type ToolGroup, type ToolValues } from '../bench/wire.js';
 import { unlisted } from '../call-origin.js';
 import { CANCELLED } from './session.js';
 
@@ -180,6 +180,9 @@ export function createSequenceDriver(
     tool: string, args: Record<string, unknown>, abortSignal?: AbortSignal,
   ) => Promise<any>,
   catalogue: () => ToolGroup[],
+  values: () => Promise<ToolValues> = async () => NO_TOOL_VALUES,
+  servers: () => Promise<ServerRow[]> = async () => [],
+  serverLog: (id: string, stream: 'stdout' | 'stderr') => Promise<ServerLog> = async () => ({ unavailable: 'no server manager' }),
 ): SequenceDriver {
   /** The human-readable text of a tool response, wherever it is carried. */
   const textOf = (value: any): string => {
@@ -504,6 +507,42 @@ export function createSequenceDriver(
     },
 
     tools: catalogue,
+
+    notes: async () => {
+      const files = [
+        ...await commandRecorder.listSavedSequencesOnDisk().catch(() => []),
+        ...await commandRecorder.listIssueSequencesOnDisk().catch(() => []),
+      ];
+      const notes: SequenceNote[] = [];
+      for (const file of files) {
+        const sequence = await fs.readFile(file.fullPath, 'utf-8').then(JSON.parse).catch(() => null);
+        (sequence?.commands ?? []).forEach((command: { tool: string; params: Record<string, any>; annotations?: Annotation[] }, step: number) => {
+          for (const note of command.annotations ?? []) {
+            const source = note.target?.source;
+            notes.push({
+              sequence: sequence.name ?? file.name,
+              file: file.filename,
+              step: step + 1,
+              stepLabel: labelFor(command),
+              comment: note.comment,
+              at: note.at,
+              url: note.url,
+              ...(note.target?.selector && { selector: note.target.selector }),
+              ...(note.target?.component && { component: note.target.component }),
+              ...(source?.fileName && { source: `${source.fileName}${source.lineNumber ? `:${source.lineNumber}` : ''}` }),
+              ...(note.screenshots?.length && { screenshots: note.screenshots }),
+            });
+          }
+        });
+      }
+      return notes.sort((a, b) => b.at.localeCompare(a.at));
+    },
+
+    toolValues: values,
+
+    servers,
+
+    serverLog,
 
     callTool: async (tool: string, args: Record<string, unknown>) => {
       try {

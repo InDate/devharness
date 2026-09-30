@@ -41,14 +41,54 @@ const MARKS: Record<string, preact.JSX.Element> = {
   message: <path d="M2 3.4h12v7.4H7.2l-3 2.6v-2.6H2z" />,
 };
 
-/** One stroked mark per tool, drawn like the bench's other glyphs; a plain box for a tool with none. */
-export function ToolGlyph({ tool }: { tool: string }) {
-  if (SHARED[tool]) return <Glyph of={SHARED[tool]} />;
+const TOGGLE = <rect x="1.8" y="4.8" width="12.4" height="6.4" rx="3.2" />;
+
+/**
+ * Marks for the actions of the tools that took over single-operation tools,
+ * `tool.action`: each is the mark that tool carried before it became an action.
+ */
+const ACTION_MARKS: Record<string, preact.JSX.Element> = {
+  'connection.launch': <>{WINDOW}<path d="M6.6 7.6v3.6l3-1.8z" /></>,
+  'connection.attach': PLUG,
+  'connection.list': <path d="M5.6 4h8M5.6 8h8M5.6 12h8M2.4 4h.1M2.4 8h.1M2.4 12h.1" />,
+  'connection.switch': <path d="M3 5.4h9.6M10.2 3l2.4 2.4-2.4 2.4M13 10.6H3.4M5.8 8.2 3.4 10.6 5.8 13" />,
+  'connection.rename': <path d="M1.8 13.2h12.4M2.8 13.2V4.6h4.6v8.6M7.4 7h5.8v6.2" />,
+  'connection.close': <>{PLUG}<path d="M2.2 13.8 13.8 2.2" /></>,
+  'connection.status': <><ellipse cx="8" cy="9.2" rx="3.2" ry="4" /><path d="M8 5.2v8M4.8 7.6H2.4M11.2 7.6h2.4M4.8 10.8H2.4M11.2 10.8h2.4M6.2 3.6 5.2 2M9.8 3.6l1-1.6" /></>,
+  'connection.browsers': <>{WINDOW}<path d="M4 9.6h1.8l1-1.8 1.6 3 1-1.2H12" /></>,
+  'browser.kill': <>{WINDOW}<path d="M6.2 7.8l3.6 3.6M9.8 7.8l-3.6 3.6" /></>,
+  'browser.resetLauncher': <>{WINDOW}<path d="M10.4 9.6a2.4 2.4 0 1 1-.8-1.8" /><path d="M9.8 7v1.4H8.4" /></>,
+  'source.get': <path d="M5.4 4 1.8 8l3.6 4M10.6 4l3.6 4-3.6 4" />,
+  'source.loadMaps': <path d="M1.8 4.2 5.8 2.6l4.4 1.6 4-1.6v9.6l-4 1.6-4.4-1.6-4 1.6zM5.8 2.6v9.6M10.2 4.2v9.6" />,
+  'modal.detect': <>{WINDOW}<rect x="4.6" y="7.4" width="6.8" height="4" rx=".6" /></>,
+  'modal.dismiss': <>{WINDOW}<path d="M6.4 7.6l3.2 3.2M9.6 7.6l-3.2 3.2" /></>,
+  'config.setDebugLogging': <>{TOGGLE}<circle cx="11" cy="8" r="1.6" fill="currentColor" /></>,
+  'config.debugLoggingStatus': <>{TOGGLE}<circle cx="5" cy="8" r="1.6" /></>,
+};
+
+function Mark({ children }: { children: preact.ComponentChildren }) {
   return (
     <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false"
       fill="none" stroke="currentColor" stroke-width="1.5"
       stroke-linecap="round" stroke-linejoin="round">
-      {MARKS[tool] ?? <rect x="2.6" y="2.6" width="10.8" height="10.8" rx="2" />}
+      {children}
     </svg>
   );
+}
+
+/** One stroked mark per tool, drawn like the bench's other glyphs; a plain box for a tool with none. */
+export function ToolGlyph({ tool }: { tool: string }) {
+  if (SHARED[tool]) return <Glyph of={SHARED[tool]} />;
+  return <Mark>{MARKS[tool] ?? <rect x="2.6" y="2.6" width="10.8" height="10.8" rx="2" />}</Mark>;
+}
+
+/** Whether `tool`'s `action` carries a mark of its own. */
+export function hasActionMark(tool: string, action: string): boolean {
+  return `${tool}.${action}` in ACTION_MARKS;
+}
+
+/** The mark of one action, where the action was a tool of its own; null for the rest. */
+export function ActionGlyph({ tool, action }: { tool: string; action: string }) {
+  const mark = ACTION_MARKS[`${tool}.${action}`];
+  return mark ? <Mark>{mark}</Mark> : null;
 }

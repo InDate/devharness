@@ -105,7 +105,7 @@ export function HoldPanel({ state, post, onClose, onGo }: {
 
 const GO_TITLES: Record<Layer, string> = {
   code: 'Open Chrome\'s DevTools on the app tab, docked, on the line it stopped on',
-  ui: 'Go to the UI tab, where the held screen is read',
+  ui: 'Go to the Sequence tab, where the held screen is read',
   network: 'Go to the Waiting list on the Traffic tab, to let one message through at a time',
 };
 
@@ -147,7 +147,7 @@ function SequenceRow({ sequence, stepAt, post, onGo }: {
           : <button class={sequence.recording || atEnd ? 'tool off' : 'tool'}
               title={sequence.recording ? 'A recording has no run to play' : atEnd ? 'The run is at its last step' : `Play from step ${Math.min(sequence.currentStep + 1, sequence.total)}, letting go of every hold`}
               aria-label="Play" onClick={() => { if (!sequence.recording && !atEnd) void post('/sequence/play'); }}><Glyph of="play" /></button>}
-        <button class="tool" title="Go to the step it is on, in the UI tab's step list" aria-label="Go to" onClick={onGo}><Glyph of="arrow" /></button>
+        <button class="tool" title="Go to the step it is on, in the Sequence tab's step list" aria-label="Go to" onClick={onGo}><Glyph of="arrow" /></button>
       </span>
     </div>
   );
@@ -164,13 +164,13 @@ function NoSequenceRow({ onGo }: { onGo: () => void }) {
     <div class="holdrow layer-absent">
       <b class="layername">Sequence</b>
       <span class="holdbadges"><span class="badge absent" title="no sequence is open">none</span></span>
-      <span class="layerstate">no sequence open - pick one in the footer, or from the list on the UI tab</span>
+      <span class="layerstate">no sequence open - pick one in the footer, or from the list on the Sequence tab</span>
       <span class="holdreading" />
       <span class="holdslots">
         <button class="tool off" title={off} aria-label="Step"><Glyph of="step" /></button>
         <button class="tool off" title={off} aria-label="Step ten"><Glyph of="steps" /></button>
         <button class="tool off" title={off} aria-label="Play"><Glyph of="play" /></button>
-        <button class="tool" title="Go to the list of sequences on the UI tab" aria-label="Go to" onClick={onGo}><Glyph of="arrow" /></button>
+        <button class="tool" title="Go to the list of sequences on the Sequence tab" aria-label="Go to" onClick={onGo}><Glyph of="arrow" /></button>
       </span>
     </div>
   );

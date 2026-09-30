@@ -77,7 +77,7 @@ import { homedir } from 'os';
 import { ServerManager } from './server-manager.js';
 import { configManager } from './config.js';
 import { ToolError } from './tool-error.js';
-import type { ToolGroup } from './bench/wire.js';
+import type { ServerLog, ServerRow, ToolGroup, ToolValues } from './bench/wire.js';
 import { arriveOn, unlisted, historyPlace, entryChannel, asInnerCall } from './call-origin.js';
 import { markNextCommand, releaseCommand, noteCallStart, newlyIdleProxies } from './proxy/registry.js';
 
@@ -586,7 +586,7 @@ const allTools = {
   ...(configManager.isToolEnabled('input') ? toolset('input', createInputTools(resolveConnectionFromReason)) : {}),
   ...(configManager.isToolEnabled('content') ? toolset('content', createContentTools(resolveConnectionFromReason, clickableCache)) : {}),
   ...(configManager.isToolEnabled('modal') ? toolset('modal', createModalTools(resolveConnectionFromReason)) : {}),
-  ...(configManager.isToolEnabled('bench') ? toolset('bench', createBenchTools(sourceMapHandler, commandRecorder, executeToolCall, resolveConnectionFromReason, toolCatalogue)) : {}),
+  ...(configManager.isToolEnabled('bench') ? toolset('bench', createBenchTools(sourceMapHandler, commandRecorder, executeToolCall, resolveConnectionFromReason, toolCatalogue, toolValues, serverRows, serverLog)) : {}),
   ...(configManager.isToolEnabled('storage') ? toolset('storage', createStorageTools(resolveConnectionFromReason)) : {}),
   // Download tools
   ...(configManager.isToolEnabled('download') ? toolset('download', createDownloadTools()) : {}),
@@ -659,6 +659,67 @@ function toolCatalogue(): ToolGroup[] {
     groups.set(set, group);
   }
   return [...groups.values()];
+}
+
+/** The names the tools tab offers as values: live connections, servers, sequences and profiles. */
+async function toolValues(): Promise<ToolValues> {
+  const sorted = (names: Array<string | undefined>) => [...new Set(names.filter((n): n is string => !!n))].sort();
+  const saved = await commandRecorder.listSavedSequencesOnDisk().catch(() => [] as Array<{ name: string }>);
+  return {
+    connections: sorted(connectionManager.listConnections().map(connection => connection.reference)),
+    servers: sorted((await serverManager.getStatus().catch(() => [])).map(server => server.id)),
+    sequences: sorted([...commandRecorder.listSequences().map(sequence => sequence.name), ...saved.map(entry => entry.name)]),
+    profiles: await chromeLauncher.listPersistentProfiles().catch(() => []),
+  };
+}
+
+/** The managed dev servers, for the bench's Servers tab. */
+async function serverRows(): Promise<ServerRow[]> {
+  return (await serverManager.getStatus().catch(() => [])).map(server => ({
+    id: server.id,
+    command: server.command,
+    cwd: server.cwd,
+    running: server.running,
+    pid: server.pid,
+    ...(server.port !== undefined && { port: server.port }),
+    uptime: server.uptime,
+    runnerType: server.runnerType,
+    autoRun: server.autoRun,
+  }));
+}
+
+/** Bytes read from the end of a log for the bench: a screen of recent lines, not the whole file. */
+const LOG_TAIL_BYTES = 64 * 1024;
+
+/**
+ * The end of one managed server's log file. The path comes from the server
+ * manager by id, never from the page, so the route reads only log files.
+ */
+async function serverLog(id: string, stream: 'stdout' | 'stderr'): Promise<ServerLog> {
+  let access: ReturnType<ServerManager['getLogAccess']>;
+  try {
+    access = serverManager.getLogAccess(id);
+  } catch {
+    return { unavailable: `no server "${id}"` };
+  }
+  if (!access) return { unavailable: 'this runner keeps no log' };
+  if (access.type === 'command') return { command: access.command };
+  const path = stream === 'stderr' ? access.stderrPath : access.stdoutPath;
+  let handle: fsPromises.FileHandle | undefined;
+  try {
+    handle = await fsPromises.open(path, 'r');
+    const { size } = await handle.stat();
+    const start = Math.max(0, size - LOG_TAIL_BYTES);
+    const buffer = Buffer.alloc(size - start);
+    await handle.read(buffer, 0, buffer.length, start);
+    const text = buffer.toString('utf-8');
+    // A read that starts mid-file starts mid-line; the partial first line goes.
+    return { path, size, text: start > 0 ? text.slice(text.indexOf('\n') + 1) : text };
+  } catch {
+    return { path, size: 0, text: '' };
+  } finally {
+    await handle?.close();
+  }
 }
 
 /**

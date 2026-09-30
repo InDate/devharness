@@ -786,7 +786,7 @@ export function createInspectionTools(
           default:
             return createErrorResponse('INVALID_ACTION', {
               action,
-              validActions: 'getCallStack, getVariables, evaluateExpression, searchCode, searchFunctions',
+              validActions: 'getCallStack, getVariables, evaluateExpression, searchCode, searchFunctions, listTargets',
             });
         }
       }

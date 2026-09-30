@@ -17,9 +17,9 @@ import { createTool } from '../validation-helpers.js';
 const modalSchema = z.object({
   action: z.enum(['detect', 'dismiss']),
   connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it (e.g. "unnamed-connection-default")'),
-  minZIndex: z.number().optional().describe('detect: min z-index to consider'),
-  minViewportCoverage: z.number().optional().describe('detect: min viewport coverage (0-1, default: 0.25)'),
-  includeBackdrops: z.boolean().optional().describe('detect: include backdrop/overlay elements'),
+  minZIndex: z.number().optional().describe('detect/dismiss: min z-index to consider'),
+  minViewportCoverage: z.number().optional().describe('detect/dismiss: min viewport coverage (0-1, default: 0.25)'),
+  includeBackdrops: z.boolean().optional().describe('detect/dismiss: include backdrop/overlay elements. dismiss detects with the same options, so an index from detect names the same modal'),
   selector: z.string().optional().describe('dismiss: CSS selector of the modal to dismiss'),
   index: z.number().optional().describe('dismiss: modal index (1-based)'),
   strategy: z.enum(['accept', 'reject', 'close', 'remove', 'auto']).optional().describe('dismiss: accept (click accept/agree), reject (click reject/decline), close (click close/X), remove (remove from DOM), auto (smart selection based on modal type; default)'),
@@ -71,6 +71,11 @@ async function detectModalsImpl(
       async () => await detectModalsUtil(page, detectionOptions as ModalDetectionOptions),
       'modal detect'
     );
+    // A page paused at a breakpoint, or a detection that failed or timed out,
+    // returns no list at all - which is not a page with no modals.
+    if (!result.success) {
+      return formatToolError('modal_detection_failed', result.error || 'Modal detection did not complete');
+    }
 
     const modals = result.result || [];
 
@@ -150,6 +155,9 @@ async function dismissModalImpl(
     index,
     strategy = 'auto',
     retryAttempts = 3,
+    minZIndex,
+    minViewportCoverage,
+    includeBackdrops,
   } = args;
 
   try {
@@ -166,9 +174,12 @@ async function dismissModalImpl(
     // First, detect modals to find the target
     const detectResult = await executeWithPauseDetection(
       cdpManager,
-      async () => await detectModalsUtil(page),
+      async () => await detectModalsUtil(page, { minZIndex, minViewportCoverage, includeBackdrops } as ModalDetectionOptions),
       'modal detect'
     );
+    if (!detectResult.success) {
+      return formatToolError('modal_detection_failed', detectResult.error || 'Modal detection did not complete');
+    }
 
     const modals = detectResult.result || [];
 
@@ -248,7 +259,7 @@ async function dismissModalImpl(
     } else {
       return formatToolError(
         'dismissal_failed',
-        `Failed to dismiss modal: ${result?.error || 'Unknown error'}`,
+        `Failed to dismiss modal: ${result?.error || dismissResult.error || 'Unknown error'}`,
         {
           modalType: targetModal.type,
           attemptedStrategy: effectiveStrategy,

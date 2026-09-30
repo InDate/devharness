@@ -255,7 +255,7 @@ describe('modal dismiss resolves its page from the connection', () => {
     expect(text).toContain('Cookie consent banner');
 
     // The page handed to detection/dismissal must be the connection's page.
-    expect(mockedDetectModals).toHaveBeenCalledWith(puppeteerManager.__page);
+    expect(mockedDetectModals).toHaveBeenCalledWith(puppeteerManager.__page, expect.anything());
     expect(mockedDismiss).toHaveBeenCalledWith(
       puppeteerManager.__page,
       expect.objectContaining({ selector: '#cookie-banner' }),

@@ -871,3 +871,56 @@ describe('storage authenticator actions', () => {
     expect(r._errorId).toBe('NO_AUTHENTICATOR');
   });
 });
+
+describe('storage on a page that fails or pauses', () => {
+  function stalledTool(opts: { paused?: boolean; throws?: string }) {
+    const page = {
+      evaluate: vi.fn(async () => { if (opts.throws) throw new Error(opts.throws); return undefined; }),
+      cookies: vi.fn(async () => []),
+      deleteCookie: vi.fn(async () => {}),
+    };
+    const cdpManager = {
+      ...fakeCdpManager(),
+      isPaused: () => opts.paused === true,
+      getPausedInfo: () => ({ paused: true, location: { url: 'app.js', lineNumber: 3 } }),
+    };
+    const puppeteerManager: any = { isConnected: () => true, getPage: () => page };
+    return createStorageTools(async () => ({ connection: {}, cdpManager, puppeteerManager, consoleMonitor: null, networkMonitor: null }) as any);
+  }
+
+  it('reports a key read on a paused page as failed, not as the key being absent', async () => {
+    const tools = stalledTool({ paused: true });
+
+    const result: any = await tools.storage.handler({ connectionReason: 'app', action: 'getLocalStorage', key: 'token' });
+
+    expect(result.isError).toBe(true);
+    expect(result._meta?.storage?.found).toBeUndefined();
+  });
+
+  it('reports a write that throws as failed', async () => {
+    const tools = stalledTool({ throws: 'QuotaExceededError' });
+
+    const result: any = await tools.storage.handler({ connectionReason: 'app', action: 'setSessionStorage', key: 'k', value: 'v' });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('QuotaExceededError');
+  });
+
+  it('reports a clear that throws as failed, not as every type cleared', async () => {
+    const tools = stalledTool({ throws: 'SecurityError: access denied' });
+
+    const result: any = await tools.storage.handler({ connectionReason: 'app', action: 'clear', reason: 'reset', types: ['localStorage'] });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('SecurityError');
+  });
+
+  it('names an unknown connection as not found', async () => {
+    const tools = createStorageTools(async () => null);
+
+    const result: any = await tools.storage.handler({ connectionReason: 'no-such-app', action: 'getCookies' });
+
+    expect(result.isError).toBe(true);
+    expect(result._errorId ?? result.content[0].text).toMatch(/CONNECTION_NOT_FOUND|not found/i);
+  });
+});

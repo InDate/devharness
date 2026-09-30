@@ -5,7 +5,7 @@
 import { z } from 'zod';
 import type { CDPManager } from '../cdp-manager.js';
 import { PuppeteerManager } from '../puppeteer-manager.js';
-import { executeWithPauseDetection } from '../debugger-aware-wrapper.js';
+import { executeWithPauseDetection, actionFailureResponse } from '../debugger-aware-wrapper.js';
 import { createTool } from '../validation-helpers.js';
 import { createSuccessResponse, createErrorResponse, formatCodeBlock } from '../messages.js';
 import type { StorageToolMeta } from '../tool-response.js';
@@ -69,6 +69,10 @@ const storageSchema = z.object({
   userVerified: z.boolean().optional().describe('authenticatorAdd: whether the authenticator reports the user verified (default: true)'),
   types: z.array(z.enum(['cookies', 'localStorage', 'sessionStorage', 'indexedDB'])).optional().describe('Storage types to clear (for clear action, default: cookies + localStorage + sessionStorage; indexedDB must be requested explicitly)'),
 }).strict();
+
+/** The target an ACTION_FAILED reply names for a web storage call. */
+const localStorageKey = (key: string | number | undefined) => key === undefined ? 'localStorage' : `localStorage[${String(key)}]`;
+const sessionStorageKey = (key: string | number | undefined) => key === undefined ? 'sessionStorage' : `sessionStorage[${String(key)}]`;
 
 /** The virtual authenticator each page holds, and the session it lives on. The
  *  authenticator stands while its session does, so the session is kept. */
@@ -203,7 +207,10 @@ export function createStorageTools(
         }
 
         const resolved = await resolveConnectionFromReason(connectionReason);
-        if (!resolved || !resolved.puppeteerManager) {
+        if (!resolved) {
+          return createErrorResponse('CONNECTION_NOT_FOUND', { reference: connectionReason });
+        }
+        if (!resolved.puppeteerManager) {
           return createErrorResponse('PUPPETEER_NOT_CONNECTED');
         }
         const targetPuppeteerManager: PuppeteerManager = resolved.puppeteerManager;
@@ -478,7 +485,7 @@ export function createStorageTools(
             const result = await executeWithPauseDetection(
               targetCdpManager,
               () => page.evaluate((key: string | undefined) => {
-                if (key) {
+                if (key !== undefined) {
                   return { [key]: localStorage.getItem(key) };
                 } else {
                   const items: Record<string, string | null> = {};
@@ -493,6 +500,10 @@ export function createStorageTools(
               }, args.key === undefined ? undefined : String(args.key)),
               'getLocalStorage'
             );
+            {
+              const failed = actionFailureResponse(result, 'getLocalStorage', localStorageKey(args.key));
+              if (failed) return failed;
+            }
 
             const markdown = `## localStorage\n\n${formatCodeBlock(result.result)}`;
             return {
@@ -512,13 +523,18 @@ export function createStorageTools(
           }
 
           case 'setLocalStorage': {
-            await executeWithPauseDetection(
+            const result = await executeWithPauseDetection(
               targetCdpManager,
               () => page.evaluate((key: string, value: string) => {
                 localStorage.setItem(key, value);
+                return true;
               }, String(args.key!), args.value!),
               'setLocalStorage'
             );
+            {
+              const failed = actionFailureResponse(result, 'setLocalStorage', localStorageKey(args.key));
+              if (failed) return failed;
+            }
 
             return createSuccessResponse('LOCAL_STORAGE_SET_SUCCESS', {
               key: args.key,
@@ -536,6 +552,10 @@ export function createStorageTools(
               }, String(args.key!)),
               'removeLocalStorage'
             );
+            {
+              const failed = actionFailureResponse(result, 'removeLocalStorage', localStorageKey(args.key));
+              if (failed) return failed;
+            }
 
             return createSuccessResponse('STORAGE_KEY_REMOVED', {
               storageType: 'localStorage',
@@ -548,7 +568,7 @@ export function createStorageTools(
             const result = await executeWithPauseDetection(
               targetCdpManager,
               () => page.evaluate((key: string | undefined) => {
-                if (key) {
+                if (key !== undefined) {
                   return { [key]: sessionStorage.getItem(key) };
                 } else {
                   const items: Record<string, string | null> = {};
@@ -563,6 +583,10 @@ export function createStorageTools(
               }, args.key === undefined ? undefined : String(args.key)),
               'getSessionStorage'
             );
+            {
+              const failed = actionFailureResponse(result, 'getSessionStorage', sessionStorageKey(args.key));
+              if (failed) return failed;
+            }
 
             const markdown = `## sessionStorage\n\n${formatCodeBlock(result.result)}`;
             return {
@@ -582,13 +606,18 @@ export function createStorageTools(
           }
 
           case 'setSessionStorage': {
-            await executeWithPauseDetection(
+            const result = await executeWithPauseDetection(
               targetCdpManager,
               () => page.evaluate((key: string, value: string) => {
                 sessionStorage.setItem(key, value);
+                return true;
               }, String(args.key!), args.value!),
               'setSessionStorage'
             );
+            {
+              const failed = actionFailureResponse(result, 'setSessionStorage', sessionStorageKey(args.key));
+              if (failed) return failed;
+            }
 
             return createSuccessResponse('SESSION_STORAGE_SET_SUCCESS', {
               key: args.key,
@@ -606,6 +635,10 @@ export function createStorageTools(
               }, String(args.key!)),
               'removeSessionStorage'
             );
+            {
+              const failed = actionFailureResponse(result, 'removeSessionStorage', sessionStorageKey(args.key));
+              if (failed) return failed;
+            }
 
             return createSuccessResponse('STORAGE_KEY_REMOVED', {
               storageType: 'sessionStorage',
@@ -618,7 +651,7 @@ export function createStorageTools(
             const result = await runIdbOperation('idbListDatabases', {});
             const idb = result.result;
             if (!idb || !idb.ok) {
-              return createErrorResponse('INDEXEDDB_ERROR', { action, error: idb ? idb.error : 'No result returned from the page' });
+              return createErrorResponse('INDEXEDDB_ERROR', { action, error: idb ? idb.error : (result.error ?? (result.pausedAtBreakpoint ? 'execution is paused at a breakpoint' : 'No result returned from the page')) });
             }
 
             const markdown = `## IndexedDB Databases\n\n**Count:** ${idb.databases.length}\n\n${formatCodeBlock(idb.databases)}`;
@@ -629,7 +662,7 @@ export function createStorageTools(
             const result = await runIdbOperation('idbListStores', { db: args.db });
             const idb = result.result;
             if (!idb || !idb.ok) {
-              return createErrorResponse('INDEXEDDB_ERROR', { action, error: idb ? idb.error : 'No result returned from the page' });
+              return createErrorResponse('INDEXEDDB_ERROR', { action, error: idb ? idb.error : (result.error ?? (result.pausedAtBreakpoint ? 'execution is paused at a breakpoint' : 'No result returned from the page')) });
             }
 
             const markdown = `## IndexedDB Object Stores\n\n**Database:** ${idb.database} (v${idb.version})\n**Stores:** ${idb.stores.length}\n\n${formatCodeBlock(idb.stores)}`;
@@ -640,7 +673,7 @@ export function createStorageTools(
             const result = await runIdbOperation('idbGet', { db: args.db, store: args.store, key: args.key });
             const idb = result.result;
             if (!idb || !idb.ok) {
-              return createErrorResponse('INDEXEDDB_ERROR', { action, error: idb ? idb.error : 'No result returned from the page' });
+              return createErrorResponse('INDEXEDDB_ERROR', { action, error: idb ? idb.error : (result.error ?? (result.pausedAtBreakpoint ? 'execution is paused at a breakpoint' : 'No result returned from the page')) });
             }
 
             const markdown = idb.found
@@ -662,7 +695,7 @@ export function createStorageTools(
             const result = await runIdbOperation('idbGetAll', { db: args.db, store: args.store, limit });
             const idb = result.result;
             if (!idb || !idb.ok) {
-              return createErrorResponse('INDEXEDDB_ERROR', { action, error: idb ? idb.error : 'No result returned from the page' });
+              return createErrorResponse('INDEXEDDB_ERROR', { action, error: idb ? idb.error : (result.error ?? (result.pausedAtBreakpoint ? 'execution is paused at a breakpoint' : 'No result returned from the page')) });
             }
 
             const truncatedNote = idb.truncated ? ` (showing ${idb.count} of ${idb.total}, raise "limit" to see more)` : '';
@@ -692,7 +725,7 @@ export function createStorageTools(
             });
             const idb = result.result;
             if (!idb || !idb.ok) {
-              return createErrorResponse('INDEXEDDB_ERROR', { action, error: idb ? idb.error : 'No result returned from the page' });
+              return createErrorResponse('INDEXEDDB_ERROR', { action, error: idb ? idb.error : (result.error ?? (result.pausedAtBreakpoint ? 'execution is paused at a breakpoint' : 'No result returned from the page')) });
             }
 
             return createSuccessResponse('IDB_PUT_SUCCESS', {
@@ -706,7 +739,7 @@ export function createStorageTools(
             const result = await runIdbOperation('idbDelete', { db: args.db, store: args.store, key: args.key });
             const idb = result.result;
             if (!idb || !idb.ok) {
-              return createErrorResponse('INDEXEDDB_ERROR', { action, error: idb ? idb.error : 'No result returned from the page' });
+              return createErrorResponse('INDEXEDDB_ERROR', { action, error: idb ? idb.error : (result.error ?? (result.pausedAtBreakpoint ? 'execution is paused at a breakpoint' : 'No result returned from the page')) });
             }
 
             return createSuccessResponse('IDB_DELETE_SUCCESS', {
@@ -720,7 +753,7 @@ export function createStorageTools(
           case 'clear': {
             // Log the reason for audit purposes
             const types = args.types || ['cookies', 'localStorage', 'sessionStorage'];
-            console.error(`[devharness] clearStorage called - Reason: ${args.reason}, Types: ${types.join(', ')}, Connection: ${connectionReason || 'default'}`);
+            console.error(`[devharness] clearStorage called - Reason: ${args.reason}, Types: ${types.join(', ')}, Connection: ${connectionReason}`);
 
             const result = await executeWithPauseDetection(
               targetCdpManager,
@@ -788,12 +821,11 @@ export function createStorageTools(
               'clearStorage'
             );
 
-            if (!result.result) {
-              return createSuccessResponse('STORAGE_CLEARED', { types: types.join(', ') });
+            {
+              const failed = actionFailureResponse(result, 'clear', types.join(', '));
+              if (failed) return failed;
             }
-
-            const storageResult = result.result;
-            return createSuccessResponse('STORAGE_CLEARED', { types: storageResult.cleared.join(', ') });
+            return createSuccessResponse('STORAGE_CLEARED', { types: result.result!.cleared.join(', ') });
           }
 
           default:

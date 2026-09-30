@@ -14,7 +14,7 @@ const serverSchema = z.object({
   action: z.enum(['start', 'stop', 'restart', 'list', 'logs', 'stopAll', 'setAutoRun', 'clearLogs', 'remove', 'monitorPort', 'unmonitorPort', 'listMonitored', 'acknowledgePort', 'acknowledgeStartup', 'extendStartup', 'cancelPendingRestart']),
   command: z.string().optional().describe('Command: npm run dev, flask run, docker compose up'),
   cwd: z.string().optional(),
-  id: z.string().optional().describe('Server name'),
+  id: z.string().optional().describe('Server name. start: a name saved in server list starts from its saved command, cwd and settings'),
   serverId: z.string().optional(),
   autoRun: z.boolean().optional(),
   env: z.record(z.string()).optional(),
@@ -122,33 +122,41 @@ export function createServerTools(serverManager: ServerManager) {
 
   return {
     server: createTool(
-      'Manage development servers. Actions: start (start a server from npm script; pass watch: true to auto-restart it on file changes instead of --watch/nodemon - coordinates with a paused breakpoint debugger by deferring the restart), stop (stop a running server), restart (restart a server), list (list running servers with status), logs (get log file paths or docker command), stopAll (stop all servers), setAutoRun (enable/disable auto-start on MCP startup), cancelPendingRestart (discard a watch-mode restart that\'s queued behind a paused debugger, to keep debugging)',
+      'Manage development servers. Actions: start (start a server from a command, or a saved one by id alone; pass watch: true to auto-restart it on file changes instead of --watch/nodemon - coordinates with a paused breakpoint debugger by deferring the restart), stop (stop a running server), restart (restart a server), list (list running servers with status), logs (get log file paths or docker command), stopAll (stop all servers), setAutoRun (enable/disable auto-start on MCP startup), cancelPendingRestart (discard a watch-mode restart that\'s queued behind a paused debugger, to keep debugging)',
       serverSchema,
       async (args: ServerArgs) => {
         switch (args.action) {
           case 'start': {
-            if (!args.command) {
+            // A server saved under this name starts from its saved entry; what
+            // the call gives overrides it. `serverId` is the name every other
+            // action takes.
+            const id = args.id ?? args.serverId;
+            if (!id) {
+              return createErrorResponse('SERVER_MISSING_ID', withLogStatus({}));
+            }
+            const saved = await serverManager.savedServer(id);
+            const command = args.command ?? saved?.command;
+            const cwd = args.cwd ?? saved?.cwd;
+            if (!command) {
               return createErrorResponse('SERVER_MISSING_COMMAND', withLogStatus({}));
             }
-            if (!args.cwd) {
+            if (!cwd) {
               return createErrorResponse('SERVER_MISSING_CWD', withLogStatus({}));
-            }
-            if (!args.id) {
-              return createErrorResponse('SERVER_MISSING_ID', withLogStatus({}));
             }
 
             try {
               const result = await serverManager.startServer({
-                command: args.command,
-                cwd: args.cwd,
-                id: args.id,
-                autoRun: args.autoRun,
+                command,
+                cwd,
+                id,
+                autoRun: args.autoRun ?? saved?.autoRun,
                 env: args.env,
-                runner: args.runner as RunnerType | undefined,
-                monitorPort: args.monitorPort,
-                global: args.global,
-                watch: args.watch,
-                watchPaths: args.watchPaths,
+                port: args.port ?? saved?.port,
+                runner: (args.runner ?? saved?.type) as RunnerType | undefined,
+                monitorPort: args.monitorPort ?? saved?.monitorPort,
+                global: args.global ?? saved?.global,
+                watch: args.watch ?? saved?.watch,
+                watchPaths: args.watchPaths ?? saved?.watchPaths,
               });
 
               // Wait briefly for port detection

@@ -2192,6 +2192,11 @@ export class ServerManager {
     }
   }
 
+  /** The entry saved for `serverId` in the local or global servers.json, or null. */
+  async savedServer(serverId: string): Promise<PersistedRunnerState | null> {
+    return this.reloadServerConfig(serverId);
+  }
+
   /**
    * Reload a server's config from persisted state (for picking up manual edits)
    */

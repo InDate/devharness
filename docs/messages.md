@@ -3247,7 +3247,7 @@ Failed to start server: {{error}}
 
 Missing required parameter: `command`
 
-Provide the command to run (e.g., "npm run dev", "flask run", "python manage.py runserver").
+No server is saved under this `id`, so the command to run has to be given (e.g., "npm run dev", "flask run", "python manage.py runserver"). A server already in `server({ action: 'list' })` starts from its saved command with `id` alone.
 
 ---
 
@@ -3258,7 +3258,7 @@ Provide the command to run (e.g., "npm run dev", "flask run", "python manage.py 
 
 Missing required parameter: `cwd`
 
-Provide the working directory for the server command.
+No server is saved under this `id`, so the working directory for its command has to be given.
 
 ---
 

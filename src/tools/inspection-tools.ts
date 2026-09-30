@@ -155,7 +155,7 @@ function extractSourceFromFullEvalLine(
   fullLineContent: string,
   pattern: string,
   caseSensitive: boolean
-): { lineContent: string; innerLineNumber?: number } | null {
+): { lineContent: string } | null {
   // eval(__webpack_require__.XX("CONTENT")): the content starts after the
   // opening quote and ends before the closing quote and "))", the last three
   // characters. An escaped quote inside the content is not looked for.
@@ -167,20 +167,13 @@ function extractSourceFromFullEvalLine(
   const startIdx = startMatch[0].length;
   const endIdx = fullLineContent.length - 3;
 
-  let innerContent = fullLineContent.substring(startIdx, endIdx);
-
-  try {
-    // The content is a string literal, with \n, \t, \r, \\ and quotes escaped in it.
-    innerContent = innerContent
-      .replace(/\\n/g, '\n')
-      .replace(/\\t/g, '\t')
-      .replace(/\\r/g, '\r')
-      .replace(/\\\\/g, '\\')
-      .replace(/\\"/g, '"')
-      .replace(/\\'/g, "'");
-  } catch {
-    return null;
-  }
+  // The content is a string literal, with \n, \t, \r, \\ and quotes escaped
+  // in it. Each escape is read in one pass, so an escaped backslash followed by
+  // `n` stays a backslash and an `n`.
+  const ESCAPES: Record<string, string> = { n: '\n', t: '\t', r: '\r' };
+  const innerContent = fullLineContent
+    .substring(startIdx, endIdx)
+    .replace(/\\(.)/g, (_escape, char: string) => ESCAPES[char] ?? char);
 
   const lines = innerContent.split('\n');
   const flags = caseSensitive ? 'g' : 'gi';
@@ -190,10 +183,7 @@ function extractSourceFromFullEvalLine(
     for (let i = 0; i < lines.length; i++) {
       if (regex.test(lines[i])) {
         regex.lastIndex = 0; // Reset for next test
-        return {
-          lineContent: lines[i].trim(),
-          innerLineNumber: i + 1, // 1-based line number within the eval content
-        };
+        return { lineContent: lines[i].trim() };
       }
       regex.lastIndex = 0; // Reset for next test
     }
@@ -203,10 +193,7 @@ function extractSourceFromFullEvalLine(
     for (let i = 0; i < lines.length; i++) {
       const line = caseSensitive ? lines[i] : lines[i].toLowerCase();
       if (line.includes(searchPattern)) {
-        return {
-          lineContent: lines[i].trim(),
-          innerLineNumber: i + 1,
-        };
+        return { lineContent: lines[i].trim() };
       }
     }
   }
@@ -324,11 +311,11 @@ export function createInspectionTools(
       'Inspect and debug code. Actions: getCallStack (get call stack when paused), getVariables (get variables in call frame), evaluateExpression (evaluate JavaScript, in the page or inside a worker via `target`), searchCode (search code by pattern), searchFunctions (find function definitions), listTargets (list service/dedicated/shared worker targets)',
       inspectionToolSchema,
       // abortSignal (#110): a cancel stops the wait, not the work. An
-      // evaluation in the page is raced against it: CDP cannot recall a
-      // Runtime.evaluate, so the expression keeps running in the target while
-      // the call returns. Every other action - a worker evaluation, the
-      // searches, the variable and call-stack reads - checks the cancel once on
-      // entry and runs its CDP round-trips to completion.
+      // evaluation, in the page or in a worker, is raced against it: CDP cannot
+      // recall a Runtime.evaluate, so the expression keeps running in the target
+      // while the call returns. The searches and the variable and call-stack
+      // reads check the cancel once on entry and run their CDP round-trips to
+      // completion.
       async (args, abortSignal?: AbortSignal) => {
         const { action, connectionReason } = args;
 
@@ -471,8 +458,9 @@ export function createInspectionTools(
             }
 
             if (args.target) {
-              return await evaluateInWorker(
-                targetCdpManager, args.target, expression, awaitPromise, resolveWorkerRegistry
+              return await raceAbort(
+                evaluateInWorker(targetCdpManager, args.target, expression, awaitPromise, resolveWorkerRegistry),
+                abortSignal
               );
             }
 
@@ -623,13 +611,13 @@ export function createInspectionTools(
                         lineContent = extracted.lineContent;
                       } else {
                         // Couldn't extract, use truncated original
-                        lineContent = match.lineContent;
+                        lineContent = match.lineContent.trim();
                       }
                     } else {
-                      lineContent = match.lineContent;
+                      lineContent = match.lineContent.trim();
                     }
                   } else {
-                    lineContent = match.lineContent;
+                    lineContent = match.lineContent.trim();
                   }
 
                   // Truncate line content to avoid huge responses from minified code

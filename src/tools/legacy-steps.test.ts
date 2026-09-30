@@ -49,6 +49,20 @@ describe('translateCall', () => {
       .toEqual({ tool: 'config', params: { action: 'debugLoggingStatus' } });
   });
 
+  it('carries into a tab action only the keys its connection action accepts', () => {
+    const stray = { reference: 'a', newReference: 'b', url: 'http://a/', bringToFront: true };
+    expect(translateCall('tab', { action: 'list', ...stray }))
+      .toEqual({ tool: 'connection', params: { action: 'list' } });
+    expect(translateCall('tab', { action: 'switch', ...stray }))
+      .toEqual({ tool: 'connection', params: { action: 'switch', connectionReason: 'a', bringToFront: true } });
+    expect(translateCall('tab', { action: 'close', ...stray }).params)
+      .toEqual({ action: 'close', connectionReason: 'a', reason: expect.any(String) });
+    expect(translateCall('tab', { action: 'rename', ...stray }))
+      .toEqual({ tool: 'connection', params: { action: 'rename', connectionReason: 'a', name: 'b' } });
+    expect(translateCall('tab', { action: 'create', ...stray }))
+      .toEqual({ tool: 'connection', params: { action: 'launch', name: 'a', url: 'http://a/', bringToFront: true } });
+  });
+
   it('leaves a call to a tool that still exists unchanged', () => {
     const params = { action: 'goto', url: 'http://a/', connectionReason: 'app' };
     expect(translateCall('navigate', params)).toEqual({ tool: 'navigate', params });

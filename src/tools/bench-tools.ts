@@ -20,6 +20,7 @@ import { autoLaunchChrome } from './replay-executor.js';
 import { createdName, isLaunchStep } from './connection-steps.js';
 import { stopRecording, cancelRecording, eventsToCommands } from '../interaction-recorder.js';
 import { openBackgroundPage } from '../puppeteer-manager.js';
+import { translateSequence } from './legacy-steps.js';
 import type { SourceMapHandler } from '../sourcemap-handler.js';
 import type { CommandRecorder } from '../command-recorder.js';
 import { debugLog } from '../debug-logger.js';
@@ -284,7 +285,7 @@ async function readSequenceAnnotations(commandRecorder: CommandRecorder): Promis
   for (const entry of saved) {
     let sequence: any;
     try {
-      sequence = JSON.parse(await fs.readFile(entry.fullPath, 'utf-8'));
+      sequence = translateSequence(JSON.parse(await fs.readFile(entry.fullPath, 'utf-8')));
     } catch {
       // A sequence file that will not parse is not worth failing a list over.
       continue;
@@ -727,7 +728,7 @@ export function createSequenceDriver(
         const onDisk = (await commandRecorder.listSavedSequencesOnDisk().catch(() => [] as any[]))
           .find((entry: any) => entry.name === name || entry.filename === `${name}.json`);
         if (!onDisk) return undefined;
-        sequence = JSON.parse(await fs.readFile(onDisk.fullPath, 'utf-8'));
+        sequence = translateSequence(JSON.parse(await fs.readFile(onDisk.fullPath, 'utf-8')));
       }
       const commands: Array<{ tool: string; params: Record<string, any>; annotations?: unknown[] }> = sequence.commands ?? [];
       return {

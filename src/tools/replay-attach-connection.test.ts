@@ -8,11 +8,40 @@ import { describe, it, expect, vi } from 'vitest';
 import { createReplayTools } from './replay-tools.js';
 import { CommandRecorder } from '../command-recorder.js';
 import { productionShaped } from '../test-support/fake-execute-tool-call.js';
+import { HELD, runsOnPass } from '../test-support/check-steps.js';
 
-function makeHarness() {
+/**
+ * `live` is what `connection list` reports: the names already connected in this
+ * session. A launch or attach adds its name, and a call naming a connection
+ * outside that set fails, as the real tools do.
+ */
+function makeHarness(opts: { live?: string[] } = {}) {
   const calls: Array<{ tool: string; params: Record<string, any> }> = [];
+  const live = new Set(opts.live ?? []);
   const executeToolCall = vi.fn(productionShaped(async (tool: string, params: Record<string, any>) => {
+    if (tool === 'check') return HELD;
     calls.push({ tool, params });
+    if (tool === 'connection' && (params.action === 'launch' || params.action === 'attach')) {
+      if (live.has(params.name)) {
+        return { isError: true, content: [{ type: 'text', text: `Reference "${params.name}" is already in use` }] };
+      }
+      live.add(params.name);
+      return { content: [{ type: 'text', text: '' }] };
+    }
+    if (typeof params.connectionReason === 'string' && !live.has(params.connectionReason)) {
+      return { isError: true, content: [{ type: 'text', text: 'Connection not found' }] };
+    }
+    if (tool === 'connection' && params.action === 'list') {
+      return {
+        content: [{ type: 'text', text: '' }],
+        _meta: {
+          tool: 'connection', action: 'list', timestamp: 0,
+          connections: [...live].map((reference, i) => ({
+            reference, type: 'chrome', host: 'localhost', port: 9222 + i, active: i === 0, connected: true, paused: false,
+          })),
+        },
+      };
+    }
     return { content: [{ type: 'text', text: '' }] };
   }));
   const recorder = new CommandRecorder();
@@ -37,6 +66,54 @@ describe('a run of an attach followed by bare steps', () => {
 
     expect(connectionsOf(calls, 'breakpoint')).toEqual(['api-server']);
     expect(connectionsOf(calls, 'inspect')).toEqual(['api-server']);
+  });
+});
+
+describe('a run of an attach to Chrome followed by bare browser steps', () => {
+  it('attaches under the name and drives that browser, launching none', async () => {
+    const { calls, replay, recorder } = makeHarness();
+    await recorder.createSequenceFromCommands('chrome-attach', [
+      { tool: 'connection', params: { action: 'attach', name: 'shop-tab', port: 9222 } },
+      { tool: 'navigate', params: { action: 'goto', url: 'http://shop.test/' } },
+      { tool: 'input', params: { action: 'click', selector: '#buy' } },
+    ]);
+
+    const result: any = await replay.handler({ action: 'run', wait: true, name: 'chrome-attach' } as any);
+
+    expect(result.isError).toBeFalsy();
+    expect(calls.filter(c => c.tool === 'connection' && c.params.action === 'launch')).toEqual([]);
+    expect(calls.filter(c => c.tool === 'connection' && c.params.action === 'attach')).toHaveLength(1);
+    expect(connectionsOf(calls, 'input')).toEqual(['shop-tab']);
+  });
+});
+
+describe('a nested sequence that attaches', () => {
+  async function recordNested(recorder: any) {
+    await recorder.createSequenceFromCommands('node-setup', [
+      { tool: 'connection', params: { action: 'attach', name: 'api-server', port: 9229 } },
+      { tool: 'inspect', params: { action: 'evaluateExpression', expression: 'process.pid' } },
+    ]);
+    await recorder.createSequenceFromCommands('outer', [runsOnPass('node-setup')]);
+  }
+
+  it('runs its bare steps on the connection its attach created', async () => {
+    const { calls, replay, recorder } = makeHarness({ live: ['browser-a'] });
+    await recordNested(recorder);
+
+    await replay.handler({ action: 'run', wait: true, name: 'outer', connectionReason: 'browser-a' } as any);
+
+    expect(calls.filter(c => c.tool === 'connection' && c.params.action === 'attach')).toHaveLength(1);
+    expect(connectionsOf(calls, 'inspect')).toEqual(['api-server']);
+  });
+
+  it('skips an attach whose name is already connected, and runs its steps where it was called from', async () => {
+    const { calls, replay, recorder } = makeHarness({ live: ['browser-a', 'api-server'] });
+    await recordNested(recorder);
+
+    await replay.handler({ action: 'run', wait: true, name: 'outer', connectionReason: 'browser-a' } as any);
+
+    expect(calls.filter(c => c.tool === 'connection' && c.params.action === 'attach')).toEqual([]);
+    expect(connectionsOf(calls, 'inspect')).toEqual(['browser-a']);
   });
 });
 
@@ -69,5 +146,32 @@ describe('repeat', () => {
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain('connectionReason');
     expect(calls.filter(c => c.tool === 'inspect')).toEqual([]);
+  });
+});
+
+describe('calls that take no connection', () => {
+  it('repeat runs a bare acknowledge and loadMaps as they were, without refusing them', async () => {
+    const { calls, replay, recorder } = makeHarness({ live: ['browser-a'] });
+    await recorder.recordCommand('execution', { action: 'acknowledge' });
+    await recorder.recordCommand('source', { action: 'loadMaps', directory: 'dist' });
+
+    const result: any = await replay.handler({ action: 'repeat', indices: [0, 1] } as any);
+
+    expect(result.isError).toBeFalsy();
+    expect(calls.filter(c => c.tool === 'execution' || c.tool === 'source').map(c => c.params)).toEqual([
+      { action: 'acknowledge' },
+      { action: 'loadMaps', directory: 'dist' },
+    ]);
+  });
+
+  it('a run leaves a bare acknowledge bare, so it acknowledges every paused connection', async () => {
+    const { calls, replay, recorder } = makeHarness({ live: ['browser-a'] });
+    await recorder.createSequenceFromCommands('ack-all', [
+      { tool: 'execution', params: { action: 'acknowledge' } },
+    ]);
+
+    await replay.handler({ action: 'run', wait: true, name: 'ack-all', connectionReason: 'browser-a' } as any);
+
+    expect(calls.filter(c => c.tool === 'execution').map(c => c.params)).toEqual([{ action: 'acknowledge' }]);
   });
 });

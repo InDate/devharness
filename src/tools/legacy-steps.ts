@@ -48,18 +48,20 @@ const REWRITES: Record<string, Rewrite> = {
   saveToDisk: p => ({ tool: 'download', params: p }),
   setDebugLogging: p => ({ tool: 'config', params: withParams(p, [], { action: 'setDebugLogging' }) }),
   getDebugLoggingStatus: p => ({ tool: 'config', params: withParams(p, [], { action: 'debugLoggingStatus' }) }),
+  // `tab` took every key for every action and `connection` is strict, so each
+  // action carries only the keys its connection action accepts.
   tab: p => {
     switch (p.action) {
       case 'create':
-        return { tool: 'connection', params: withParams(p, ['action', 'reference'], { action: 'launch', name: p.reference }) };
+        return { tool: 'connection', params: withParams({}, [], { action: 'launch', name: p.reference, url: p.url, bringToFront: p.bringToFront }) };
       case 'rename':
-        return { tool: 'connection', params: withParams(p, ['action', 'reference', 'newReference'], { action: 'rename', connectionReason: p.reference, name: p.newReference }) };
+        return { tool: 'connection', params: withParams({}, [], { action: 'rename', connectionReason: p.reference, name: p.newReference }) };
       case 'switch':
-        return { tool: 'connection', params: withParams(p, ['action', 'reference'], { action: 'switch', connectionReason: p.reference }) };
+        return { tool: 'connection', params: withParams({}, [], { action: 'switch', connectionReason: p.reference, bringToFront: p.bringToFront }) };
       case 'close':
-        return { tool: 'connection', params: withParams(p, ['action', 'reference'], { action: 'close', connectionReason: p.reference, reason: p.reason ?? 'closed with tab close' }) };
+        return { tool: 'connection', params: withParams({}, [], { action: 'close', connectionReason: p.reference, reason: p.reason ?? 'closed with tab close' }) };
       default:
-        return { tool: 'connection', params: withParams(p, ['action'], { action: 'list' }) };
+        return { tool: 'connection', params: { action: 'list' } };
     }
   },
 };
@@ -75,7 +77,7 @@ const REPLACEMENTS: Record<string, string> = {
   getChromeStatus: "connection with action: 'browsers'",
   killChrome: "browser with action: 'kill'",
   resetChromeLauncher: "browser with action: 'resetLauncher'",
-  tab: "connection: list, switch, rename and close; a new tab is connection launch with port",
+  tab: "connection: list, switch, rename and close; a new tab is connection launch with the port of the Chrome to open it in (a translated tab create opens it in the Chrome on the reserved port, or starts one there)",
   getSourceCode: "source with action: 'get'",
   loadSourceMaps: "source with action: 'loadMaps'",
   detectModals: "modal with action: 'detect'",

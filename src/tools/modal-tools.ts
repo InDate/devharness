@@ -69,7 +69,7 @@ async function detectModalsImpl(
     const result = await executeWithPauseDetection(
       cdpManager,
       async () => await detectModalsUtil(page, detectionOptions as ModalDetectionOptions),
-      'detectModals'
+      'modal detect'
     );
 
     const modals = result.result || [];
@@ -167,7 +167,7 @@ async function dismissModalImpl(
     const detectResult = await executeWithPauseDetection(
       cdpManager,
       async () => await detectModalsUtil(page),
-      'detectModals'
+      'modal detect'
     );
 
     const modals = detectResult.result || [];
@@ -231,7 +231,7 @@ async function dismissModalImpl(
         effectiveStrategy,
         retryAttempts
       );
-    }, 'dismissModal');
+    }, 'modal dismiss');
 
     const result = dismissResult.result;
 

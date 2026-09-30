@@ -88,7 +88,7 @@ export function createExecutionTools(
             } else {
               await targetCdpManager.pause();
             }
-            return createSuccessResponse('EXECUTION_PAUSED');
+            return createSuccessResponse('EXECUTION_PAUSED', { reference: connectionReason });
 
           case 'resume': {
             // Check if execution was paused due to logpoint limit exceeded

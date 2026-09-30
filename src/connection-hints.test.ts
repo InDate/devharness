@@ -1,8 +1,8 @@
 // @vitest-environment node
 /**
  * A reply that suggests the next call names the connection the reply came
- * from. A suggestion without it reaches the active connection, which with two
- * browsers open is not necessarily the one that answered.
+ * from. A suggestion without it is refused as a call, since every call that
+ * acts on a connection has to name one.
  */
 import { describe, it, expect, vi } from 'vitest';
 import { checkBreakpointPause } from './tool-response.js';

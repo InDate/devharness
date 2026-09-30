@@ -5,7 +5,7 @@ Chrome DevTools Protocol debugging for JavaScript/TypeScript in Chrome, Node.js,
 **Quick start (web apps):**
 1. `connection({ action: 'launch', name: "name" })` - launches AND auto-connects, ready immediately (do not attach after this)
 2. `navigate({ action: 'goto', connectionReason: "name", url: "..." })` - also caches interactive elements for the page
-3. `content({ action: 'findInteractive' })` / `content({ action: 'extractText', mode: 'outline' })` to read the page
+3. `content({ action: 'findInteractive', connectionReason: "name" })` / `content({ action: 'extractText', mode: 'outline', connectionReason: "name" })` to read the page
 4. Use other tools with `connectionReason: "name"`
 
 **Node.js:** start with `node --inspect=9229 app.js`, then `connection({ action: 'attach', name: "name", port: 9229 })`.

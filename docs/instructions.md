@@ -31,6 +31,8 @@ Chrome DevTools Protocol debugging for JavaScript/TypeScript in Chrome, Node.js,
 
 ## Basic Workflow
 
+Past this point, calls are written short and leave `connectionReason` out. Every call that acts on a connection passes it; a call without one is refused.
+
 1. **Connect**:
    - `connection({ action: 'launch', name: "name" })` - Launches AND auto-connects (ready immediately, don't attach after it)
    - `connection({ action: 'attach', name: "name" })` - Only for existing Node.js/remote debuggers
@@ -234,7 +236,7 @@ runs against (see Quick Start).
 - `resolve` is **human-gated**: it opens a browser overlay and only a person clicking Fixed/Not Fixed can close the issue. Don't call it unattended - it will wait ~150s and then fail with `ISSUES_RESOLVE_TIMEOUT`. Record what you found with `comment` and ask the user to run `resolve` themselves
 - `acknowledge`: acknowledge pending bugs to unblock other tools
 - **GitHub** (via the `gh` CLI; only `publish` and `sync` use the network): `publish` shows a draft and posts nothing until `confirm: true`; `sync` reconciles both ways and reports a conflict rather than overwriting when both sides changed; `import` materialises a GitHub-only issue locally; `link` stamps an existing number with no network call; `pullSequence` writes a sequence out of an issue body to disk (one authored by another GitHub account needs a person to read it and pass `confirm: true`)
-- A sequence pulled from an issue is **never run automatically**, and one using `execution`, `server`, `request` or `download` is refused unless you pass `allowPrivilegedSteps: true`. Read it first
+- A sequence pulled from an issue is **never run automatically**, and one using `execution`, `server`, `request`, `download` or `browser` is refused unless you pass `allowPrivilegedSteps: true`. Read it first
 
 **Bench**: `bench` (actions: start, stop, hold, release, picker, tick, keepStep, dropStep, flagStep, sweep, retake, capture, list, status)
 - The panel beside a driven app: it holds the page still, shows what crossed the boundary and what caused each thing, records and steps sequences, and collects element-level comments

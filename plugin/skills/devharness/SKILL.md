@@ -27,7 +27,7 @@ Launched without a name? `connection({ action: 'rename', connectionReason: "unna
 
 Paused: `inspect({ action: 'getCallStack', connectionReason })` → `getVariables` → `evaluateExpression`.
 Watch: `console({ action: 'list', connectionReason })`, `network({ action: 'list', connectionReason })` (needs `network({ action: 'enable', connectionReason })` first).
-Inside a worker: `inspect({ action: 'listTargets', connectionReason })` → `evaluateExpression({ target, expression })`, and `console({ action: 'list', target })` — a service worker's console reaches no page listener.
+Inside a worker: `inspect({ action: 'listTargets', connectionReason })` → `inspect({ action: 'evaluateExpression', connectionReason, target, expression })`, and `console({ action: 'list', connectionReason, target })` — a service worker's console reaches no page listener.
 
 ## `.devharness/` must be git-ignored
 

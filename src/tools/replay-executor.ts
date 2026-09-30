@@ -20,7 +20,7 @@ import { assertAsCheck, subjectOf as subjectOfCheck, waitAsCheck } from './check
 import type { CheckOutcome as CheckOutcomeRecord, RanStep } from '../proxy/registry.js';
 import { asStep, withinRun } from '../call-origin.js';
 import type { ConnectionMeta, DebuggerStatusMeta } from '../tool-response.js';
-import { addressesConnection, createsConnection, createdName, isAttachStep, isLaunchStep } from './connection-steps.js';
+import { addressesConnection, createsConnection, createdName, isLaunchStep } from './connection-steps.js';
 
 // Re-export replay cursor functions
 export { injectReplayCursor, showClickEffect, showKeyPress, removeReplayCursor } from '../replay-cursor.js';
@@ -199,9 +199,11 @@ export interface ExecutionResult {
 }
 
 export interface ConnectionAnalysis {
-  launchIndex: number;
+  /** The first launch or attach step, or -1. */
+  createIndex: number;
   firstConnectionToolIndex: number;
-  hasLaunchBeforeConnection: boolean;
+  /** A launch or attach comes before any step needs a browser, so the sequence creates the connection it runs on. */
+  createsBeforeUse: boolean;
 }
 
 // =============================================================================
@@ -277,7 +279,7 @@ export function captureVariable(
 }
 
 /**
- * Tools that can only run against a *browser*. Used to decide whether a sequence
+ * Tools that can only run against a *browser*. Read to find whether a sequence
  * needs Chrome auto-launched (analyzeSequenceConnections / sequenceNeedsConnection
  * and the auto-launch paths in replay-tools).
  *
@@ -343,7 +345,20 @@ export function commandNeedsBrowserConnection(cmd: { tool: string; params?: Reco
  * points. Measuring ambiguity with the narrower predicate missed exactly those
  * tools, which are the ones people actually leave bare.
  */
+/**
+ * Actions of connection-taking tools that run without one: a bare `execution
+ * acknowledge` acknowledges every paused connection, and `source loadMaps`
+ * registers maps for the whole session. A connection stamped onto either
+ * narrows the first to one connection and the second to nothing it uses.
+ */
+function actsWithoutConnection(cmd: { tool: string; params?: Record<string, any> }): boolean {
+  const action = cmd.params?.action;
+  return (cmd.tool === 'execution' && action === 'acknowledge')
+    || (cmd.tool === 'source' && action === 'loadMaps');
+}
+
 export function commandTakesInjectedConnection(cmd: { tool: string; params?: Record<string, any> }): boolean {
+  if (actsWithoutConnection(cmd)) return false;
   // wait({ ms }) is a plain sleep - no connection is injected, nothing ambiguous.
   if (cmd.tool === 'wait') return (cmd.params || {}).ms === undefined;
   if (cmd.tool === 'check') {
@@ -641,15 +656,16 @@ export interface NestedRunResult {
 
 /**
  * Shared preparation for any sequence run INSIDE another one (a check's
- * `{ run }`, `forEach`'s `do`): decide which of its launch steps still
- * apply, and which browser its bare steps belong to.
+ * `{ run }`, `forEach`'s `do`): which of its launch and attach steps still
+ * apply, and which connection its bare steps run on.
  *
- * Drop launch steps whose browser already exists - the caller handed us a
- * live connection and relaunching it would throw the session away. Keep the ones
- * whose reference is NOT live: a setup sequence that spans two browsers has to be
- * able to create the second one, or it can only ever heal identity in browsers
- * that happened to be open already. Probed only when there is a launch to reason
- * about, so the common nested call costs no extra tool call.
+ * A launch or attach whose name is already live is dropped - relaunching it
+ * would throw the session away, and attaching again fails on a name in use.
+ * One whose name is NOT live is kept: a setup sequence that spans two
+ * browsers has to be able to create the second one, or it can only ever heal
+ * identity in browsers that happened to be open already. Probed only when
+ * there is a launch or attach to check, so the common nested call costs no
+ * extra tool call.
  */
 async function prepareNestedSequence(
   rawSequence: CommandSequence,
@@ -663,12 +679,12 @@ async function prepareNestedSequence(
   const sequence = ctx.rebaseOrigin
     ? rebaseSequence(rawSequence, { baseUrl: ctx.rebaseOrigin })
     : rawSequence;
-  const liveRefs = sequence.commands.some(isLaunchStep)
+  const liveRefs = sequence.commands.some(createsConnection)
     ? await probeLiveConnectionReferences(ctx.executeToolCall)
     : null;
   const keptLaunches: string[] = [];
   const filteredCommands = sequence.commands.filter(cmd => {
-    if (!isLaunchStep(cmd)) return true;
+    if (!createsConnection(cmd)) return true;
 
     const name = createdName(cmd);
     const recorded = name ? sanitizeReference(name) : undefined;
@@ -679,21 +695,21 @@ async function prepareNestedSequence(
     const resolved = ctx.connectionMap?.[recorded] ?? recorded;
     if (liveRefs.has(resolved)) return false;
 
-    debugLog(logPrefix, `Keeping the launch of "${resolved}" in nested sequence "${label}": no such connection in this session`);
+    debugLog(logPrefix, `Keeping the ${cmd.params?.action} of "${resolved}" in nested sequence "${label}": no such connection in this session`);
     keptLaunches.push(resolved);
     return true;
   });
 
-  // A launch we KEPT created a browser that only this sub-sequence knows about,
-  // and `create` hoists a uniform connection OFF the steps - so the setup
-  // sequence is a launch followed by BARE steps. Left on the parent's
-  // connection, those steps run in the caller's browser: the run creates a
-  // browser, does nothing in it, and reports success. Bind the sub-run to the
-  // browser it just launched, exactly as a top-level run of that sequence would
-  // (extractConnectionFromSequence).
+  // A launch or attach we KEPT created a connection that only this
+  // sub-sequence knows about, and `create` hoists a uniform connection OFF the
+  // steps - so the setup sequence is a launch or attach followed by BARE steps.
+  // Left on the parent's connection, those steps run in the caller's browser:
+  // the run creates a connection, does nothing in it, and reports success.
+  // Bind the sub-run to the connection it just created, exactly as a top-level
+  // run of that sequence would (extractConnectionFromSequence).
   //
-  // Only for a launch we kept. A launch that was DROPPED means the browser
-  // already existed, and re-pointing bare steps at it would hijack a nested
+  // Only for one we kept. One that was DROPPED means the connection already
+  // existed, and re-pointing bare steps at it would hijack a nested
   // login/setup sequence that has always run in whatever browser called it.
   const nestedAnalysis = analyzeSequenceConnections(filteredCommands);
   const launchedConnection = extractConnectionFromSequence(filteredCommands, nestedAnalysis);
@@ -1221,52 +1237,28 @@ export function rebaseSequence(
 // =============================================================================
 
 /**
- * Analyze sequence commands to find the first launch and determine connection requirements
+ * Where a sequence creates its connection (its first launch or attach) and
+ * where it first needs a browser. A sequence that creates its connection first
+ * is given none by the run: auto-launching one under the same name would make
+ * its own launch reuse it or its own attach fail on a name already in use.
  */
 export function analyzeSequenceConnections(commands: RecordedCommand[]): ConnectionAnalysis {
-  let launchIndex = -1;
-  let firstConnectionToolIndex = -1;
+  const createIndex = commands.findIndex(createsConnection);
+  const firstConnectionToolIndex = commands.findIndex(commandNeedsBrowserConnection);
+  const createsBeforeUse = createIndex !== -1 &&
+    (firstConnectionToolIndex === -1 || createIndex < firstConnectionToolIndex);
 
-  for (let i = 0; i < commands.length; i++) {
-    if (isLaunchStep(commands[i]) && launchIndex === -1) {
-      launchIndex = i;
-    }
-    if (commandNeedsBrowserConnection(commands[i]) && firstConnectionToolIndex === -1) {
-      firstConnectionToolIndex = i;
-    }
-  }
-
-  const hasLaunchBeforeConnection = launchIndex !== -1 &&
-    (firstConnectionToolIndex === -1 || launchIndex < firstConnectionToolIndex);
-
-  return { launchIndex, firstConnectionToolIndex, hasLaunchBeforeConnection };
+  return { createIndex, firstConnectionToolIndex, createsBeforeUse };
 }
 
-/**
- * The connection a sequence's bare steps run on, when the sequence creates it:
- * the name its first launch gives, when that launch comes before any step
- * needs a browser, or else the name its first attach gives, when that attach
- * comes before any step takes a connection.
- */
+/** The name the sequence's first launch or attach creates, when it creates it before any step needs a browser. */
 export function extractConnectionFromSequence(
   commands: RecordedCommand[],
   analysis: ConnectionAnalysis
 ): string | undefined {
-  if (analysis.hasLaunchBeforeConnection) {
-    const name = createdName(commands[analysis.launchIndex]);
-    if (name) {
-      return sanitizeReference(name);
-    }
-  }
-  const attachIndex = commands.findIndex(isAttachStep);
-  const firstTakingIndex = commands.findIndex(commandTakesInjectedConnection);
-  if (attachIndex !== -1 && (firstTakingIndex === -1 || attachIndex < firstTakingIndex)) {
-    const name = createdName(commands[attachIndex]);
-    if (name) {
-      return sanitizeReference(name);
-    }
-  }
-  return undefined;
+  if (!analysis.createsBeforeUse) return undefined;
+  const name = createdName(commands[analysis.createIndex]);
+  return name ? sanitizeReference(name) : undefined;
 }
 
 export interface RecordedConnectionAnalysis {
@@ -1555,14 +1547,14 @@ export async function autoLaunchChrome(
 export async function ensureConnection(
   ctx: ExecutionContext,
   needsConnection: boolean,
-  hasLaunchBeforeConnection: boolean,
+  createsBeforeUse: boolean,
   /** The recording ran through a proxy, so the browser this launches needs one
    *  too - otherwise the replay drives an app whose traffic nothing captures. */
   throughProxy: boolean = false
 ): Promise<{ success: true; didAutoLaunch: boolean } | { success: false; error: string }> {
   const { executeToolCall, connectionReason, logPrefix = 'executor' } = ctx;
 
-  if (!needsConnection || hasLaunchBeforeConnection) {
+  if (!needsConnection || createsBeforeUse) {
     return { success: true, didAutoLaunch: false };
   }
 
@@ -1635,7 +1627,7 @@ export async function navigateToStartUrl(
     cmd.tool === 'navigate' && cmd.params.action === 'goto'
   );
   const startsWithNavigate = firstNavigateIndex === 0 ||
-    (analysis.hasLaunchBeforeConnection && firstNavigateIndex === analysis.launchIndex + 1);
+    (analysis.createsBeforeUse && firstNavigateIndex === analysis.createIndex + 1);
 
   if (startsWithNavigate) {
     return { success: true };
@@ -2500,7 +2492,8 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
 
       // Inject the run-level connectionReason for tools that accept one, unless the
       // step names its own (per-step connection wins - multi-device sequences).
-      if (connectionReason && (TOOLS_ACCEPTING_CONNECTION.includes(cmd.tool) || addressesConnection(cmd)) && !params.connectionReason) {
+      if (connectionReason && (TOOLS_ACCEPTING_CONNECTION.includes(cmd.tool) || addressesConnection(cmd))
+          && !actsWithoutConnection(cmd) && !params.connectionReason) {
         params.connectionReason = connectionReason;
       }
 

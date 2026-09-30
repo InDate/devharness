@@ -271,21 +271,13 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
 
           await debugLog('index', `Connection with reference "${sanitizedRef}" already exists, reusing`);
 
-          // Set as active connection
-          connectionManager.setActiveConnection(existingConnection.id);
           activateConnection(existingConnection.id);
+          const page = await pageOf(existingConnection);
+          const title = page?.title ?? 'Unknown';
+          const pageUrl = page?.url ?? 'about:blank';
 
-          // Get current page info
-          let title = 'Unknown';
-          let pageUrl = 'about:blank';
-          if (existingConnection.puppeteerManager) {
-            const page = existingConnection.puppeteerManager.getPage();
-            pageUrl = page.url();
-            title = await page.title();
-          }
-
-          // `reused: true` is how a replay run tells a browser it BORROWED from
-          // one it created: the reference already existed, so it belongs to
+          // `reused: true` separates a browser a replay run BORROWED from one
+          // it created: the reference already existed, so it belongs to
           // whoever made it and must survive killChromeOnFinish.
           return withLaunchMeta(
             createSuccessResponse('CHROME_CONNECTION_REUSED', {
@@ -488,7 +480,6 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
               pageIndex
             );
 
-            // Update active manager references
             activateConnection(connectionId);
 
             // Get page info for Chrome connections
@@ -762,7 +753,6 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
           pageIndex
         );
 
-        // Update active manager references
         activateConnection(connectionId);
 
         // Build console stats for Chrome connections
@@ -855,7 +845,6 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
       return response;
   };
 
-  /** The page a connection drives, or undefined for one without a page (a Node.js target) or mid-navigation. */
   /**
    * The page a connection drives, or undefined for one without a page (a
    * Node.js target) or mid-navigation. `page.title()` waits while the debugger

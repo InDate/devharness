@@ -61,13 +61,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `navigateTo()` and other names that are not tools now name real calls.
 - **A replay run takes its connection from an `attach` step**, so a Node.js
   sequence's bare `breakpoint` and `inspect` steps run on the process it
-  attached to. `repeat` and `runFromLog` fill a connection into every tool
-  that takes one, not only browser tools.
+  attached to, and a sequence that attaches to Chrome runs without a browser
+  launched ahead of it under the same name. A nested sequence treats an
+  attach as it treats a launch. `repeat` and `runFromLog` fill a connection
+  into every tool that takes one, not only browser tools; a bare `execution
+  acknowledge` and `source loadMaps` stay bare.
 - **Replay passes a `reason` when it releases a browser it launched**, which
   validation had refused, leaving the name bound until Chrome's exit handler
   ran.
-- **`connection list` and `switch` answer while a connection is paused.**
-  Reading the page title waited for the page to resume.
+- **`connection list`, `status`, `switch` and a reusing `launch` answer
+  while a connection is paused.** Reading the page title waited for the page
+  to resume, and the pause guard blocked `list`, `status` and `browsers`.
 - **`modal dismiss` works in a tab that is not in front.** The button click
   waited on a rendering frame such a tab never produces, and failed after
   minutes.
@@ -125,7 +129,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     bench calls using the old names are rewritten to the new calls where they
     are read. An MCP call to an old name returns `UNKNOWN_TOOL` with
     `replacedBy`. Permission allowlists naming the old tools need the new
-    names.
+    names. An old `tab create` becomes a launch on the reserved port, where
+    it opens a tab in the Chrome there or starts one.
+  - A sequence pulled from GitHub that uses `browser` is refused without
+    `allowPrivilegedSteps`, as `execution`, `server`, `request` and
+    `download` are.
 - **Schema defaults moved into the handlers**, so history and saved
   sequences record what a call passed, not `autoConnect`, `headless` and
   `host` on every connection action.

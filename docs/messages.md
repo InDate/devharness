@@ -648,7 +648,7 @@ Logpoint {{breakpointId}} execution counter reset. It can now execute {{maxExecu
 
 **Type:** success
 
-Pause requested. Execution stops at the next statement the page runs: at once when a script is running, otherwise when one next starts. `connection({ action: 'status' })` reports `paused: true` once it has.
+Pause requested. Execution stops at the next statement the page runs: at once when a script is running, otherwise when one next starts. `connection({ action: 'status', connectionReason: '{{reference}}' })` reports `paused: true` once it has.
 
 ---
 
@@ -1087,9 +1087,9 @@ Cannot interact with element `{{selector}}` - blocked by {{modalDescription}}
 - Available dismiss strategies: {{availableStrategies}}
 
 **Suggestions:**
-- Use `modal({ action: 'dismiss' })` to remove the blocking modal first
+- Use `modal({ action: 'dismiss', connectionReason })` to remove the blocking modal first
 - Enable `handleModals: true` parameter to automatically dismiss modals
-- Use `modal({ action: 'detect' })` to see all blocking elements on the page
+- Use `modal({ action: 'detect', connectionReason })` to see all blocking elements on the page
 
 {{#suggestion}}
 **Hint:** {{suggestion}}

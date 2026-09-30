@@ -583,6 +583,9 @@ const BREAKPOINT_ALLOWED_TOOLS = new Set([
  */
 const BREAKPOINT_ALLOWED_TOOL_ACTIONS: Record<string, Set<string>> = {
   server: new Set(['cancelPendingRestart']),
+  // Read the connections without launching, attaching or closing any; `status`
+  // is where a requested pause shows as taken.
+  connection: new Set(['list', 'status', 'browsers']),
 };
 
 /**
@@ -656,8 +659,8 @@ export function checkBreakpointPause(
     return `- "${p.reference}"${loc}${frameId}${restart}`;
   }).join('\n');
 
-  // Every suggested call names the paused connection: without it the call
-  // reaches the active connection, which need not be the one paused.
+  // Every suggested call names the paused connection: a call without one is
+  // refused, and with two connections open only the name selects the paused one.
   const first = pausedConnections[0];
   const on = `connectionReason: '${first.reference}'`;
   const getVariablesHint = first.callFrameId

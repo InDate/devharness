@@ -1938,7 +1938,7 @@ async function handleRun(
   // Validate connection requirement - fall back to a reason derived from the
   // sequence name so we can auto-launch Chrome instead of erroring out
   const needsConnection = sequenceNeedsConnection(commands);
-  if (!connectionReason && !analysis.hasLaunchBeforeConnection && needsConnection) {
+  if (!connectionReason && !analysis.createsBeforeUse && needsConnection) {
     connectionReason = deriveConnectionReference(sequence.name);
   }
 
@@ -2420,9 +2420,9 @@ async function performRun(
 
   // Ensure connection is ready
   let didAutoLaunch = false;
-  if (needsConnection && !analysis.hasLaunchBeforeConnection) {
+  if (needsConnection && !analysis.createsBeforeUse) {
     const connResult = await ensureConnection(
-      ctx, needsConnection, analysis.hasLaunchBeforeConnection, sequence.recordedThroughProxy === true);
+      ctx, needsConnection, analysis.createsBeforeUse, sequence.recordedThroughProxy === true);
     if (!connResult.success) {
       return {
         outcome: 'failed',

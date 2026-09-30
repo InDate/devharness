@@ -175,6 +175,24 @@ describe('auditSequence', () => {
     expect(audit.privileged).toEqual(['execution', 'server']);
   });
 
+  it('flags a step that kills a browser, under its old name or its new one', () => {
+    const parsed = parseRemoteSequence(JSON.stringify({
+      commands: [{ tool: 'navigate' }, { tool: 'killChrome', params: { reason: 'r' } }],
+      teardown: [{ tool: 'browser', params: { action: 'kill', reason: 'r' } }],
+    }));
+    if (!parsed.ok) throw new Error('expected ok');
+    expect(auditSequence(parsed.sequence).privileged).toEqual(['browser']);
+  });
+
+  it('reads an old saveToDisk step as download, and flags it', () => {
+    const parsed = parseRemoteSequence(JSON.stringify({
+      commands: [{ tool: 'saveToDisk', params: { url: 'http://a/f.txt', filename: 'f.txt' } }],
+    }));
+    if (!parsed.ok) throw new Error('expected ok');
+    expect(parsed.sequence.commands[0].tool).toBe('download');
+    expect(auditSequence(parsed.sequence).privileged).toEqual(['download']);
+  });
+
   it('reports nothing privileged for a plain UI sequence', () => {
     const parsed = parseRemoteSequence(JSON.stringify(SEQ));
     if (!parsed.ok) throw new Error('expected ok');

@@ -69,7 +69,7 @@ import { createMessageTools } from './tools/message-tools.js';
 import { startSessionEndpoint, type SessionEndpoint } from './session-endpoint.js';
 import { runCli, isCliCommand, isVersionFlag, readPackageVersion } from './cli/index.js';
 import { getClaudeSessionId, resolveSessionName } from './session-identity.js';
-import { createDashboardTools, setDashboardInstance, getDashboardInstance, setSessionInfo, getSessionInfo, getDuplicateSessionInfo } from './tools/dashboard-tools.js';
+import { createDashboardTools, setDashboardInstance, getDashboardInstance, setSessionInfo, getDuplicateSessionInfo } from './tools/dashboard-tools.js';
 import { initializeDashboard, shutdownDashboard, type DashboardInstance, type ConnectionInfo as DashboardConnectionInfo } from './dashboard/index.js';
 import { Orchestrator } from './log-processor/orchestrator.js';
 import { mkdirSync, existsSync, readFileSync, readdirSync, statSync } from 'fs';
@@ -79,7 +79,7 @@ import { configManager } from './config.js';
 import { ToolError } from './tool-error.js';
 import type { ToolGroup } from './bench/wire.js';
 import { arriveOn, unlisted, historyPlace, entryChannel } from './call-origin.js';
-import { markOnProxies, markNextCommand, releaseCommand, noteCallStart } from './proxy/registry.js';
+import { markNextCommand, releaseCommand, noteCallStart } from './proxy/registry.js';
 
 /**
  * Tools that read the app without driving it.
@@ -109,15 +109,15 @@ function observes(toolName: string, args: Record<string, unknown> | undefined): 
 import { checkPortFailures, checkBreakpointPause, checkBugBlocking, checkPendingStartups, checkDuplicateSession, prependToResponse, appendToResponse, buildStatusSuffix, type StatusLineItem } from './tool-response.js';
 import { recordBlockEvent, clearBlockEvents } from './block-events.js';
 import { createStartupGate } from './startup-gate.js';
-import { createErrorResponse, formatCodeBlock, getMessage, getFormattedResponse } from './messages.js';
+import { createErrorResponse } from './messages.js';
 import { setChromeLauncher } from './error-helpers.js';
 import { createServer } from 'net';
 import { readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { debugLog, enableDebugLogging, enableHistoryLogging, disableHistoryLogging, setStartupMetrics } from './debug-logger.js';
+import { debugLog, enableDebugLogging, enableHistoryLogging, setStartupMetrics } from './debug-logger.js';
 import { deriveConnectionReference, sanitizeReference, InvalidReferenceError } from './reference-validator.js';
-import { initializePaths, getOutputPath, resolveStateDir } from './helpers/paths.js';
+import { initializePaths, resolveStateDir } from './helpers/paths.js';
 import { cleanupStaleTempFiles, cleanupStaleTempFilesSync } from './atomic-write.js';
 import { createSessionDetector, type SessionInfo, type SessionDetector } from './session-detector.js';
 import { serverClaims } from './server-claims.js';
@@ -151,14 +151,13 @@ const startupGate = createStartupGate({
 });
 
 /**
- * Which build is actually answering, so a session can tell whether the code it
- * is calling is the code it just compiled.
+ * Which build is actually answering, reported by `config status` so a session
+ * can compare the code it calls with the code it just compiled.
  *
  * A rebuild signals the supervisor named in this project's pidfile, which is
  * not necessarily the supervisor serving this session - when it isn't, the
- * build reports success and the old code keeps answering. There was no way to
- * notice: behaviour was read from a stale build for several iterations and a
- * fix that already worked was called broken (issue #135).
+ * build reports success and the old code keeps answering, and behaviour read
+ * from it describes a stale build (issue #135).
  *
  * `buildMtime` is read once at startup, so it dates the running code rather
  * than whatever is on disk now - which is the whole point of the comparison.
@@ -284,10 +283,9 @@ type SkillInstallState =
  * package, which tracks upgrades for free - but nothing stops a client or user
  * from *copying* the directory instead, and a copy is frozen forever: the file
  * exists, so a presence-only check suppresses the nudge permanently and the
- * user silently runs an old skill against a newer tool surface. That is not
- * hypothetical - this package shipped a catalog describing a pre-grouping API
- * long after those tools were consolidated away. Comparing the stamped version
- * catches the copy case without needing any install machinery of our own.
+ * user silently runs an old skill against a newer tool surface. Comparing the
+ * stamped version catches the copy case without needing any install machinery
+ * of our own.
  */
 function getSkillInstallState(): SkillInstallState {
   let stale: { path: string; installedVersion: string | null } | null = null;
@@ -428,37 +426,6 @@ async function createMCPServer(): Promise<Server> {
   );
 }
 
-/**
- * Wait for Chrome debugging port to become ready
- * Polls the /json/version endpoint until Chrome is inspectable
- */
-async function waitForChromeReady(port: number, maxAttempts: number = 10): Promise<void> {
-  for (let i = 0; i < maxAttempts; i++) {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 1000);
-
-      const response = await fetch(`http://localhost:${port}/json/version`, {
-        signal: controller.signal
-      });
-
-      clearTimeout(timeoutId);
-
-      if (response.ok) {
-        // Chrome is ready and inspectable
-        return;
-      }
-    } catch (error) {
-      // Chrome not ready yet, continue polling
-    }
-
-    // Exponential backoff: 500ms + (attempt * 200ms)
-    await new Promise(resolve => setTimeout(resolve, 500 + i * 200));
-  }
-
-  throw new Error(`Chrome debugging port ${port} failed to become inspectable within timeout. Try increasing the wait time or check if Chrome started correctly.`);
-}
-
 // Session detection state (set in main, used in tool handler)
 let sessionDetectorInstance: SessionDetector | null = null;
 let sessionVerifyStarted = false;
@@ -467,8 +434,9 @@ let sessionVerifyStarted = false;
 let orchestratorInstance: Orchestrator | null = null;
 
 /**
- * Resolve a connection from a connectionReason (task description)
- * Sanitizes the reason, looks for existing tab, or creates new one
+ * The connection `connectionReason` names, with its managers, or null when no
+ * connection has that name. Every tool that acts on a connection reaches it
+ * here, and each reach counts as activity against the inactivity timeout.
  */
 async function resolveConnectionFromReason(connectionReason: string): Promise<{
   connection: Connection;
@@ -477,18 +445,10 @@ async function resolveConnectionFromReason(connectionReason: string): Promise<{
   consoleMonitor: ConsoleMonitor | null;
   networkMonitor: NetworkMonitor | null;
 } | null> {
-  // Sanitize: lowercase, trim, spaces to hyphens
-  const reference = connectionReason.toLowerCase().trim().replace(/\s+/g, '-');
-
-  // Find connection by reference only
-  const connection = connectionManager.findConnectionByReference(reference);
-
-  // If not found, return null to show error
+  const connection = connectionManager.findConnectionByReference(connectionReason);
   if (!connection) {
     return null;
   }
-
-  // Update activity timestamp when connection is accessed
   connectionManager.updateActivity(connection.id);
 
   return {
@@ -525,9 +485,6 @@ let pidAnnounced = false;
 let statusLegendShown = false;
 
 /**
- * Execute a tool call - used by replay system
- */
-/**
  * The refusal for a tool that would drive a page the bench holds - held,
  * running a sequence, recording. The page cannot move, so the call would
  * wait on it to its timeout and hold the caller with it; refused at once,
@@ -543,6 +500,11 @@ function pageHeldRefusal(toolName: string, args: Record<string, any>): any {
   return hold ? createErrorResponse('PAGE_HELD_BY_BENCH', { ...hold, toolName }) : undefined;
 }
 
+/**
+ * Run a tool call that did not arrive over MCP: a replay step, a bench action,
+ * a CLI call, or a call one tool makes to another. An isError answer is thrown
+ * as a ToolError.
+ */
 async function executeToolCall(calledName: string, calledParams: Record<string, any>, abortSignal?: AbortSignal): Promise<any> {
   const { toolName, params, tool } = callTarget<any>(allTools, calledName, calledParams);
 
@@ -722,11 +684,6 @@ function registerToolHandlers(server: Server) {
       return unknownToolResponse(toolName, Object.keys(allTools));
     }
 
-    // A tool that drives a page the bench holds - frozen, running, recording -
-    // would wait on a page that cannot move until its timeout, and hold the
-    // call with it. Refused at once instead, naming what holds it.
-    // A check read once answers from the page as it is; one read again until
-    // it holds waits on the page moving, as a wait does.
     const held = pageHeldRefusal(toolName, (request.params.arguments ?? {}) as Record<string, any>);
     if (held) return held;
 
@@ -1045,17 +1002,12 @@ async function runCliSequence(argv: string[]): Promise<void> {
   }
 
   try {
-    const launchResult = await executeToolCall('connection', {
+    await executeToolCall('connection', {
       action: 'launch',
       name: connectionReason,
       headless: !headed,
       forceNewInstance: true,
     });
-    if (launchResult?.isError) {
-      console.error(launchResult.content?.[0]?.text || 'Failed to launch Chrome');
-      process.exit(1);
-    }
-
     const runResult = await executeToolCall('replay', {
       action: 'run',
       // Blocking: the CLI's exit code comes from the run result, and the
@@ -1065,9 +1017,9 @@ async function runCliSequence(argv: string[]): Promise<void> {
       connectionReason,
       killChromeOnFinish: !keepChrome,
       // A CLI run has nobody to answer a prompt, so a parameterised sequence
-      // must keep its recorded values. Leaving this undefined made every such
-      // sequence exit 1 having executed nothing - a "failure" that is really
-      // the run asking a question into a pipe. Same reason runAll passes it.
+      // keeps its recorded values. Left undefined, every such sequence would
+      // exit 1 having executed nothing - the run asking a question into a
+      // pipe. Same reason runAll passes it.
       variables: {},
     });
 
@@ -1127,7 +1079,6 @@ async function main() {
 
   // Start non-blocking session detection (polls for file modified after MCP start)
   const cwd = process.cwd();
-  const mcpStartTime = Date.now();
   // SessionInfo detected asynchronously - may be undefined until callback fires
   let detectedSessionInfo: SessionInfo | undefined;
   // Dashboard instance - initialized after session is detected
@@ -1356,14 +1307,14 @@ async function main() {
 
   // Note: Config was already loaded earlier (before orchestrator startup) for debug logging
 
-  // Announce this session BEFORE the manager decides anything: collection asks
-  // whether another live session is working in a server's directory, and a
-  // session that has not registered yet is invisible to that question.
+  // Announced BEFORE the manager starts: collection counts the live sessions
+  // working in a server's directory, and a session that has not registered yet
+  // is not counted.
   serverClaims.collectDeadSessions();
   await serverClaims.registerSession(process.cwd());
 
   // Initialize server manager - recover running servers and start auto-run servers.
-  // Tool calls queue behind this (see waitForStartupRecovery); release the gate
+  // Tool calls queue behind this (startupGate); release the gate
   // even if recovery throws, or every later call would wait out the timeout.
   let serverInitResult: Awaited<ReturnType<typeof serverManager.initialize>>;
   try {
@@ -1380,8 +1331,6 @@ async function main() {
   if (serverInitResult.failed.length > 0) {
     console.error(`[devharness] Failed to auto-start ${serverInitResult.failed.length} server(s): ${serverInitResult.failed.join(', ')}`);
   }
-
-  // Dashboard is initialized in session detection callback after sessionId is known
 
   console.error(`[devharness] Server ready (PID: ${process.pid})`);
 
@@ -1414,11 +1363,11 @@ async function main() {
         }
       }
 
-      // closeInactiveConnections() now does the activity re-check and Chrome kill itself
-      // (per-connection, before tearing down its monitors, and correctly tagged as
-      // 'inactivity' - see ConnectionManager.closeConnection). What's left here is just a
-      // backstop for Chrome instances with no tracked connection at all (e.g. launched with
-      // autoConnect: false and never connected, or orphaned by some other cleanup path).
+      // closeInactiveConnections() re-checks activity and kills Chrome itself,
+      // per connection, before tearing down its monitors, tagged 'inactivity'
+      // (see ConnectionManager.closeConnection). This loop is the backstop for a
+      // Chrome with no tracked connection at all (launched with autoConnect:
+      // false and never connected, or orphaned by another cleanup path).
       const closedCount = await connectionManager.closeInactiveConnections(INACTIVITY_THRESHOLD);
       if (closedCount > 0) {
         console.error(`[devharness] Closed ${closedCount} inactive connection(s)`);

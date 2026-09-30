@@ -10,7 +10,8 @@ import { promises as fsp } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { setWorkingDirOverride } from '../helpers/paths.js';
-import { __resetForTests, addIssue, getIssue } from '../issue-tracker.js';
+import { __resetForTests, addIssue, getIssue, getIssueSequencesDir } from '../issue-tracker.js';
+import { activityPathFor } from '../sequence-activity.js';
 import { createIssuesTools, DEFAULT_RESOLVE_VERIFICATION_TIMEOUT_MS } from './issues-tools.js';
 import { ToolError } from '../tool-error.js';
 import { createErrorResponse } from '../messages.js';
@@ -333,5 +334,54 @@ describe('issues list - a body is data, not template', () => {
     );
 
     expect(result.content[0].text).toContain('BODY OF THE NAMED ISSUE');
+  });
+});
+
+describe('issues and the sequence file they carry', () => {
+
+  it('workOn runs the sequence by the name inside its file, not by the filename', async () => {
+    const calls: Array<{ tool: string; params: any }> = [];
+    const executeToolCall = vi.fn(productionShaped(async (tool: string, params: any) => {
+      calls.push({ tool, params });
+      return { content: [{ type: 'text', text: '' }] };
+    }));
+    const issue = await addIssue({ type: 'bug', title: 'Login loops', sequenceFile: 'bug-1-login-loops.json', recordingName: 'login-flow', initialStatus: 'acknowledged', startUrl: '' });
+    await fsp.mkdir(getIssueSequencesDir(), { recursive: true });
+    await fsp.writeFile(join(getIssueSequencesDir(), 'bug-1-login-loops.json'), JSON.stringify({ id: 'x', name: 'login-flow', createdAt: 1, commands: [] }));
+    const { issues } = createIssuesTools(executeToolCall as any);
+
+    await issues.handler({ action: 'workOn', id: issue.id } as any);
+
+    expect(calls.find(c => c.tool === 'replay' && c.params.action === 'run')?.params.name).toBe('login-flow');
+  });
+
+  it('resolve closes its tab when the person cancels at "ready to begin?"', async () => {
+    const calls: Array<{ tool: string; params: any }> = [];
+    const executeToolCall = vi.fn(productionShaped(async (tool: string, params: any) => {
+      calls.push({ tool, params });
+      return { content: [{ type: 'text', text: '' }] };
+    }));
+    const issue = await addIssue({ type: 'bug', title: 'Cart empties', sequenceFile: '', recordingName: 'manual', initialStatus: 'acknowledged', startUrl: 'http://shop.test/' });
+    showTestReadyOverlay.mockResolvedValue('cancel');
+    const { issues } = createIssuesTools(executeToolCall as any, undefined, async () => ({}));
+
+    await issues.handler({ action: 'resolve', id: issue.id } as any);
+
+    expect(calls.some(c => c.tool === 'connection' && c.params.action === 'close')).toBe(true);
+  });
+
+  it('create copies the linked sequence\'s activity with it', async () => {
+    const source = join(tempDir, 'checkout.json');
+    await fsp.writeFile(source, JSON.stringify({ id: 'y', name: 'checkout', createdAt: 1, commands: [] }));
+    await fsp.mkdir(join(activityPathFor(source), '..'), { recursive: true });
+    await fsp.writeFile(activityPathFor(source), '{"traffic":1}');
+    await fsp.mkdir(getIssueSequencesDir(), { recursive: true });
+    const { issues } = createIssuesTools(vi.fn() as any, async () => source);
+
+    const result: any = await issues.handler({ action: 'create', type: 'bug', title: 'Checkout total wrong', sequenceName: 'checkout' } as any);
+
+    const issue = await getIssue(Number(result.content[0].text.match(/#(\d+)/)?.[1]));
+    const copied = activityPathFor(join(getIssueSequencesDir(), issue!.sequenceFile));
+    expect(await fsp.readFile(copied, 'utf-8')).toBe('{"traffic":1}');
   });
 });

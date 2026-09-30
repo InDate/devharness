@@ -40,6 +40,7 @@ import {
   handlePublish, handleSync, handleImport, handleLink, handlePullSequence,
 } from '../github/issue-actions.js';
 import { configManager } from '../config.js';
+import { activityPathFor } from '../sequence-activity.js';
 
 /** GitHub actions can be switched off in config - the override path a user
  *  can reach without going through an agent. */
@@ -140,6 +141,33 @@ async function withVerificationTimeout<T>(promise: Promise<T>, timeoutMs: number
 // Helper Functions
 // =============================================================================
 
+
+/**
+ * The name a sequence file registers under when loaded. A sequence linked by
+ * `create` keeps its own name while its file is renamed for the issue, so a
+ * run by the filename found nothing, or another sequence by prefix.
+ */
+async function sequenceNameIn(path: string, fallback: string): Promise<string> {
+  try {
+    const name = JSON.parse(await fs.readFile(path, 'utf-8')).name;
+    return typeof name === 'string' && name ? name : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/** Move or copy a sequence's activity file beside it, when it has one. */
+async function carryActivity(from: string, to: string, move: boolean): Promise<void> {
+  const source = activityPathFor(from);
+  const target = activityPathFor(to);
+  try {
+    await fs.mkdir(join(target, '..'), { recursive: true });
+    if (move) await fs.rename(source, target);
+    else await fs.copyFile(source, target);
+  } catch {
+    // No activity recorded for it.
+  }
+}
 
 function formatIssuesList(issues: TrackedIssue[]): string {
   if (issues.length === 0) {
@@ -254,7 +282,7 @@ export function createIssuesTools(
 ) {
   return {
     issues: createTool(
-      'Track and manage bugs and features as Markdown issues (title, Markdown body, labels, comments). Actions: list (show all issues with optional filters, or one issue in full by id), create (create new issue with title/body/labels, optionally linking a sequence), workOn (start working on issue with auto-replay), resolve (HUMAN-ONLY interactive verification: opens a browser overlay and waits for a person to confirm the fix before marking fixed/implemented - agents are refused immediately, use `comment` instead), acknowledge (acknowledge pending bugs to unblock tools), comment (append a Markdown comment to an issue), publish/sync/import/link/pullSequence (GitHub, via the gh CLI; only publish and sync use the network)',
+      'Track and manage bugs and features as Markdown issues (title, Markdown body, labels, comments). Actions: list (show all issues with optional filters, or one issue in full by id), create (create new issue with title/body/labels, optionally linking a sequence), workOn (start working on issue with auto-replay), resolve (HUMAN-ONLY interactive verification: opens a browser overlay and waits for a person to confirm the fix before marking fixed/implemented - an agent calling it waits until the overlay times out, so use `comment` instead), acknowledge (acknowledge pending bugs to unblock tools), comment (append a Markdown comment to an issue), publish/sync/import/link/pullSequence (GitHub, via the gh CLI; only publish and sync use the network)',
       issuesSchema,
       async (args, abortSignal) => {
         // Initialize tracker on first use
@@ -380,8 +408,8 @@ export function createIssuesTools(
                 const destPath = join(getIssueSequencesDir(), newFilename);
 
                 try {
-                  // Copy the sequence file
                   await fs.copyFile(sourcePath, destPath);
+                  await carryActivity(sourcePath, destPath, false);
                   sequenceFile = newFilename;
                 } catch (error: any) {
                   return createErrorResponse('ISSUES_SEQUENCE_COPY_FAILED', {
@@ -419,6 +447,7 @@ export function createIssuesTools(
                 const newPath = join(getIssueSequencesDir(), correctFilename);
                 try {
                   await fs.rename(oldPath, newPath);
+                  await carryActivity(oldPath, newPath, true);
                   await updateIssueSequenceFile(issue.id, correctFilename);
                   issue.sequenceFile = correctFilename;
                 } catch {
@@ -482,7 +511,7 @@ export function createIssuesTools(
               if (hasSequence) {
                 // Auto-replay sequence if available
                 const sequencePath = join(getIssueSequencesDir(), issue.sequenceFile!);
-                const sequenceName = issue.sequenceFile!.replace(/\.json$/, '');
+                const sequenceName = await sequenceNameIn(sequencePath, issue.sequenceFile!.replace(/\.json$/, ''));
 
                 // Load and run sequence (errors propagate via ToolError)
                 await executeToolCall('replay', {
@@ -707,6 +736,9 @@ export function createIssuesTools(
             }
 
             if (readyAction === 'cancel') {
+              if (!args.keepBrowserOpen) {
+                await executeToolCall('connection', { action: 'close', reason: 'issue verification cancelled', connectionReason: connectionRef }).catch(() => {});
+              }
               return createSuccessResponse('ISSUES_VERIFICATION_CANCELLED', {
                 id: issue.id,
                 type: issue.type,
@@ -752,7 +784,7 @@ export function createIssuesTools(
 
             if (hasSequence) {
               const sequencePath = join(getIssueSequencesDir(), issue.sequenceFile!);
-              const sequenceName = issue.sequenceFile!.replace(/\.json$/, '');
+              const sequenceName = await sequenceNameIn(sequencePath, issue.sequenceFile!.replace(/\.json$/, ''));
 
               const closeVerificationTab = async () => {
                 if (args.keepBrowserOpen) return;

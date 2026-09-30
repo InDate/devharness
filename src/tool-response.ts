@@ -1,6 +1,8 @@
 /**
- * Tool Response Helpers
- * Functions for modifying tool responses with pre/post content
+ * The shape of a tool response: its `_meta` types, the guards that block a
+ * call before it runs (port failures, pending bugs, breakpoint pauses,
+ * startup failures, duplicate sessions), and the helpers that add text
+ * before or after a response.
  */
 
 import type { PortFailureInfo, PendingStartupFailureInfo, PendingRestartInfo } from './server-manager.js';
@@ -169,10 +171,10 @@ export interface RequestToolMeta {
 /**
  * Inspect tool metadata (evaluateExpression result, capturable via saveAs).
  *
- * `value` is a best-effort de-formatted view of the evaluated result: the
- * CDP layer returns values already shaped for display (strings arrive quoted,
- * numbers/booleans arrive as strings), so this reverses that so a captured
- * variable holds the real type rather than its display text.
+ * `value` holds the evaluated result with its real type: captured by value
+ * from CDP where the result serialises, or else reconstructed from the display
+ * text, in which strings arrive quoted and numbers and booleans as strings.
+ * `valueSource` records which.
  */
 export interface InspectToolMeta {
   expression: string;
@@ -257,8 +259,8 @@ export interface WaitToolMeta {
 /**
  * Replay run metadata - structured completion signal, since a "run" can
  * finish with failed steps or pause (stepTo/breakpoint/click-validation)
- * while still returning a non-isError response (a caller has to read this
- * to tell those apart from a clean run instead of text-scraping the reply).
+ * while still returning a non-isError response. These fields separate those
+ * from a clean run, where the reply's text does not.
  */
 export interface ReplayRunMeta {
   /** Not set on a background-start response (runId + background instead). */
@@ -278,11 +280,6 @@ export interface ReplayRunMeta {
   cancelled?: boolean;
 }
 
-/**
- * Root metadata structure for tool responses
- * This provides structured data for programmatic use (validation, replay)
- * while keeping text content free to evolve for human/LLM display
- */
 /** One worker target: service worker, dedicated worker, or shared worker. */
 export interface WorkerTargetMeta {
   targetId: string;
@@ -305,6 +302,11 @@ export interface ConnectionMeta {
   title?: string;
 }
 
+/**
+ * Root metadata structure for tool responses
+ * This provides structured data for programmatic use (validation, replay)
+ * while keeping text content free to evolve for human/LLM display
+ */
 export interface ToolResponseMeta {
   tool: string;
   action?: string;
@@ -515,7 +517,7 @@ export function checkPortFailures(
 
 /**
  * Check for blocking bugs from recordings
- * Only allows the 'acknowledge' action in the issues tool
+ * Only allows the issues tool's `acknowledge` and `list` actions
  */
 export async function checkBugBlocking(toolName: string, toolArgs?: Record<string, unknown>): Promise<PreExecutionResult> {
   const hasBugs = await hasPendingBugs();
@@ -577,9 +579,9 @@ const BREAKPOINT_ALLOWED_TOOLS = new Set([
 
 /**
  * Specific tool+action combos allowed even when otherwise blocked - narrower
- * than BREAKPOINT_ALLOWED_TOOLS, for actions that need to run precisely
- * because a pause is blocking things (e.g. discarding a restart that's
- * queued behind this very pause - blocking it would make it uncancellable).
+ * than BREAKPOINT_ALLOWED_TOOLS, where the tool's other actions stay blocked:
+ * one that has to run because of the pause (discarding a restart queued
+ * behind it, which blocking would make uncancellable), and ones that only read.
  */
 const BREAKPOINT_ALLOWED_TOOL_ACTIONS: Record<string, Set<string>> = {
   server: new Set(['cancelPendingRestart']),
@@ -829,7 +831,7 @@ export function checkDuplicateSession(
   const duplicatePpids = info.allPpids.filter(p => p !== info.allPpids[0]);
 
   if (isOriginal) {
-    // Original session - tell them about the duplicate and how to kill it
+    // Original session: the reply names the duplicate and the kill that ends it
     return {
       blocked: true,
       response: {
@@ -861,7 +863,7 @@ Another Claude session has connected with the same session ID:
       }
     };
   } else {
-    // Duplicate session - tell them to fork
+    // Duplicate session: the reply gives the fork command
     const firstPpid = info.allPpids[0] || firstPid;
     return {
       blocked: true,

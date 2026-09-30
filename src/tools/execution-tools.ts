@@ -1,5 +1,6 @@
 /**
- * Execution Control Tools
+ * `execution` pauses, resumes and steps a connection's debugger, and
+ * acknowledges a pause so the pause guard lets other tools run while it holds.
  */
 
 import { z } from 'zod';
@@ -9,7 +10,6 @@ import { createSuccessResponse, createErrorResponse, formatCodeBlock } from '../
 import type { ConnectionManager } from '../connection-manager.js';
 import { hold, isHeld, release } from '../hold.js';
 
-// Consolidated schema with action parameter
 const executionSchema = z.object({
   action: z.enum(['pause', 'resume', 'stepOver', 'stepInto', 'stepOut', 'acknowledge']).describe('Execution control action to perform'),
   connectionReason: z.string().optional().describe('The connection, by the name connection launch or attach gave it (e.g. "unnamed-connection-default"). Required for every action except acknowledge, which without one acknowledges every paused connection'),
@@ -29,7 +29,7 @@ export function createExecutionTools(
 ) {
   return {
     execution: createTool(
-      'Control execution flow when paused at breakpoints. Actions: pause (pause execution), resume (resume execution), stepOver (step to next line), stepInto (step into function call), stepOut (step out of current function), acknowledge (acknowledge breakpoint pause to allow other tools to run while paused)',
+      'Control execution flow when paused at breakpoints. Actions: pause (stop at the next statement the page runs), resume (resume execution), stepOver (step to next line), stepInto (step into function call), stepOut (step out of current function), acknowledge (acknowledge breakpoint pause to allow other tools to run while paused)',
       executionSchema,
       async (args) => {
         const { action, connectionReason } = args;
@@ -45,7 +45,8 @@ export function createExecutionTools(
         };
 
         if (!connectionReason) {
-          // Every paused connection is the one the pause guard blocks on.
+          // With no connection named, acknowledge covers every paused
+          // connection, since the pause guard blocks on any of them.
           if (action === 'acknowledge' && connectionManager) {
             const paused = connectionManager.getAllConnections().filter(conn => conn.cdpManager.isPaused());
             if (paused.length === 0) {
@@ -80,9 +81,9 @@ export function createExecutionTools(
           resolvedConnection.breakpointPauseAcknowledged = false;
         };
 
-        // Handle each action
         switch (action) {
           case 'pause':
+            // Through the hold record, which resume releases.
             if (resolvedConnection.reference) {
               await hold(resolvedConnection.reference, { source: 'tool', layers: ['code'] });
             } else {
@@ -91,11 +92,12 @@ export function createExecutionTools(
             return createSuccessResponse('EXECUTION_PAUSED', { reference: connectionReason });
 
           case 'resume': {
-            // Check if execution was paused due to logpoint limit exceeded
+            // A logpoint that reached its limit paused the page. Resume is
+            // refused with the logpoint's logs until `breakpoint resetCounter`
+            // clears the limit.
             const logpointLimit = targetCdpManager.getLogpointLimitExceeded();
 
             if (logpointLimit) {
-              // Format logs as a code block
               const logsFormatted = formatCodeBlock(logpointLimit.logs);
 
               return createErrorResponse('LOGPOINT_LIMIT_EXCEEDED', {
@@ -108,7 +110,6 @@ export function createExecutionTools(
               });
             }
 
-            // Clear acknowledged flag when resuming (auto-unblock)
             clearAcknowledgedFlag();
 
             // Through the hold record, so a resume of the bench's hold releases

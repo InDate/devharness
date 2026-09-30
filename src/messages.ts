@@ -616,7 +616,7 @@ import type { ToolResponseMeta } from './tool-response.js';
 /**
  * MCP Response type
  */
-interface MCPResponse {
+export interface MCPResponse {
   content: Array<{ type: 'text'; text: string }>;
   isError?: boolean;
   /** Structured metadata for programmatic use (validation, replay). Decoupled from text output. */

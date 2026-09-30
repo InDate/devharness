@@ -117,7 +117,7 @@ describe('replay create - templatizes literals against earlier saveAs captures',
 
 describe('replay insert - shares create\'s templatization (buildCommandsFromHistory)', () => {
   // handleInsert builds its inserted steps via recorder.buildCommandsFromHistory
-  // (replay-tools.ts), the exact method createSequence uses above - exercised
+  // (replay-edit.ts), the exact method createSequence uses above - exercised
   // directly here since driving a real pause/insert cycle needs a live
   // background run. Wiring is a 3-line delegation, verified by inspection.
   it('rewrites a literal against an earlier saveAs capture within the given indices', async () => {

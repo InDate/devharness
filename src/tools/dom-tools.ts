@@ -3,7 +3,6 @@
  */
 
 import { z } from 'zod';
-import type { ConnectionManager } from '../connection-manager.js';
 import { executeWithPauseDetection, formatActionResult, actionFailureResponse } from '../debugger-aware-wrapper.js';
 import { checkBrowserAutomation } from '../error-helpers.js';
 import { createTool } from '../validation-helpers.js';
@@ -15,24 +14,23 @@ const domSchema = z.object({
   action: z.enum(['querySelector', 'getProperties', 'snapshot', 'hitTest']).describe('DOM action: querySelector (find element by selector), getProperties (get detailed element properties), snapshot (get full DOM snapshot), hitTest (for every match: is it the topmost element at its own centre, and if not what covers it)'),
   connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it (e.g. "unnamed-connection-default")'),
   // Parameters for querySelector and getProperties actions
-  selector: z.string().optional().describe('CSS selector (required for querySelector and getProperties actions). Supports extended selectors: :has-text("text") for partial match, :text("text") for exact match. Example: button:has-text("Submit")'),
+  selector: z.string().optional().describe('CSS selector (required for querySelector, getProperties and hitTest). Supports extended selectors: :has-text("text") for partial match, :text("text") for exact match. Example: button:has-text("Submit")'),
   // Parameters for snapshot action
   maxDepth: z.number().optional().describe('Maximum depth for DOM snapshot (default: 5, for snapshot action)'),
 }).strict();
 
 export function createDOMTools(
-  connectionManager: ConnectionManager,
   resolveConnectionFromReason: (connectionReason: string) => Promise<any>
 ) {
   return {
     dom: createTool(
-      'Inspect and query the DOM. Actions: querySelector (find element by CSS selector and get basic info), getProperties (get detailed properties of an element), snapshot (get full DOM structure snapshot)',
+      'Inspect and query the DOM. Actions: querySelector (find element by CSS selector and get basic info), getProperties (get detailed properties of an element), snapshot (get full DOM structure snapshot), hitTest (for every match, whether it is topmost at its own centre and what covers it when not)',
       domSchema,
       async (args) => {
         const { action, connectionReason } = args;
 
         // Validate required parameters for each action
-        if ((action === 'querySelector' || action === 'getProperties') && !args.selector) {
+        if ((action === 'querySelector' || action === 'getProperties' || action === 'hitTest') && !args.selector) {
           return createErrorResponse('MISSING_PARAMETER', {
             action,
             missing: 'selector',
@@ -104,7 +102,7 @@ export function createDOMTools(
             // Clean up temporary selector attribute
             await cleanupResolvedSelector(page, selector);
 
-            // Check if element was not found
+            // A pause or a throw is reported as itself; only an absent element reads as not found.
             {
               const failed = actionFailureResponse(result, 'querySelector', rawSelector);
               if (failed) return failed;
@@ -276,7 +274,7 @@ export function createDOMTools(
             // Clean up temporary selector attribute
             await cleanupResolvedSelector(page, selector);
 
-            // Check if element was not found
+            // A pause or a throw is reported as itself; only an absent element reads as not found.
             {
               const failed = actionFailureResponse(result, 'getProperties', rawSelector);
               if (failed) return failed;
@@ -340,7 +338,10 @@ export function createDOMTools(
               'getDOMSnapshot'
             );
 
-            // Return DOM snapshot using the message template
+            {
+              const failed = actionFailureResponse(result, 'snapshot', 'document');
+              if (failed) return failed;
+            }
             return createSuccessResponse('DOM_SNAPSHOT_SUCCESS', { depth: maxDepth }, result.result);
           }
 

@@ -579,7 +579,7 @@ const allTools = {
   ...toolset('proxy', createProxyTools()),
   ...toolset('hold', createHoldTools()),
   ...(configManager.isToolEnabled('page') ? toolset('page', createPageTools(connectionManager, resolveConnectionFromReason, clickableCache, executeToolCall)) : {}),
-  ...(configManager.isToolEnabled('dom') ? toolset('dom', createDOMTools(connectionManager, resolveConnectionFromReason)) : {}),
+  ...(configManager.isToolEnabled('dom') ? toolset('dom', createDOMTools(resolveConnectionFromReason)) : {}),
   ...(configManager.isToolEnabled('screenshot') ? toolset('screenshot', createScreenshotTools(connectionManager, resolveConnectionFromReason)) : {}),
   ...(configManager.isToolEnabled('input') ? toolset('input', createInputTools(connectionManager, resolveConnectionFromReason)) : {}),
   ...(configManager.isToolEnabled('content') ? toolset('content', createContentTools(connectionManager, resolveConnectionFromReason, clickableCache)) : {}),

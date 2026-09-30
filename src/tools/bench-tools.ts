@@ -2,7 +2,7 @@
  * Bench tool - hold the page still, click what is wrong, keep working.
  *
  * Mode control only; the hold, the picker and the annotation store live in
- * `src/bench-mode.ts`, and the page it is driven from in `src/bench-control.ts`.
+ * `src/bench-mode/`, and the page it is driven from in `src/bench-control.ts`.
  * Nothing here blocks: `start` returns as soon as the bench tab is open, and
  * each saved annotation arrives on the session's event stream instead of on
  * this call's response.
@@ -59,6 +59,7 @@ import {
 } from '../bench-mode.js';
 import type { BoundaryRule, HiddenKind, RuleCatalogueEntry, ToolGroup } from '../bench/wire.js';
 import { unlisted } from '../call-origin.js';
+import { CANCELLED } from '../bench-mode/session.js';
 
 const benchSchema = z.object({
   action: z.enum(['start', 'stop', 'tick', 'hold', 'release', 'picker', 'list', 'status', 'keepStep', 'dropStep', 'flagStep', 'sweep', 'retake', 'capture'])
@@ -210,9 +211,6 @@ function formatAnnotations(entries: SequenceAnnotation[]): string {
     })
     .join('\n');
 }
-
-/** Returned by record() when the person abandoned it; not a failure. */
-export const CANCELLED = '\u0000cancelled';
 
 /**
  * Stands in for the bench's own address inside a recorded sequence.

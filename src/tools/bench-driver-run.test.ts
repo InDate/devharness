@@ -8,7 +8,7 @@
  * sequence's steps.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { createSequenceDriver } from './bench-tools.js';
+import { createSequenceDriver } from '../bench-mode/sequence-driver.js';
 
 /** A recorder holding two sequences, with one of them mid-run. */
 function recorderWith(runningName: string | null) {

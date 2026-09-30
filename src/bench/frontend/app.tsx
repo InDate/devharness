@@ -354,15 +354,32 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
       )}
       {sequence?.name && !sequence.recording && (
         <div class="footbar">
-          {/* A run stopped by hand and a run that reached its end both sit
-              still, so the one that was stopped says so - and names the
-              control that carries it on. */}
-          <span class={sequence.playing ? 'at running' : sequence.paused ? 'at paused' : 'at'}>
-            {sequence.playing ? 'running · '
-              : sequence.paused ? (frozen ? 'paused · held · ' : 'paused · ')
-              : ''}
-            step <b>{Math.min(sequence.currentStep + 1, sequence.total)}</b> of {sequence.total}
-          </span>
+          {/* A run stopped by hand, a run whose last step failed and a run that
+              reached its end all sit still with nothing in flight, so the line
+              names which: a run ending leaves no other mark on the bar. */}
+          {(() => {
+            const still = !sequence.playing && !sequence.busy;
+            const failed = still && !!sequence.failure;
+            const finished = still && !failed && !sequence.paused
+              && sequence.total > 0 && sequence.currentStep >= sequence.total;
+            if (finished) {
+              return (
+                <span class="at runend" title="the run reached the end of the sequence">
+                  <Glyph of="tick" /> finished · {sequence.total === 1 ? <><b>1</b> step</> : <>all <b>{sequence.total}</b> steps</>}
+                </span>
+              );
+            }
+            return (
+              <span class={sequence.playing ? 'at running' : sequence.paused ? 'at paused' : failed ? 'at runfail' : 'at'}
+                title={failed ? sequence.failure : undefined}>
+                {sequence.playing ? 'running · '
+                  : sequence.paused ? (frozen ? 'paused · held · ' : 'paused · ')
+                  : failed ? 'failed · '
+                  : ''}
+                step <b>{Math.min(sequence.currentStep + 1, sequence.total)}</b> of {sequence.total}
+              </span>
+            );
+          })()}
           {/* What this step crossed, not what the run has: a running total
               only climbs, so it states that the run is doing something, while
               the step's own count separates a step that made a call from one

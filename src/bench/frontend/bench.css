@@ -22,6 +22,7 @@
   --sequence: #5a5fd1;
   --wait: #0f8a98;
   --variable: #6f8f1f;
+  --done: #238636;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -42,6 +43,7 @@
     --sequence: #a3a7f5;
     --wait: #5fd3de;
     --variable: #b6d65c;
+    --done: #56d364;
   }
 }
 
@@ -1238,6 +1240,13 @@ textarea.toolargs {
    already carrying "held", so the two kinds of stillness read as one family. */
 .footing .at.paused { color: var(--frost); }
 .footing .at.paused b { color: var(--frost); }
+/* A run that reached its end in the done green, and one whose last step
+   failed in the failure hue: the line reads as the outcome at a glance. */
+.footing .at.runend,
+.footing .at.runend b { color: var(--done); }
+.footing .at.runend svg { vertical-align: -2px; }
+.footing .at.runfail,
+.footing .at.runfail b { color: var(--alert); }
 /* The control the paused line is waiting on, in the colour of that line. */
 .footing .chip-toggle.waiting,
 .footing .chip-toggle.waiting:hover:not(:disabled) {

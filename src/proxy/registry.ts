@@ -152,8 +152,8 @@ export function markOnProxies(cursor: ProxyCursor | undefined): void {
  * parser-rooted subresource, a timer-rooted request or send - that measurement
  * already stands and the wait adds nothing to it.
  *
- * Marking idle before the wait, as an earlier build did, stamped the tail this
- * exists to keep with no command and dropped it from every step.
+ * The cursor stays in place through the wait: marked idle before it, the tail
+ * this exists to keep would carry no command and fall out of every step.
  */
 export async function settleProxies(quietMs: number, capMs: number): Promise<void> {
   if (quietMs <= 0 || proxies.size === 0) return;

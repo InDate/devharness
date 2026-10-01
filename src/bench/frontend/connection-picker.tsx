@@ -56,11 +56,13 @@ export function ConnectionPicker({ base }: { base: string }) {
   const names = open.includes(own) ? open : [own, ...open];
 
   return (
-    <select class={failure ? 'connpick bad' : 'connpick'} value={own} disabled={moving}
-      aria-label="Connection the bench works on"
-      title={failure || 'the connection the bench works on; choosing another moves the bench to it'}
-      onChange={(e: Event) => void move((e.target as HTMLSelectElement).value)}>
-      {names.map(name => <option key={name} value={name}>{name}</option>)}
-    </select>
+    <span class={failure ? 'connpick bad' : 'connpick'}>
+      <select value={own} disabled={moving}
+        aria-label="Connection the bench works on"
+        title={failure || 'the connection the bench works on; choosing another moves the bench to it'}
+        onChange={(e: Event) => void move((e.target as HTMLSelectElement).value)}>
+        {names.map(name => <option key={name} value={name}>{name}</option>)}
+      </select>
+    </span>
   );
 }

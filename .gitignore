@@ -13,5 +13,7 @@ dev-notes/*
 # Coverage reports (vitest --coverage)
 coverage/
 
-# Working notes on the shape of a problem, kept beside the code but not shipped.
+# The landscape wiki tracing features, stories and capabilities stays on this machine.
 docs/landscapes/
+*.landscape
+.landscapes/

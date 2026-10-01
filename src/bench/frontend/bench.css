@@ -664,10 +664,12 @@ nav button:hover .tabbadge, nav button.on .tabbadge { background: var(--fg); }
 nav button.on .tabbadge { box-shadow: 0 0 0 1.5px var(--panel); }
 /* A browser launched without a proxy: nothing reaches the Traffic tab. */
 nav button.unproxied { color: var(--alert); }
-/* Six tabs with words, marks and badges, beside the title and the state disc,
-   take about 700px; below 720px the words go and the marks and badges stay. */
-@media (max-width: 719px) {
+/* Six tabs with words, marks and badges, beside the title, the connection
+   picker and the state disc, take about 880px; below 900px the words go, the
+   marks and badges stay, and the picker narrows. */
+@media (max-width: 899px) {
   .tabword { display: none; }
+  .connpick { max-width: 14ch; }
 }
 
 /* One managed dev server. Running and stopped read by the words at the right
@@ -960,6 +962,14 @@ nav button.unproxied { color: var(--alert); }
 .detailhead .resetbtn, .detailhead .runbtn { flex: 0 0 auto; line-height: 18px; }
 .actiongist { font-size: 12px; color: var(--muted); margin: -2px 0 4px; }
 .actionfield { font-weight: 600; }
+/* The connection the bench works on, beside the title. */
+.connpick {
+  max-width: 24ch; padding: 2px 6px; border: 1px solid var(--line); border-radius: 4px;
+  background: var(--bg); color: var(--muted); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-overflow: ellipsis;
+}
+.connpick:hover, .connpick:focus { color: var(--fg); outline: none; border-color: var(--accent); }
+.connpick.bad { border-color: var(--alert); }
 .toolpick { display: none; }
 @media (max-width: 640px) {
   .toolsplit, .toolsplit.railshut { grid-template-columns: minmax(0, 1fr); }

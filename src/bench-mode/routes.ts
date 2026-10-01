@@ -24,6 +24,19 @@ import { openSequence, openSteps, recordedStepOf, summariseBoundary, writeEvents
 
 /** What the bench server calls, for one connection's session and page. */
 export function benchRoutes(connection: string, session: BenchSession, page: Page): BenchHandlers {
+  /**
+   * The bench on connection `name`: the one already open there, or one started
+   * with no tab of its own, so the tab asking moves to it.
+   */
+  const benchOn = async (name: string): Promise<{ benchUrl: string } | { failure: string }> => {
+    const sequences = sessions.get(connection)?.sequences;
+    if (!sequences) return { failure: 'This bench holds no replay side to run tools through' };
+    const benched = await sequences.callTool('bench', { action: 'start', connection: name, openTab: false });
+    const benchUrl = benched.meta?.bench?.state?.benchUrl;
+    if (benched.failed || typeof benchUrl !== 'string') return { failure: benched.result };
+    return { benchUrl };
+  };
+
   return {
     // Everything but `primary`: only the route knows which copy is asking.
     getState: async (): Promise<Omit<BenchView, 'primary'>> => {
@@ -145,11 +158,10 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
         url: page.url(), copyCookiesFrom: connection, port,
       });
       if (launched.failed) return { failure: launched.result };
-      const benched = await sequences.callTool('bench', { action: 'start', connection: name, openTab: false });
-      const benchUrl = benched.meta?.bench?.state?.benchUrl;
-      if (benched.failed || typeof benchUrl !== 'string') return { failure: benched.result };
-      return { benchUrl };
+      return benchOn(name);
     },
+
+    openBench: (name: string) => benchOn(name),
 
     /**
      * Answer this from now on with what it answered here.

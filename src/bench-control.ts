@@ -110,6 +110,8 @@ export interface BenchHandlers {
    * this tab moves to, or the failure.
    */
   enableProxy: (name: string) => Promise<{ benchUrl: string } | { failure: string }>;
+  /** The bench on connection `name`, started with no tab of its own where none is open: the address this tab moves to, or the failure. */
+  openBench: (name: string) => Promise<{ benchUrl: string } | { failure: string }>;
   /**
    * Scope what this browser may reach. An empty list reaches every host, which
    * is what browsing without a sequence needs.
@@ -479,6 +481,10 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
           const body = await readJson(req);
           const hosts = Array.isArray(body.hosts) ? body.hosts.map(String) : [];
           return send(res, 200, await handlers.allowHosts(hosts), 'text/plain; charset=utf-8');
+        }
+        if (req.method === 'POST' && route === '/bench/open') {
+          const { connection } = await readJson(req);
+          return send(res, 200, JSON.stringify(await handlers.openBench(String(connection ?? ''))), 'application/json');
         }
         if (req.method === 'POST' && route === '/proxy/enable') {
           const { name } = await readJson(req);

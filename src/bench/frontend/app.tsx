@@ -10,6 +10,7 @@ import { Tools, type ToolSeed } from './tools.js';
 import { Issues } from './issues.js';
 import { Running } from './running.js';
 import { EnableProxy } from './enable-proxy.js';
+import { ConnectionPicker } from './connection-picker.js';
 import { About } from './sequence.js';
 import { Editing } from './editing.js';
 import { Glyph } from './glyph.js';
@@ -1010,6 +1011,7 @@ function Bench() {
         <h1 class="home" role="link" aria-disabled={busy ? true : undefined}
           title={busy ? 'the run is going - stop it first' : 'the list of sequences'}
           onClick={home}>bench</h1>
+        <ConnectionPicker base={BASE} />
         <nav>
           <TabButton on={tab === 'editing'} word="Sequence" mark={<Glyph of="sequence" />}
             onClick={() => goTab('editing')} />
@@ -1017,7 +1019,7 @@ function Bench() {
             mark={<Glyph of="request" />}
             count={counts.proxied === false ? undefined : counts.traffic}
             detail={counts.proxied === false
-              ? 'this browser was launched without proxy: true, so no traffic is seen. Relaunch it with proxy: true.'
+              ? 'this page runs outside a proxy, so no traffic is seen; Enable proxy on this tab opens it in a proxied window'
               : counts.traffic === undefined ? undefined : `${counts.traffic} crossings at the proxy`}
             onClick={() => goTab('traffic')} />
           <TabButton on={tab === 'history'} word="History" mark={<Glyph of="history" />}

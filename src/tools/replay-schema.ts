@@ -19,6 +19,7 @@ export const replaySchema = z.object({
   envFile: z.string().optional().describe('run/runAll: KEY=value file supplying the {{env:NAME}} tokens; its values win over the server environment'),
   baseUrl: z.string().optional().describe('run/runAll: origin every absolute URL in the run moves onto, path and query kept'),
   indices: z.array(z.number()).optional().describe('Command indices'),
+  params: z.record(z.any()).optional().describe('repeat, one index: fields replacing the recorded ones; null removes one'),
   lines: z.array(z.number()).optional().describe('Log line numbers'),
   sequenceId: z.string().optional(),
   runId: z.string().optional().describe('status/cancel: the background run, by the id run returned'),

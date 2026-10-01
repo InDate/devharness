@@ -162,7 +162,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
       // Validate the name FIRST, before launching Chrome
       const userReference = args.name;
       if (userReference) {
-        requireValidReference(userReference); // Throws InvalidReferenceError if invalid
+        requireValidReference(userReference, 'name'); // Throws InvalidReferenceError if invalid
       }
 
       // Validate the profile name before anything else - an invalid name must
@@ -638,7 +638,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
 
   const attach = async (args: ConnectionArgs): Promise<any> => {
       // The name in its stored form; throws when it is not three words
-      const reference = requireValidReference(args.name!);
+      const reference = requireValidReference(args.name!, 'name');
 
       // A name held by a live connection is refused; one held by a dead connection is freed by the lookup
       const existingConnection = await connectionManager.findConnectionByReferenceValidated(reference);
@@ -1002,7 +1002,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
   };
 
   const rename = async (args: ConnectionArgs): Promise<any> => {
-    const newName = requireValidReference(args.name!);
+    const newName = requireValidReference(args.name!, 'name');
     if (await connectionManager.findConnectionByReferenceValidated(newName)) {
       return createErrorResponse('REFERENCE_IN_USE', { reference: newName });
     }

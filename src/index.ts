@@ -36,7 +36,7 @@ import { createConnectionTools } from './tools/connection-tools.js';
 import { callTarget, unknownToolResponse } from './tools/legacy-steps.js';
 import { LogpointExecutionTracker } from './logpoint-execution-tracker.js';
 import { PortReserver } from './port-reserver.js';
-import { validateParams } from './validation-helpers.js';
+import { validateParams, describeRefusal } from './validation-helpers.js';
 import { ClickableCache } from './clickable-cache.js';
 import { CommandRecorder } from './command-recorder.js';
 import { createBreakpointTools } from './tools/breakpoint-tools.js';
@@ -109,7 +109,7 @@ function observes(toolName: string, args: Record<string, unknown> | undefined): 
 import { checkPortFailures, checkBreakpointPause, checkBugBlocking, checkPendingStartups, checkDuplicateSession, prependToResponse, appendToResponse, buildStatusSuffix, type StatusLineItem } from './tool-response.js';
 import { recordBlockEvent, clearBlockEvents } from './block-events.js';
 import { createStartupGate } from './startup-gate.js';
-import { createErrorResponse, messages } from './messages.js';
+import { createErrorResponse, getErrorMessage, messages, historyFooter, isParameterError } from './messages.js';
 import { setChromeLauncher } from './error-helpers.js';
 import { createServer } from 'net';
 import { readFile } from 'fs/promises';
@@ -484,6 +484,16 @@ function truncate(text: string, limit: number): string {
 let pidAnnounced = false;
 let statusLegendShown = false;
 
+/** A call the schema refused, as an error response carrying the fields it names. */
+function validationFailure(toolName: string, error: any): any {
+  return {
+    content: [{ type: 'text', text: getErrorMessage('PARAMETERS_REFUSED', { tool: toolName, issues: describeRefusal(error) }) }],
+    isError: true,
+    _errorId: error.code,
+    _parameters: error.parameters,
+  };
+}
+
 /**
  * The refusal for a tool that would drive a page the bench holds - held,
  * running a sequence, recording. The page cannot move, so the call would
@@ -521,13 +531,20 @@ async function executeToolCall(calledName: string, calledParams: Record<string, 
 
   const validation = validateParams(params, (tool as any).zodSchema, toolName);
 
+  // A call from the CLI, the bench or a run's step is a command as much as
+  // one over MCP, so history holds it with where it came in. A call the schema
+  // refused is held too, so a repeat can replace the fields it named.
+  const place = toolName === 'replay' ? undefined : historyPlace();
+
   if (!validation.success) {
-    throw new Error(`Validation failed: ${JSON.stringify(validation.error)}`);
+    const refused = validationFailure(toolName, validation.error);
+    if (place) {
+      await commandRecorder.recordCommand(toolName, params, place);
+      commandRecorder.attachResult(commandRecorder.getCurrentHistoryIndex(), refused);
+    }
+    throw new ToolError(refused);
   }
 
-  // A call from the CLI, the bench or a run's step is a command as much as
-  // one over MCP, so history holds it with where it came in.
-  const place = toolName === 'replay' ? undefined : historyPlace();
   let index: number | null = null;
   if (place) {
     await commandRecorder.recordCommand(toolName, validation.data, place);
@@ -787,15 +804,14 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
     );
 
     if (!validation.success) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify(validation.error, null, 2),
-          },
-        ],
-        isError: true
-      };
+      const refused = validationFailure(toolName, validation.error);
+      if (toolName !== 'replay') {
+        await commandRecorder.recordCommand(toolName, request.params.arguments || {});
+        const index = commandRecorder.getCurrentHistoryIndex();
+        commandRecorder.attachResult(index, refused);
+        appendToResponse(refused, `\n\n${historyFooter(index, refused)}`);
+      }
+      return refused;
     }
 
     // Record command if recording is active (but don't record replay tool calls)
@@ -929,7 +945,8 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
         }
       }
 
-      if (commandIndex !== null) {
+      // A parameter error's footer names the entry itself, with the fields to replace.
+      if (commandIndex !== null && !isParameterError(result)) {
         statusItems.push({ label: 'Replay', value: String(commandIndex) });
       }
 
@@ -938,6 +955,7 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
         statusLegendShown = true;
         appendToResponse(result, statusSuffix);
       }
+      if (commandIndex !== null && isParameterError(result)) appendToResponse(result, `\n\n${historyFooter(commandIndex, result)}`);
 
       // One occurrence in the transcript is what session-detector.ts matches on.
       if (!pidAnnounced) {
@@ -990,7 +1008,10 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
             ],
             isError: true
           };
-      if (commandIndex !== null) commandRecorder.attachResult(commandIndex, response);
+      if (commandIndex !== null) {
+        commandRecorder.attachResult(commandIndex, response);
+        appendToResponse(response, `\n\n${historyFooter(commandIndex, response)}`);
+      }
       return response;
     } finally {
       if (marksBoundary) {

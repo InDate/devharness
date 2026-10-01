@@ -963,6 +963,9 @@ nav button.on .tabcount { color: var(--fg); }
 .optionrow.unset .optionfield { border-style: dashed; }
 .optionfield:focus { outline: none; border-color: var(--accent); border-style: solid; }
 .optionname .paramneeded { margin-left: 2px; color: var(--alert); }
+.optionrow.rejected .optionname { color: var(--alert); }
+.optionrow.rejected .optionfield { border-color: var(--alert); border-style: solid; }
+.rejectnote { font-size: 12px; color: var(--alert); margin: -2px 0 4px; }
 .toolbody { display: flex; flex-direction: column; gap: 10px; }
 .toolbody > .hint { margin: 0; }
 .toolfoot { display: flex; align-items: center; gap: 8px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 12px; }

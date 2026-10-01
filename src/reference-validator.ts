@@ -75,12 +75,12 @@ export function validateReference(ref: string): { valid: boolean; sanitized?: st
  * Error class for invalid references - contains the MCP error response
  */
 export class InvalidReferenceError extends Error {
-  public readonly response: { content: { type: string; text: string }[] };
+  public readonly response: ReturnType<typeof createErrorResponse>;
 
-  constructor(error: string) {
+  constructor(error: string, parameter: string) {
     super(error);
     this.name = 'InvalidReferenceError';
-    this.response = createErrorResponse('INVALID_REFERENCE', { error });
+    this.response = createErrorResponse('INVALID_REFERENCE', { error, parameter });
   }
 }
 
@@ -88,10 +88,10 @@ export class InvalidReferenceError extends Error {
  * Validate and return sanitized reference, or throw InvalidReferenceError
  * Use this in tool handlers - throws if invalid, returns sanitized string if valid
  */
-export function requireValidReference(ref: string): string {
+export function requireValidReference(ref: string, parameter: 'name' | 'connectionReason'): string {
   const result = validateReference(ref);
   if (!result.valid) {
-    throw new InvalidReferenceError(result.error!);
+    throw new InvalidReferenceError(result.error!, parameter);
   }
   return result.sanitized!;
 }

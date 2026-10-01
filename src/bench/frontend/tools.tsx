@@ -1,5 +1,5 @@
 /** @jsxImportSource preact */
-import { h, type ComponentChildren } from 'preact';
+import { h, Fragment, type ComponentChildren } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import { ToolGlyph } from './tool-glyph.js';
 import { Glyph } from './glyph.js';
@@ -448,15 +448,22 @@ export function Tools({ base, client, seed, tool, action: placedAction, onPlace 
 }
 
 /**
- * Whether a parameter belongs to `action`. A grouped tool's descriptions open
- * with the actions that take the parameter, `launch/attach: ...`; one naming
- * other actions only is left out, and one naming none belongs to every action.
+ * The actions a grouped tool's parameter description names, from each sentence
+ * that opens with them: `launch/attach: the name ... rename: the new name`
+ * names launch, attach and rename. Empty where no sentence opens that way.
+ */
+function actionsNamedIn(description: string): string[] {
+  return [...description.matchAll(/(?:^|[.;]\s+)([A-Za-z]+(?:\/[A-Za-z]+)*):\s/g)].flatMap(match => match[1].split('/'));
+}
+
+/**
+ * Whether a parameter belongs to `action`: one whose description names
+ * actions of this tool belongs to those, and one naming none belongs to every action.
  */
 function takenBy(description: string | undefined, action: string | undefined, actions: string[]): boolean {
   if (action === undefined || !description) return true;
-  const named = description.match(/^([A-Za-z]+(?:\/[A-Za-z]+)*):\s/)?.[1].split('/');
-  if (!named || !named.every(name => actions.includes(name))) return true;
-  return named.includes(action);
+  const named = actionsNamedIn(description).filter(name => actions.includes(name));
+  return named.length === 0 || named.includes(action);
 }
 
 /** What the bench is looking at, for filling a payload's values it already holds. */
@@ -466,12 +473,16 @@ export interface ToolContext {
   sequence?: string;
 }
 
-/** The options `action` takes: its schema's properties, less `action` and those described as another action's. */
-function optionsOf(tool: ToolCard, action: string | undefined): Array<[string, Schema]> {
+/**
+ * The options `action` takes: its schema's properties, less `action` and those
+ * described as another action's. A property in `kept` stays whatever its
+ * description names, so a field a run failed on has a row to be marked on.
+ */
+function optionsOf(tool: ToolCard, action: string | undefined, kept: string[] = []): Array<[string, Schema]> {
   const actions = actionsOf(tool.inputSchema);
   return Object.entries<Schema>(branchOf(tool.inputSchema).properties ?? {})
     .filter(([name]) => action === undefined || name !== 'action')
-    .filter(([, property]) => takenBy(branchOf(property).description, action, actions));
+    .filter(([name, property]) => kept.includes(name) || takenBy(branchOf(property).description, action, actions));
 }
 
 /**
@@ -494,9 +505,7 @@ function knownValue(tool: string, action: string | undefined, name: string, cont
  */
 function namedFor(tool: ToolCard, action: string | undefined, name: string, property: Schema): boolean {
   if ((branchOf(tool.inputSchema).required ?? []).includes(name)) return true;
-  const description = String(branchOf(property).description ?? '');
-  const named = description.match(/^([A-Za-z]+(?:\/[A-Za-z]+)*):\s/)?.[1].split('/');
-  return !!action && !!named && named.includes(action);
+  return !!action && actionsNamedIn(String(branchOf(property).description ?? '')).includes(action);
 }
 
 /** The starting payload for a call: required options, `action`, and every option the bench holds a value for. */
@@ -563,9 +572,11 @@ function ToolBody({ tool, toolPicker, action, actions, failedActions, onAction, 
 }) {
   const branch = branchOf(tool.inputSchema);
   const required = new Set<string>(branch.required ?? []);
+  // The fields the last run failed on, each with what was wrong, marked on their rows until the next run.
+  const rejected: Record<string, string> = last && last !== 'running' && last.failed ? last.parameters ?? {} : {};
   // Required options first, then the rest in schema order. The order holds
   // while fields fill, so a row stays under the pointer that is typing in it.
-  const properties = optionsOf(tool, action)
+  const properties = optionsOf(tool, action, Object.keys(rejected))
     .sort(([a], [b]) => Number(required.has(b)) - Number(required.has(a)));
 
   // A payload that does not parse to an object is held back here: the route
@@ -582,6 +593,12 @@ function ToolBody({ tool, toolPicker, action, actions, failedActions, onAction, 
 
   const running = last === 'running';
   const submit = () => { if (parsed && !running) onRun(parsed); };
+  const rejectNote = (name: string) => rejected[name] !== undefined && (
+    <>
+      <span />
+      <span class="rejectnote">{rejected[name]}</span>
+    </>
+  );
   // Open while it does not parse, since the form cannot show what an unparsed payload holds.
   const jsonOpen = jsonShown || !!parseError;
 
@@ -616,7 +633,7 @@ function ToolBody({ tool, toolPicker, action, actions, failedActions, onAction, 
         <div class="optionform">
           {action !== undefined && actions.length > 0 && (
             <>
-              <label class="optionrow">
+              <label class={rejected.action !== undefined ? 'optionrow rejected' : 'optionrow'}>
                 <span class="optionname">action</span>
                 <select class="optionfield short actionfield" value={action}
                   onChange={(e: Event) => onAction((e.target as HTMLSelectElement).value)}>
@@ -625,6 +642,7 @@ function ToolBody({ tool, toolPicker, action, actions, failedActions, onAction, 
                   ))}
                 </select>
               </label>
+              {rejectNote('action')}
               {actionGistOf(tool, action) && (
                 <>
                   <span />
@@ -643,57 +661,60 @@ function ToolBody({ tool, toolPicker, action, actions, failedActions, onAction, 
             const listId = `offers-${tool.name}-${name}`;
             const blank = required.has(name) ? 'choose' : '–';
             return (
-              <label key={name} class={unset ? 'optionrow unset' : 'optionrow'} title={tip}>
-                <span class="optionname">{name}{required.has(name) && <span class="paramneeded" title="required" aria-label="required">*</span>}</span>
-                {kind === 'enum' ? (
-                  <select class="optionfield short" value={unset ? '' : String(value)}
-                    onChange={(e: Event) => {
-                      const picked = (e.target as HTMLSelectElement).value;
-                      set(name, picked === '' ? emptied(name, property) : branchProp.enum.find((v: unknown) => String(v) === picked));
-                    }}>
-                    <option value="">{blank}</option>
-                    {branchProp.enum.map((v: unknown) => <option key={String(v)} value={String(v)}>{String(v)}</option>)}
-                  </select>
-                ) : kind === 'boolean' ? (
-                  <select class="optionfield short" value={value === true ? 'true' : value === false ? 'false' : ''}
-                    onChange={(e: Event) => {
-                      const picked = (e.target as HTMLSelectElement).value;
-                      set(name, picked === '' ? emptied(name, property) : picked === 'true');
-                    }}>
-                    <option value="">{blank}</option>
-                    <option value="true">true</option>
-                    <option value="false">false</option>
-                  </select>
-                ) : kind === 'number' ? (
-                  <input type="number" class="optionfield short" placeholder={typeOf(property)}
-                    value={typeof value === 'number' ? value : ''}
-                    onInput={(e: Event) => {
-                      const text = (e.target as HTMLInputElement).value;
-                      set(name, text === '' ? emptied(name, property) : Number(text));
-                    }} />
-                ) : kind === 'json' ? (
-                  <input class="optionfield mono" placeholder={typeOf(property)}
-                    defaultValue={unset ? '' : JSON.stringify(value)} key={unset ? 'unset' : JSON.stringify(value)}
-                    onChange={(e: Event) => {
-                      const text = (e.target as HTMLInputElement).value.trim();
-                      if (text === '') { set(name, emptied(name, property)); return; }
-                      try { set(name, JSON.parse(text)); } catch { /* left as typed until it parses */ }
-                    }} />
-                ) : (
-                  <>
-                    <input class="optionfield" placeholder={typeOf(property)}
-                      value={typeof value === 'string' ? value : ''}
-                      list={offers.length ? listId : undefined}
+              <Fragment key={name}>
+                <label class={['optionrow', unset ? 'unset' : '', rejected[name] !== undefined ? 'rejected' : ''].filter(Boolean).join(' ')} title={tip}>
+                  <span class="optionname">{name}{required.has(name) && <span class="paramneeded" title="required" aria-label="required">*</span>}</span>
+                  {kind === 'enum' ? (
+                    <select class="optionfield short" value={unset ? '' : String(value)}
+                      onChange={(e: Event) => {
+                        const picked = (e.target as HTMLSelectElement).value;
+                        set(name, picked === '' ? emptied(name, property) : branchProp.enum.find((v: unknown) => String(v) === picked));
+                      }}>
+                      <option value="">{blank}</option>
+                      {branchProp.enum.map((v: unknown) => <option key={String(v)} value={String(v)}>{String(v)}</option>)}
+                    </select>
+                  ) : kind === 'boolean' ? (
+                    <select class="optionfield short" value={value === true ? 'true' : value === false ? 'false' : ''}
+                      onChange={(e: Event) => {
+                        const picked = (e.target as HTMLSelectElement).value;
+                        set(name, picked === '' ? emptied(name, property) : picked === 'true');
+                      }}>
+                      <option value="">{blank}</option>
+                      <option value="true">true</option>
+                      <option value="false">false</option>
+                    </select>
+                  ) : kind === 'number' ? (
+                    <input type="number" class="optionfield short" placeholder={typeOf(property)}
+                      value={typeof value === 'number' ? value : ''}
                       onInput={(e: Event) => {
                         const text = (e.target as HTMLInputElement).value;
-                        set(name, text === '' ? emptied(name, property) : text);
+                        set(name, text === '' ? emptied(name, property) : Number(text));
                       }} />
-                    {offers.length > 0 && (
-                      <datalist id={listId}>{offers.map(offer => <option key={offer} value={offer} />)}</datalist>
-                    )}
-                  </>
-                )}
-              </label>
+                  ) : kind === 'json' ? (
+                    <input class="optionfield mono" placeholder={typeOf(property)}
+                      defaultValue={unset ? '' : JSON.stringify(value)} key={unset ? 'unset' : JSON.stringify(value)}
+                      onChange={(e: Event) => {
+                        const text = (e.target as HTMLInputElement).value.trim();
+                        if (text === '') { set(name, emptied(name, property)); return; }
+                        try { set(name, JSON.parse(text)); } catch { /* left as typed until it parses */ }
+                      }} />
+                  ) : (
+                    <>
+                      <input class="optionfield" placeholder={typeOf(property)}
+                        value={typeof value === 'string' ? value : ''}
+                        list={offers.length ? listId : undefined}
+                        onInput={(e: Event) => {
+                          const text = (e.target as HTMLInputElement).value;
+                          set(name, text === '' ? emptied(name, property) : text);
+                        }} />
+                      {offers.length > 0 && (
+                        <datalist id={listId}>{offers.map(offer => <option key={offer} value={offer} />)}</datalist>
+                      )}
+                    </>
+                  )}
+                </label>
+                {rejectNote(name)}
+              </Fragment>
             );
           })}
         </div>

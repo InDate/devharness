@@ -4291,6 +4291,27 @@ Recording continues - {{steps}} step(s) so far.
 
 ---
 
+## PARAMETERS_REFUSED
+
+**Type:** error
+
+`{{tool}}` refused its parameters:
+{{issues}}
+
+---
+
+## REPEAT_WITH_PARAMS
+
+**Type:** info
+
+Replay {{index}}, fix: {{names}}
+
+**Once per session:**
+
+This call is history entry {{index}}. `replay({ action: 'repeat', indices: [{{index}}], params: { {{fields}} } })` runs it again with only those fields replaced and every other field as recorded, so the rest is not resent. `null` removes a field. The rerun takes its own index, and a rerun that fails on a field names that index.
+
+---
+
 ## STATUS_LEGEND
 
 **Type:** info

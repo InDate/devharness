@@ -689,12 +689,40 @@ export interface MCPResponse {
    * anything is serialized, so it need not survive the wire.
    */
   _errorId?: string;
+  /** The fields a parameter error names, each with what is wrong with it, for the repeat hint and the bench form. In-process, as `_errorId` is. */
+  _parameters?: Record<string, string>;
+}
+
+/** Error ids whose cause is a field of the call, so a repeat with that field replaced can succeed. */
+export const PARAMETER_ERROR_IDS = new Set([
+  'MISSING_PARAMETER', 'MISSING_PARAMETERS', 'INVALID_PARAMETER', 'INVALID_PARAMS', 'INVALID_ACTION', 'INVALID_REFERENCE',
+]);
+
+/** What is wrong with each field a parameter error names, by error id. */
+const FIELD_ISSUES: Record<string, string> = {
+  MISSING_PARAMETER: 'missing',
+  INVALID_PARAMETER: 'invalid',
+  INVALID_PARAMS: 'invalid',
+  INVALID_ACTION: 'not an action of this tool',
+  INVALID_REFERENCE: '3 words, e.g. user-one-join',
+};
+
+/** The fields a parameter error's variables name: `missing` holds a comma-separated list, `parameter` one field. */
+function parametersNamed(messageId: string, variables?: Record<string, any>): Record<string, string> | undefined {
+  if (!PARAMETER_ERROR_IDS.has(messageId)) return undefined;
+  const issue = FIELD_ISSUES[messageId] ?? 'invalid';
+  if (messageId === 'INVALID_ACTION') return { action: issue };
+  const named = typeof variables?.missing === 'string' ? variables.missing
+    : typeof variables?.parameter === 'string' ? variables.parameter
+    : '';
+  return Object.fromEntries(named.split(',').map(field => field.trim()).filter(Boolean).map(field => [field, issue]));
 }
 
 /**
  * Create an error response in MCP format with markdown content
  */
 export function createErrorResponse(messageId: string, variables?: Record<string, any>): MCPResponse {
+  const parameters = parametersNamed(messageId, variables);
   return {
     content: [
       {
@@ -704,7 +732,29 @@ export function createErrorResponse(messageId: string, variables?: Record<string
     ],
     isError: true,
     _errorId: messageId,
+    ...(parameters && { _parameters: parameters }),
   };
+}
+
+/** Whether a reply failed on a field of the call, which a repeat replacing that field can fix. */
+export function isParameterError(response: { _errorId?: string } | undefined): boolean {
+  return !!response?._errorId && PARAMETER_ERROR_IDS.has(response._errorId);
+}
+
+/**
+ * The footer of a reply from history entry `index`: for a parameter error, the
+ * entry and the fields its repeat replaces, with the repeat call spelled out on
+ * the first one of a session; for any other reply, the entry alone.
+ */
+export function historyFooter(index: number, response: { _errorId?: string; _parameters?: Record<string, string> }): string {
+  if (!isParameterError(response)) return `Replay: ${index}`;
+  const fields = Object.keys(response._parameters ?? {});
+  const named = fields.length ? fields : ['<field>'];
+  return getMessage('REPEAT_WITH_PARAMS', {
+    index,
+    names: named.join(', '),
+    fields: named.map(field => `${field}: …`).join(', '),
+  });
 }
 
 /**

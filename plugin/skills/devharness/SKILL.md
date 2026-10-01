@@ -54,15 +54,15 @@ Every response footer carries its own history index, `Replay: 58`, which `replay
 
 ## Recovering from a failed call
 
-Two mechanisms, two different failure points — don't mix them.
+Every call is in history, a refused one included, and its reply ends with its index.
 
-**Validation failed** (`MISSING_PARAMETERS`, `INVALID_PARAMS`) → the error carries a `continuationToken` and `missingParameters`. Resend only what was missing:
+**A field is missing or wrong** → the footer reads `Replay N, fix: <fields>`. Send only those fields:
 ```
-{ continuationToken: '<token>', <missing field(s)> }
+replay({ action: 'repeat', indices: [N], params: { <field>: <value> } })
 ```
-Server merges and re-validates. Same token, repeat until it passes. Expires in 5 min.
+Every other field runs as recorded; `null` removes one. The rerun takes its own index.
 
-**Guard blocked a valid call** (dead port, breakpoint pause) → it was already recorded. Acknowledge (`server({ action: 'acknowledgePort' })`, `acknowledgeStartup`), then use the footer's `replay` hint. Don't rebuild the arguments; don't use a `continuationToken` here.
+**Guard blocked a valid call** (dead port, breakpoint pause) → acknowledge (`server({ action: 'acknowledgePort' })`, `acknowledgeStartup`), then `replay({ action: 'repeat', indices: [N] })` from the `Replay: N` footer. Don't rebuild the arguments.
 
 ## The event stream
 

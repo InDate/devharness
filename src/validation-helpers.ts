@@ -5,7 +5,6 @@
 
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
-import { randomUUID } from 'crypto';
 
 /**
  * Result of parameter validation
@@ -13,27 +12,6 @@ import { randomUUID } from 'crypto';
 export type ValidationResult<T> =
   | { success: true; data: T }
   | { success: false; error: any };
-
-/**
- * Pending calls that failed only because required parameters were missing.
- * Caller can retry with { continuationToken, <missing fields> } instead of
- * resending the whole argument set.
- */
-interface PendingContinuation {
-  toolName: string;
-  args: Record<string, unknown>;
-  expiresAt: number;
-}
-
-const CONTINUATION_TTL_MS = 5 * 60 * 1000;
-const pendingContinuations = new Map<string, PendingContinuation>();
-
-function sweepExpiredContinuations(): void {
-  const now = Date.now();
-  for (const [token, entry] of pendingContinuations) {
-    if (entry.expiresAt < now) pendingContinuations.delete(token);
-  }
-}
 
 function isMissingRequiredIssue(issue: z.ZodIssue): boolean {
   return issue.code === 'invalid_type' && issue.received === 'undefined';
@@ -121,99 +99,75 @@ function describeMissingField(schema: z.ZodTypeAny, fieldPath: string): MissingP
  * Validates parameters against a Zod schema
  * Returns validated data or formatted error response
  *
- * Supports an out-of-band `continuationToken` param: if a prior call to the
- * same tool failed with missing required params, the caller can retry with
- * just { continuationToken, <missing fields> } and this merges it with the
- * originally-supplied args instead of requiring a full resend.
+ * A failure's `parameters` lists the fields it names, which the reply turns
+ * into a `replay` repeat carrying only those fields.
  */
 export function validateParams<T extends z.ZodTypeAny>(
   params: unknown,
   schema: T,
   toolName: string
 ): ValidationResult<z.infer<T>> {
-  sweepExpiredContinuations();
+  const result = schema.safeParse(params);
 
-  let effectiveParams: unknown = params;
-  let continuationToken: string | undefined;
+  if (result.success) return { success: true, data: result.data };
 
-  if (params && typeof params === 'object' && 'continuationToken' in (params as Record<string, unknown>)) {
-    const { continuationToken: token, ...rest } = params as Record<string, unknown>;
-    if (typeof token === 'string') {
-      continuationToken = token;
-      const pending = pendingContinuations.get(token);
-      effectiveParams = pending && pending.toolName === toolName
-        ? { ...pending.args, ...rest }
-        : rest;
+  const missingIssues = result.error.issues.filter(isMissingRequiredIssue);
+  const otherIssues = result.error.issues.filter(issue => !isMissingRequiredIssue(issue));
+  const parameters: Record<string, string> = {};
+  for (const issue of result.error.issues) {
+    if (issue.code === 'unrecognized_keys') {
+      for (const key of issue.keys) parameters[key] = 'not a parameter of this tool';
     } else {
-      effectiveParams = rest;
+      parameters[issue.path.join('.') || 'root'] = isMissingRequiredIssue(issue) ? 'missing' : fieldIssue(issue);
     }
   }
 
-  const result = schema.safeParse(effectiveParams);
-
-  if (!result.success) {
-    const missingIssues = result.error.issues.filter(isMissingRequiredIssue);
-    const otherIssues = result.error.issues.filter(issue => !isMissingRequiredIssue(issue));
-
-    // Any failure keeps (or opens) a continuation slot with the latest attempt's
-    // args, so the caller can retry with just a fix/addition rather than the
-    // whole payload - whether the problem was a missing field or a bad value.
-    const token = continuationToken && pendingContinuations.has(continuationToken)
-      ? continuationToken
-      : randomUUID();
-
-    pendingContinuations.set(token, {
-      toolName,
-      args: effectiveParams as Record<string, unknown>,
-      expiresAt: Date.now() + CONTINUATION_TTL_MS
-    });
-
-    const instructions = `Call '${toolName}' again with { continuationToken: '${token}', ...<only the field(s) to add/fix> }. Previously supplied arguments are cached for ${Math.round(CONTINUATION_TTL_MS / 60000)} minutes and merged automatically - no need to resend them.`;
-
-    if (missingIssues.length > 0) {
-      const missingParameters = missingIssues.map(issue =>
-        describeMissingField(schema, issue.path.join('.'))
-      );
-
-      const error: Record<string, unknown> = {
-        success: false,
-        error: `Missing required parameter(s) for tool '${toolName}'`,
-        code: otherIssues.length > 0 ? 'INVALID_PARAMS' : 'MISSING_PARAMETERS',
-        missingParameters,
-        continuationToken: token,
-        instructions
-      };
-
-      if (otherIssues.length > 0) {
-        error.validationErrors = formatZodErrors(result.error, otherIssues);
-      }
-
-      return { success: false, error };
-    }
-
-    // Only non-missing issues (bad types/enums/etc on values actually supplied)
-    return {
+  if (missingIssues.length > 0) {
+    const error: Record<string, unknown> = {
       success: false,
-      error: {
-        success: false,
-        error: `Invalid parameters for tool '${toolName}'`,
-        code: 'INVALID_PARAMS',
-        validationErrors: formatZodErrors(result.error),
-        continuationToken: token,
-        instructions
-      }
+      error: `Missing required parameter(s) for tool '${toolName}'`,
+      code: otherIssues.length > 0 ? 'INVALID_PARAMS' : 'MISSING_PARAMETERS',
+      missingParameters: missingIssues.map(issue => describeMissingField(schema, issue.path.join('.'))),
+      parameters,
     };
+    if (otherIssues.length > 0) {
+      error.validationErrors = formatZodErrors(result.error, otherIssues);
+    }
+    return { success: false, error };
   }
 
-  // Validation succeeded - the token's job (merging args) is done. Resuming a
-  // call that's blocked *after* this point by an unrelated guard (port
-  // failure, dead server, etc.) is already handled by the existing command
-  // recorder / replay({ action: 'repeat' }) mechanism, which records this same
-  // merged `result.data` right after this call returns - no need to keep the
-  // continuation cache alive for that case too.
-  if (continuationToken) pendingContinuations.delete(continuationToken);
+  return {
+    success: false,
+    error: {
+      success: false,
+      error: `Invalid parameters for tool '${toolName}'`,
+      code: 'INVALID_PARAMS',
+      validationErrors: formatZodErrors(result.error),
+      parameters,
+    }
+  };
+}
 
-  return { success: true, data: result.data };
+/** What is wrong with one field's value, without the field's name. */
+function fieldIssue(issue: z.ZodIssue): string {
+  switch (issue.code) {
+    case 'invalid_type':
+      return `must be ${issue.expected}, got ${issue.received}`;
+    case 'invalid_enum_value':
+      return `one of ${issue.options.join(', ')}`;
+    default:
+      return issue.message;
+  }
+}
+
+/** One line per field a refusal names: what each missing field takes, then each invalid value. */
+export function describeRefusal(error: { missingParameters?: MissingParamInfo[]; validationErrors?: string[] }): string {
+  const missing = (error.missingParameters ?? []).map(field => {
+    const takes = field.enum ? `one of ${field.enum.join(', ')}` : field.type;
+    return `- \`${field.name}\` missing (${takes})${field.description ? `: ${field.description}` : ''}`;
+  });
+  const invalid = (error.validationErrors ?? []).map(line => `- ${line}`);
+  return [...missing, ...invalid].join('\n');
 }
 
 /**

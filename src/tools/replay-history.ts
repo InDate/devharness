@@ -5,8 +5,9 @@
 import { markOnProxies } from '../proxy/registry.js';
 import type { CommandRecorder } from '../command-recorder.js';
 import type { ExecuteToolCall } from '../types.js';
-import { createErrorResponse } from '../messages.js';
-import { sanitizeReference } from '../reference-validator.js';
+import { createErrorResponse, historyFooter } from '../messages.js';
+import { ToolError } from '../tool-error.js';
+import { sanitizeReference, InvalidReferenceError } from '../reference-validator.js';
 import { commandTakesInjectedConnection } from './replay-executor.js';
 import { createdName } from './connection-steps.js';
 import { formatHistory } from './replay-formatters.js';
@@ -80,6 +81,13 @@ export async function handleRepeat(
     });
   }
 
+  if (args.params && args.indices.length !== 1) {
+    return createErrorResponse('INVALID_PARAMETER', {
+      parameter: 'params',
+      message: `params replaces fields of one recorded call, and indices names ${args.indices.length}. Repeat the call to change on its own.`,
+    });
+  }
+
   // Get commands from history
   const commands: Array<{ tool: string; params: Record<string, any>; index: number }> = [];
   for (const idx of args.indices) {
@@ -89,8 +97,10 @@ export async function handleRepeat(
         message: `Command index ${idx} not found in history. Use replay({ action: "history" }) to see available commands.`
       });
     }
-    commands.push({ tool: cmd.tool, params: cmd.params, index: idx });
+    commands.push({ tool: cmd.tool, params: args.params ? withFields(cmd.params, args.params) : cmd.params, index: idx });
   }
+
+  if (commands.length === 1) return repeatOne(commands[0], args.connectionReason, recorder, executeToolCall);
 
   // A command replays against the connection it was RECORDED with when it has one
   // (bug-018) - repeating a batch that spans two browsers used to resolve one
@@ -177,6 +187,56 @@ export async function handleRepeat(
   });
 
   return { content: [{ type: 'text', text: response }] };
+}
+
+/** `recorded` with each of `fields` set over it; a null field is removed. */
+function withFields(recorded: Record<string, any>, fields: Record<string, any>): Record<string, any> {
+  const params = { ...recorded };
+  for (const [key, value] of Object.entries(fields)) {
+    if (value === null) delete params[key];
+    else params[key] = value;
+  }
+  return params;
+}
+
+/**
+ * One recorded call run again, answered with that call's own reply and the
+ * history index the run took, so a reply that fails on a field leads to the
+ * repeat of this run rather than of the original.
+ */
+async function repeatOne(
+  cmd: { tool: string; params: Record<string, any>; index: number },
+  requested: string | undefined,
+  recorder: CommandRecorder,
+  executeToolCall: ExecuteToolCall
+) {
+  const params = { ...cmd.params };
+  if (requested && commandTakesInjectedConnection(cmd)) params.connectionReason = requested;
+  if (!params.connectionReason && commandTakesInjectedConnection(cmd)) {
+    return createErrorResponse('MISSING_PARAMETER', {
+      action: 'repeat',
+      missing: 'connectionReason',
+      message: 'This command acts on a connection and names none. Provide connectionReason parameter.'
+    });
+  }
+
+  const before = recorder.getCurrentHistoryIndex();
+  markOnProxies({ kind: 'replay', runId: `repeat-${Date.now().toString(36)}-${(repeatSeq += 1)}`, step: 0 });
+  let response: any;
+  try {
+    response = await executeToolCall(cmd.tool, params);
+  } catch (error) {
+    if (!(error instanceof ToolError || error instanceof InvalidReferenceError)) throw error;
+    response = error.response;
+  }
+
+  const ran = recorder.getCommand(before + 1);
+  if (ran && ran.tool === cmd.tool) {
+    const footer = `\n\n${historyFooter(ran.index, response)}`;
+    const last = [...(response?.content ?? [])].reverse().find((part: any) => part.type === 'text');
+    if (last) last.text += footer;
+  }
+  return response;
 }
 
 export async function handleRunFromLog(

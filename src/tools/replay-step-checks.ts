@@ -102,7 +102,7 @@ export async function autoLaunchChrome(
   // Answered as a result rather than thrown: this runs inside ensureConnection's
   // catch, where a throw escapes the run's own LAUNCH_FAILED handling.
   try {
-    requireValidReference(connectionReason);
+    requireValidReference(connectionReason, 'connectionReason');
   } catch (invalid: any) {
     return {
       success: false,

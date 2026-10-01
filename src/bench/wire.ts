@@ -362,6 +362,8 @@ export interface ToolRun {
   result: string;
   /** The response's `_meta`, for a page that acts on what the call found rather than its words. */
   meta?: Record<string, any>;
+  /** A parameter error's fields, each with what is wrong with it, which the form marks. */
+  parameters?: Record<string, string>;
 }
 
 /** A step held while the agent reads it, and whether it needs the person. */

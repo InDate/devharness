@@ -603,7 +603,7 @@ export function createIssuesTools(
             // Use provided connectionReason or generate one
             let connectionRef: string | null = null;
             if (args.connectionReason) {
-              connectionRef = requireValidReference(args.connectionReason);
+              connectionRef = requireValidReference(args.connectionReason, 'connectionReason');
             } else {
               connectionRef = `${issue.type} ${issue.id} workOn`;
             }

@@ -548,8 +548,9 @@ export function createSequenceDriver(
       try {
         const response = await executeToolCall(tool, args);
         return { failed: false, result: textOf(response), ...(response?._meta && { meta: response._meta }) };
-      } catch (error) {
-        return { failed: true, result: textOf(error) };
+      } catch (error: any) {
+        const parameters = error?.response?._parameters;
+        return { failed: true, result: textOf(error), ...(parameters && { parameters }) };
       }
     },
 

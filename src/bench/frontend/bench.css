@@ -669,7 +669,7 @@ nav button.unproxied { color: var(--alert); }
    marks and badges stay, and the picker narrows. */
 @media (max-width: 899px) {
   .tabword { display: none; }
-  .connpick select { max-width: 14ch; }
+  .connpick select, .connpick select::picker(select) { width: 16ch; }
 }
 
 /* One managed dev server. Running and stopped read by the words at the right
@@ -963,31 +963,36 @@ nav button.unproxied { color: var(--alert); }
 .actiongist { font-size: 12px; color: var(--muted); margin: -2px 0 4px; }
 .actionfield { font-weight: 600; }
 /* The connection the bench works on: the connection mark with the open count
-   badged on it as the tabs' counts are, then a borderless select, as the
-   bottom bar's sequence picker is drawn, each option ending in its connection's
-   dot in the disc's colours. The disc on the select's right is the chosen
-   one's, so the closed face drops its copy. */
+   badged on it as the tabs' counts are, then the face - the chosen name, with
+   the disc over its right end. The name opens the list, which grows out of the
+   face: opened under it and pulled up by its 26px height, at its 24ch width,
+   with no top edge, the chosen row first on the face's line, and every row's
+   dot where the disc stands. */
 .connpick { display: inline-flex; align-items: center; gap: 6px; align-self: center; margin-right: 10px; color: var(--muted); }
 .connpick:hover .tabbadge { background: var(--fg); }
+.connface { position: relative; display: inline-flex; align-items: center; }
+.connface .statedisc-slot { position: absolute; right: 9px; top: 50%; transform: translateY(-50%); margin: 0; z-index: 1; }
 .connpick select, .connpick select::picker(select) { appearance: base-select; }
 .connpick select {
-  display: flex; align-items: center; max-width: 24ch; min-width: 0; padding: 2px 4px;
-  border: 0; border-radius: 6px; background: none; color: var(--fg); font: 12px/1.4 inherit; cursor: pointer;
+  display: flex; align-items: center; width: 24ch; min-width: 0; padding: 3px 30px 3px 9px;
+  border: 1px solid transparent; border-radius: 8px; background: none; color: var(--fg); font: 12px/18px inherit; cursor: pointer;
 }
-.connpick select:hover, .connpick select:focus-visible { outline: none; background: var(--panel); }
+.connpick select:hover, .connpick select:focus-visible { outline: none; border-color: var(--line); }
 .connpick select > button { display: flex; min-width: 0; padding: 0; border: 0; background: none; font: inherit; color: inherit; }
 .connpick selectedcontent { display: flex; align-items: center; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .connpick selectedcontent .conndot { display: none; }
-.connpick select::picker-icon { color: var(--muted); }
+.connpick select::picker-icon { display: none; }
 .connpick select::picker(select) {
-  padding: 4px; margin-top: 4px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg);
+  margin: -26px 0 0; width: 24ch; font-size: 12px; padding: 1px 0 4px;
+  border: 1px solid var(--line); border-top: 0; border-radius: 0 0 8px 8px; background: var(--bg); color: var(--fg);
 }
-.connpick option { display: flex; align-items: center; gap: 12px; padding: 3px 6px; border-radius: 6px; font-size: 12px; }
+.connpick option { display: flex; align-items: center; gap: 12px; padding: 3px 8px 3px 8px; font: 12px/18px inherit; }
+.connpick option .connname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .connpick option .conndot { margin-left: auto; }
 .connpick option:hover { background: var(--panel); }
-.connpick option:checked { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.connpick option:checked { color: var(--fg); }
 .connpick option::checkmark { display: none; }
-.conndot { flex: 0 0 auto; width: 9px; height: 9px; border-radius: 50%; }
+.conndot { flex: 0 0 auto; width: 12px; height: 12px; border-radius: 50%; }
 .conndot.idle { box-shadow: inset 0 0 0 1.5px var(--muted); }
 .connpick.bad select { color: var(--alert); }
 .toolpick { display: none; }

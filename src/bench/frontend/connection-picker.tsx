@@ -64,8 +64,9 @@ export function ConnectionPicker({ base }: { base: string }) {
   };
 
   const listed = open ?? [];
-  const rows = own && !listed.some(row => row.name === own)
-    ? [{ name: own } as ConnectionRow, ...listed]
+  // The chosen connection first, so the list opens with its row on the closed face.
+  const rows = own
+    ? [listed.find(row => row.name === own) ?? ({ name: own } as ConnectionRow), ...listed.filter(row => row.name !== own)]
     : listed;
   const count = listed.length;
   const drawn = useRef<number | undefined>(undefined);
@@ -75,33 +76,38 @@ export function ConnectionPicker({ base }: { base: string }) {
     drawn.current = count;
   }
 
-  // The disc's slot stands from the first render: the footing finds it once, on mount.
-  const slot = <span id="statedisc-slot" class="statedisc-slot" />;
-  if (!own) return <span class="connpick">{slot}</span>;
+  // One structure from the first render, keyed: the footing finds the disc's
+  // slot once, on mount, and draws into that element for good.
   return (
     <span class={failure ? 'connpick bad' : 'connpick'}>
-      <span class="tabmark connmark" title={`${count} connection${count === 1 ? '' : 's'} open`}>
+      <span key="mark" class="tabmark connmark" title={`${count} connection${count === 1 ? '' : 's'} open`}>
         <ToolGlyph tool="connection" />
         {count > 0 && (
           <span key={rises.current} class={rises.current > 0 ? 'tabbadge risen' : 'tabbadge'}>{count > 999 ? '999+' : count}</span>
         )}
       </span>
-      <select value={own} disabled={moving}
-        aria-label="Connection the bench works on"
-        title={failure || 'the connection the bench works on; choosing another moves the bench to it'}
-        onChange={(e: Event) => void move((e.target as HTMLSelectElement).value)}>
-        {/* Chrome's customizable select copies the chosen option into
-            `selectedcontent`; Preact's JSX types do not list the element. */}
-        <button type="button">{h('selectedcontent', null)}</button>
-        {rows.map(row => (
-          <option key={row.name} value={row.name}>
-            <span>{row.name}</span>
-            <span class={row.modes?.length ? 'conndot' : 'conndot idle'} title={discSaid(row.modes ?? [])}
-              style={discFill(row.modes ?? []) ? { background: discFill(row.modes ?? []) } : undefined} />
-          </option>
-        ))}
-      </select>
-      {slot}
+      {/* The disc stands over the face's right end, where each row's dot
+          stands in the open list, so the list reads as the face extended. */}
+      <span key="face" class="connface">
+        {own && (
+          <select value={own} disabled={moving}
+            aria-label="Connection the bench works on"
+            title={failure || 'the connection the bench works on; choosing another moves the bench to it'}
+            onChange={(e: Event) => void move((e.target as HTMLSelectElement).value)}>
+            {/* Chrome's customizable select copies the chosen option into
+                `selectedcontent`; Preact's JSX types do not list the element. */}
+            <button type="button">{h('selectedcontent', null)}</button>
+            {rows.map(row => (
+              <option key={row.name} value={row.name}>
+                <span class="connname">{row.name}</span>
+                <span class={row.modes?.length ? 'conndot' : 'conndot idle'} title={discSaid(row.modes ?? [])}
+                  style={discFill(row.modes ?? []) ? { background: discFill(row.modes ?? []) } : undefined} />
+              </option>
+            ))}
+          </select>
+        )}
+        <span id="statedisc-slot" class="statedisc-slot" />
+      </span>
     </span>
   );
 }

@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-01
+
+### Changed
+
+- **One name for a connection: `connection`.** Every tool takes `connection`
+  where it took `connectionReason`. `connection launch` and `attach` create the
+  connection named in `connection` (it was `name`), and `rename` takes the new
+  name in `newName`. A sequence's `requiredConnections` entries take
+  `connection` (it was `reference`). Saved sequences, pulled issues,
+  `history.log` lines, bench favourites and CLI calls are rewritten on read;
+  an MCP call still written with `connectionReason` is refused, naming the
+  field it became.
+- **A connection name takes `proxied` as a fourth word**, for the proxied
+  connection made from a three-word one: `user-one-join-proxied`.
+- **Errors name the connection name**, not the old reference parameter.
+- **The bench's Servers tab is Running**: Watcher (the event-stream watch, the
+  sequence directories reloaded on edit, each watch-mode server's paths),
+  Connections (switch and close) and Servers.
+
+### Added
+
+- **A call that fails on a field is repeated with only that field.** Every
+  call enters history, a refused one included, and a field error's reply ends
+  with `Replay N, fix: <fields>`, the repeat call spelled out on the first one
+  of a session. `replay repeat` takes `params` for one recorded call (`null`
+  removes a field) and answers with the tool's own reply. A refusal reads as
+  one line per field. The `continuationToken` is gone.
+- **`connection launch` with `newContextWindow: true`** adds a window to the
+  Chrome already on `port`, with cookies and storage of its own; with
+  `proxy: true` that window alone routes through the proxy, so a running
+  Chrome gains a proxied window without a relaunch. `copyCookiesFrom` starts it
+  with another connection's cookies.
+- **Enable proxy** on the bench's Traffic tab, proxy panel and sequence
+  notice: a proxied window in the same Chrome at the same page, under
+  `<name>-proxied`, and the bench moves to it.
+- **A connection picker in the bench header**: the open connections, counted
+  on the connection mark, each with its state's dot; choosing one moves the
+  bench to it. The bench's disc stands on the picker as the chosen
+  connection's.
+- **A sequence that crosses the proxy brings one up.** `replay declare` takes
+  `proxy`, `create` sets it when the recording crossed one, and traffic or
+  socket checks and boundary rules imply it. A run on a live connection
+  outside the proxy plays in a proxied window it opens and closes, and says
+  so in its summary. `recordedThroughProxy` in an older file reads as `proxy`.
+- **The bench's Tools form marks the fields a run failed on**, with a red
+  border and what was wrong under each.
+- **The bench's tabs carry marks and counts**: crossings at the proxy, calls in
+  history, connections and servers running, issues open. A count of 0 draws
+  nothing, a rising count pulses, Traffic is red while the page runs outside a
+  proxy, and the words go below 900px.
+- **`bench start` with `openTab: false`** starts a bench with no tab of its own.
+
+### Fixed
+
+- **A held or paused page is no longer removed as dead** by `connection
+  list`'s liveness probe, which ran script the held page could not answer.
+- **The rename form in the bench's Tools tab shows `newName`**: a field's
+  actions are read from every sentence of its description.
+- **`build:verify` passes**: the Modal category's prose moved under its line,
+  so its parameter names stopped counting as tools.
+
+## [0.11.0] - 2026-09-30
+
 ### Added
 
 - **Waits hold a replay step open.** Wait on a row makes its step wait for

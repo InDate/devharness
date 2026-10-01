@@ -122,8 +122,8 @@ nav button.on { background: var(--panel); color: var(--fg); }
    every two seconds stops shoving the traffic a step caused down the page. */
 .repeating { margin-bottom: 14px; }
 /* What the proxy is keeping while the traffic is held, in the hold's colour. */
-.waiting { margin-bottom: 14px; }
-.waiting > .sectionhead { color: var(--frost); }
+section.waiting { margin-bottom: 14px; }
+section.waiting > .sectionhead { color: var(--frost); }
 .waitrow .dir { color: var(--frost); }
 .sectionhead {
   display: flex; gap: 10px; align-items: baseline; padding: 0 0 4px 2px;
@@ -1600,6 +1600,25 @@ textarea.toolargs {
 .footing .at.runend svg { vertical-align: -2px; }
 .footing .at.runfail,
 .footing .at.runfail b { color: var(--alert); }
+/* A browser dialog the run waits on, in the hue every wait carries. */
+.footing .at.waitdialog,
+.footing .at.waitdialog b { color: var(--wait); }
+/* One box for everything the bench asks a person to read. The mark says
+   which kind; the hue follows the roles: red for what failed, the wait cyan
+   for what the run waits on them to do, and none for information and
+   warnings, which the mark alone tells apart. */
+.notice {
+  display: flex; gap: 10px; align-items: center; margin: 0 0 12px; padding: 8px 11px;
+  border: 1px solid var(--line); border-radius: 8px;
+  color: var(--fg); font-size: 12px; line-height: 1.55;
+}
+.notice > .grow { flex: 1; min-width: 0; }
+.notice .noticemark { display: inline-flex; flex: none; }
+.notice .noticemark svg { width: 15px; height: 15px; }
+.notice.error { border-color: var(--alert); color: var(--alert); }
+.notice.action { border-color: var(--wait); }
+.notice.action .noticemark { color: var(--wait); }
+.notice.warning .noticemark, .notice.info .noticemark { color: var(--muted); }
 /* The control the paused line is waiting on, in the colour of that line. */
 .footing .chip-toggle.waiting,
 .footing .chip-toggle.waiting:hover:not(:disabled) {

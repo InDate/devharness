@@ -95,6 +95,19 @@ with an endpoint that has regressed. Note what happens: the 500 logs a console
 error, so click validation stops the run at that step before any behaviour
 comparison is reached. Boundary drift covers the class that logs nothing.
 
+## Dialogs the browser draws
+
+`native dialogs` hands control to the browser's own UI three ways, and each
+upload crosses as `POST /upload`:
+
+- **choose a file to upload** - an `<input type="file">`'s picker. A
+  devharness call that opens it holds it with no OS window, for
+  `modal({ action: 'answer', files })`.
+- **choose with showOpenFilePicker** - the File System Access picker. A call
+  that opens it is refused by Chrome, and the page logs `AbortError`.
+- **forget the upload (asks first)** - a `confirm`, which stops the page's
+  scripts until it is answered.
+
 ## What the page adds
 
 - **open 60 sockets** — past `MAX_SOCKETS`, for the eviction order.
@@ -132,5 +145,12 @@ Copy them, with `activity/`, into the project's `.devharness/` to run them.
   a worker running, opens and closes a worker with its own socket, removes
   every write, then removes them again on an empty app. A baseline of it holds
   each store's set, changed and removed rows, and none under the second clear.
+
+- **native-dialogs** - each of the three dialogs above, answered by the
+  step after the one that opened it: a fixture file for the picker, OK for the
+  confirm, and the page's `AbortError` for the File System Access picker.
+- **native-dialogs-by-hand** - the same three with no recorded answers. Run
+  from the bench, each dialog opens on screen and the run waits for the
+  person to answer it there or with the bench's OK and Cancel.
 
 The first run in a browser runs `dismiss-whats-new`; the second skips it.

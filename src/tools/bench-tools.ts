@@ -26,9 +26,11 @@ import { getSessionInfo } from './dashboard-tools.js';
 import { getEventStreamPath, streamReaders, watchCall } from '../session-events.js';
 import type { ToolResponseMeta, BenchToolMeta } from '../tool-response.js';
 import { readCapture, readRecord, versionsOf, forget } from '../capture-file.js';
-import { startBench, stopBench, tickBench, setHeld, setPicker, getBenchSession, pageHeldElsewhere, runningBench, selectSequence, gotoSequenceStep, keepRecordedStep, dropRecordedStep, flagRecordedStep, type Annotation, type SequenceState, capturesInFlight, retakeCapture } from '../bench-mode.js';
+import { startBench, stopBench, tickBench, setHeld, setPicker, getBenchSession, getSequenceState, pageHeldElsewhere, runningBench, selectSequence, gotoSequenceStep, keepRecordedStep, dropRecordedStep, flagRecordedStep, type Annotation, type SequenceState, capturesInFlight, retakeCapture } from '../bench-mode.js';
 import { NO_TOOL_VALUES, type ServerLog, type ServerRow, type ToolGroup, type ToolValues } from '../bench/wire.js';
 import { createSequenceDriver, getSequencesRoot, labelFor } from '../bench-mode/sequence-driver.js';
+import { answerCalls, describeDialog, type OpenDialog } from '../dialog-monitor.js';
+import { sanitizeReference } from '../reference-validator.js';
 
 const benchSchema = z.object({
   action: z.enum(['start', 'stop', 'tick', 'hold', 'release', 'picker', 'list', 'status', 'keepStep', 'dropStep', 'flagStep', 'sweep', 'retake', 'capture']),
@@ -300,14 +302,50 @@ export function createBenchTools(
 
         if (action === 'status') {
           const state = getBenchSession(connection);
+          const dialog: OpenDialog | null = resolved.connection.dialogMonitor?.current() ?? null;
+          // What the pane shows, read from the same state it polls: replay's
+          // session ends with a run that failed or finished, while the pane
+          // still holds the run's position, its failure and every step's mark.
+          const pane = state ? await getSequenceState(connection).catch(() => undefined) : undefined;
+          const sequence = pane?.name ? {
+            name: pane.name,
+            standing: pane.dialog ? 'waiting' as const
+              : pane.playing ? 'running' as const
+              : pane.busy ? 'stepping' as const
+              : pane.failure ? 'failed' as const
+              : pane.paused ? 'paused' as const
+              : pane.total > 0 && pane.currentStep >= pane.total ? 'finished' as const
+              : pane.currentStep > 0 ? 'stopped' as const : 'ready' as const,
+            nextStep: Math.min(pane.currentStep + 1, pane.total),
+            totalSteps: pane.total,
+            ...(pane.failure ? { failure: pane.failure } : {}),
+            ...(pane.dialog ? { dialog: pane.dialog.text } : {}),
+            // The one step the standing turns on: the step that failed, else the
+            // step the run goes to next. The sequence itself is a file to read.
+            ...((() => {
+              const at = pane.steps.find(step => step.failed) ?? pane.steps.find(step => step.current);
+              return at ? { at: { step: at.index + 1, label: at.label } } : {};
+            })()),
+          } : null;
+          const lines = [
+            state
+              ? `Page ${state.frozen ? 'held' : 'running'}, picker ${state.pickerArmed ? 'armed' : 'idle'}, ${state.totalSteps} callback(s)/${state.tickMs}ms stepped, ${state.picks} pick(s), ${state.annotations} annotation(s). Bench: ${state.benchUrl}`
+              : `The bench is closed here. \`bench({ action: "start", connection: "${connection}" })\` opens it with the page running.`,
+            sequence
+              ? `**Sequence:** "${sequence.name}" ${sequence.standing} at step ${sequence.nextStep} of ${sequence.totalSteps}${sequence.at ? `: ${sequence.at.label}` : ''}.`
+              : '**Sequence:** none selected.',
+            ...(sequence?.failure ? [`**Failure:** ${sequence.failure}`] : []),
+            ...(sequence?.dialog ? [`**Waiting on the person:** ${sequence.dialog}`] : []),
+            dialog
+              ? `**Dialog:** ${describeDialog(dialog)}. Answer: ${answerCalls(connection, dialog).map(call => `\`${call}\``).join(' or ') || 'on screen, by a person'}.`
+              : '**Dialog:** none open.',
+          ];
           const response = createSuccessResponse('BENCH_STATUS', {
             connection,
             active: state ? 'open' : 'closed',
-            detail: state
-              ? `Page ${state.frozen ? 'held' : 'running'}, picker ${state.pickerArmed ? 'armed' : 'idle'}, ${state.totalSteps} callback(s)/${state.tickMs}ms stepped, ${state.picks} pick(s), ${state.annotations} annotation(s). Bench: ${state.benchUrl}`
-              : `The bench is closed here. \`bench({ action: "start", connection: "${connection}" })\` opens it with the page running.`,
+            detail: lines.join('\n'),
           });
-          return { ...response, _meta: buildMeta('status', { active: !!state, connection, state }) };
+          return { ...response, _meta: buildMeta('status', { active: !!state, connection, state, pane: sequence, dialog }) };
         }
 
         const targetPuppeteerManager = resolved.puppeteerManager;

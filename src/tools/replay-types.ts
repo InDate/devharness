@@ -5,6 +5,7 @@
 
 import type { CommandRecorder, RecordedCommand, ActiveSequenceState } from '../command-recorder.js';
 import type { ExecuteToolCall } from '../types.js';
+import type { DialogAnswer, OpenDialog } from '../dialog-monitor.js';
 
 export interface ExecutionContext {
   executeToolCall: ExecuteToolCall;
@@ -94,6 +95,10 @@ export interface StepResult {
   itemsFound?: number;
   /** forEach: how many items actually ran `do` (post-filter, post-maxItems). */
   iterations?: number;
+  /** The browser dialog this step opened: answered by the next step, or by a person while the run waited. */
+  dialog?: OpenDialog;
+  /** How the person answered the dialog, when the run waited on one. */
+  dialogAnswer?: DialogAnswer;
 }
 
 export interface BreakpointHitInfo {

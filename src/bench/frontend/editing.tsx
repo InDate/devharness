@@ -1,6 +1,7 @@
 /** @jsxImportSource preact */
 import { Fragment } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
+import { Notice } from './notice.js';
 import { Draft } from './markup.js';
 import { ActivityRows, listedKinds, stepTally, useActivity } from './activity.js';
 import { RecordingRow } from './recorder.js';
@@ -496,7 +497,7 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
           opening the sequence rather than at the step that errors. */}
       {activity.boundary && !activity.boundary.running
         && steps.some(step => step.tool === 'check' && (step.params?.traffic !== undefined || step.params?.socket !== undefined)) && (
-        <div class="noproxy">
+        <Notice kind="warning">
           <span class="grow">
             This sequence checks traffic, which is read through the proxy, and this browser was
             not launched through one. A running browser cannot gain one.
@@ -507,16 +508,29 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
                 const res = await fetch(`${base}/proxy/relaunch`, { method: 'POST' }).catch(() => null);
                 setProxyAsked(res ? await res.text() : 'the bench did not answer');
               }}>Ask the session to relaunch with a proxy</button>}
-        </div>
+        </Notice>
       )}
 
       {sequence?.failure && (
-        <div class="failure">
-          <span class="bad grow">{sequence.failure}</span>
+        <Notice kind="error">
+          <span class="grow">{sequence.failure}</span>
           <button class="chip-toggle" onClick={() => void post('/sequence/failure/dismiss')}>
             Dismiss
           </button>
-        </div>
+        </Notice>
+      )}
+
+      {/* A browser dialog the run waits on: the run bar below says only that
+          it waits, and this says what to do, with what answers it. */}
+      {sequence?.dialog && (
+        <Notice kind={sequence.dialog.kind} title={sequence.dialog.why}>
+          <span class="grow">{sequence.dialog.text}</span>
+          {sequence.dialog.answers.map(answer => (
+            <button key={answer} class="chip-toggle"
+              onClick={() => void post('/dialog/answer', { accept: answer === 'accept' })}
+            >{answer === 'accept' ? 'OK' : 'Cancel'}</button>
+          ))}
+        </Notice>
       )}
 
 

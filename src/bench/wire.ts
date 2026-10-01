@@ -444,6 +444,24 @@ export interface SequenceState {
   pendingStep?: HeldStep;
   /** The tracked issue this sequence reproduces, when one references it. */
   issue?: { id: number; type: string; title: string };
+  /** A browser dialog open over the app's page: the run waits on it. */
+  dialog?: BenchDialog;
+}
+
+/** An alert, confirm, prompt, "leave this page?" dialog or file picker over the app's page. */
+export interface BenchDialog {
+  /** One line: what the person does, or the dialog's own question. */
+  text: string;
+  /** Why it stands this way, for the tooltip. */
+  why?: string;
+  /** action: the run waits on the person; info: the sequence answers it itself. */
+  kind: 'action' | 'info';
+  /**
+   * What the bench can answer it with: OK alone for an alert, OK and Cancel
+   * for the others, Cancel alone for a picker a step holds, and nothing for a
+   * picker on screen, which a person answers in the app's window.
+   */
+  answers: Array<'accept' | 'cancel'>;
 }
 
 /** A capture waiting on the person: the image, and what it is of. */

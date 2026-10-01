@@ -100,6 +100,20 @@ const http = createServer((req, res) => {
     return;
   }
 
+  // Where a picked file is sent, so a pick that never happened shows at the
+  // boundary as a missing request rather than only as unchanged page text.
+  if (path === '/upload' && req.method === 'POST') {
+    let bytes = 0;
+    req.on('data', chunk => { bytes += chunk.length; });
+    req.on('end', () => {
+      const name = decodeURIComponent(req.headers['x-file-name'] ?? '');
+      console.log(`POST /upload ${name} ${bytes}b`);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ name, bytes }));
+    });
+    return;
+  }
+
   const entry = files[path];
   if (!entry) {
     res.writeHead(404, { 'content-type': 'text/plain' });
@@ -212,5 +226,5 @@ http.listen(PORT, () => {
   console.log(`socket-app on http://localhost:${PORT}`);
   console.log('lifecycle: /live (connect, push, die, bye), POST /session then POST /draft');
   console.log('capture:   /small /big /binary /burst /ping /heartbeat /quiet /serverclose /badframe');
-  console.log('http:    /sse (text/event-stream), POST /draft');
+  console.log('http:    /sse (text/event-stream), POST /draft, POST /upload');
 });

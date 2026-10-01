@@ -2,9 +2,11 @@ import { debugLog } from '../debug-logger.js';
 import { currentCursor } from '../proxy/registry.js';
 import type { SequenceCard, SequenceState } from '../bench/wire.js';
 import { appendRun } from '../run-log.js';
-import { request, send, setInspectMode } from './cdp.js';
+import { evaluateInPage, request, send, setInspectMode } from './cdp.js';
 import { type SequenceDriver } from './driver.js';
-import { letGoForRun, withPageReleased } from './page-hold.js';
+import { letGoForRun, stoppedByDialog, withPageReleased } from './page-hold.js';
+import { dialogMonitorOf, describeDialog } from '../dialog-monitor.js';
+import type { BenchDialog } from '../bench/wire.js';
 import { addRecordingTimer, attachStepTraffic, gateNewStep, recordedSteps } from './recording.js';
 import { armSavedRules } from './rules.js';
 import { type BenchSession, STEP_TIMEOUT_MS, sessions } from './session.js';
@@ -59,10 +61,17 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
   }
 
   const active = session.sequences.active();
+  const next = active?.steps[active.currentStep];
+  const cursor = session.sequenceBusy ? currentCursor() : undefined;
+  const opener = active?.steps[cursor?.kind === 'replay' ? cursor.step : Math.max(0, (active?.currentStep ?? 0) - 1)];
+  const dialog = await benchDialogOf(session,
+    typeof opener?.params?.selector === 'string' ? { selector: opener.params.selector } : undefined,
+    next?.tool === 'modal' && next.params?.action === 'answer' ? active!.currentStep : undefined);
   if (!active) {
     return {
       available,
     catalogue, steps: [], currentStep: 0, total: 0, busy: session.sequenceBusy, variables: [],
+      ...(dialog ? { dialog } : {}),
       ...(session.recordingSequence ? { recording: true } : {}),
       ...(session.sequences.baseUrl() ? { baseUrl: session.sequences.baseUrl() } : {}),
       // A failure with nothing selected still belongs on the pane's failure
@@ -87,6 +96,7 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
     available,
     catalogue,
     ...(issue ? { issue } : {}),
+    ...(dialog ? { dialog } : {}),
     name: active.name,
     ...(active.description ? { description: active.description } : {}),
     ...(active.expectedOutcome ? { expectedOutcome: active.expectedOutcome } : {}),
@@ -133,6 +143,97 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
 }
 
 /**
+ * A step's own time: the time it runs with no browser dialog over the page.
+ * A run that waits on a person answering a dialog is not a step overrunning,
+ * so the bounds on a step count only the time outside one.
+ */
+function stepClock(session: BenchSession): { past(ms: number): Promise<void>; stop(): void } {
+  let spent = 0;
+  let last = Date.now();
+  const waiters: Array<{ ms: number; resolve: () => void }> = [];
+  const timer = setInterval(() => {
+    const now = Date.now();
+    if (!dialogMonitorOf(session.page)?.current()) spent += now - last;
+    last = now;
+    for (const waiter of waiters.filter(w => spent >= w.ms)) {
+      waiters.splice(waiters.indexOf(waiter), 1);
+      waiter.resolve();
+    }
+  }, 250);
+  return {
+    past: (ms: number) => new Promise<void>(resolve => { waiters.push({ ms, resolve }); }),
+    stop: () => clearInterval(timer),
+  };
+}
+
+/** The words on the element a step clicks, read once per selector, for naming it to the person. */
+const labels = new WeakMap<BenchSession, { selector: string; label: string }>();
+
+async function labelOf(session: BenchSession, selector: string): Promise<string> {
+  const known = labels.get(session);
+  if (known?.selector === selector) return known.label;
+  const label = String(await evaluateInPage(session, `(() => {
+    const element = document.querySelector(${JSON.stringify(selector)});
+    return element ? (element.innerText || element.getAttribute('aria-label') || element.value || '').trim().slice(0, 60) : '';
+  })()`).catch(() => '') ?? '');
+  labels.set(session, { selector, label });
+  return label;
+}
+
+/**
+ * The browser dialog over the session's page, as one line for the pane: what
+ * the person does, or what the sequence does for them. `stepAt` is the step
+ * that opened it, and `answeredByStep` the next step when that is the
+ * sequence's own answer.
+ */
+async function benchDialogOf(
+  session: BenchSession,
+  stepAt: { selector?: string } | undefined,
+  answeredByStep: number | undefined,
+): Promise<BenchDialog | undefined> {
+  const monitor = dialogMonitorOf(session.page);
+  const dialog = monitor?.current();
+  if (!dialog && monitor?.awaitingGesture()) {
+    const label = stepAt?.selector ? await labelOf(session, stepAt.selector) : '';
+    return {
+      kind: 'action',
+      text: label ? `Click \u201c${label}\u201d in the app.` : 'Open the file picker from the app.',
+      why: 'Chrome opens a file picker only in the focused tab, so this one waits on your own click there.',
+      answers: [],
+    };
+  }
+  if (!dialog) return undefined;
+  if (answeredByStep !== undefined) {
+    return { kind: 'info', text: `Step ${answeredByStep + 1} answers ${describeDialog(dialog)}.`, answers: [] };
+  }
+  if (dialog.kind === 'javascript') {
+    return {
+      kind: 'action',
+      text: dialog.type === 'beforeunload' ? 'The app asks to leave this page.' : `The app asks: \u201c${dialog.message}\u201d`,
+      answers: dialog.type === 'alert' ? ['accept'] : ['accept', 'cancel'],
+    };
+  }
+  return dialog.intercepted
+    ? { kind: 'action', text: 'A file picker is held with no window.', why: 'devharness opened it for a step; Cancel closes it unfilled.', answers: ['cancel'] }
+    : { kind: 'action', text: 'Choose a file in the picker the app opened.', answers: [] };
+}
+
+/**
+ * Close the dialog over the session's page from the bench: OK or Cancel for a
+ * JavaScript dialog, Cancel for a picker a step holds.
+ */
+export async function answerBenchDialog(connection: string, accept: boolean): Promise<SequenceState | undefined> {
+  const session = sessions.get(connection);
+  const monitor = session ? dialogMonitorOf(session.page) : undefined;
+  const dialog = monitor?.current();
+  if (monitor && dialog?.kind === 'javascript') await monitor.answerDialog(accept);
+  else if (monitor && dialog?.kind === 'fileChooser' && dialog.intercepted && dialog.backendNodeId !== undefined && !accept) {
+    await monitor.cancelChooser(dialog.backendNodeId);
+  }
+  return getSequenceState(connection);
+}
+
+/**
  * Run `drive` with the app's tab in front, then put the bench back.
  *
  * Chrome delivers no synthesised mouse input to a hidden tab, so a step's
@@ -146,7 +247,9 @@ async function withAppInFront<T>(session: BenchSession, drive: () => Promise<T>)
     session.appInFront = (session.appInFront ?? 0) + 1;
     try { return await drive(); } finally { session.appInFront = (session.appInFront ?? 1) - 1; }
   }
-  const visible = await request(session.client, 'Runtime.evaluate', {
+  // Chrome raises a tab that opens a JavaScript dialog, and the stopped page
+  // answers no evaluation until its 3s bound.
+  const visible = stoppedByDialog(session) || await request(session.client, 'Runtime.evaluate', {
     expression: 'document.visibilityState', returnByValue: true,
   }).then(r => r?.result?.value !== 'hidden').catch(() => true);
   session.appInFront = 1;
@@ -186,18 +289,19 @@ async function driveSequence(
   // Last resort. Every call below is bounded, but a latched busy flag turns the
   // whole pane into a no-op with nothing on screen to say why, so it is cleared
   // on a timer as well as in the finally.
-  const unlatch = setTimeout(() => { session.sequenceBusy = false; }, STEP_TIMEOUT_MS + 15000);
+  const clock = stepClock(session);
+  void clock.past(STEP_TIMEOUT_MS + 15000).then(() => { session.sequenceBusy = false; });
 
   try {
     // The picker would swallow the step's own click. Disarmed whatever the
     // flag says: Chrome's inspect mode outlives a pick, and a flag that read
     // off while it was on let every replayed click land as a pick.
-    await setInspectMode(session, false);
+    if (!stoppedByDialog(session)) await setInspectMode(session, false);
     session.sequenceFailure = await withAppInFront(session, () => withPageReleased(session, async () => {
       // Let the page paint before driving it: a step following a navigate can
       // otherwise look for an element the framework has not rendered yet.
       // Bounded, because rAF never fires on a page that is still held.
-      await Promise.race([
+      if (!stoppedByDialog(session)) await Promise.race([
         send(session.client, 'Runtime.evaluate', {
           expression: 'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))',
           awaitPromise: true,
@@ -210,14 +314,13 @@ async function driveSequence(
       // pane with nothing on screen to say why.
       return Promise.race([
         drive(session.sequences!, driving.signal),
-        new Promise<string>(resolve =>
-          setTimeout(() => resolve('the step did not finish in time'), STEP_TIMEOUT_MS)),
+        clock.past(STEP_TIMEOUT_MS).then(() => 'the step did not finish in time'),
       ]);
     }));
   } catch (error) {
     debugLog('bench', `sequence step failed: ${error}`);
   } finally {
-    clearTimeout(unlatch);
+    clock.stop();
     // A step stopped by hand reports itself aborted, and that text would
     // otherwise stand as a failure line over a pause somebody chose.
     if (driving.signal.aborted) session.sequenceFailure = undefined;

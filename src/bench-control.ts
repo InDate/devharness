@@ -61,6 +61,8 @@ export interface BenchHandlers {
   cancelSequence: () => Promise<void>;
   removeSequence: (name: string) => Promise<void>;
   dismissFailure: () => Promise<void>;
+  /** Close the browser dialog over the app's page: OK, or Cancel. */
+  answerDialog: (accept: boolean) => Promise<void>;
   /** What the proxy has seen, when this browser was launched through one. */
   proxyEvents: (sinceId: string | null) => Promise<BoundaryState>;
   /** Every response kept on disk, across every site and sequence. */
@@ -568,6 +570,7 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
             case '/sequence/rename':
               return send(res, 200, JSON.stringify(await handlers.renameFromHome(String(body.from ?? ''), String(body.to ?? ''))), 'application/json');
             case '/sequence/failure/dismiss': await handlers.dismissFailure(); break;
+            case '/dialog/answer': await handlers.answerDialog(body.accept === true); break;
             case '/sequence/record':
               await handlers.recordSequence(
                 String(body.name ?? ''), !!body.withAgent, String(body.startUrl ?? ''));

@@ -11,11 +11,17 @@ import {
   selectDismissalStrategy,
 } from '../utils/modal-dismissal.js';
 import { executeWithPauseDetection } from '../debugger-aware-wrapper.js';
-import { formatToolError, formatToolSuccess } from '../messages.js';
+import { formatToolError, formatToolSuccess, createErrorResponse, createSuccessResponse } from '../messages.js';
 import { createTool } from '../validation-helpers.js';
+import { closedUnseen, dialogResponse, describeAnswer, describeDialog, type DialogMonitor, type OpenDialog } from '../dialog-monitor.js';
+import { throwIfAborted } from '../utils/abort.js';
+import { sanitizeReference } from '../reference-validator.js';
+import type { ToolResponseMeta } from '../tool-response.js';
+import { existsSync } from 'fs';
+import { resolve } from 'path';
 
 const modalSchema = z.object({
-  action: z.enum(['detect', 'dismiss']),
+  action: z.enum(['detect', 'dismiss', 'answer', 'wait']),
   connection: z.string().describe('The connection, by the name connection launch or attach gave it'),
   minZIndex: z.number().optional().describe('detect/dismiss: min z-index to consider'),
   minViewportCoverage: z.number().optional().describe('detect/dismiss: min viewport coverage (0-1, default: 0.25)'),
@@ -24,6 +30,10 @@ const modalSchema = z.object({
   index: z.number().optional().describe('dismiss: modal index (1-based)'),
   strategy: z.enum(['accept', 'reject', 'close', 'remove', 'auto']).optional().describe('dismiss: accept, reject, close (click that button), remove (from the DOM), auto (by modal type; default)'),
   retryAttempts: z.number().optional().describe('dismiss: click retries (default 3)'),
+  accept: z.boolean().optional().describe('answer: OK (true, default) or Cancel (false); false closes a file picker unfilled'),
+  promptText: z.string().optional().describe('answer: the text a prompt is accepted with'),
+  files: z.array(z.string()).optional().describe('answer: files for the file picker, absolute or relative to the project'),
+  timeoutMs: z.number().int().min(1).max(3_600_000).optional().describe('wait: most ms to wait for the dialog to close (default 600000)'),
 }).strict();
 
 /**
@@ -32,13 +42,118 @@ const modalSchema = z.object({
 export function createModalTools(resolveConnectionByName: (connection: string) => Promise<any>) {
   return {
     modal: createTool(
-      'Blocking modals and overlays on the page. Actions: detect (list them with the strategies each can be dismissed by), dismiss (dismiss one, the topmost by default)',
+      'Blocking modals and overlays, and browser dialogs. Actions: detect (an open alert/confirm/prompt/file picker, else page overlays with the strategies each can be dismissed by), dismiss (dismiss a page overlay, the topmost by default), answer (close an open alert/confirm/prompt or fill a file picker), wait (until the open dialog closes, however it is answered)',
       modalSchema,
-      async ({ action, ...args }) => action === 'detect'
-        ? await detectModalsImpl(args, resolveConnectionByName)
-        : await dismissModalImpl(args, resolveConnectionByName)
+      async ({ action, ...args }, signal) => {
+        const resolved = await resolveConnectionByName(args.connection);
+        const dialog = resolved?.connection?.dialogMonitor?.current() as OpenDialog | null | undefined;
+        if (action === 'answer') return answerDialogImpl(args, resolved);
+        if (action === 'wait') return waitDialogImpl(args, resolved, signal);
+        if (dialog) {
+          return dialogResponse(action === 'detect' ? 'DIALOG_DETECTED' : 'DIALOG_OPEN', sanitizeReference(args.connection), dialog, `modal ${action}`);
+        }
+        return action === 'detect'
+          ? await detectModalsImpl(args, resolveConnectionByName)
+          : await dismissModalImpl(args, resolveConnectionByName);
+      }
     ),
   };
+}
+
+/**
+ * Close the browser dialog open on the connection: a JavaScript dialog by
+ * Page.handleJavaScriptDialog, which returns while the page's scripts are
+ * stopped, and a picker a call holds by filling its input or cancelling it.
+ */
+async function answerDialogImpl(
+  args: { connection: string; accept?: boolean; promptText?: string; files?: string[] },
+  resolved: any,
+) {
+  const connection = sanitizeReference(args.connection);
+  if (!resolved) return createErrorResponse('CONNECTION_NOT_FOUND', { reference: args.connection });
+  const monitor: DialogMonitor | undefined = resolved.connection?.dialogMonitor;
+  const dialog = monitor?.current();
+  if (!monitor || !dialog) return createErrorResponse('DIALOG_NONE_OPEN', { connection });
+
+  const refused = (reason: string) => {
+    const response: any = createErrorResponse('DIALOG_ANSWER_REFUSED', { connection, dialog: describeDialog(dialog), reason });
+    response._meta = { tool: 'modal', action: 'answer', timestamp: Date.now(), dialog } satisfies ToolResponseMeta;
+    return response;
+  };
+  const answered = (answer: string) => {
+    const response: any = createSuccessResponse('DIALOG_ANSWERED', { connection, dialog: describeDialog(dialog), answer });
+    response._meta = { tool: 'modal', action: 'answer', timestamp: Date.now(), dialog } satisfies ToolResponseMeta;
+    return response;
+  };
+
+  if (dialog.kind === 'javascript') {
+    if (args.files) return refused('it takes accept and promptText, not files.');
+    const accept = args.accept ?? true;
+    await monitor.answerDialog(accept, args.promptText);
+    return answered(accept
+      ? `accepted${args.promptText !== undefined ? ` with "${args.promptText}"` : ''}`
+      : 'cancelled');
+  }
+
+  if (!dialog.intercepted || dialog.backendNodeId === undefined) {
+    return refused('the picker is on screen, and filling its input would leave the OS window up. A person answers it there.');
+  }
+  if (args.files) {
+    // Relative to the project, so a sequence carrying a fixture path runs on any machine.
+    const files = args.files.map(file => resolve(file));
+    const missing = files.filter(file => !existsSync(file));
+    if (missing.length > 0) return refused(`no file at ${missing.map(file => `\`${file}\``).join(', ')}.`);
+    if (dialog.mode === 'selectSingle' && files.length > 1) return refused(`its input takes one file, and ${files.length} were given.`);
+    await monitor.answerFiles(dialog.backendNodeId, files);
+    return answered(`filled with ${files.map(file => `\`${file}\``).join(', ')}`);
+  }
+  if (args.accept === false) {
+    await monitor.cancelChooser(dialog.backendNodeId);
+    return answered('cancelled');
+  }
+  return refused("it takes files to fill it, or accept: false to cancel it.");
+}
+
+/**
+ * Wait for the dialog open on the connection to close, from the app's window,
+ * the bench or `modal answer`, and report how it was answered.
+ */
+async function waitDialogImpl(
+  args: { connection: string; timeoutMs?: number },
+  resolved: any,
+  signal?: AbortSignal,
+) {
+  const connection = sanitizeReference(args.connection);
+  if (!resolved) return createErrorResponse('CONNECTION_NOT_FOUND', { reference: args.connection });
+  const monitor: DialogMonitor | undefined = resolved.connection?.dialogMonitor;
+  if (!monitor) return createSuccessResponse('DIALOG_WAIT_NONE_OPEN', { connection });
+  const timeoutMs = args.timeoutMs ?? 600_000;
+  const began = Date.now();
+  const left = () => Math.max(1, timeoutMs - (Date.now() - began));
+  const open = monitor.current();
+  // A picker the step opened in a tab without focus, which Chrome cancelled
+  // before it showed, was answered by nobody: the wait stands on the person
+  // opening it with their own click in the app, which focuses that tab.
+  const just = open ? null : monitor.closedWithin(2000);
+  let closed = open ? await monitor.waitForClose(timeoutMs, signal) : null;
+  const unseen = closed && closedUnseen(closed) ? closed : just && closedUnseen(just) ? just : null;
+  if (!open && !unseen) return createSuccessResponse('DIALOG_WAIT_NONE_OPEN', { connection });
+  if (unseen) closed = await monitor.waitForPersonToOpen(left(), signal);
+  throwIfAborted(signal);
+  const dialog = open ?? unseen!.dialog;
+  if (!closed) {
+    const response: any = createErrorResponse('DIALOG_WAIT_TIMEOUT', { connection, dialog: describeDialog(dialog), timeoutMs });
+    response._meta = { tool: 'modal', action: 'wait', timestamp: Date.now(), dialog } satisfies ToolResponseMeta;
+    return response;
+  }
+  const response: any = createSuccessResponse('DIALOG_CLOSED', {
+    connection, dialog: describeDialog(closed.dialog), answer: describeAnswer(closed.answer),
+    waitedMs: Date.now() - began,
+  });
+  response._meta = {
+    tool: 'modal', action: 'wait', timestamp: Date.now(), dialog: closed.dialog, dialogAnswer: closed.answer,
+  } satisfies ToolResponseMeta;
+  return response;
 }
 
 /**

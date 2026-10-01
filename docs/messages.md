@@ -1983,6 +1983,95 @@ A waiting run answers within {{seconds}}s, so a step that never finishes cannot 
 
 ---
 
+## DIALOG_OPEN
+
+**Type:** error
+**Summary:** A browser dialog is open over the page
+
+**`{{connection}}` has {{dialog}} open.** {{toolName}} did not run. {{#javascript}}The dialog stops the page's scripts, so the call would wait until someone answers it.{{/javascript}}{{#onScreen}}The picker holds the window's input, and while it is up Chrome answers every alert, confirm and prompt with cancel, unseen.{{/onScreen}}{{#held}}The page waits on the picker's files, so a call driving it acts on a step the app has not finished.{{/held}}
+
+{{#hasAnswers}}Answer it:
+{{#each answers}}- `{{this}}`
+{{/each}}{{/hasAnswers}}{{^hasAnswers}}A person answers it on screen; calls run again once it closes.{{/hasAnswers}}
+
+---
+
+## DIALOG_OPENED
+
+**Type:** error
+**Summary:** A browser dialog opened during the call
+
+**During {{toolName}}, {{dialog}} opened on `{{connection}}`.** The call stopped there. {{#javascript}}The dialog stops the page's scripts until it is answered, so nothing the call would have done after this point ran.{{/javascript}}{{^javascript}}The page waits on the picker's files.{{/javascript}}
+
+{{#hasAnswers}}Answer it:
+{{#each answers}}- `{{this}}`
+{{/each}}{{/hasAnswers}}{{^hasAnswers}}A person answers it on screen; calls run again once it closes.{{/hasAnswers}}
+
+---
+
+## DIALOG_NONE_OPEN
+
+**Type:** error
+**Summary:** No browser dialog is open
+
+**No dialog is open on `{{connection}}`.** `modal answer` closes an alert, confirm, prompt, "leave this page?" dialog or file picker that a call reported. Overlays drawn by the page itself are closed with `modal({ action: 'dismiss' })`.
+
+---
+
+## DIALOG_ANSWER_REFUSED
+
+**Type:** error
+**Summary:** The open dialog cannot be answered that way
+
+**`{{connection}}` has {{dialog}} open:** {{reason}}
+
+---
+
+## DIALOG_ANSWERED
+
+**Type:** success
+
+Answered {{dialog}} on `{{connection}}`: {{answer}}.
+
+---
+
+## DIALOG_CLOSED
+
+**Type:** success
+
+Closed after {{waitedMs}}ms on `{{connection}}`: {{dialog}}, answered {{answer}}.
+
+---
+
+## DIALOG_WAIT_NONE_OPEN
+
+**Type:** success
+
+No dialog is open on `{{connection}}`, so there was nothing to wait for.
+
+---
+
+## DIALOG_WAIT_TIMEOUT
+
+**Type:** error
+**Summary:** The dialog stayed open past the wait
+
+**`{{connection}}` still has {{dialog}} open after {{timeoutMs}}ms.** Calls on the page stay refused until it closes.
+
+---
+
+## DIALOG_DETECTED
+
+**Type:** success
+
+**`{{connection}}` has {{dialog}} open.**{{#javascript}} The page's scripts are stopped, so overlays drawn by the page cannot be read until it closes.{{/javascript}}
+
+{{#hasAnswers}}Answer it:
+{{#each answers}}- `{{this}}`
+{{/each}}{{/hasAnswers}}{{^hasAnswers}}A person answers it on screen.{{/hasAnswers}}
+
+---
+
 ## REPLAY_RUN_NOT_FOUND
 
 **Type:** error

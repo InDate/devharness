@@ -37,6 +37,8 @@ export interface RecordedCommand {
   params: Record<string, any>;
   delay?: number;  // ms to wait before executing this command
   comment?: string;  // user comment describing expected behavior
+  /** A file picker this step opens, cancelled: the step fails, or with `continue` passes. */
+  onCancel?: 'continue';
   /** Notes taken against this step, stored here so they travel with the file. */
   annotations?: Annotation[];
   /** What crossed the boundary while this step ran, when it was recorded. */

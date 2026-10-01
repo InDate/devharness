@@ -1,0 +1,79 @@
+{
+  "_comment": "CDP Tools replay sequence. Load with: replay({ action: \"load\", filename: \"<this-file>\" }), then run with: replay({ action: \"run\", name: \"<this-file>\" }). What the app did under each step, and the responses that answer it on replay, are in the file of the same name under activity/.",
+  "id": "seq-1790500000000-6",
+  "name": "native-dialogs",
+  "description": "Each way the page hands control to the browser's own UI: the file input's picker, a confirm, and showOpenFilePicker. Each dialog is answered by the step after the one that opened it",
+  "startUrl": "http://localhost:7788/",
+  "commands": [
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"upload-pick\"]"
+      },
+      "comment": "opens the file input's picker, held for files with no OS window"
+    },
+    {
+      "tool": "modal",
+      "params": {
+        "action": "answer",
+        "files": ["examples/socket-app/fixtures/upload.txt"]
+      },
+      "comment": "the page receives change and sends POST /upload"
+    },
+    {
+      "tool": "check",
+      "params": {
+        "selector": "[data-testid=\"upload-state\"]",
+        "condition": "text",
+        "operator": "contains",
+        "right": "upload.txt",
+        "withinMs": 5000
+      }
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"upload-clear\"]"
+      },
+      "comment": "opens a confirm, which stops the page's scripts until answered"
+    },
+    {
+      "tool": "modal",
+      "params": {
+        "action": "answer",
+        "accept": true
+      }
+    },
+    {
+      "tool": "check",
+      "params": {
+        "selector": "[data-testid=\"upload-state\"]",
+        "condition": "text",
+        "operator": "equals",
+        "right": "nothing",
+        "withinMs": 5000
+      }
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"upload-fs-pick\"]"
+      },
+      "comment": "the File System Access picker: Chrome refuses it under interception, and the page receives AbortError"
+    },
+    {
+      "tool": "check",
+      "params": {
+        "selector": "[data-testid=\"log\"]",
+        "condition": "text",
+        "operator": "contains",
+        "right": "picker  AbortError",
+        "withinMs": 5000
+      }
+    }
+  ],
+  "createdAt": 1790500000000
+}

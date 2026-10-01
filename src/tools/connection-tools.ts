@@ -10,6 +10,8 @@ import { CDPManager } from '../cdp-manager.js';
 import { PuppeteerManager } from '../puppeteer-manager.js';
 import { ConsoleMonitor } from '../console-monitor.js';
 import { NetworkMonitor } from '../network-monitor.js';
+import { DialogMonitor } from '../dialog-monitor.js';
+import type { Page } from 'puppeteer-core';
 import type { ConnectionManager } from '../connection-manager.js';
 import type { SourceMapHandler } from '../sourcemap-handler.js';
 import type { LogpointExecutionTracker } from '../logpoint-execution-tracker.js';
@@ -52,6 +54,19 @@ async function isDebuggerListening(port: number): Promise<boolean> {
     return response.ok;
   } catch {
     return false;
+  }
+}
+
+/**
+ * The dialog monitor for a connection's page. A Chrome that refuses its CDP
+ * calls leaves the connection without one, which drives as it did before.
+ */
+async function attachDialogMonitor(page: Page): Promise<DialogMonitor | undefined> {
+  try {
+    return await DialogMonitor.attach(page);
+  } catch (error) {
+    await debugLog('index', `Dialog monitor not attached: ${error}`);
+    return undefined;
   }
 }
 
@@ -377,6 +392,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
             const puppeteerManager = new PuppeteerManager();
             const consoleMonitor = new ConsoleMonitor();
             const networkMonitor = new NetworkMonitor();
+            let dialogMonitor: DialogMonitor | undefined;
 
             // In a browser that already runs, Puppeteer connects first and opens a
             // new tab, which gives CDP a target to connect to even when every
@@ -432,6 +448,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
               const page = puppeteerManager.getPage();
               consoleMonitor.startMonitoring(page);
               networkMonitor.startMonitoring(page);
+              dialogMonitor = await attachDialogMonitor(page);
 
               // Register logpoint tracker callback on this connection's console monitor
               consoleMonitor.onMessage((message) => {
@@ -504,6 +521,8 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
               connectionReference,
               pageIndex
             );
+            const created = connectionManager.getConnection(connectionId);
+            if (created && dialogMonitor) created.dialogMonitor = dialogMonitor;
             shareBrowserProxy(connectionManager.listConnections(), port, connectionReference);
 
             activateConnection(connectionId);
@@ -683,6 +702,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
         const puppeteerManager = new PuppeteerManager();
         const consoleMonitor = new ConsoleMonitor();
         const networkMonitor = new NetworkMonitor();
+        let dialogMonitor: DialogMonitor | undefined;
 
         // Connect CDP first to detect runtime type
         await cdpManager.connect(host, port);
@@ -721,6 +741,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
           const page = puppeteerManager.getPage();
           consoleMonitor.startMonitoring(page);
           networkMonitor.startMonitoring(page);
+          dialogMonitor = await attachDialogMonitor(page);
 
           // Auto-reload page to capture initial console logs
           // Skip reload for blank pages (nothing to reload)
@@ -775,6 +796,8 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
           reference, // Set reference from parameter
           pageIndex
         );
+        const created = connectionManager.getConnection(connectionId);
+        if (created && dialogMonitor) created.dialogMonitor = dialogMonitor;
         if (runtimeType === 'chrome') shareBrowserProxy(connectionManager.listConnections(), port, reference);
 
         activateConnection(connectionId);

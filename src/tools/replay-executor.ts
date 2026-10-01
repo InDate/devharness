@@ -22,7 +22,8 @@ import { getMessage, isElementNotFoundFailure } from '../messages.js';
 import type { CheckOutcome as CheckAction } from './check-tools.js';
 import { assertAsCheck, subjectOf as subjectOfCheck, waitAsCheck } from './check-engine.js';
 import type { CheckOutcome as CheckOutcomeRecord, RanStep } from '../proxy/registry.js';
-import { asStep, withinRun } from '../call-origin.js';
+import { asStep, originChannel, withinRun } from '../call-origin.js';
+import { showingPickers } from '../dialog-monitor.js';
 import { addressedConnection, addressesConnection, createsConnection, createdName, isLaunchStep } from './connection-steps.js';
 
 // Re-export replay cursor functions
@@ -765,7 +766,7 @@ export async function executeCommandWithRetry(
    * it as "Replay aborted by user" rather than a genuine step failure.
    */
   abortSignal?: AbortSignal
-): Promise<{ success: boolean; result?: any; error?: string }> {
+): Promise<{ success: boolean; result?: any; error?: string; errorId?: string; response?: any }> {
   const isRetryableAction = tool === 'input' && ['click', 'type', 'hover'].includes(params.action);
   const maxRetries = isRetryableAction ? 5 : 1;
   const retryDelayMs = 500;
@@ -791,7 +792,11 @@ export async function executeCommandWithRetry(
         await new Promise(resolve => setTimeout(resolve, retryDelayMs));
         continue;
       }
-      return { success: false, error: failureLine(errorText) };
+      return {
+        success: false,
+        error: failureLine(errorText),
+        ...(err?.response?._errorId ? { errorId: err.response._errorId, response: err.response } : {}),
+      };
     }
 
     return { success: true, result };
@@ -1376,8 +1381,17 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
       const stepBound = cmd.tool === 'wait' ? remainingTotal : Math.min(stepTimeout, remainingTotal);
       const stepStarted = Date.now();
       const stepAbort = new AbortController();
+      // A dialog this step opens is answered by the step after it, when that
+      // step is a `modal answer`. Otherwise a run the bench started has a
+      // person watching, who answers it: a picker opens on screen for them
+      // rather than held with no window, and the run waits on their answer.
+      const next = commands[i + 1];
+      const nextAnswers = next?.tool === 'modal' && next.params?.action === 'answer';
+      const personAnswers = !nextAnswers && originChannel() === 'bench';
+      debugLog(logPrefix, `Step ${i + 1}: a dialog it opens is answered by ${nextAnswers ? 'the next step' : personAnswers ? 'a person' : 'nobody'} (origin ${originChannel() ?? 'none'})`);
+      const call = () => executeCommandWithRetry(executeToolCall, cmd.tool, params, logPrefix, stepSignalOf(abortSignal, stepAbort));
       const execResult = await executeWithTimeout(
-        executeCommandWithRetry(executeToolCall, cmd.tool, params, logPrefix, stepSignalOf(abortSignal, stepAbort)),
+        personAnswers ? showingPickers(call) : call(),
         stepBound,
         getMessage('REPLAY_STEP_TIMEOUT', {
           step: i + 1,
@@ -1423,6 +1437,47 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
             tool: cmd.tool,
             success: false,
             error: 'Replay aborted by user'
+          });
+          break;
+        }
+        if (execResult.errorId === 'DIALOG_OPENED' && nextAnswers) {
+          const dialog = execResult.response?._meta?.dialog;
+          results.push({ step: i + 1, tool: cmd.tool, success: true, ...(dialog ? { dialog } : {}) });
+          debugLog(logPrefix, `Step ${i + 1} opened a dialog, answered by step ${i + 2}`);
+          continue;
+        }
+        if (execResult.errorId === 'DIALOG_OPENED' && personAnswers && stepConnection) {
+          debugLog(logPrefix, `Step ${i + 1} opened a dialog; waiting for a person to answer it`);
+          const waited = await executeToolCall('modal', {
+            action: 'wait', connection: stepConnection,
+            timeoutMs: Math.max(1, totalTimeout - (Date.now() - startTime)),
+          }, abortSignal).catch((error: any) => error?.response ?? { isError: true });
+          if (abortSignal?.aborted) {
+            results.push({ step: i + 1, tool: cmd.tool, success: false, error: 'Replay aborted by user' });
+            break;
+          }
+          const dialog = waited?._meta?.dialog ?? execResult.response?._meta?.dialog;
+          const dialogAnswer = waited?._meta?.dialogAnswer;
+          if (!waited?.isError && dialogAnswer?.kind === 'fileChooser' && !dialogAnswer.picked && cmd.onCancel !== 'continue') {
+            results.push({
+              step: i + 1, tool: cmd.tool, success: false,
+              error: 'File picker cancelled',
+              ...(dialog ? { dialog } : {}), dialogAnswer,
+            });
+            break;
+          }
+          if (!waited?.isError) {
+            results.push({
+              step: i + 1, tool: cmd.tool, success: true,
+              ...(dialog ? { dialog } : {}), ...(dialogAnswer ? { dialogAnswer } : {}),
+            });
+            await markNextCommand(cursorAt(i));
+            continue;
+          }
+          results.push({
+            step: i + 1, tool: cmd.tool, success: false,
+            error: failureLine(waited?.content?.[0]?.text ?? 'The dialog stayed open'),
+            ...(dialog ? { dialog } : {}),
           });
           break;
         }

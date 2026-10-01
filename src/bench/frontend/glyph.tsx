@@ -47,6 +47,9 @@ export function Glyph({ of }: { of: string }) {
     // A boundary with something crossing it: what a proxy is for.
     proxy: <><path d="M8 1.4v2.6M8 6.7v2.6M8 12v2.6" /><path d="M1.8 8h11" /><path d="M10.2 5.6 12.8 8l-2.6 2.4" /></>,
     info: <><circle cx="8" cy="8" r="6.2" /><path d="M8 7.2v4" /><path d="M8 4.9v.1" /></>,
+    warning: <><path d="M8 1.8 14.6 13.6H1.4z" /><path d="M8 6.2v3.4" /><path d="M8 11.6v.1" /></>,
+    error: <><circle cx="8" cy="8" r="6.2" /><path d="M5.8 5.8l4.4 4.4" /><path d="M10.2 5.8l-4.4 4.4" /></>,
+    action: <><path d="M3 2.5l9 4.2-3.8 1.4-1.4 3.8z" /><path d="M8.6 8.6l4 4" /></>,
     variable: <><path d="M5.6 2.8c-1.4 0-2 .6-2 1.8v1.6c0 .9-.5 1.5-1.4 1.8.9.3 1.4.9 1.4 1.8v1.6c0 1.2.6 1.8 2 1.8" /><path d="M10.4 2.8c1.4 0 2 .6 2 1.8v1.6c0 .9.5 1.5 1.4 1.8-.9.3-1.4.9-1.4 1.8v1.6c0 1.2-.6 1.8-2 1.8" /></>,
     up: <><path d="M8 13V3.5" /><path d="M4.5 7 8 3.5 11.5 7" /></>,
     down: <><path d="M8 3v9.5" /><path d="M4.5 9 8 12.5 11.5 9" /></>,

@@ -69,6 +69,11 @@ export function entryChannel(): CallChannel | undefined {
   return here.from;
 }
 
+/** The channel the outermost call arrived on, read the same inside a run or a call it made. */
+export function originChannel(): CallChannel | undefined {
+  return place.getStore()?.from;
+}
+
 /**
  * Run `work` as a call made by another call, a run's step or the bench. Its
  * reply returns to the code that made it, and any part of it reaches an agent

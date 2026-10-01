@@ -360,6 +360,17 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
               reached its end all sit still with nothing in flight, so the line
               names which: a run ending leaves no other mark on the bar. */}
           {(() => {
+            // A browser dialog stops the run where it stands, so the line
+            // names the wait ahead of any other state; the box above the
+            // steps says on what, and holds what answers it.
+            const dialog = sequence.dialog;
+            if (dialog) {
+              return (
+                <span class="at waitdialog" title={dialog.why ?? dialog.text}>
+                  waiting · step <b>{Math.min(sequence.currentStep + 1, sequence.total)}</b> of {sequence.total}
+                </span>
+              );
+            }
             const still = !sequence.playing && !sequence.busy;
             const failed = still && !!sequence.failure;
             const finished = still && !failed && !sequence.paused

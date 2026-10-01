@@ -116,7 +116,9 @@ import { readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { debugLog, enableDebugLogging, enableHistoryLogging, setStartupMetrics } from './debug-logger.js';
-import { deriveConnectionReference, sanitizeReference, InvalidReferenceError } from './reference-validator.js';
+import { deriveConnectionReference, sanitizeReference, InvalidReferenceError, UNNAMED_CONNECTION } from './reference-validator.js';
+import { dialogResponse, type OpenDialog } from './dialog-monitor.js';
+import { AbortError, linkSignals } from './utils/abort.js';
 import { initializePaths, resolveStateDir, getOutputPath } from './helpers/paths.js';
 import { cleanupStaleTempFiles, cleanupStaleTempFilesSync } from './atomic-write.js';
 import { createSessionDetector, type SessionInfo, type SessionDetector } from './session-detector.js';
@@ -126,6 +128,22 @@ import { serverClaims } from './server-claims.js';
 const DRIVING_TOOLS = new Set(['input', 'navigate', 'wait']);
 /** The replay actions that drive a page: a run or its steps, and a repeat of past calls. */
 const DRIVING_REPLAY = new Set(['run', 'runAll', 'step', 'finish', 'runFromLog', 'repeat']);
+/**
+ * Tools that run with a browser dialog open: `modal` answers it, and the rest
+ * read what devharness holds rather than the page, so none waits on a page
+ * whose scripts the dialog stopped. `replay` passes because each step of a
+ * run comes through the gate as a call of its own: gated as a whole, a
+ * step-through could never reach the step that answers the dialog the step
+ * before it opened, and raced as a whole, one step's dialog aborts the run.
+ */
+const DIALOG_PASSING_TOOLS = new Set([
+  'modal', 'connection', 'browser', 'console', 'network', 'proxy', 'server', 'config', 'dashboard', 'issues', 'message',
+  'replay',
+]);
+/** Actions that read the bench's own state, not the page, and so run with a dialog open. */
+const DIALOG_PASSING_ACTIONS: Record<string, ReadonlySet<string>> = {
+  bench: new Set(['status', 'list']),
+};
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -511,6 +529,70 @@ function pageHeldRefusal(toolName: string, args: Record<string, any>): any {
 }
 
 /**
+ * Run a tool call against the browser dialogs of the connection it names.
+ *
+ * A dialog already open refuses the call with DIALOG_OPEN: a JavaScript dialog
+ * stops the page's scripts, so the call would wait until a human answered, and
+ * a native picker takes the window's input while Chrome cancels every dialog
+ * behind it. A dialog opening mid-call settles the call with DIALOG_OPENED and
+ * aborts the handler, whose CDP command stays pending until the dialog closes.
+ * File-chooser interception is on for an `input` call's span, so a picker it
+ * opens raises no OS window and waits for `modal answer`.
+ */
+async function underDialogs(
+  toolName: string,
+  args: Record<string, any>,
+  signal: AbortSignal | undefined,
+  run: (signal: AbortSignal | undefined) => Promise<any>,
+): Promise<any> {
+  const passes = DIALOG_PASSING_TOOLS.has(toolName)
+    || (DIALOG_PASSING_ACTIONS[toolName]?.has(String(args.action)) ?? false);
+  const connection = typeof args.connection === 'string'
+    ? connectionManager.findConnectionByReference(args.connection)
+    : null;
+  const monitor = connection?.dialogMonitor;
+  if (passes || !monitor) return run(signal);
+  const reference = connection!.reference || UNNAMED_CONNECTION;
+
+  const standing = monitor.current();
+  if (standing) return dialogResponse('DIALOG_OPEN', reference, standing, toolName);
+
+  const stopped = new AbortController();
+  const linked = linkSignals(signal, stopped.signal);
+  let stopWatching = () => {};
+  const opened = new Promise<OpenDialog>(resolve => { stopWatching = monitor.onOpen(resolve); });
+  // Chrome opens a picker only on a user gesture, which only `input` makes.
+  // Interception is one setting for the whole page, so a reading call holding
+  // it on would hold a picker a step means to show on screen.
+  const within = toolName === 'input'
+    ? <T>(work: () => Promise<T>) => monitor.intercepting(work)
+    : <T>(work: () => Promise<T>) => work();
+  try {
+    return await within(async () => {
+      const work = run(linked.signal);
+      // Rejected after the dialog settled the call, by the abort or the dialog's close.
+      work.catch(() => {});
+      const settled = await Promise.race([
+        work.then(result => ({ result })),
+        opened.then(dialog => ({ dialog })),
+      ]);
+      if ('dialog' in settled) {
+        stopped.abort(new AbortError('A browser dialog opened during the call'));
+        return dialogResponse('DIALOG_OPENED', reference, settled.dialog, toolName);
+      }
+      const refused = monitor.takeRefusedPickers();
+      if (refused > 0 && settled.result && !settled.result.isError) {
+        appendToResponse(settled.result, `\n\n**File System Access picker refused:** the page asked for ${refused === 1 ? 'one' : refused}, and received AbortError, as from a cancel. devharness fills only an \`<input type="file">\`'s picker.`);
+      }
+      return settled.result;
+    });
+  } finally {
+    stopWatching();
+    linked.dispose();
+  }
+}
+
+/**
  * Run a tool call that did not arrive over MCP: a replay step, a bench action,
  * a CLI call, or a call one tool makes to another. An isError answer is thrown
  * as a ToolError.
@@ -551,9 +633,9 @@ async function executeToolCall(calledName: string, calledParams: Record<string, 
     index = commandRecorder.getCurrentHistoryIndex();
   }
 
-  const run = () => index === null
-    ? tool.handler(validation.data, abortSignal)
-    : unlisted(() => tool.handler(validation.data, abortSignal));
+  const run = () => underDialogs(toolName, validation.data, abortSignal, signal => index === null
+    ? tool.handler(validation.data, signal)
+    : unlisted(() => tool.handler(validation.data, signal)));
   let result: any;
   try {
     result = await (cliEntry ? run() : asInnerCall(run));
@@ -886,9 +968,9 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
 
     // Pass validated data to handler
     try {
-      const result = await arriveOn('mcp', () => (commandIndex !== null
-        ? unlisted(() => tool.handler(validation.data, extra?.signal))
-        : tool.handler(validation.data, extra?.signal)));
+      const result = await arriveOn('mcp', () => underDialogs(toolName, validation.data, extra?.signal, signal => (commandIndex !== null
+        ? unlisted(() => tool.handler(validation.data, signal))
+        : tool.handler(validation.data, signal))));
 
       if (commandIndex !== null) {
         commandRecorder.attachResult(commandIndex, result);

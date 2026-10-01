@@ -19,7 +19,7 @@ import { stepTraffic, tickBench } from './page-hold.js';
 import { addRecordingTimer, addRecordingVariable, cancelRecordingSequence, chooseStepSelector, dropRecordedStep, editRecordingVariable, flagRecordedStep, keepRecordedStep, recordSequence, stopRecordingSequence } from './recording.js';
 import { clearBoundaryRule, hiddenOf, hideKind, nameTarget, namesOf, persistRules, ruleFrom, rulesOf, savePayloadFor, setBoundaryName, setBoundaryRule, setHiddenMode, setHiddenUse, setResponseMode, setResponseUse, unhideKind, useFrom } from './rules.js';
 import { baselineSequence, playHere, playToStep, renameFromHome, runFromHome, runsView, stopRun } from './runs.js';
-import { cancelSequence, commentSequenceStep, describeSequence, dismissSequenceFailure, editSequenceStep, getSequenceState, gotoSequenceStep, insertSequenceCheck, insertSequenceTimer, moveSequenceStep, playSequence, removeSequence, removeSequenceStep, removeSequenceVariable, selectSequence, setSequenceBaseUrl, setSequenceVariable, stepSequence } from './sequence.js';
+import { answerBenchDialog, cancelSequence, commentSequenceStep, describeSequence, dismissSequenceFailure, editSequenceStep, getSequenceState, gotoSequenceStep, insertSequenceCheck, insertSequenceTimer, moveSequenceStep, playSequence, removeSequence, removeSequenceStep, removeSequenceVariable, selectSequence, setSequenceBaseUrl, setSequenceVariable, stepSequence } from './sequence.js';
 import { type BenchSession, sessions } from './session.js';
 import { openSequence, openSteps, recordedStepOf, summariseBoundary, writeEvents } from './traffic.js';
 
@@ -78,6 +78,7 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
     cancelSequence: async () => { await cancelSequence(connection); },
     removeSequence: async (name: string) => { await removeSequence(connection, name); },
     dismissFailure: async () => { await dismissSequenceFailure(connection); },
+    answerDialog: async (accept: boolean) => { await answerBenchDialog(connection, accept); },
     // A write's value is held by the write watch, which no proxy carries.
     proxyBody: async (id: string) => getProxy(connection)?.bodyOf(id)
       ?? sessions.get(connection)?.writeWatch?.writes.find(write => write.id === id)?.value

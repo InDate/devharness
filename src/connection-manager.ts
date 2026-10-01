@@ -9,6 +9,7 @@ import { attachLayer, recordHeld, recordReleased } from './hold.js';
 import { PuppeteerManager } from './puppeteer-manager.js';
 import { ConsoleMonitor } from './console-monitor.js';
 import { NetworkMonitor } from './network-monitor.js';
+import type { DialogMonitor } from './dialog-monitor.js';
 import type { RuntimeType } from './types.js';
 import type { ChromeLauncher } from './chrome-launcher.js';
 import { disposeWorkerTargetRegistry } from './worker-targets.js';
@@ -27,6 +28,7 @@ export interface Connection {
   reference?: string; // User-provided tab reference (e.g., "agent1-wikipedia")
   pageIndex?: number; // Index of the page/tab in the browser
   breakpointPauseAcknowledged?: boolean; // Whether the current breakpoint pause has been acknowledged
+  dialogMonitor?: DialogMonitor;
 }
 
 // Browser instance tracking (multiple connections can share one browser)
@@ -272,6 +274,12 @@ export class ConnectionManager {
         return false;
       }
 
+      // A JavaScript dialog stops the renderer, so the evaluation below would
+      // stay pending until the timeout and remove a live connection.
+      if (connection.dialogMonitor?.current()?.kind === 'javascript') {
+        return true;
+      }
+
       // Use a short timeout to avoid hanging on dead/stuck connections
       const timeoutPromise = new Promise<boolean>((resolve) => {
         setTimeout(() => resolve(false), 1500);
@@ -307,6 +315,7 @@ export class ConnectionManager {
     }
 
     console.error(`[ConnectionManager] Removing stale connection: ${connection.reference || connectionId}`);
+    void connection.dialogMonitor?.dispose();
 
     // Best-effort: let the CDP manager release its state and fire any pending
     // resume callback (e.g. to un-pause port monitoring) even though the
@@ -427,6 +436,7 @@ export class ConnectionManager {
       const page = connection.puppeteerManager.getPage();
       connection.consoleMonitor?.stopMonitoring(page);
       await connection.networkMonitor?.stopMonitoring(page);
+      await connection.dialogMonitor?.dispose();
 
       // Close the page/tab
       try {

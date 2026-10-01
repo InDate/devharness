@@ -12,6 +12,7 @@ import { createErrorResponse, getMessage } from './messages.js';
 import type { BlockEventInfo } from './block-events.js';
 import type { LaunchObservations } from './chrome-launcher.js';
 import type { SessionMessage } from './session-messages.js';
+import type { DialogAnswer, OpenDialog } from './dialog-monitor.js';
 import type { Annotation, BenchReport, TickResult } from './bench-mode.js';
 import type { CaptureRecord, CaptureVersion } from './bench/wire.js';
 import { readFileSync } from 'fs';
@@ -337,6 +338,10 @@ export interface ToolResponseMeta {
   launchObservations?: LaunchObservationsMeta;
   /** breakpoint set: where the breakpoint landed, 1-based, after CDP moved it to a valid line. */
   breakpoint?: { url: string; line: number };
+  /** The browser dialog a call was refused on, stopped by, answered or detected. */
+  dialog?: OpenDialog;
+  /** modal wait: how the dialog it waited on was answered. */
+  dialogAnswer?: DialogAnswer;
 }
 
 /** Structured result of a bench action. Behaviour reads this, never the
@@ -350,6 +355,20 @@ export interface BenchToolMeta {
   alreadyOpen?: boolean;
   connection?: string;
   state?: BenchReport;
+  /** status: the sequence open in the bench as its pane shows it, or null with none selected. */
+  pane?: {
+    name: string;
+    standing: 'waiting' | 'running' | 'stepping' | 'failed' | 'paused' | 'finished' | 'stopped' | 'ready';
+    nextStep: number;
+    totalSteps: number;
+    failure?: string;
+    /** The line the pane shows while the run waits on the person over a browser dialog. */
+    dialog?: string;
+    /** The step the standing turns on: the one that failed, else the next to run. */
+    at?: { step: number; label: string };
+  } | null;
+  /** status: the browser dialog open over the page, or null with none. */
+  dialog?: OpenDialog | null;
   /** tick: what the step asked for, and what it actually did. */
   tick?: TickResult;
   /** list: the annotations returned, oldest first. */

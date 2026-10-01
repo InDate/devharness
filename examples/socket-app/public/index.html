@@ -55,6 +55,15 @@
 </fieldset>
 
 <fieldset>
+  <legend>native dialogs - opened outside the page</legend>
+  <div class="state">uploaded: <strong data-testid="upload-state">nothing</strong></div>
+  <input type="file" data-testid="upload-input">
+  <button data-testid="upload-pick">choose a file to upload</button>
+  <button data-testid="upload-fs-pick">choose with showOpenFilePicker</button>
+  <button data-testid="upload-clear" disabled>forget the upload (asks first)</button>
+</fieldset>
+
+<fieldset>
   <legend>payload shapes</legend>
   <button data-testid="open-small" data-path="/small">small text, 2/s</button>
   <button data-testid="open-big" data-path="/big?chars=200000">200KB text frames</button>
@@ -281,6 +290,42 @@ $('[data-testid=post-draft]').addEventListener('click', async () => {
 });
 
 setLiveState('disconnected');
+
+// Three ways the page hands control to the browser's own UI: the file input's
+// picker, the File System Access picker, and a confirm. Each blocks on a human
+// outside the page, and each upload crosses the boundary as POST /upload.
+async function upload(file) {
+  const res = await fetch('/upload', {
+    method: 'POST',
+    headers: { 'x-file-name': encodeURIComponent(file.name) },
+    body: file,
+  });
+  const body = await res.json();
+  $('[data-testid=upload-state]').textContent = `${body.name} (${body.bytes} bytes)`;
+  $('[data-testid=upload-clear]').disabled = false;
+  log(`POST /upload -> ${res.status} ${body.name} ${body.bytes}b`);
+}
+
+$('[data-testid=upload-input]').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (file) upload(file);
+  e.target.value = '';
+});
+$('[data-testid=upload-pick]').addEventListener('click', () => $('[data-testid=upload-input]').click());
+$('[data-testid=upload-fs-pick]').addEventListener('click', async () => {
+  try {
+    const [handle] = await showOpenFilePicker();
+    await upload(await handle.getFile());
+  } catch (error) {
+    log(`picker  ${error.name}`);
+  }
+});
+$('[data-testid=upload-clear]').addEventListener('click', () => {
+  if (!confirm('Forget the uploaded file?')) return log('upload kept');
+  $('[data-testid=upload-state]').textContent = 'nothing';
+  $('[data-testid=upload-clear]').disabled = true;
+  log('upload forgotten');
+});
 
 let sse = null;
 $('[data-testid=open-sse]').addEventListener('click', () => {

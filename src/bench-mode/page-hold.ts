@@ -3,6 +3,7 @@ import { debugLog } from '../debug-logger.js';
 import { attachLayer, hold, holdReading, isHeld, release, step, type HoldLayer, type HoldSource, type LayerHold, type LayerStanding } from '../hold.js';
 import type { CallbackEntry, TickResult } from '../bench/wire.js';
 import { isRunning, nextPause, pageTime, send, setInspectMode } from './cdp.js';
+import { dialogMonitorOf } from '../dialog-monitor.js';
 import { type BenchSession, MAX_CALLBACK_LOG, sessions } from './session.js';
 
 /**
@@ -19,6 +20,10 @@ import { type BenchSession, MAX_CALLBACK_LOG, sessions } from './session.js';
  *   set is still there, still stopped, when the step is done.
  */
 export async function withPageReleased<T>(session: BenchSession, work: () => Promise<T>): Promise<T> {
+  // A JavaScript dialog stops the page's scripts, so no hold of ours is in
+  // force and every call below would wait out its bound: 3s apiece, which
+  // stretched the step that answers a confirm past 20s.
+  if (stoppedByDialog(session)) return work();
   const { client } = session;
   const wasFrozen = session.frozen;
   // Every layer the step would otherwise drive into a stop: the queue lets
@@ -73,14 +78,27 @@ export async function withPageReleased<T>(session: BenchSession, work: () => Pro
   try {
     return await work();
   } finally {
-    await send(client, 'Debugger.enable');
-    await send(client, 'Debugger.setSkipAllPauses', { skip: false });
-    for (const source of new Set(restore.map(held => held.source))) {
-      const layers = restore.filter(held => held.source === source).map(held => held.layer);
-      await hold(session.connection, { source, layers }).catch(() => {});
-    }
+    // A dialog the step opened leaves the agent detached until the next
+    // step's release, which runs once the dialog is answered.
+    if (!stoppedByDialog(session)) await restoreAfterStep(session, restore);
   }
 }
+
+/** Whether a JavaScript dialog has stopped the bench's page. */
+export function stoppedByDialog(session: BenchSession): boolean {
+  return dialogMonitorOf(session.page)?.current()?.kind === 'javascript';
+}
+
+async function restoreAfterStep(session: BenchSession, restore: LayerHold[]): Promise<void> {
+  const { client } = session;
+  await send(client, 'Debugger.enable');
+  await send(client, 'Debugger.setSkipAllPauses', { skip: false });
+  for (const source of new Set(restore.map(held => held.source))) {
+    const layers = restore.filter(held => held.source === source).map(held => held.layer);
+    await hold(session.connection, { source, layers }).catch(() => {});
+  }
+}
+
 /**
  * Turn a pause into a log line. The instrumentation name arrives as
  * "instrumentation:setTimeout.callback"; only the middle of that is worth

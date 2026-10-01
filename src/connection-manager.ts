@@ -5,7 +5,7 @@
 
 import { CDPManager } from './cdp-manager.js';
 import { getProxy } from './proxy/registry.js';
-import { attachLayer, recordHeld, recordReleased } from './hold.js';
+import { attachLayer, isHeld, recordHeld, recordReleased } from './hold.js';
 import { PuppeteerManager } from './puppeteer-manager.js';
 import { ConsoleMonitor } from './console-monitor.js';
 import { NetworkMonitor } from './network-monitor.js';
@@ -278,9 +278,13 @@ export class ConnectionManager {
         return false;
       }
 
-      // A JavaScript dialog stops the renderer, so the evaluation below would
-      // stay pending until the timeout and remove a live connection.
-      if (connection.dialogMonitor?.current()?.kind === 'javascript') {
+      // A JavaScript dialog stops the renderer, and a paused debugger or a held
+      // page runs no script, so the evaluation below would stay pending until
+      // the timeout and remove a live connection; the open socket above is the
+      // reading for each.
+      if (connection.dialogMonitor?.current()?.kind === 'javascript'
+          || connection.cdpManager.isPaused()
+          || (connection.reference !== undefined && isHeld(connection.reference))) {
         return true;
       }
 

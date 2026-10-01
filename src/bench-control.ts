@@ -105,14 +105,11 @@ export interface BenchHandlers {
   /** Report a reading that looks wrong, with everything the rule read. */
   proxyInvestigate: (id: string, note: string) => Promise<string>;
   /**
-   * Ask the session to relaunch this browser through a proxy.
-   *
-   * The proxy is chosen at launch, so a running browser cannot gain one. This
-   * puts the request on the event stream and returns; the relaunch is the
-   * agent's to make, and the sequence being worked on is named so the bench
-   * comes back where it was.
+   * Open a proxied window under `name` in this browser's Chrome, at this page
+   * with its cookies, and a bench on it with no tab of its own: the address
+   * this tab moves to, or the failure.
    */
-  requestProxy: () => Promise<string>;
+  enableProxy: (name: string) => Promise<{ benchUrl: string } | { failure: string }>;
   /**
    * Scope what this browser may reach. An empty list reaches every host, which
    * is what browsing without a sequence needs.
@@ -483,8 +480,9 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
           const hosts = Array.isArray(body.hosts) ? body.hosts.map(String) : [];
           return send(res, 200, await handlers.allowHosts(hosts), 'text/plain; charset=utf-8');
         }
-        if (req.method === 'POST' && route === '/proxy/relaunch') {
-          return send(res, 200, await handlers.requestProxy(), 'text/plain; charset=utf-8');
+        if (req.method === 'POST' && route === '/proxy/enable') {
+          const { name } = await readJson(req);
+          return send(res, 200, JSON.stringify(await handlers.enableProxy(String(name ?? ''))), 'application/json');
         }
         if (req.method === 'POST' && route.startsWith('/proxy/investigate')) {
           const params = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams;

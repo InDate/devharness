@@ -592,7 +592,21 @@ textarea.notewords::placeholder { color: var(--muted); }
    allows rather than the width a report of text wants. */
 .shotview { width: min(1100px, 100%); }
 
-.report .noproxy { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px; }
+/* Enable proxy: a name box and its button, in a line after the text that asks
+   for it, or alone in the middle of a pane with nothing else to show. */
+.enableproxy { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.report .enableproxy {
+  margin-top: 12px; padding: 9px 12px; border: 1px dashed var(--line); border-radius: 9px;
+  font-size: 12px; color: var(--muted);
+}
+.enableproxy.centred { flex-direction: column; justify-content: center; min-height: 40vh; text-align: center; }
+.enableproxyrow { display: inline-flex; gap: 8px; align-items: center; }
+.enableproxyname {
+  width: 26ch; padding: 3px 7px; border: 1px solid var(--line); border-radius: 4px;
+  background: var(--bg); color: var(--fg); font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.enableproxyname:focus { outline: none; border-color: var(--accent); }
+.enableproxyfailure { flex-basis: 100%; margin: 0; white-space: pre-wrap; font-size: 11px; }
 .shotfull {
   display: block; width: 100%; height: auto; margin-top: 12px;
   border: 1px solid var(--line); border-radius: 6px;
@@ -1224,14 +1238,6 @@ textarea.toolargs {
 
 /* A browser is launched through a proxy or it is not; a running one cannot
    gain one, so this asks rather than offering a switch. */
-.noproxy {
-  display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
-  margin: 10px 0 0; padding: 9px 12px;
-  border: 1px dashed var(--line); border-radius: 9px;
-  font-size: 12px; color: var(--muted);
-}
-.noproxy .asked { color: var(--caused); font: 11px/1.6 ui-monospace, Menlo, monospace; }
-
 .scopecounts {
   display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; margin: 4px 0;
   font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;

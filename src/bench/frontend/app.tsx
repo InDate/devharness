@@ -9,6 +9,7 @@ import { History } from './history.js';
 import { Tools, type ToolSeed } from './tools.js';
 import { Issues } from './issues.js';
 import { Running } from './running.js';
+import { EnableProxy } from './enable-proxy.js';
 import { About } from './sequence.js';
 import { Editing } from './editing.js';
 import { Glyph } from './glyph.js';
@@ -767,20 +768,9 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
                     setProxyAsked(await res.text());
                   }}
                 />
-              : <div class="noproxy">
-                  <span class="grow">
-                    This browser was not launched through a proxy, so nothing records what
-                    crosses its boundary. A browser is launched through one or it is not;
-                    a running one cannot gain one.
-                  </span>
-                  {proxyAsked
-                    ? <span class="asked">{proxyAsked}</span>
-                    : <button class="save" onClick={async () => {
-                        const res = await fetch(`${base}/proxy/relaunch`, { method: 'POST' })
-                          .catch(() => null);
-                        setProxyAsked(res ? await res.text() : 'the bench did not answer');
-                      }}>Ask the session to relaunch with a proxy</button>}
-                </div>)}
+              : <EnableProxy base={base}>
+                  <span class="grow">Nothing records what crosses this page's boundary until it runs through a proxy.</span>
+                </EnableProxy>)}
             {showing === 'about' && sequence && <About sequence={sequence} post={post} />}
             {showing === 'about' && sequence && boundary?.totals && (
               <dl class="facts">

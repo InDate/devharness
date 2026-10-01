@@ -7,6 +7,7 @@ import { waited } from './sequence.js';
 import { useGoToTarget } from './goto.js';
 import { useEscape } from './escape.js';
 import { Fold, Row } from './row.js';
+import { EnableProxy } from './enable-proxy.js';
 
 export type { BoundaryEvent, BoundaryState, BoundaryTotals } from '../wire.js';
 export { socketName } from './crossing.js';
@@ -204,7 +205,7 @@ export function Traffic({ base }: { base: string }): preact.JSX.Element {
 
   if (!state) return <div class="hint">reading the traffic…</div>;
   if (!state.running) {
-    return <div class="hint">this browser was not launched through a proxy</div>;
+    return <EnableProxy base={base} centred />;
   }
 
   const rowFor = (made: Group) => (

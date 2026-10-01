@@ -19,6 +19,7 @@ import { keyOf, kindOf, type KindCount } from '../kinds.js';
 import { socketName } from './crossing.js';
 import { useVariablesHidden } from './variables-shown.js';
 import { moveShift, spliceIn, spliceShift, useStepMotion } from './step-motion.js';
+import { EnableProxy } from './enable-proxy.js';
 
 const CLIENT_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
 
@@ -54,7 +55,6 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
   // The step whose instructions are open to change.
   const [editAt, setEditAt] = useState<number | null>(null);
   // What the session answered when asked to relaunch through a proxy.
-  const [proxyAsked, setProxyAsked] = useState<string | null>(null);
   // The step whose bin has been clicked once; a second click removes it.
   const [removingAt, setRemovingAt] = useState<number | null>(null);
   // Steps whose rows are folded under their marker, by position.
@@ -498,16 +498,9 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
       {activity.boundary && !activity.boundary.running
         && steps.some(step => step.tool === 'check' && (step.params?.traffic !== undefined || step.params?.socket !== undefined)) && (
         <Notice kind="warning">
-          <span class="grow">
-            This sequence checks traffic, which is read through the proxy, and this browser was
-            not launched through one. A running browser cannot gain one.
-          </span>
-          {proxyAsked
-            ? <span class="asked">{proxyAsked}</span>
-            : <button class="save" onClick={async () => {
-                const res = await fetch(`${base}/proxy/relaunch`, { method: 'POST' }).catch(() => null);
-                setProxyAsked(res ? await res.text() : 'the bench did not answer');
-              }}>Ask the session to relaunch with a proxy</button>}
+          <EnableProxy base={base}>
+            <span class="grow">This sequence checks traffic, which is read through the proxy, and this page runs outside one.</span>
+          </EnableProxy>
         </Notice>
       )}
 

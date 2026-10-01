@@ -4417,16 +4417,6 @@ Ensure this selector is serving its purpose, check with the user if that is uncl
 
 ---
 
-## BENCH_PROXY_WANTED
-
-**Type:** info
-
-A browser is launched through a proxy or it is not; a running one cannot gain one. Relaunch it with `connection({ action: 'launch', connection: '{{connection}}', proxy: true })`, then `bench({ action: 'start', connection: '{{connection}}', sequence: '{{sequence}}' })` so the bench comes back where they left it.
-
-Until then the ASSOCIATE view has nothing to read: without a proxy nothing records what crossed the boundary.
-
----
-
 ## BENCH_NOTIFY_REVIEW
 
 **Type:** info

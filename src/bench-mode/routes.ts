@@ -1,6 +1,5 @@
 import type { Page } from 'puppeteer-core';
 import { appendEvent } from '../session-events.js';
-import { getMessage } from '../messages.js';
 import { holdableLayers, holdReading } from '../hold.js';
 import type { BenchHandlers } from '../bench-control.js';
 import { getProxy, checkOutcomesFor } from '../proxy/registry.js';
@@ -135,18 +134,21 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
         : 'reaching every host';
     },
 
-    requestProxy: async () => {
-      if (getProxy(connection)) return 'this browser already runs through a proxy';
-      const open = (await getSequenceState(connection))?.name;
-      await appendEvent(sessions.get(connection)?.session ?? connection, 'proxy', {
-        connection,
-        wanted: true,
-        ...(open ? { sequence: open } : {}),
-        review: getMessage('BENCH_PROXY_WANTED', { connection, sequence: open ?? 'the open sequence' }),
-        detail: `the person asked for "${connection}" to be relaunched through a proxy`
-          + (open ? `, with "${open}" open` : ''),
+    // A proxied window in the same Chrome rather than a relaunch, so this
+    // page and the bench tab beside it stay open; the bench follows the window.
+    enableProxy: async (name: string) => {
+      const sequences = sessions.get(connection)?.sequences;
+      if (!sequences) return { failure: 'This bench holds no replay side to run tools through' };
+      const port = Number(new URL(page.browser().wsEndpoint()).port);
+      const launched = await sequences.callTool('connection', {
+        action: 'launch', connection: name, newContextWindow: true, proxy: true,
+        url: page.url(), copyCookiesFrom: connection, port,
       });
-      return 'asked the session to relaunch this browser through a proxy';
+      if (launched.failed) return { failure: launched.result };
+      const benched = await sequences.callTool('bench', { action: 'start', connection: name, openTab: false });
+      const benchUrl = benched.meta?.bench?.state?.benchUrl;
+      if (benched.failed || typeof benchUrl !== 'string') return { failure: benched.result };
+      return { benchUrl };
     },
 
     /**

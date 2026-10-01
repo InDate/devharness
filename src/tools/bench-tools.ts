@@ -50,6 +50,8 @@ const benchSchema = z.object({
     .describe('start: navigate here first; with no browser on this connection name, one is launched at it'),
   sequence: z.string().optional()
     .describe('start: open the pane with this sequence selected'),
+  openTab: z.boolean().optional()
+    .describe('start: false starts the bench with no tab of its own, for a bench tab already open to move to (default true)'),
   reason: z.string().optional()
     .describe('flagStep: one short line naming what is wrong, the headline the person reads first'),
   detail: z.string().optional()
@@ -407,7 +409,7 @@ export function createBenchTools(
               sequences: createSequenceDriver(commandRecorder, executeToolCall, catalogue, values, servers, serverLog),
               // A tab in the same browser, so it can be dragged into Chrome's
               // split view beside the frozen app.
-              openBench: async (url: string) => {
+              openBench: args.openTab === false ? undefined : async (url: string) => {
                 const tab = await openBackgroundPage(page.browser());
                 await tab.goto(url);
                 await tab.bringToFront();

@@ -126,8 +126,9 @@ The proxy control states three things and opens the rest:
 A count on it is the rules in force. Inside: what crossed (since recording
 began, while one runs), the saved responses, the sites the browser may load,
 what the list has blocked, whether writes no rule answers are refused, and what
-the proxy is holding. Pressing it with no proxy asks the session to relaunch
-through one.
+the proxy is holding. With no proxy, Traffic and this panel carry Enable proxy:
+it opens a proxied window in the same Chrome at the same page, with the
+connection's cookies, under a name ending in `-proxied`, and the bench moves to it.
 
 A rule is made and edited on the traffic row it answers; the saved responses
 list every rule, and a line opens its row, or the same editor in place where

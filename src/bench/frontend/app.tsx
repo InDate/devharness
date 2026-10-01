@@ -1030,11 +1030,10 @@ function Bench() {
             detail={counts.issues === undefined ? undefined : `${counts.issues} open`}
             onClick={() => goTab('issues')} />
         </nav>
-        {/* The state disc is drawn here by the footing, which reads the state,
-            so it sits in the header's corner on the tabs' line at any width. */}
+        {/* The state disc is drawn by the footing, which reads the state, into
+            the slot on the connection picker's right, as the chosen connection's dot. */}
         <span class="grow" />
         <ConnectionPicker base={BASE} />
-        <span id="statedisc-slot" class="statedisc-slot" />
       </header>
       {tab === 'editing' && (
         <Editing

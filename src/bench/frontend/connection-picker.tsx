@@ -14,8 +14,10 @@ import { ToolGlyph } from './tool-glyph.js';
  *
  * Its mark carries a count of the open connections, badged as the tabs' counts
  * are and pulsing as they do when it rises. Each option carries its
- * connection's dot in the disc's colours, so a held page, held traffic, a run
- * or a recording on another connection shows before switching to it.
+ * connection's dot in the disc's colours on its right, so a held page, held
+ * traffic, a run or a recording on another connection shows before switching
+ * to it. The bench's own disc, drawn by the footing through the slot, stands
+ * on the right of the closed select as the chosen connection's dot.
  *
  * The list is read again every five seconds, since agents' calls open and
  * close connections as well as the bench.
@@ -73,7 +75,9 @@ export function ConnectionPicker({ base }: { base: string }) {
     drawn.current = count;
   }
 
-  if (!own) return null;
+  // The disc's slot stands from the first render: the footing finds it once, on mount.
+  const slot = <span id="statedisc-slot" class="statedisc-slot" />;
+  if (!own) return <span class="connpick">{slot}</span>;
   return (
     <span class={failure ? 'connpick bad' : 'connpick'}>
       <span class="tabmark connmark" title={`${count} connection${count === 1 ? '' : 's'} open`}>
@@ -91,12 +95,13 @@ export function ConnectionPicker({ base }: { base: string }) {
         <button type="button">{h('selectedcontent', null)}</button>
         {rows.map(row => (
           <option key={row.name} value={row.name}>
-            <span class="conndot" title={discSaid(row.modes ?? [])}
-              style={{ background: discFill(row.modes ?? []) ?? 'var(--line)' }} />
             <span>{row.name}</span>
+            <span class={row.modes?.length ? 'conndot' : 'conndot idle'} title={discSaid(row.modes ?? [])}
+              style={discFill(row.modes ?? []) ? { background: discFill(row.modes ?? []) } : undefined} />
           </option>
         ))}
-        </select>
+      </select>
+      {slot}
     </span>
   );
 }

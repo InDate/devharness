@@ -964,9 +964,9 @@ nav button.unproxied { color: var(--alert); }
 .actionfield { font-weight: 600; }
 /* The connection the bench works on: the connection mark with the open count
    badged on it as the tabs' counts are, then a borderless select, as the
-   bottom bar's sequence picker is drawn, each option led by its connection's
-   dot in the disc's colours. The disc in the corner is the chosen one's, so
-   the closed face drops its copy. */
+   bottom bar's sequence picker is drawn, each option ending in its connection's
+   dot in the disc's colours. The disc on the select's right is the chosen
+   one's, so the closed face drops its copy. */
 .connpick { display: inline-flex; align-items: center; gap: 6px; align-self: center; margin-right: 10px; color: var(--muted); }
 .connpick:hover .tabbadge { background: var(--fg); }
 .connpick select, .connpick select::picker(select) { appearance: base-select; }
@@ -982,11 +982,13 @@ nav button.unproxied { color: var(--alert); }
 .connpick select::picker(select) {
   padding: 4px; margin-top: 4px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg);
 }
-.connpick option { display: flex; align-items: center; gap: 7px; padding: 3px 6px; border-radius: 6px; font-size: 12px; }
+.connpick option { display: flex; align-items: center; gap: 12px; padding: 3px 6px; border-radius: 6px; font-size: 12px; }
+.connpick option .conndot { margin-left: auto; }
 .connpick option:hover { background: var(--panel); }
 .connpick option:checked { background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .connpick option::checkmark { display: none; }
 .conndot { flex: 0 0 auto; width: 9px; height: 9px; border-radius: 50%; }
+.conndot.idle { box-shadow: inset 0 0 0 1.5px var(--muted); }
 .connpick.bad select { color: var(--alert); }
 .toolpick { display: none; }
 @media (max-width: 640px) {

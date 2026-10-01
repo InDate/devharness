@@ -8,7 +8,7 @@ import { getIssues } from '../issue-tracker.js';
 import { addFavourite, readFavourites, removeFavourite } from './favourites.js';
 import { bodyHash, commentGithubId, stripCommentMarker } from '../github/gh-issues.js';
 import { localProse } from '../github/issue-actions.js';
-import { NO_TOOL_VALUES, type BenchView, type BoundaryEvent, type BoundaryState, type HiddenKind } from '../bench/wire.js';
+import { NO_TOOL_VALUES, type DiscMode, type BenchView, type BoundaryEvent, type BoundaryState, type HiddenKind } from '../bench/wire.js';
 import type { ActivityMove, ExpectedValue, KindCount } from '../bench/kinds.js';
 import { discardPick, highlightAnnotation, moveAnnotation, noteAtStep, noteTargetFor, notifyAnnotation, removeAnnotation, rewordAnnotation, saveAnnotation } from './annotations.js';
 import { beginCapture, cancelCapture, captureBenchScreenshot, discardBenchScreenshot, readMoreFacts, retakeCapture, saveBenchScreenshot, seriesOfNotes, setFactChoice } from './captures.js';
@@ -23,6 +23,25 @@ import { type BenchSession, sessions } from './session.js';
 import { openSequence, openSteps, recordedStepOf, summariseBoundary, writeEvents } from './traffic.js';
 
 /** What the bench server calls, for one connection's session and page. */
+/**
+ * The states the disc draws for one connection, read where every connection
+ * reports them: held layers from the hold record, run and recording from its
+ * bench, where it has one. The bench's own disc reads the same conditions
+ * from its full view.
+ */
+async function discModesOf(name: string): Promise<DiscMode[]> {
+  const held = holdReading(name).held;
+  const sequence = await getSequenceState(name).catch(() => undefined);
+  const standing: Array<[DiscMode, boolean]> = [
+    ['recording', sequence?.recording === true],
+    ['frozen', sessions.get(name)?.frozen === true || held.some(layer => layer.layer !== 'network')],
+    ['traffic', held.some(layer => layer.layer === 'network')],
+    ['playing', sequence?.playing === true || (sequence?.busy === true && !sequence?.recording)],
+    ['paused', sequence?.paused === true],
+  ];
+  return standing.filter(([, on]) => on).map(([mode]) => mode);
+}
+
 export function benchRoutes(connection: string, session: BenchSession, page: Page): BenchHandlers {
   /**
    * The bench on connection `name`: the one already open there, or one started
@@ -220,7 +239,8 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
     running: async () => {
       const sequences = sessions.get(connection)?.sequences;
       if (!sequences) throw new Error('This bench holds no replay side to read from');
-      return sequences.running();
+      const view = await sequences.running();
+      return { ...view, connections: await Promise.all(view.connections.map(async row => ({ ...row, modes: await discModesOf(row.name) }))) };
     },
     favourites: () => readFavourites(),
     addFavourite: (call: { tool: string; label: string; args: Record<string, unknown> }) => addFavourite(call),

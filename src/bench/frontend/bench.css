@@ -962,19 +962,32 @@ nav button.unproxied { color: var(--alert); }
 .detailhead .resetbtn, .detailhead .runbtn { flex: 0 0 auto; line-height: 18px; }
 .actiongist { font-size: 12px; color: var(--muted); margin: -2px 0 4px; }
 .actionfield { font-weight: 600; }
-/* The connection the bench works on, beside the disc: a pill like the bar at
-   the bottom, holding a borderless select as that bar's sequence picker does. */
-.connpick {
-  display: inline-flex; align-items: center; align-self: center; margin-right: 8px;
-  padding: 2px 10px; border: 1px solid var(--line); border-radius: 22px; background: var(--bg);
-}
+/* The connection the bench works on: the connection mark with the open count
+   badged on it as the tabs' counts are, then a borderless select, as the
+   bottom bar's sequence picker is drawn, each option led by its connection's
+   dot in the disc's colours. The disc in the corner is the chosen one's, so
+   the closed face drops its copy. */
+.connpick { display: inline-flex; align-items: center; gap: 6px; align-self: center; margin-right: 10px; color: var(--muted); }
+.connpick:hover .tabbadge { background: var(--fg); }
+.connpick select, .connpick select::picker(select) { appearance: base-select; }
 .connpick select {
-  max-width: 24ch; min-width: 0; padding: 2px 0; border: 0; background: none;
-  color: var(--fg); font: 12px/1.4 inherit; text-overflow: ellipsis;
+  display: flex; align-items: center; max-width: 24ch; min-width: 0; padding: 2px 4px;
+  border: 0; border-radius: 6px; background: none; color: var(--fg); font: 12px/1.4 inherit; cursor: pointer;
 }
-.connpick select:focus { outline: none; }
-.connpick:hover, .connpick:focus-within { border-color: var(--accent); }
-.connpick.bad { border-color: var(--alert); }
+.connpick select:hover, .connpick select:focus-visible { outline: none; background: var(--panel); }
+.connpick select > button { display: flex; min-width: 0; padding: 0; border: 0; background: none; font: inherit; color: inherit; }
+.connpick selectedcontent { display: flex; align-items: center; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.connpick selectedcontent .conndot { display: none; }
+.connpick select::picker-icon { color: var(--muted); }
+.connpick select::picker(select) {
+  padding: 4px; margin-top: 4px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg);
+}
+.connpick option { display: flex; align-items: center; gap: 7px; padding: 3px 6px; border-radius: 6px; font-size: 12px; }
+.connpick option:hover { background: var(--panel); }
+.connpick option:checked { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.connpick option::checkmark { display: none; }
+.conndot { flex: 0 0 auto; width: 9px; height: 9px; border-radius: 50%; }
+.connpick.bad select { color: var(--alert); }
 .toolpick { display: none; }
 @media (max-width: 640px) {
   .toolsplit, .toolsplit.railshut { grid-template-columns: minmax(0, 1fr); }

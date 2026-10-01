@@ -314,7 +314,12 @@ export interface ConnectionRow {
   paused: boolean;
   url?: string;
   title?: string;
+  /** The states the disc draws that stand on this connection, in the disc's order. */
+  modes?: DiscMode[];
 }
+
+/** What the state disc draws, one slice each: recording, the page held, traffic held, a run playing, a run paused. */
+export type DiscMode = 'recording' | 'frozen' | 'traffic' | 'playing' | 'paused';
 
 /**
  * What runs alongside the bench besides its servers: this session's event

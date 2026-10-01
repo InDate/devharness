@@ -11,6 +11,7 @@ import { Issues } from './issues.js';
 import { Running } from './running.js';
 import { EnableProxy } from './enable-proxy.js';
 import { ConnectionPicker } from './connection-picker.js';
+import { DISC_TONES, discFill, discSaid } from './disc.js';
 import { About } from './sequence.js';
 import { Editing } from './editing.js';
 import { Glyph } from './glyph.js';
@@ -20,7 +21,7 @@ import { CaptureDialog } from './capture.js';
 import { HoldPanel } from './hold-panel.js';
 import { goToSection } from './goto.js';
 import { SavedHidden, SavedPayloads, SavedResponses, choicesIn, rearmRule } from './crossing.js';
-import type { BenchView, BoundaryEvent, BoundaryState } from '../wire.js';
+import type { BenchView, BoundaryEvent, BoundaryState, DiscMode } from '../wire.js';
 import './bench.css';
 import { useEscape } from './escape.js';
 
@@ -261,7 +262,7 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
   // one that holds, in this order: recording, a held page, a run, a pause.
   // The first is the outer line and the disc's first slice; each after it is
   // a line just inside the one before and the next slice.
-  const modes = ([
+  const modes: DiscMode[] = ([
     ['recording', state.sequence?.recording === true],
     // The page held - its screen or its code - and the traffic held, each in
     // its own colour: held traffic leaves the page running, so the two are
@@ -283,16 +284,9 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
   // The first layer something waits on, in the frames' order, takes the
   // whole disc on each pulse.
   const attention = modes.find(mode => waitingOn.has(mode));
-  const tone: Record<string, string> = {
-    recording: 'var(--alert)', frozen: 'var(--frost)', traffic: 'var(--caused)', playing: 'var(--sequence)', paused: 'color-mix(in srgb, var(--sequence) 50%, transparent)',
-  };
-  const said = modes.length
-    ? modes.map(mode => (mode === 'frozen' ? 'page held' : mode === 'traffic' ? 'traffic held' : mode)).join(' · ')
-    : 'idle';
-  const slice = 100 / Math.max(1, modes.length);
-  const disc = modes.length
-    ? `linear-gradient(90deg, ${modes.map((mode, k) => `${tone[mode]} ${k * slice}% ${(k + 1) * slice}%`).join(', ')})`
-    : undefined;
+  const tone = DISC_TONES;
+  const said = discSaid(modes);
+  const disc = discFill(modes);
 
   return (
     <>
@@ -1037,7 +1031,7 @@ function Bench() {
             onClick={() => goTab('issues')} />
         </nav>
         {/* The state disc is drawn here by the footing, which reads the state,
-            so it sits on the tabs' line at any width. */}
+            so it sits in the header's corner on the tabs' line at any width. */}
         <span class="grow" />
         <ConnectionPicker base={BASE} />
         <span id="statedisc-slot" class="statedisc-slot" />

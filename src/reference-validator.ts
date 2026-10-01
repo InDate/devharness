@@ -45,7 +45,7 @@ export function validateReference(ref: string): { valid: boolean; sanitized?: st
   const trimmed = ref.trim();
 
   if (!trimmed) {
-    return { valid: false, error: 'Reference cannot be empty' };
+    return { valid: false, error: 'Connection name cannot be empty' };
   }
 
   // First, sanitize the reference
@@ -53,19 +53,19 @@ export function validateReference(ref: string): { valid: boolean; sanitized?: st
 
   // Check for reserved words on sanitized version
   if (RESERVED_REFERENCES.includes(sanitized)) {
-    return { valid: false, error: `Reference "${trimmed}" is reserved and cannot be used` };
+    return { valid: false, error: `Connection name "${trimmed}" is reserved and cannot be used` };
   }
 
   // Verify sanitized version has exactly 3 parts
   // This works for both "test replay feature" and "test-replay-feature"
   const sanitizedParts = sanitized.split('-');
   if (sanitizedParts.length !== 3) {
-    return { valid: false, error: `Reference must be exactly 3 words, got ${sanitizedParts.length}` };
+    return { valid: false, error: `Connection name "${trimmed}" must be exactly 3 words, got ${sanitizedParts.length}` };
   }
 
   // Verify each part is non-empty (catches cases like "test--feature" or "test- -feature")
   if (sanitizedParts.some(part => !part)) {
-    return { valid: false, error: `Invalid reference format: contains empty parts` };
+    return { valid: false, error: `Connection name "${trimmed}" contains an empty word` };
   }
 
   return { valid: true, sanitized };

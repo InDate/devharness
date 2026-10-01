@@ -78,25 +78,25 @@ describe('validateReference', () => {
       const result = validateReference('oneword');
       expect(result.valid).toBe(false);
       expect(result.sanitized).toBeUndefined();
-      expect(result.error).toBe('Reference must be exactly 3 words, got 1');
+      expect(result.error).toBe('Connection name "oneword" must be exactly 3 words, got 1');
     });
 
     it('should reject 2 words', () => {
       const result = validateReference('two words');
       expect(result.valid).toBe(false);
-      expect(result.error).toBe('Reference must be exactly 3 words, got 2');
+      expect(result.error).toBe('Connection name "two words" must be exactly 3 words, got 2');
     });
 
     it('should reject 4 words', () => {
       const result = validateReference('four words too many');
       expect(result.valid).toBe(false);
-      expect(result.error).toBe('Reference must be exactly 3 words, got 4');
+      expect(result.error).toBe('Connection name "four words too many" must be exactly 3 words, got 4');
     });
 
     it('should reject 5+ words', () => {
       const result = validateReference('this has way too many words here');
       expect(result.valid).toBe(false);
-      expect(result.error).toBe('Reference must be exactly 3 words, got 7');
+      expect(result.error).toBe('Connection name "this has way too many words here" must be exactly 3 words, got 7');
     });
   });
 
@@ -104,19 +104,19 @@ describe('validateReference', () => {
     it('should reject empty string', () => {
       const result = validateReference('');
       expect(result.valid).toBe(false);
-      expect(result.error).toBe('Reference cannot be empty');
+      expect(result.error).toBe('Connection name cannot be empty');
     });
 
     it('should reject whitespace-only string', () => {
       const result = validateReference('   ');
       expect(result.valid).toBe(false);
-      expect(result.error).toBe('Reference cannot be empty');
+      expect(result.error).toBe('Connection name cannot be empty');
     });
 
     it('should reject tabs and newlines only', () => {
       const result = validateReference('\t\n  \t');
       expect(result.valid).toBe(false);
-      expect(result.error).toBe('Reference cannot be empty');
+      expect(result.error).toBe('Connection name cannot be empty');
     });
   });
 
@@ -286,7 +286,7 @@ describe('validateReference', () => {
     it('should reject 2-part hyphenated references', () => {
       const result = validateReference('chrome-browser');
       expect(result.valid).toBe(false);
-      expect(result.error).toBe('Reference must be exactly 3 words, got 2');
+      expect(result.error).toBe('Connection name "chrome-browser" must be exactly 3 words, got 2');
     });
   });
 });

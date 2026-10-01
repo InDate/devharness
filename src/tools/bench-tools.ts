@@ -45,7 +45,7 @@ const benchSchema = z.object({
   limit: z.number().int().positive().max(500).optional()
     .describe('list: most recent N annotations (default 20)'),
   url: z.string().optional()
-    .describe('start: navigate here first; with no browser on this reference, one is launched at it'),
+    .describe('start: navigate here first; with no browser on this connection name, one is launched at it'),
   sequence: z.string().optional()
     .describe('start: open the pane with this sequence selected'),
   reason: z.string().optional()

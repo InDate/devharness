@@ -137,10 +137,10 @@ Cannot launch a new Chrome instance on port {{port}}: that port is already in us
 **Type:** error
 **Code:** REFERENCE_IN_USE
 
-Reference "{{reference}}" is already bound to a live connection, so `forceNewInstance` would leave two Chrome instances answering to the same name.
+Connection name "{{reference}}" is already bound to a live connection, so `forceNewInstance` would leave two Chrome instances answering to the same name.
 
 **Suggestions:**
-- Choose a different 3-word reference for the new instance
+- Choose a different 3-word connection name for the new instance
 - Drop `forceNewInstance` to reuse the existing "{{reference}}" connection
 - Use `connection({ action: 'close', connectionReason: "{{reference}}", reason })` or `browser({ action: 'kill', reason })` first to release the name
 
@@ -239,14 +239,12 @@ Chrome launched successfully but auto-connect failed: {{error}}
 **Type:** success
 **Summary:** Connected to {{runtimeType}} debugger
 
-Host: {{host}}:{{port}}, Reference: {{reference}}
+Host: {{host}}:{{port}}, Connection: {{reference}}
 
 Features: {{features}}{{#consoleStats}}
 Console: {{consoleStats}}{{/consoleStats}}{{#isChrome}}
 
-Note: Console monitoring auto-enabled. Page auto-reloaded to capture initial logs.
-
-IMPORTANT: Please provide a reference name for this tab using the renameTab tool.{{/isChrome}}{{#isNode}}
+Note: Console monitoring auto-enabled. Page auto-reloaded to capture initial logs.{{/isChrome}}{{#isNode}}
 
 Note: Browser automation features are not available for Node.js debugging.
 Console Monitoring: Enabled via CDP (logpoint output and console.log calls will be captured).{{/isNode}}{{autoRestartWarning}}
@@ -407,7 +405,7 @@ Renamed connection {{oldName}} to {{newName}}
 **Type:** error
 **Code:** CONNECTION_NOT_FOUND
 
-Connection with reference "{{reference}}" not found
+No connection is named "{{reference}}"
 
 **Suggestion:** Use `connection({ action: 'list' })` to see all available connections.
 
@@ -444,11 +442,11 @@ The run stopped before its first step, so nothing has been executed yet.
 **Type:** error
 **Code:** INVALID_REFERENCE
 
-Invalid reference: {{error}}
+Invalid connection name: {{error}}
 
 **Requirements:**
-- Reference must be exactly 3 words
-- Words are separated by spaces
+- A connection name is exactly 3 words, e.g. `user one join` or `user-one-join`
+- Words are separated by spaces or hyphens
 
 ---
 
@@ -457,9 +455,9 @@ Invalid reference: {{error}}
 **Type:** error
 **Code:** REFERENCE_IN_USE
 
-Reference "{{reference}}" is already in use by another connection
+Connection name "{{reference}}" is already in use by another connection
 
-**Suggestion:** Choose a different 3-word reference that describes this specific debugging activity.
+**Suggestion:** Choose a different 3-word connection name that describes this specific debugging activity.
 
 ---
 
@@ -1485,7 +1483,7 @@ Common variables used across messages:
 - `{{lineNumber}}` - Line number in source code
 - `{{columnNumber}}` - Column number in source code (optional)
 - `{{breakpointId}}` - Unique breakpoint identifier
-- `{{reference}}` - Connection reference name
+- `{{reference}}` - Connection name (the `name` a connection was launched or attached with)
 - `{{runtimeType}}` - 'chrome' or 'node'
 - `{{error}}` - Error message or details
 - `{{selector}}` - CSS selector string

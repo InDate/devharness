@@ -125,7 +125,7 @@ export function createWaitTools(
             return { ...createErrorResponse('WAIT_DEBUGGER_PAUSED', { condition: conditionLabel, connectionReason }), _meta: meta };
           case 'no-connection':
             return createErrorResponse('CONNECTION_NOT_FOUND', {
-              message: `No connection found for reference "${connectionReason}". Start one with connection({ action: 'launch' }), or see the names in use with connection({ action: 'list' }).`,
+              message: `No connection is named "${connectionReason}". Start one with connection({ action: 'launch' }), or see the names in use with connection({ action: 'list' }).`,
             });
           case 'not-connected':
             return createErrorResponse('DEBUGGER_NOT_CONNECTED');

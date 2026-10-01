@@ -114,6 +114,8 @@ const connectionSchema = z.object({
   host: z.string().optional().describe('attach: the debugger host (default: localhost)'),
   autoConnect: z.boolean().optional().describe('launch: connect the debugger after launch (default: true)'),
   forceNewInstance: z.boolean().optional().describe('launch: a fresh Chrome process, never a tab in an existing one'),
+  newContextWindow: z.boolean().optional().describe('launch: a window in the Chrome on `port` with cookies and storage of its own; with proxy, only it routes through the proxy'),
+  copyCookiesFrom: z.string().optional().describe('launch with newContextWindow: the connection whose cookies the new window starts with'),
   bringToFront: z.boolean().optional().describe('launch/switch: select this tab and raise Chrome, taking keyboard focus (default: false)'),
   headless: z.boolean().optional().describe('launch: no visible window (default: false)'),
   width: z.number().optional().describe('launch: viewport width in CSS px'),
@@ -155,6 +157,25 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
    * `inspect getCallStack` maps it, so a breakpoint a sequence set by source line
    * matches the place it paused. Undefined when the pause carries no frames.
    */
+  /** Console, network and dialog monitoring on a connection's page, with logpoint executions read from its console. */
+  async function monitorPage(page: Page, cdpManager: CDPManager, consoleMonitor: ConsoleMonitor, networkMonitor: NetworkMonitor): Promise<DialogMonitor | undefined> {
+    consoleMonitor.startMonitoring(page);
+    networkMonitor.startMonitoring(page);
+    const dialogMonitor = await attachDialogMonitor(page);
+    consoleMonitor.onMessage((message) => {
+      logpointTracker.handleConsoleMessage(message, cdpManager);
+    });
+    return dialogMonitor;
+  }
+
+  /** The launch reply's closing note on the inactivity timeout, empty where none is set. */
+  function inactivityNote(): string {
+    const minutes = configManager.getChromeConfig().inactivityTimeoutMinutes;
+    return minutes > 0
+      ? `\n\nNote: This connection auto-closes after ${minutes} min of no tool activity against it. Any tool call using this connection resets the timer.`
+      : '';
+  }
+
   async function pausedAtOf(cdpManager: CDPManager): Promise<PausedAtMeta | undefined> {
     const top = cdpManager.getCallStack()?.[0];
     if (!top) return undefined;
@@ -179,6 +200,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
       if (requested) {
         requireValidReference(requested, 'connection'); // Throws InvalidReferenceError if invalid
       }
+      if (args.newContextWindow) return launchContextWindow(args);
 
       // Validate the profile name before anything else - an invalid name must
       // not reach the filesystem, and naming a profile implies persistence
@@ -444,16 +466,8 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
 
             if (runtimeType === 'chrome') {
 
-              // Start monitoring console and network
               const page = puppeteerManager.getPage();
-              consoleMonitor.startMonitoring(page);
-              networkMonitor.startMonitoring(page);
-              dialogMonitor = await attachDialogMonitor(page);
-
-              // Register logpoint tracker callback on this connection's console monitor
-              consoleMonitor.onMessage((message) => {
-                logpointTracker.handleConsoleMessage(message, cdpManager);
-              });
+              dialogMonitor = await monitorPage(page, cdpManager, consoleMonitor, networkMonitor);
 
               if (args.width !== undefined || args.height !== undefined) {
                 const current = await page.evaluate(() => {
@@ -567,10 +581,6 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
         if (autoConnect) {
           const connection = connectionManager.getConnection(connectionId);
           const reference = connection?.reference || UNNAMED_CONNECTION;
-          const inactivityTimeoutMinutes = configManager.getChromeConfig().inactivityTimeoutMinutes;
-          const inactivityNote = inactivityTimeoutMinutes > 0
-            ? `\n\nNote: This connection auto-closes after ${inactivityTimeoutMinutes} min of no tool activity against it. Any tool call using this connection resets the timer.`
-            : '';
 
           return withLaunchMeta(
             createSuccessResponse('CHROME_LAUNCH_SUCCESS', {
@@ -581,7 +591,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
               hasUserReference: !!requested,
               viewport: viewportSet,
               viewportClamped: viewportClamped ? true : undefined,
-              inactivityNote,
+              inactivityNote: inactivityNote(),
             }),
             reference,
             false
@@ -653,6 +663,127 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
         }
         return createErrorResponse('CHROME_SPAWN_FAILED', { error: `${error}` });
       }
+  };
+
+  /**
+   * A window of its own browser context in the Chrome already on `port`: its
+   * own cookies and storage, and with `proxy` its own route through the proxy
+   * started for its name, so a running Chrome gains a proxied window without a
+   * relaunch. Closing the connection closes the context with it.
+   */
+  const launchContextWindow = async (args: ConnectionArgs): Promise<any> => {
+    if (!args.connection) {
+      return createErrorResponse('MISSING_PARAMETER', {
+        action: 'launch', missing: 'connection',
+        message: 'A newContextWindow launch names the connection it creates, since the window is reached by that name alone',
+      });
+    }
+    for (const conflicting of ['forceNewInstance', 'profile'] as const) {
+      if (args[conflicting] !== undefined) {
+        return createErrorResponse('INVALID_PARAMETER', {
+          parameter: conflicting,
+          message: `newContextWindow adds a window to a running Chrome, and ${conflicting} chooses the Chrome itself; pass one or the other`,
+        });
+      }
+    }
+    const name = validateReference(args.connection).sanitized!;
+    if (await connectionManager.findConnectionByReferenceValidated(name)) {
+      return createErrorResponse('REFERENCE_IN_USE', { reference: name });
+    }
+    const source = args.copyCookiesFrom
+      ? await connectionManager.findConnectionByReferenceValidated(sanitizeReference(args.copyCookiesFrom))
+      : undefined;
+    if (args.copyCookiesFrom && !source) {
+      return createErrorResponse('CONNECTION_NOT_FOUND', { reference: args.copyCookiesFrom });
+    }
+    const port = args.port ?? configManager.getCurrentPort();
+    if (!(await isDebuggerListening(port))) {
+      return createErrorResponse('DEBUGGER_NOT_RUNNING', {
+        port: port.toString(),
+        message: `newContextWindow opens a window in a running Chrome, and none answers on port ${port}. Launch one first with \`connection({ action: 'launch' })\`.`,
+      });
+    }
+
+    const proxyServer = args.proxy
+      ? (await startProxyFor(name, args.url)).chromeArgs.find(arg => arg.startsWith('--proxy-server='))?.slice('--proxy-server='.length)
+      : undefined;
+    const puppeteerManager = new PuppeteerManager();
+    await puppeteerManager.connect('localhost', port);
+    const browser = puppeteerManager.getBrowser();
+    const context = await browser.createBrowserContext(proxyServer ? { proxyServer, proxyBypassList: ['<-loopback>'] } : {});
+    try {
+      if (source) {
+        const browserSession = await browser.target().createCDPSession();
+        try {
+          const { cookies } = await browserSession.send('Storage.getCookies',
+            source.browserContextId ? { browserContextId: source.browserContextId } : {});
+          if (cookies.length > 0) {
+            await browserSession.send('Storage.setCookies', { cookies, browserContextId: context.id });
+          }
+        } finally {
+          await browserSession.detach().catch(() => {});
+        }
+      }
+
+      const page = await context.newPage();
+      puppeteerManager.adopt(page);
+      if (proxyServer) {
+        const pageSession = await page.createCDPSession();
+        await pageSession.send('Security.setIgnoreCertificateErrors', { ignore: true });
+      }
+
+      const cdpManager = new CDPManager(sourceMapHandler);
+      const consoleMonitor = new ConsoleMonitor();
+      const networkMonitor = new NetworkMonitor();
+      const targetId = (page.target() as any)._targetId as string;
+      await cdpManager.connect('localhost', port, targetId);
+      const portMonitor = serverManager.getPortMonitor();
+      cdpManager.setPauseCallback(() => portMonitor.pauseMonitoring());
+      cdpManager.setResumeCallback(() => portMonitor.resumeMonitoring());
+      const dialogMonitor = await monitorPage(page, cdpManager, consoleMonitor, networkMonitor);
+
+      let viewport: { width: number; height: number } | undefined;
+      let viewportClamped = false;
+      if (args.width !== undefined || args.height !== undefined) {
+        const current = await page.evaluate(() => {
+          const w = (globalThis as any).window;
+          return { width: w.innerWidth, height: w.innerHeight };
+        });
+        const sized = await sizeWindowToViewport(page, { width: args.width ?? current.width, height: args.height ?? current.height }, false);
+        viewport = sized.viewport;
+        viewportClamped = sized.clampedTo !== undefined;
+      }
+      if (args.url) await page.goto(args.url, { waitUntil: 'load', timeout: 30000 });
+      if (args.bringToFront) await page.bringToFront();
+
+      const pageIndex = (await puppeteerManager.getPages()).findIndex(p => p === page);
+      const connectionId = connectionManager.createConnection(
+        cdpManager, puppeteerManager, consoleMonitor, networkMonitor, 'localhost', port, name, pageIndex);
+      const created = connectionManager.getConnection(connectionId)!;
+      if (dialogMonitor) created.dialogMonitor = dialogMonitor;
+      created.browserContextId = context.id;
+      created.disposeContext = () => context.close();
+      // A context with no proxy of its own routes as the browser does, so it shares the browser's proxy where there is one.
+      if (!proxyServer) shareBrowserProxy(connectionManager.listConnections(), port, name);
+      activateConnection(connectionId);
+
+      return withLaunchMeta(
+        createSuccessResponse('CHROME_LAUNCH_SUCCESS', {
+          reference: name,
+          title: (await page.title()) || '(no title)',
+          url: page.url(),
+          hasUserReference: true,
+          viewport,
+          viewportClamped: viewportClamped ? true : undefined,
+          inactivityNote: inactivityNote(),
+        }),
+        name,
+        false
+      );
+    } catch (error) {
+      await context.close().catch(() => {});
+      return createErrorResponse('CHROME_SPAWN_FAILED', { error: `newContextWindow: ${error}` });
+    }
   };
 
   const attach = async (args: ConnectionArgs): Promise<any> => {

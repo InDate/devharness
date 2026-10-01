@@ -113,6 +113,11 @@ export class PuppeteerManager {
     return newPage;
   }
 
+  /** Make `page` the current page: one opened outside this manager, such as in a browser context of its own. */
+  adopt(page: Page): void {
+    this.page = page;
+  }
+
   /**
    * Set the current page by index
    */

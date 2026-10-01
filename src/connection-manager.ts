@@ -29,6 +29,10 @@ export interface Connection {
   pageIndex?: number; // Index of the page/tab in the browser
   breakpointPauseAcknowledged?: boolean; // Whether the current breakpoint pause has been acknowledged
   dialogMonitor?: DialogMonitor;
+  /** The browser context a `newContextWindow` launch made for this connection; absent in the default context. */
+  browserContextId?: string;
+  /** Closes that context, with its window and storage. */
+  disposeContext?: () => Promise<void>;
 }
 
 // Browser instance tracking (multiple connections can share one browser)
@@ -445,6 +449,8 @@ export class ConnectionManager {
         console.error(`[ConnectionManager] Error closing page: ${error}`);
       }
     }
+    await connection.disposeContext?.().catch(error =>
+      console.error(`[ConnectionManager] Error disposing browser context: ${error}`));
 
     // Disconnect managers only for this connection. Best-effort: the underlying
     // connection may already be dead (e.g. the process was killed), and we

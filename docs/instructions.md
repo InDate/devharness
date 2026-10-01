@@ -162,6 +162,7 @@ runs against (see Quick Start).
 
 **Connection**: `connection` (actions: launch, attach, list, switch, rename, close, status, browsers) and `browser` (actions: kill, resetLauncher)
 - `connection` names the connection on every call: the one launch or attach creates, and the one switch, rename, close and status act on. Rename's new name is `newName`
+- `launch` with `newContextWindow: true` adds a window to the Chrome already on `port`, with cookies and storage of its own. With `proxy: true` that window alone routes through the proxy, so a running Chrome gains a proxied window without a relaunch; `copyCookiesFrom` starts it with another connection's cookies (localStorage and IndexedDB stay behind). Closing the connection closes the window
 - `launch` also connects - don't follow it with `attach`. `launch` with the `port` of a running Chrome opens a new tab in it
 - `list` gives each connection's URL and title and drops dead ones; `switch` makes a connection active and selects its page
 - `close` and both `browser` actions require a `reason`. Closing the last connection to a Chrome kills that Chrome. `browser` is separate so that allowing `connection` allows no kill

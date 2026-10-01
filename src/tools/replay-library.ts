@@ -65,7 +65,7 @@ export async function handleCreate(args: ReplayArgs, recorder: CommandRecorder, 
   if (normalized.hoisted) (sequence as any).recordedConnection = normalized.hoisted;
   const recordingProxy = normalized.hoisted ? getProxy(normalized.hoisted) : undefined;
   if (recordingProxy) {
-    (sequence as any).recordedThroughProxy = true;
+    (sequence as any).proxy = true;
     const rules = recordingProxy.shapeRules();
     if (Object.keys(rules).length > 0) (sequence as any).shapeRules = rules;
     // Read now and stored on the step: the proxy holds its events in memory

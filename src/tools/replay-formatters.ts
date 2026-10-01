@@ -13,6 +13,7 @@ import {
   isPasteEvent,
 } from '../interaction-recorder.js';
 import { getFormattedResponse } from '../messages.js';
+import { sequenceNeedsProxy } from './replay-connections.js';
 
 // =============================================================================
 // Result Formatting
@@ -1094,6 +1095,10 @@ export function formatDeclarations(sequence: CommandSequence, persistedTo?: stri
   const sockets = sequence.requiredSockets ?? [];
   const lines = [`**"${sequence.name}" declares**`, ''];
 
+  lines.push(sequenceNeedsProxy(sequence)
+    ? `- **Proxy:** needed${sequence.proxy ? '' : ' - its traffic checks or boundary rules read the proxy'}; a run on a connection outside it plays in a proxied window it opens`
+    : '- **Proxy:** not needed');
+
   if (connections.length === 0) {
     lines.push('- **Browsers:** none - the run brings up only its own connection');
   } else {
@@ -1105,6 +1110,7 @@ export function formatDeclarations(sequence: CommandSequence, persistedTo?: stri
         decl.url ? `opens ${decl.url}` : null,
         decl.profile && decl.forceNewInstance !== true ? 'reuses the Chrome already on that profile' : null,
         !decl.profile && decl.forceNewInstance === false ? 'may share an existing browser' : null,
+        decl.proxy ? 'launched through the proxy' : null,
       ].filter(Boolean);
       lines.push(`  - \`${decl.connection}\`${notes.length ? ` - ${notes.join('; ')}` : ''}`);
     }

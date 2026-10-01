@@ -106,6 +106,7 @@ export async function ensureDeclaredConnections(
           ? decl.forceNewInstance === true
           : decl.forceNewInstance !== false,
         ...(decl.profile && { profile: decl.profile }),
+        ...(decl.proxy && { proxy: true }),
       });
       // A launch that found the name already up reused someone else's browser
       // (a profile-bearing declaration launches without forceNewInstance), and

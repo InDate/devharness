@@ -29,6 +29,9 @@ import {
   type ExecutionContext,
 } from './replay-executor.js';
 import { addressedConnection, createdName } from './connection-steps.js';
+import { sequenceNeedsProxy } from './replay-connections.js';
+import { getProxy } from '../proxy/registry.js';
+import { PROXIED_WORD } from '../reference-validator.js';
 import {
   formatExecutionResults,
   formatPausedResponse,
@@ -594,8 +597,9 @@ export async function performRun(
   onProgress?: (ev: { step: number; totalSteps: number; tool: string }) => void
 ): Promise<{ response: any; outcome: RunOutcome; results?: any[] }> {
   const { args, recorder, executeToolCall, getPageForConnection,
-    sequence, analysis, connection, needsConnection, connectionMap,
+    sequence, analysis, needsConnection, connectionMap,
     launchedConnections, runEnv } = deps;
+  let connection = deps.connection;
 
   // Build execution context
   const ctx: ExecutionContext = {
@@ -620,9 +624,10 @@ export async function performRun(
 
   // Ensure connection is ready
   let didAutoLaunch = false;
+  const needsProxy = sequenceNeedsProxy(sequence);
   if (needsConnection && !analysis.createsBeforeUse) {
     const connResult = await ensureConnection(
-      ctx, needsConnection, analysis.createsBeforeUse, sequence.recordedThroughProxy === true);
+      ctx, needsConnection, analysis.createsBeforeUse, needsProxy);
     if (!connResult.success) {
       return {
         outcome: 'failed',
@@ -635,6 +640,46 @@ export async function performRun(
     didAutoLaunch = connResult.didAutoLaunch;
   }
 
+  // A live connection outside the proxy is played in a proxied window of its
+  // own Chrome, opened for this run and closed when it ends; the connection
+  // given stays as it was.
+  let ownedWindow: string | undefined;
+  let proxiedNote = '';
+  if (needsProxy && needsConnection && !analysis.createsBeforeUse && connection
+      && !getProxy(sanitizeReference(connection))) {
+    const given = sanitizeReference(connection);
+    const window = `${given}-${PROXIED_WORD}`;
+    if (getProxy(window)) {
+      proxiedNote = `\n\n**Proxied window:** played in "${window}", the proxied window already open beside "${given}", which runs outside the proxy.`;
+    } else {
+      const listed: any = await executeToolCall('connection', { action: 'list' }).catch(() => null);
+      const port = listed?._meta?.connections?.find((row: any) => row.reference === given)?.port;
+      try {
+        await executeToolCall('connection', {
+          action: 'launch', connection: window, newContextWindow: true, proxy: true,
+          copyCookiesFrom: given, ...(port !== undefined && { port }),
+        });
+      } catch (launchError: any) {
+        return {
+          outcome: 'failed',
+          response: createErrorResponse('LAUNCH_FAILED', {
+            message: `"${sequence.name}" crosses the proxy and "${given}" runs outside it; opening a proxied window "${window}" in its Chrome failed: ${launchError?.response?.content?.[0]?.text || launchError?.message || launchError}`,
+          }),
+        };
+      }
+      ownedWindow = window;
+      proxiedNote = `\n\n**Proxied window:** played in "${window}", opened in the Chrome of "${given}" because that connection runs outside the proxy, with its cookies; closed when the run ended.`;
+    }
+    connection = window;
+    ctx.connection = window;
+  }
+  const closeOwnedWindow = async () => {
+    if (!ownedWindow) return;
+    const closing = ownedWindow;
+    ownedWindow = undefined;
+    await executeToolCall('connection', { action: 'close', connection: closing, reason: `sequence "${sequence.name}" opened it for its run` }).catch(() => {});
+  };
+
   // Navigate to startUrl if needed
   const navResult = await navigateToStartUrl(ctx, sequence, analysis);
   if (!navResult.success) {
@@ -642,6 +687,7 @@ export async function performRun(
     if (didAutoLaunch && connection) {
       await executeToolCall('connection', { action: 'close', reason: `sequence "${sequence.name}" auto-launched it`, connection }).catch(() => {});
     }
+    await closeOwnedWindow();
     return {
       outcome: 'failed',
       response: createErrorResponse('NAVIGATION_FAILED', {
@@ -698,6 +744,7 @@ export async function performRun(
     if (closeTab && didAutoLaunch && connection) {
       await executeToolCall('connection', { action: 'close', reason: `sequence "${sequence.name}" auto-launched it`, connection }).catch(() => {});
     }
+    if (closeTab) await closeOwnedWindow();
   };
 
   // Calculate start step (convert 1-indexed to 0-indexed).
@@ -808,6 +855,7 @@ export async function performRun(
 
   // Clean up cursor and overlay
   await cleanup();
+  await closeOwnedWindow();
 
   // Format results
   let response = formatExecutionResults(
@@ -819,6 +867,7 @@ export async function performRun(
       ? { results: execResult.teardownResults, ...(execResult.teardownFailed !== undefined ? { failed: execResult.teardownFailed } : {}) }
       : undefined
   );
+  response += proxiedNote;
 
   if (execResult.behaviourDrift?.length) {
     // Reported, never a verdict: what a step should do at the boundary is the

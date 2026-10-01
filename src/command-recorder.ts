@@ -140,13 +140,13 @@ export interface CommandSequence {
    */
   recordedConnection?: string;
   /**
-   * The recording ran through an intercepting proxy.
-   *
-   * A replay that auto-launches its own browser launches it without one, so
-   * nothing it drives reaches the proxy and none of its traffic is captured -
-   * leaving no boundary evidence to set beside the recording's.
+   * The run needs its connection to cross the proxy: set by `replay declare`,
+   * and by `create` when the recording crossed one. A run on a browser outside
+   * the proxy captures none of its traffic, leaving no boundary evidence to
+   * set beside the recording's. Traffic checks and boundary rules need it
+   * too, declared or not (`sequenceNeedsProxy`).
    */
-  recordedThroughProxy?: boolean;
+  proxy?: boolean;
   /**
    * What a person ruled about each payload shape while recording.
    *
@@ -197,6 +197,8 @@ export interface CommandSequence {
      *  `profile` is set) - two identities sharing one browser share its
      *  storage, which defeats the point. */
     forceNewInstance?: boolean;
+    /** Launched through the proxy. */
+    proxy?: boolean;
     /** Why this browser exists, for the run summary. */
     role?: string;
   }>;

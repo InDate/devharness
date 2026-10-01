@@ -419,6 +419,15 @@ pause (`cancel`, `finish`, stepping off the end) closes them then. Browsers
 that were already up, or that share a port with another live connection, are
 left alone.
 
+**Declaring that it crosses the proxy.** `replay({ action: 'declare', name: '...',
+proxy: true })` marks a run that reads what crossed the proxy; `create` sets it
+when the recording crossed one, and traffic checks, socket checks and boundary
+rules imply it. A run with no live connection launches it proxied. A run on a
+live connection outside the proxy opens `<connection>-proxied`, a proxied window
+in that connection's Chrome with its cookies, plays there, says so in the
+summary and closes it when the run ends; the connection given is left as it
+was. A `requiredConnections` entry takes `proxy: true` for a declared browser.
+
 **Declaring the sockets it depends on.** `requiredSockets` is the same idea for
 transports: URL substrings of the WebSockets the assertions ride on, set by the
 same action (`replay({ action: 'declare', name: '...', requiredSockets:

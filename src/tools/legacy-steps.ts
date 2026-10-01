@@ -127,8 +127,9 @@ export function replacementFor(tool: string): string | undefined {
 }
 
 /**
- * A sequence's steps and teardown rewritten step by step, and its declared
- * browsers' `reference` moved to `connection`; everything else kept.
+ * A sequence's steps and teardown rewritten step by step, its declared
+ * browsers' `reference` moved to `connection`, and `recordedThroughProxy`
+ * read as `proxy`; everything else kept.
  */
 export function translateSequence<T extends {
   commands?: Array<{ tool: string; params?: Record<string, any> }>;
@@ -140,8 +141,10 @@ export function translateSequence<T extends {
       const { tool, params } = translateCall(step.tool, step.params);
       return tool === step.tool && params === step.params ? step : { ...step, tool, params };
     });
+  const { recordedThroughProxy, ...current } = sequence as T & { recordedThroughProxy?: boolean };
   return {
-    ...sequence,
+    ...(current as T),
+    ...(recordedThroughProxy === true && (current as any).proxy === undefined ? { proxy: true } : {}),
     ...(sequence.commands ? { commands: translateSteps(sequence.commands) } : {}),
     ...(sequence.teardown ? { teardown: translateSteps(sequence.teardown) } : {}),
     ...(sequence.requiredConnections

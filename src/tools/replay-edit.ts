@@ -337,13 +337,13 @@ export async function handleAddCheck(args: ReplayArgs, recorder: CommandRecorder
  * browser" unexpressible.
  */
 export async function handleDeclare(args: ReplayArgs, recorder: CommandRecorder) {
-  if (args.requiredConnections === undefined && args.requiredSockets === undefined && args.tags === undefined) {
+  if (args.requiredConnections === undefined && args.requiredSockets === undefined && args.tags === undefined && args.proxy === undefined) {
     return createErrorResponse('MISSING_PARAMETER', {
       action: 'declare',
-      missing: 'requiredConnections, requiredSockets or tags',
+      missing: 'requiredConnections, requiredSockets, tags or proxy',
       message: 'The "declare" action needs at least one of "requiredConnections" (browsers the sequence needs), ' +
-        '"requiredSockets" (URL substrings of the WebSockets its assertions ride on), or "tags" (what kind of ' +
-        'sequence this is, which runAll selects on). Pass [] to clear one.',
+        '"requiredSockets" (URL substrings of the WebSockets its assertions ride on), "tags" (what kind of ' +
+        'sequence this is, which runAll selects on), or "proxy" (the run crosses the proxy). Pass [] to clear a list.',
     });
   }
 
@@ -400,6 +400,10 @@ export async function handleDeclare(args: ReplayArgs, recorder: CommandRecorder)
     (sequence as any).requiredConnections = args.requiredConnections.length > 0
       ? args.requiredConnections.map(d => ({ ...d, connection: sanitizeReference(d.connection) }))
       : undefined;
+  }
+
+  if (args.proxy !== undefined) {
+    (sequence as any).proxy = args.proxy || undefined;
   }
 
   if (args.requiredSockets !== undefined) {

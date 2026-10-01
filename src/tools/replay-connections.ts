@@ -220,6 +220,23 @@ export function sanitizeConnectionMap(
 }
 
 /**
+ * Whether a run of `sequence` crosses the proxy: declared with `proxy`, or
+ * holding a traffic or socket check or a boundary rule, each of which reads
+ * what crossed the proxy and answers an error on a browser outside it.
+ */
+export function sequenceNeedsProxy(sequence: {
+  proxy?: boolean;
+  commands: RecordedCommand[];
+  teardown?: RecordedCommand[];
+  boundaryRules?: unknown[];
+}): boolean {
+  if (sequence.proxy === true) return true;
+  if ((sequence.boundaryRules?.length ?? 0) > 0) return true;
+  return [...sequence.commands, ...(sequence.teardown ?? [])].some(step =>
+    step.tool === 'check' && (step.params?.traffic !== undefined || step.params?.socket !== undefined));
+}
+
+/**
  * Check if sequence needs a connection
  */
 export function sequenceNeedsConnection(commands: RecordedCommand[]): boolean {

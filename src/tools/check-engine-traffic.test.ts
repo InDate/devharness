@@ -32,7 +32,7 @@ beforeEach(() => proxies.clear());
 
 describe('traffic checks', () => {
   it('answers error when the connection has no proxy', async () => {
-    const reading = await runCheck({ traffic: { urlIncludes: '/api' } }, { connectionReason: 'tab' });
+    const reading = await runCheck({ traffic: { urlIncludes: '/api' } }, { connection: 'tab' });
     expect(reading).toMatchObject({ outcome: 'error', errorKind: 'no-proxy' });
     expect(reading.detail).toContain('proxy: true');
   });
@@ -41,7 +41,7 @@ describe('traffic checks', () => {
     let n = 0;
     const proxy = standIn(() => (n += 1));
     const started = Date.now();
-    const reading = await runCheck({ traffic: { urlIncludes: '/api/items', method: 'GET' }, count: 3, withinMs: 5000, pollMs: 25 }, { connectionReason: 'tab' });
+    const reading = await runCheck({ traffic: { urlIncludes: '/api/items', method: 'GET' }, count: 3, withinMs: 5000, pollMs: 25 }, { connection: 'tab' });
     expect(proxy.count).toHaveBeenCalledWith({ urlIncludes: '/api/items', method: 'GET' }, expect.any(Number));
     expect(reading).toMatchObject({ outcome: 'held', found: '3 crossed', polls: 3 });
     expect(Date.now() - started).toBeLessThan(1000);
@@ -50,7 +50,7 @@ describe('traffic checks', () => {
   it('holds a count of none only once its time is up', async () => {
     standIn(() => 0);
     const started = Date.now();
-    const reading = await runCheck({ traffic: { urlIncludes: '/analytics' }, count: 0, operator: 'equals', withinMs: 150, pollMs: 25 }, { connectionReason: 'tab' });
+    const reading = await runCheck({ traffic: { urlIncludes: '/analytics' }, count: 0, operator: 'equals', withinMs: 150, pollMs: 25 }, { connection: 'tab' });
     expect(reading.outcome).toBe('held');
     expect(Date.now() - started).toBeGreaterThanOrEqual(100);
   });
@@ -58,7 +58,7 @@ describe('traffic checks', () => {
   it('fails a count that must not be exceeded as soon as it is', async () => {
     standIn(() => 1);
     const started = Date.now();
-    const reading = await runCheck({ traffic: { urlIncludes: '/analytics' }, count: 0, operator: 'equals', withinMs: 5000, pollMs: 25 }, { connectionReason: 'tab' });
+    const reading = await runCheck({ traffic: { urlIncludes: '/analytics' }, count: 0, operator: 'equals', withinMs: 5000, pollMs: 25 }, { connection: 'tab' });
     expect(reading).toMatchObject({ outcome: 'failed', found: '1 crossed', polls: 1 });
     expect(Date.now() - started).toBeLessThan(1000);
   });
@@ -66,23 +66,23 @@ describe('traffic checks', () => {
   it('holds exactly 4 only if no fifth crosses before its time is up', async () => {
     let n = 3;
     standIn(() => Math.min(5, (n += 1)));
-    const reading = await runCheck({ traffic: { method: 'GET' }, count: 4, operator: 'equals', withinMs: 2000, pollMs: 25 }, { connectionReason: 'tab' });
+    const reading = await runCheck({ traffic: { method: 'GET' }, count: 4, operator: 'equals', withinMs: 2000, pollMs: 25 }, { connection: 'tab' });
     expect(reading).toMatchObject({ outcome: 'failed', found: '5 crossed' });
   });
 
   it('releases its counter when it holds, when it fails, and when it is cancelled', async () => {
     const held = standIn(() => 1);
-    await runCheck({ traffic: {} }, { connectionReason: 'tab' });
+    await runCheck({ traffic: {} }, { connection: 'tab' });
     expect(held.released).toEqual(['count-1']);
 
     const failed = standIn(() => 0);
-    await runCheck({ traffic: {}, withinMs: 60, pollMs: 25 }, { connectionReason: 'tab' });
+    await runCheck({ traffic: {}, withinMs: 60, pollMs: 25 }, { connection: 'tab' });
     expect(failed.released).toEqual(['count-1']);
 
     const cancelled = standIn(() => 0);
     const abort = new AbortController();
     setTimeout(() => abort.abort(), 40);
-    await expect(runCheck({ traffic: {}, withinMs: 10_000, pollMs: 25 }, { connectionReason: 'tab', abortSignal: abort.signal })).rejects.toThrow();
+    await expect(runCheck({ traffic: {}, withinMs: 10_000, pollMs: 25 }, { connection: 'tab', abortSignal: abort.signal })).rejects.toThrow();
     expect(cancelled.released).toEqual(['count-1']);
   });
 });
@@ -94,16 +94,16 @@ describe('where a traffic count starts', () => {
     noteCallStart(1000);   // the click
     noteCallStart(2000);   // a screenshot after it
     noteCallStart(3000);   // the check itself
-    await runCheck({ traffic: {} }, { connectionReason: 'tab' });
+    await runCheck({ traffic: {} }, { connection: 'tab' });
     expect(proxy.count.mock.calls.at(-1)?.[1]).toBe(2000);
-    await runCheck({ traffic: {}, stepsBack: 2 }, { connectionReason: 'tab' });
+    await runCheck({ traffic: {}, stepsBack: 2 }, { connection: 'tab' });
     expect(proxy.count.mock.calls.at(-1)?.[1]).toBe(1000);
   });
 
   it('says the count may be short when the record was trimmed past its start', async () => {
     const proxy = standIn(() => 1);
     proxy.isPartial.mockReturnValue(true);
-    const reading = await runCheck({ traffic: {} }, { connectionReason: 'tab' });
+    const reading = await runCheck({ traffic: {} }, { connection: 'tab' });
     expect(reading.detail).toContain('may be short');
   });
 });
@@ -111,12 +111,12 @@ describe('where a traffic count starts', () => {
 describe('socket checks', () => {
   it('holds open while the socket is open, and waits for it to close', async () => {
     standIn(() => 0, true);
-    expect(await runCheck({ socket: '/live' }, { connectionReason: 'tab' })).toMatchObject({ outcome: 'held', found: 'open' });
+    expect(await runCheck({ socket: '/live' }, { connection: 'tab' })).toMatchObject({ outcome: 'held', found: 'open' });
 
     let reads = 0;
     const proxy = standIn(() => 0);
     proxy.socketOpen.mockImplementation(() => (reads += 1) < 3);
-    const reading = await runCheck({ socket: '/live', condition: 'closed', withinMs: 2000, pollMs: 25 }, { connectionReason: 'tab' });
+    const reading = await runCheck({ socket: '/live', condition: 'closed', withinMs: 2000, pollMs: 25 }, { connection: 'tab' });
     expect(reading).toMatchObject({ outcome: 'held', found: 'closed', polls: 3 });
   });
 

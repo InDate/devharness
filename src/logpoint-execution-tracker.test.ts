@@ -35,7 +35,7 @@ async function logpointOnSecond(maxExecutions: number) {
     async (reason) => (reason === 'second' ? { cdpManager: named } as any : null)
   );
   await breakpoint.handler({
-    action: 'setLogpoint', connectionReason: 'second',
+    action: 'setLogpoint', connection: 'second',
     url: 'app.js', lineNumber: 42, logMessage: 'hit', maxExecutions,
   } as any);
   return { active, named, tracker };

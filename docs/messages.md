@@ -113,7 +113,7 @@ Chrome is already running. You can either:
 
 **Suggestions:**
 - Use `browser({ action: 'kill', reason })` to close the existing instance
-- Use `connection({ action: 'attach', name })` to connect to the running instance instead
+- Use `connection({ action: 'attach', connection })` to connect to the running instance instead
 
 ---
 
@@ -142,7 +142,7 @@ Connection name "{{reference}}" is already bound to a live connection, so `force
 **Suggestions:**
 - Choose a different 3-word connection name for the new instance
 - Drop `forceNewInstance` to reuse the existing "{{reference}}" connection
-- Use `connection({ action: 'close', connectionReason: "{{reference}}", reason })` or `browser({ action: 'kill', reason })` first to release the name
+- Use `connection({ action: 'close', connection: "{{reference}}", reason })` or `browser({ action: 'kill', reason })` first to release the name
 
 ---
 
@@ -171,7 +171,7 @@ Profile "{{profile}}" is already held by the Chrome running on port {{port}}.
 Only one live Chrome can use a profile at a time - a second launch on the same user-data-dir is handed off to the first process and immediately exits.
 
 **Suggestions:**
-- Use the existing instance on port {{port}} (`connectionReason` of that connection)
+- Use the existing instance on port {{port}} (`connection` of that connection)
 - Or free the profile first: `browser({ action: 'kill', port: {{port}}, reason: 'switching profile' })`
 - Or launch a different profile, e.g. `connection({ action: 'launch', profile: '{{profile}}-2' })`
 
@@ -201,7 +201,7 @@ Title: {{title}}, URL: {{url}}{{#viewport}}, Viewport: {{viewport.width}}x{{view
 
 Console: {{consoleStats}}{{/consoleStats}}
 
-{{#hasUserReference}}Ready to use! Use connectionReason: "{{reference}}" in tool calls.{{/hasUserReference}}{{^hasUserReference}}Ready to use! Use connectionReason: "{{reference}}" in tool calls, or rename with connection({ action: 'rename', connectionReason: "{{reference}}", name }) first.{{/hasUserReference}}{{inactivityNote}}
+{{#hasUserReference}}Ready to use! Use connection: "{{reference}}" in tool calls.{{/hasUserReference}}{{^hasUserReference}}Ready to use! Use connection: "{{reference}}" in tool calls, or rename with connection({ action: 'rename', connection: "{{reference}}", newName }) first.{{/hasUserReference}}{{inactivityNote}}
 
 ---
 
@@ -212,7 +212,7 @@ Console: {{consoleStats}}{{/consoleStats}}
 
 Title: {{title}}, URL: {{url}}
 
-Ready to use! Use connectionReason: "{{reference}}" in tool calls.
+Ready to use! Use connection: "{{reference}}" in tool calls.
 
 ---
 
@@ -230,7 +230,7 @@ Chrome launched with debugging on port {{port}}
 
 Chrome launched successfully but auto-connect failed: {{error}}
 
-**Note:** Use `connection({ action: 'attach', name })` to connect manually.
+**Note:** Use `connection({ action: 'attach', connection })` to connect manually.
 
 ---
 
@@ -286,15 +286,15 @@ No active debugger connection found.
 
 **Suggestions:**
 - Use `connection({ action: 'launch' })` to launch Chrome with debugging enabled
-- Use `connection({ action: 'attach', name })` to connect to an existing debugger instance
+- Use `connection({ action: 'attach', connection })` to connect to an existing debugger instance
 
 **Example:**
 ```javascript
 // Launch Chrome
-connection({ action: 'launch', name: 'my-web-app', url: 'http://localhost:3000' })
+connection({ action: 'launch', connection: 'my-web-app', url: 'http://localhost:3000' })
 
 // Or connect to existing
-connection({ action: 'attach', name: 'my-web-app', host: 'localhost', port: 9222 })
+connection({ action: 'attach', connection: 'my-web-app', host: 'localhost', port: 9222 })
 ```
 
 ---
@@ -433,7 +433,7 @@ The run stopped before its first step, so nothing has been executed yet.
 
 **Suggestions:**
 - Use `connection({ action: 'launch' })` to launch Chrome with debugging enabled
-- Use `connection({ action: 'attach', name })` to connect to an existing debugger instance
+- Use `connection({ action: 'attach', connection })` to connect to an existing debugger instance
 
 ---
 
@@ -553,7 +553,7 @@ Reason: {{error}}
 
 A breakpoint already exists at {{url}}:{{lineNumber}}
 
-**TIP:** Use `breakpoint({ action: 'list', connectionReason })` to see all active breakpoints and their IDs.
+**TIP:** Use `breakpoint({ action: 'list', connection })` to see all active breakpoints and their IDs.
 
 ---
 
@@ -573,7 +573,7 @@ Breakpoint {{breakpointId}} removed successfully
 Breakpoint {{breakpointId}} not found
 
 **Suggestions:**
-- Use `breakpoint({ action: 'list', connectionReason })` to see all active breakpoints
+- Use `breakpoint({ action: 'list', connection })` to see all active breakpoints
 - The breakpoint may have already been removed
 
 ---
@@ -587,7 +587,7 @@ Logpoint set at {{url}}:{{lineNumber}} (max executions: {{maxExecutions}})
 **Breakpoint ID:** `{{breakpointId}}`
 **Log message:** `{{logMessage}}`
 
-**Note:** Logpoint will pause execution after {{maxExecutions}} executions. Use `breakpoint({ action: 'resetCounter', connectionReason, breakpointId })` to reset the counter.
+**Note:** Logpoint will pause execution after {{maxExecutions}} executions. Use `breakpoint({ action: 'resetCounter', connection, breakpointId })` to reset the counter.
 
 ---
 
@@ -611,7 +611,7 @@ Logpoint validation failed: {{error}}
 **Suggestions:**
 - Check that the expressions in `{curly braces}` are valid JavaScript
 - Ensure variables referenced exist in the scope at that line
-- Try evaluating the expression manually with `inspect({ action: 'evaluateExpression', connectionReason })`
+- Try evaluating the expression manually with `inspect({ action: 'evaluateExpression', connection })`
 
 ---
 
@@ -646,7 +646,7 @@ Logpoint {{breakpointId}} execution counter reset. It can now execute {{maxExecu
 
 **Type:** success
 
-Pause requested. Execution stops at the next statement the page runs: at once when a script is running, otherwise when one next starts. `connection({ action: 'status', connectionReason: '{{reference}}' })` reports `paused: true` once it has.
+Pause requested. Execution stops at the next statement the page runs: at once when a script is running, otherwise when one next starts. `connection({ action: 'status', connection: '{{reference}}' })` reports `paused: true` once it has.
 
 ---
 
@@ -772,7 +772,7 @@ Failed to evaluate expression: {{error}}
 **Suggestions:**
 - Check that the expression is valid JavaScript
 - Ensure variables referenced exist in the current scope
-- If evaluating in a specific frame, verify the call frame ID is valid with `inspect({ action: 'getCallStack', connectionReason })`
+- If evaluating in a specific frame, verify the call frame ID is valid with `inspect({ action: 'getCallStack', connection })`
 
 ---
 
@@ -799,7 +799,7 @@ The evaluated expression threw {{errorType}}: {{errorMessage}}
 **Type:** error
 **Code:** EVALUATE_CONTEXT_UNRESPONSIVE
 
-Evaluation on connection "{{connectionReason}}" did not respond within {{timeoutMs}}ms - the execution context may be unresponsive.
+Evaluation on connection "{{connection}}" did not respond within {{timeoutMs}}ms - the execution context may be unresponsive.
 
 **Expression:** `{{expression}}`
 
@@ -835,8 +835,8 @@ Expression returned a pending Promise while the debugger is paused - the event l
 Not currently paused at a breakpoint
 
 **Suggestions:**
-- Use `execution({ action: 'pause', connectionReason })` to pause execution
-- Set a breakpoint with `breakpoint({ action: 'set', connectionReason, url, lineNumber })` and trigger it
+- Use `execution({ action: 'pause', connection })` to pause execution
+- Set a breakpoint with `breakpoint({ action: 'set', connection, url, lineNumber })` and trigger it
 - Wait for execution to hit an existing breakpoint
 
 ---
@@ -861,7 +861,7 @@ Timeout waiting for execution to pause
 **Suggestions:**
 - The breakpoint may not be hit in the code path being executed
 - Try increasing the timeout duration
-- Verify the breakpoint is set at the correct location with `breakpoint({ action: 'list', connectionReason })`
+- Verify the breakpoint is set at the correct location with `breakpoint({ action: 'list', connection })`
 
 ---
 
@@ -966,7 +966,7 @@ Element not found: `{{selector}}`
 
 **Suggestions:**
 - Verify the CSS selector is correct
-- Use `dom({ action: 'querySelector', connectionReason, selector })` to test if the element exists
+- Use `dom({ action: 'querySelector', connection, selector })` to test if the element exists
 - The element may not be visible or loaded yet - try waiting or reloading the page
 
 ---
@@ -1065,10 +1065,10 @@ Element `{{selector}}` was clicked, but may not have a click handler attached. V
 {{action}} on `{{selector}}` triggered breakpoint at {{url}}:{{lineNumber}}
 
 **Next steps:**
-- Use `inspect({ action: 'getCallStack', connectionReason })` to see the full call stack
-- Use `inspect({ action: 'getVariables', connectionReason, callFrameId })` to inspect variables at this location
+- Use `inspect({ action: 'getCallStack', connection })` to see the full call stack
+- Use `inspect({ action: 'getVariables', connection, callFrameId })` to inspect variables at this location
 - Use `execution` with `stepOver`, `stepInto` or `stepOut` to continue debugging
-- Use `execution({ action: 'resume', connectionReason })` to continue execution
+- Use `execution({ action: 'resume', connection })` to continue execution
 
 ---
 
@@ -1085,9 +1085,9 @@ Cannot interact with element `{{selector}}` - blocked by {{modalDescription}}
 - Available dismiss strategies: {{availableStrategies}}
 
 **Suggestions:**
-- Use `modal({ action: 'dismiss', connectionReason })` to remove the blocking modal first
+- Use `modal({ action: 'dismiss', connection })` to remove the blocking modal first
 - Enable `handleModals: true` parameter to automatically dismiss modals
-- Use `modal({ action: 'detect', connectionReason })` to see all blocking elements on the page
+- Use `modal({ action: 'detect', connection })` to see all blocking elements on the page
 
 {{#suggestion}}
 **Hint:** {{suggestion}}
@@ -1225,7 +1225,7 @@ Network Request Search: {{matchCount}} matches for pattern "{{pattern}}"{{#flags
 Network request {{id}} not found
 
 **Suggestions:**
-- Use `network({ action: 'list', connectionReason })` to see all captured requests
+- Use `network({ action: 'list', connection })` to see all captured requests
 - Ensure network monitoring was enabled before the request was made
 - The request may have occurred before monitoring started
 
@@ -1244,7 +1244,7 @@ Script not found for URL: {{url}}
 - Verify the URL is correct (use `file://` for local files)
 - Ensure the script has been loaded by the browser
 - For dynamically loaded scripts, wait for them to load before setting breakpoints
-- Use `inspect({ action: 'searchCode', connectionReason, pattern })` to find available scripts
+- Use `inspect({ action: 'searchCode', connection, pattern })` to find available scripts
 
 ---
 
@@ -1270,7 +1270,7 @@ Line {{lineNumber}} not found in {{url}}
 Call frame {{callFrameId}} not found
 
 **Suggestions:**
-- Use `inspect({ action: 'getCallStack', connectionReason })` to get valid call frame IDs
+- Use `inspect({ action: 'getCallStack', connection })` to get valid call frame IDs
 - Ensure execution is still paused at a breakpoint
 - The call stack may have changed if execution resumed
 
@@ -1321,7 +1321,7 @@ Failed to spawn Chrome process: {{error}}
 This page holds no virtual authenticator.
 
 **Suggestions:**
-1. Add one with `storage({ action: "authenticatorAdd", connectionReason })` before the page asks for a passkey
+1. Add one with `storage({ action: "authenticatorAdd", connection })` before the page asks for a passkey
 
 ## PUPPETEER_NOT_CONNECTED
 
@@ -1332,7 +1332,7 @@ Not connected to browser. This operation requires browser automation support.
 
 **Suggestions:**
 1. Launch Chrome with `connection({ action: 'launch' })` (automatically enables browser automation)
-2. Or connect to Chrome: `connection({ action: 'attach', name: 'my-web-app', port: 9222 })`
+2. Or connect to Chrome: `connection({ action: 'attach', connection: 'my-web-app', port: 9222 })`
 
 **Note:** Browser automation features (DOM interaction, screenshots, navigation) are only available when connected to Chrome, not Node.js.
 
@@ -1346,7 +1346,7 @@ Not connected to browser. This operation requires browser automation support.
 No page loaded. The tool `{{toolName}}` requires a web page to be loaded first.
 
 **Suggestions:**
-1. Navigate to a URL with `navigate({ action: 'goto', connectionReason, url: 'https://example.com' })`
+1. Navigate to a URL with `navigate({ action: 'goto', connection, url: 'https://example.com' })`
 2. Or launch Chrome with a URL: `connection({ action: 'launch', url: 'https://example.com' })`
 
 **Note:** Chrome starts with a blank page by default. You must navigate to a URL before using tools that interact with page content.
@@ -1383,7 +1383,7 @@ Execution context was destroyed (page may have navigated or reloaded)
 
 **Suggestions:**
 - Reload the page and try again
-- Reconnect to the debugger with `connection({ action: 'attach', name })`
+- Reconnect to the debugger with `connection({ action: 'attach', connection })`
 - Check if the page navigated unexpectedly
 
 ---
@@ -1397,8 +1397,8 @@ Debugger session closed unexpectedly
 
 **Suggestions:**
 - The browser or Node.js process may have crashed or been closed
-- Use `connection({ action: 'status', connectionReason })` to check connection status
-- Reconnect with `connection({ action: 'attach', name })` or relaunch with `connection({ action: 'launch', name })`
+- Use `connection({ action: 'status', connection })` to check connection status
+- Reconnect with `connection({ action: 'attach', connection })` or relaunch with `connection({ action: 'launch', connection })`
 
 ---
 
@@ -1483,7 +1483,7 @@ Common variables used across messages:
 - `{{lineNumber}}` - Line number in source code
 - `{{columnNumber}}` - Column number in source code (optional)
 - `{{breakpointId}}` - Unique breakpoint identifier
-- `{{reference}}` - Connection name (the `name` a connection was launched or attached with)
+- `{{reference}}` - Connection name (the `connection` a launch or attach created it under)
 - `{{runtimeType}}` - 'chrome' or 'node'
 - `{{error}}` - Error message or details
 - `{{selector}}` - CSS selector string
@@ -1845,7 +1845,7 @@ Completed {{completedSteps}}/{{totalSteps}} steps before abort.{{#failedSteps}}
 **Type:** success
 **Summary:** Run started: {{name}}
 
-**Run started in the background:** {{name}} ({{totalSteps}} steps, connection: {{connectionReason}})
+**Run started in the background:** {{name}} ({{totalSteps}} steps, connection: {{connection}})
 
 Run id: `{{runId}}`
 
@@ -1870,7 +1870,7 @@ How the options of `run` and `runAll` act:
 - `strict`: console output is counted per connection from the start of the run, so output present before the run does not fail it. A sequence can pass functionally and still log; strict fails the second case.
 - `requireSockets`: socket closures and frame errors are counted from the start of the run, so a socket already down before it does not fail it, and a drop that recovered before the last step still does - a final assertion reads only the end state. A sequence declaring `requiredSockets` gets this check on every run, and that check also fails a declared socket that is missing or never opened, which a closure count cannot detect.
 - `killChromeOnFinish`: acts after a finished run, not after a pause or an abort. It kills the run's own connection and the browsers its launch steps created. A step that reached an already-bound reference borrowed that browser, which stays running, so a browser launched outside the run survives. A browser whose port another live connection shares stays running too (a launch step usually opens a tab in the same instance), and the run reports the connection holding it. On `runAll` only the last sequence carries it, so a preamble's browser survives between sequences and a suite stopped early leaves its browsers up.
-- `connections`: applies only to steps carrying their own connectionReason; `replay({ action: 'get', outputFormat: 'commands' })` lists them.
+- `connections`: applies only to steps carrying their own connection; `replay({ action: 'get', outputFormat: 'commands' })` lists them.
 - `status` without a runId returns the paused session and the recent runs; `cancel` without one drops the paused session, or stops the one executing run.
 
 ---
@@ -1910,7 +1910,7 @@ Each list passed to `declare` replaces that field, and `[]` clears it. A `profil
 **Type:** success
 **Summary:** Playing {{name}} in the bench
 
-**Playing in the bench on {{connectionReason}}:** {{name}}, from step 1.
+**Playing in the bench on {{connection}}:** {{name}}, from step 1.
 
 Bench: `{{benchUrl}}`
 
@@ -1932,9 +1932,9 @@ Bench: `{{benchUrl}}`
 ## REPLAY_BENCH_NOT_OPEN
 
 **Type:** error
-**Summary:** No bench open on {{connectionReason}}
+**Summary:** No bench open on {{connection}}
 
-No bench is open on `{{connectionReason}}`, so there is nothing to play the sequence in. Open one with `bench({ action: 'start', connectionReason: '{{connectionReason}}' })`, or run without `bench`.
+No bench is open on `{{connection}}`, so there is nothing to play the sequence in. Open one with `bench({ action: 'start', connection: '{{connection}}' })`, or run without `bench`.
 
 ---
 
@@ -2617,9 +2617,9 @@ No server listening at {{startUrl}}
 {{details}}{{#replayStarted}}
 Sequence replay completed.{{/replayStarted}}{{#browserLaunched}}
 Browser launched and navigated to start URL.{{/browserLaunched}}{{#recordingStarted}}
-Recording started. Reproduce the issue, then stop the recording.{{/recordingStarted}}{{#connectionReason}}
+Recording started. Reproduce the issue, then stop the recording.{{/recordingStarted}}{{#connection}}
 
-Connection: `{{connectionReason}}`{{/connectionReason}}
+Connection: `{{connection}}`{{/connection}}
 
 ---
 
@@ -3972,7 +3972,7 @@ Request to {{url}} failed ({{destination}}): {{error}}
 
 **Suggestions:**
 - Check the URL is reachable and the server is running
-- destination "browser" requires an active connection (use connectionReason)
+- destination "browser" requires an active connection (use connection)
 - destination "node" cannot resolve relative URLs - use a full URL (http://localhost:PORT/path)
 
 ---
@@ -4054,11 +4054,11 @@ A condition form polls from the MCP side: each read runs in whatever document th
 **Type:** error
 **Code:** WAIT_DEBUGGER_PAUSED
 
-Cannot wait for {{condition}}: the debugger on "{{connectionReason}}" is paused at a breakpoint. The page's event loop is stopped, so nothing can change and the wait would only burn its timeout.
+Cannot wait for {{condition}}: the debugger on "{{connection}}" is paused at a breakpoint. The page's event loop is stopped, so nothing can change and the wait would only burn its timeout.
 
 **Suggestions:**
-- Resume execution first: `execution({ action: 'resume', connectionReason: '{{connectionReason}}' })`
-- Or inspect the paused state instead of waiting: `inspect({ action: 'getCallStack', connectionReason: '{{connectionReason}}' })`
+- Resume execution first: `execution({ action: 'resume', connection: '{{connection}}' })`
+- Or inspect the paused state instead of waiting: `inspect({ action: 'getCallStack', connection: '{{connection}}' })`
 
 ---
 
@@ -4332,7 +4332,7 @@ Ensure this selector is serving its purpose, check with the user if that is uncl
 
 **Type:** info
 
-A browser is launched through a proxy or it is not; a running one cannot gain one. Relaunch it with `connection({ action: 'launch', name: '{{connection}}', proxy: true })`, then `bench({ action: 'start', connectionReason: '{{connection}}', sequence: '{{sequence}}' })` so the bench comes back where they left it.
+A browser is launched through a proxy or it is not; a running one cannot gain one. Relaunch it with `connection({ action: 'launch', connection: '{{connection}}', proxy: true })`, then `bench({ action: 'start', connection: '{{connection}}', sequence: '{{sequence}}' })` so the bench comes back where they left it.
 
 Until then the ASSOCIATE view has nothing to read: without a proxy nothing records what crossed the boundary.
 
@@ -4377,7 +4377,7 @@ Read the whole sequence against the page and tell the person what will not survi
 
 Bench: `{{benchUrl}}` - the page is {{held}} and the picker is {{pickerState}}; neither was changed.{{#unapplied}} Not applied from this call: {{unapplied}}. Open it in the bench, or stop the bench and start it again with it.{{/unapplied}}
 
-`bench({ action: 'picker', connectionReason: '{{connection}}', armed: true })` arms the picker; `armed: false` disarms it.
+`bench({ action: 'picker', connection: '{{connection}}', armed: true })` arms the picker; `armed: false` disarms it.
 
 ---
 
@@ -4392,14 +4392,14 @@ Bench: `{{benchUrl}}` - the page runs and the picker is idle.
 
 **Once per session:**
 
-HOLD in the bench stops the page's JS and its CSS animations and, for a browser launched with `proxy: true`, keeps what crosses its boundary waiting at the proxy, so a state that only exists mid-interaction is read with the traffic that produced it; PICKER turns the next click into a pick. They are independent: driving the app needs the picker disarmed *and* the page running, because a held page has its JS stopped and a click reaches nothing. Picking works in either state - the picker is Chrome's, not the page's. While held, a tool that drives the page is refused, naming the hold. `bench({ action: 'release' })`, `hold({ action: 'release' })`, `execution({ action: 'resume', connectionReason })` and `stop` each release every layer of it.
+HOLD in the bench stops the page's JS and its CSS animations and, for a browser launched with `proxy: true`, keeps what crosses its boundary waiting at the proxy, so a state that only exists mid-interaction is read with the traffic that produced it; PICKER turns the next click into a pick. They are independent: driving the app needs the picker disarmed *and* the page running, because a held page has its JS stopped and a click reaches nothing. Picking works in either state - the picker is Chrome's, not the page's. While held, a tool that drives the page is refused, naming the hold. `bench({ action: 'release' })`, `hold({ action: 'release' })`, `execution({ action: 'resume', connection })` and `stop` each release every layer of it.
 
 Nothing is injected into the page. The bench is served from `127.0.0.1` while apps sit on `localhost` - a different site, so Chrome gives it its own renderer process. Drag it into Chrome's split view to work side by side.
 
 The person picks a step in the bench's step list, clicks the element in the app tab, types a comment, saves. The note is stored in that step of the sequence file, so it travels with the sequence rather than living beside it, and hovering the note swaps its text for the selector while outlining the element on the page. Saves, sequence writes and screenshots announce themselves on this session's event stream, `{{eventStreamPath}}`. With no watch they reach you only on your next devharness call, so each bench start prints the watch call when no process reads the stream. Keep working while they write.
 
 **Suggestions:**
-- To read what they recorded: `bench({ action: 'list', connectionReason: '{{connection}}' })`
+- To read what they recorded: `bench({ action: 'list', connection: '{{connection}}' })`
 
 ---
 
@@ -4535,7 +4535,7 @@ Could not read {{path}}: {{reason}}
 **Type:** error
 **Code:** BENCH_NOT_ACTIVE
 
-`{{action}}` needs the bench open on "{{connection}}". Open it with `bench({ action: 'start', connectionReason: '{{connection}}' })`.
+`{{action}}` needs the bench open on "{{connection}}". Open it with `bench({ action: 'start', connection: '{{connection}}' })`.
 
 ---
 
@@ -4545,7 +4545,7 @@ Could not read {{path}}: {{reason}}
 
 **Once per session:**
 
-Called directly, a check answers held or failed and the call itself succeeds; `assert` is a check whose failure stops a run, and `wait` a check with a time limit. `stepsBack` counts traffic from the start of an earlier call: the default 1 is the call before the check, whose traffic has usually crossed by the time the check runs, and every call counts, in a run each step. A traffic match follows a pin's rules. With `count`, the operators `equals`, `lte` and `lt` read until `withinMs` ends, since a later crossing can break them. As a sequence step, `connectionReason` comes from the run, and a `{ run }` outcome with no `resumeAt` carries on at the next step.
+Called directly, a check answers held or failed and the call itself succeeds; `assert` is a check whose failure stops a run, and `wait` a check with a time limit. `stepsBack` counts traffic from the start of an earlier call: the default 1 is the call before the check, whose traffic has usually crossed by the time the check runs, and every call counts, in a run each step. A traffic match follows a pin's rules. With `count`, the operators `equals`, `lte` and `lt` read until `withinMs` ends, since a later crossing can break them. As a sequence step, `connection` comes from the run, and a `{ run }` outcome with no `resumeAt` carries on at the next step.
 
 ---
 
@@ -4575,7 +4575,7 @@ A localStorage or sessionStorage write crosses no network boundary and a later s
 
 **Once per session:**
 
-A given `port` is always honoured: a Chrome already on it gets a tab, and with `forceNewInstance` the call errors when that port is taken. `forceNewInstance` without `port` picks a free port, and errors when `name` is already bound to a live connection. `width` and `height` size the real OS window, so the page keeps tracking window resizes; a size larger than the display is clamped and reported, and a headless launch emulates the size. A `profile` maps to a stable user-data-dir under ~/.devharness/profiles (per project with `chrome.persistentProfileRoot`), created on first use and never deleted, so cookies, localStorage and IndexedDB survive; it pins no port, one live Chrome holds it, and `config({ action: 'resetProfile', profile })` wipes it. With `proxy: true` Chrome shows its unsupported-flag banner and HTTP/1.1 is forced. `chromeArgs` merges after the managed defaults, the `CDP_TOOLS_EXTRA_CHROME_ARGS` env var (space-separated) merges too, and both are ignored when an existing Chrome on the port is reused.
+A given `port` is always honoured: a Chrome already on it gets a tab, and with `forceNewInstance` the call errors when that port is taken. `forceNewInstance` without `port` picks a free port, and errors when `connection` is already bound to a live connection. `width` and `height` size the real OS window, so the page keeps tracking window resizes; a size larger than the display is clamped and reported, and a headless launch emulates the size. A `profile` maps to a stable user-data-dir under ~/.devharness/profiles (per project with `chrome.persistentProfileRoot`), created on first use and never deleted, so cookies, localStorage and IndexedDB survive; it pins no port, one live Chrome holds it, and `config({ action: 'resetProfile', profile })` wipes it. With `proxy: true` Chrome shows its unsupported-flag banner and HTTP/1.1 is forced. `chromeArgs` merges after the managed defaults, the `CDP_TOOLS_EXTRA_CHROME_ARGS` env var (space-separated) merges too, and both are ignored when an existing Chrome on the port is reused.
 
 ---
 

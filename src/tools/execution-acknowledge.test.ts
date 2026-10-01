@@ -24,7 +24,7 @@ function twoConnections(opts: { secondPaused: boolean }) {
   return { connectionManager, execution, first, second };
 }
 
-describe('execution acknowledge with no connectionReason', () => {
+describe('execution acknowledge with no connection', () => {
   it('acknowledges a pause on a connection other than the active one', async () => {
     const { connectionManager, execution, first, second } = twoConnections({ secondPaused: true });
 
@@ -47,13 +47,13 @@ describe('execution acknowledge with no connectionReason', () => {
 });
 
 describe('execution actions other than acknowledge', () => {
-  it('refuse a call with no connectionReason rather than act on the active connection', async () => {
+  it('refuse a call with no connection rather than act on the active connection', async () => {
     const { execution } = twoConnections({ secondPaused: true });
 
     for (const action of ['pause', 'resume', 'stepOver', 'stepInto', 'stepOut'] as const) {
       const result: any = await execution.handler({ action } as any);
       expect(result.isError).toBe(true);
-      expect(result.content[0].text).toContain('connectionReason');
+      expect(result.content[0].text).toContain('connection');
     }
   });
 });

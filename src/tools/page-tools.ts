@@ -89,11 +89,11 @@ export async function gatherPageContext(
 }
 
 /**
- * Format page context for response. Each hint names `connectionReason`,
+ * Format page context for response. Each hint names `connection`,
  * since a call that acts on a connection without naming one is refused.
  */
-export function formatPageContextForResponse(context: PageContext, connectionReason: string): Record<string, any> {
-  const on = `connectionReason: '${connectionReason}'`;
+export function formatPageContextForResponse(context: PageContext, connection: string): Record<string, any> {
+  const on = `connection: '${connection}'`;
   const response: Record<string, any> = {
     url: context.url,
     title: context.title,
@@ -145,7 +145,7 @@ function navigationOutcome(result: ActionResult<unknown>, action: string, target
 // Consolidated schema for page navigation tools
 const navigateSchema = z.object({
   action: z.enum(['goto', 'reload', 'back', 'forward', 'info']),
-  connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it'),
+  connection: z.string().describe('The connection, by the name connection launch or attach gave it'),
   // Parameters for goto action
   url: z.string().optional().describe('URL to navigate to (required for goto action)'),
   waitUntil: z.enum(['load', 'domcontentloaded', 'networkidle0', 'networkidle2']).optional().describe('goto/reload: when navigation counts as complete (default load)'),
@@ -155,7 +155,7 @@ const navigateSchema = z.object({
 }).strict();
 
 export function createPageTools(
-  resolveConnectionFromReason: (connectionReason: string) => Promise<any>,
+  resolveConnectionByName: (connection: string) => Promise<any>,
   clickableCache: ClickableCache,
   executeToolCall?: ExecuteToolCall
 ) {
@@ -182,7 +182,7 @@ export function createPageTools(
       // abort the handler throws promptly while the page keeps loading in
       // the background.
       async (args, abortSignal?: AbortSignal) => {
-        const { action, connectionReason } = args;
+        const { action, connection } = args;
 
         throwIfAborted(abortSignal);
 
@@ -196,19 +196,19 @@ export function createPageTools(
         }
 
         // Resolve connection from reason
-        let resolved = await resolveConnectionFromReason(connectionReason);
+        let resolved = await resolveConnectionByName(connection);
 
         // Auto-launch Chrome for 'goto' action if no connection found
         if (!resolved && action === 'goto' && executeToolCall) {
-          const launchResult = await autoLaunchChrome(executeToolCall, connectionReason, 'navigate.goto');
+          const launchResult = await autoLaunchChrome(executeToolCall, connection, 'navigate.goto');
           if (!launchResult.success) {
             return createErrorResponse(launchResult.errorType, {
-              reference: connectionReason,
+              reference: connection,
               error: launchResult.error
             });
           }
           // Try resolving again after launch
-          resolved = await resolveConnectionFromReason(connectionReason);
+          resolved = await resolveConnectionByName(connection);
         }
 
         if (!resolved) {
@@ -258,7 +258,7 @@ export function createPageTools(
               return createSuccessResponse('PAGE_NAVIGATE_SUCCESS', { url: args.url });
             }
 
-            return createSuccessResponse('PAGE_NAVIGATE_SUCCESS', formatPageContextForResponse(result.result, connectionReason));
+            return createSuccessResponse('PAGE_NAVIGATE_SUCCESS', formatPageContextForResponse(result.result, connection));
           }
 
           case 'reload': {
@@ -293,7 +293,7 @@ export function createPageTools(
               return createSuccessResponse('PAGE_RELOAD_SUCCESS');
             }
 
-            return createSuccessResponse('PAGE_RELOAD_SUCCESS', formatPageContextForResponse(result.result, connectionReason));
+            return createSuccessResponse('PAGE_RELOAD_SUCCESS', formatPageContextForResponse(result.result, connection));
           }
 
           case 'back': {
@@ -317,7 +317,7 @@ export function createPageTools(
               return createSuccessResponse('PAGE_GO_BACK_SUCCESS');
             }
 
-            return createSuccessResponse('PAGE_GO_BACK_SUCCESS', formatPageContextForResponse(result.result, connectionReason));
+            return createSuccessResponse('PAGE_GO_BACK_SUCCESS', formatPageContextForResponse(result.result, connection));
           }
 
           case 'forward': {
@@ -341,7 +341,7 @@ export function createPageTools(
               return createSuccessResponse('PAGE_GO_FORWARD_SUCCESS');
             }
 
-            return createSuccessResponse('PAGE_GO_FORWARD_SUCCESS', formatPageContextForResponse(result.result, connectionReason));
+            return createSuccessResponse('PAGE_GO_FORWARD_SUCCESS', formatPageContextForResponse(result.result, connection));
           }
 
           case 'info': {

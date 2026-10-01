@@ -23,7 +23,7 @@ function makeInput(page: Record<string, any>) {
   return { input, page: fullPage };
 }
 
-const on = { connectionReason: 'shop-web-app', detectChanges: false };
+const on = { connection: 'shop-web-app', detectChanges: false };
 
 describe('an input action whose dispatch throws', () => {
   it('reports a press of a key the page refuses as failed', async () => {
@@ -63,7 +63,7 @@ describe('the DOM change observer', () => {
   it('is not left running by a click that returns before collecting it', async () => {
     const { input } = makeInput({});
 
-    await input.handler({ connectionReason: 'observer-left-check', action: 'click', x: 10, y: 20, detectChanges: true });
+    await input.handler({ connection: 'observer-left-check', action: 'click', x: 10, y: 20, detectChanges: true });
 
     expect(domChangeMonitor.isObserving('observer-left-check')).toBe(false);
   });

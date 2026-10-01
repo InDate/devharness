@@ -26,7 +26,7 @@ function page(answers: Array<unknown | Error>, overrides: Record<string, unknown
   };
   return {
     cdpManager,
-    deps: { connectionReason: 'tab', resolveConnection: vi.fn(async () => ({ cdpManager })) },
+    deps: { connection: 'tab', resolveConnection: vi.fn(async () => ({ cdpManager })) },
   };
 }
 
@@ -197,8 +197,8 @@ describe('runCheck', () => {
       content: [{ type: 'text', text: 'URL: https://example.com/app/home' }],
       _meta: { tool: 'navigate', action: 'info', timestamp: 0, navigate: { url: 'https://example.com/app/home', title: 't', action: 'info' } },
     }));
-    const reading = await runCheck({ url: '/app', operator: 'contains' }, { connectionReason: 'tab', executeToolCall: executeToolCall as any });
+    const reading = await runCheck({ url: '/app', operator: 'contains' }, { connection: 'tab', executeToolCall: executeToolCall as any });
     expect(reading.outcome).toBe('held');
-    expect((executeToolCall.mock.calls[0] as unknown[]).slice(0, 2)).toEqual(['navigate', { action: 'info', connectionReason: 'tab' }]);
+    expect((executeToolCall.mock.calls[0] as unknown[]).slice(0, 2)).toEqual(['navigate', { action: 'info', connection: 'tab' }]);
   });
 });

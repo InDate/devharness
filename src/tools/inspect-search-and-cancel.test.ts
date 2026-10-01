@@ -21,7 +21,7 @@ describe('searching a webpack eval bundle', () => {
     const fullLine = String.raw`eval(__webpack_require__.ts("const a = 1;\nconst sep = '\\n'; // marker\n"))`;
     const inspect = inspectOver('eval(__webpack_require__.ts("const a = 1;', fullLine);
 
-    const result = await inspect.handler({ action: 'searchCode', connectionReason: 'shop-web-app', pattern: 'marker' });
+    const result = await inspect.handler({ action: 'searchCode', connection: 'shop-web-app', pattern: 'marker' });
 
     expect(text(result)).toContain(String.raw`const sep = '\n'; // marker`);
   });
@@ -30,10 +30,10 @@ describe('searching a webpack eval bundle', () => {
 describe('search results', () => {
   it('are shown without their indentation, by searchCode as by searchFunctions', async () => {
     const code = await inspectOver('        const marker = 1;').handler({
-      action: 'searchCode', connectionReason: 'shop-web-app', pattern: 'marker',
+      action: 'searchCode', connection: 'shop-web-app', pattern: 'marker',
     });
     const fns = await inspectOver('        function marker() {').handler({
-      action: 'searchFunctions', connectionReason: 'shop-web-app', functionName: 'marker',
+      action: 'searchFunctions', connection: 'shop-web-app', functionName: 'marker',
     });
 
     expect(text(code)).toContain('\n  const marker = 1;');
@@ -49,7 +49,7 @@ describe('evaluating inside a worker', () => {
     const controller = new AbortController();
 
     const settled = inspect.handler(
-      { action: 'evaluateExpression', connectionReason: 'shop-web-app', target: 'sw.js', expression: 'self.registration' },
+      { action: 'evaluateExpression', connection: 'shop-web-app', target: 'sw.js', expression: 'self.registration' },
       controller.signal,
     ).then(value => ({ value }), error => ({ error }));
     controller.abort();

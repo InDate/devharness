@@ -56,7 +56,7 @@ export async function handleCreate(args: ReplayArgs, recorder: CommandRecorder, 
 
   // Recorded steps keep the connection they were driven against (bug-018). Hoist
   // it back off when the whole sequence shares one, so the sequence stays
-  // portable and a run-level connectionReason still retargets it; keep it
+  // portable and a run-level connection still retargets it; keep it
   // per-step only where the sequence genuinely spans connections.
   const normalized = normalizeStepConnections(sequence.commands);
   (sequence as any).commands = normalized.commands;
@@ -117,8 +117,8 @@ export function rehydrateStepConnections(sequence: CommandSequence): RecordedCom
   const recorded = sequence.recordedConnection;
   if (!recorded) return sequence.commands;
   return sequence.commands.map(cmd =>
-    commandTakesInjectedConnection(cmd) && !cmd.params.connectionReason
-      ? { ...cmd, params: { ...cmd.params, connectionReason: recorded } }
+    commandTakesInjectedConnection(cmd) && !cmd.params.connection
+      ? { ...cmd, params: { ...cmd.params, connection: recorded } }
       : cmd
   );
 }
@@ -135,13 +135,13 @@ export function formatConnectionNote(normalized: ReturnType<typeof normalizeStep
 
   if (hoisted) {
     return `\n\n**Connection:** every step ran against \`${hoisted}\`, so it was hoisted off the steps` +
-      ` - the sequence is portable and \`replay({ action: 'run', connectionReason: '<other>' })\` retargets it.`;
+      ` - the sequence is portable and \`replay({ action: 'run', connection: '<other>' })\` retargets it.`;
   }
 
   if (analysis.multiConnection) {
     notes.push(`\n\n**Multi-connection sequence:** steps keep their own connections (${analysis.references.map(r => `\`${r}\``).join(', ')}),` +
       ` so the recorded interleaving is reproduced instead of collapsing into one browser.` +
-      ` A run-level \`connectionReason\` does NOT override them; in another session rebind them with` +
+      ` A run-level \`connection\` does NOT override them; in another session rebind them with` +
       ` \`replay({ action: 'run', name: '...', connections: { ${analysis.references.map(r => `"${r}": "<reference here>"`).join(', ')} } })\`.` +
       ` A reference that doesn't exist at run time fails that step rather than falling back.`);
   }
@@ -156,9 +156,9 @@ export function formatConnectionNote(normalized: ReturnType<typeof normalizeStep
       `steps naming ${analysis.references.map(r => `\`${r}\``).join(', ')} are pinned, but other browser steps name none` +
       ` (nothing records which connection they ran against).` +
       ` Those bare steps take the run-level connection, so ${analysis.multiConnection
-        ? `they land in a DIFFERENT browser depending on the run-level \`connectionReason\` - and the run still reports success either way.`
-        : `a run-level \`connectionReason\` retargets them while the named steps stay put.`}` +
-      ` Re-record passing \`connectionReason\` on every step to make this deterministic.`);
+        ? `they land in a DIFFERENT browser depending on the run-level \`connection\` - and the run still reports success either way.`
+        : `a run-level \`connection\` retargets them while the named steps stay put.`}` +
+      ` Re-record passing \`connection\` on every step to make this deterministic.`);
   }
 
   return notes.join('');

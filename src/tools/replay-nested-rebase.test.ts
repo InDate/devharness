@@ -53,7 +53,7 @@ function makeHarness(nested: CommandSequence[], rebaseOrigin?: string) {
   const ctx: ExecutionContext = {
     executeToolCall,
     commandRecorder,
-    connectionReason: 'device-a',
+    connection: 'device-a',
     logPrefix: 'test',
     variableStore: {},
     ...(rebaseOrigin ? { rebaseOrigin } : {}),

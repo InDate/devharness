@@ -388,7 +388,7 @@ const clipSchema = z.object({
 
 const screenshotSchema = z.object({
   action: z.enum(['fullPage', 'viewport', 'element', 'pdf']),
-  connectionReason: z.string(),
+  connection: z.string(),
 
   // Screenshot options
   type: z.enum(['png', 'jpeg']).optional(),
@@ -417,7 +417,7 @@ const screenshotSchema = z.object({
   }),
 }).strict();
 
-export function createScreenshotTools(resolveConnectionFromReason: (connectionReason: string) => Promise<any>) {
+export function createScreenshotTools(resolveConnectionByName: (connection: string) => Promise<any>) {
   /**
    * Save screenshot buffer to disk
    */
@@ -465,7 +465,7 @@ export function createScreenshotTools(resolveConnectionFromReason: (connectionRe
         throwIfAborted(abortSignal);
 
         // Resolve connection from reason
-        const resolved = await resolveConnectionFromReason(args.connectionReason);
+        const resolved = await resolveConnectionByName(args.connection);
         if (!resolved) {
           return createErrorResponse('CONNECTION_NOT_FOUND', {
             message: 'No Chrome browser available. Start one with `connection` action `launch`.'

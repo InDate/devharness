@@ -20,14 +20,14 @@ import { createErrorResponse, createSuccessResponse } from '../messages.js';
 interface Call {
   tool: string;
   action?: string;
-  connectionReason?: string;
+  connection?: string;
   params: Record<string, any>;
 }
 
 function makeHarness(responses: Record<string, any> = {}) {
   const calls: Call[] = [];
   const executeToolCall = vi.fn(productionShaped(async (tool: string, params: Record<string, any>) => {
-    calls.push({ tool, action: params.action, connectionReason: params.connectionReason, params });
+    calls.push({ tool, action: params.action, connection: params.connection, params });
     const key = `${tool}.${params.action}`;
     if (key in responses) {
       const r = responses[key];
@@ -48,7 +48,7 @@ function makeHarness(responses: Record<string, any> = {}) {
   const ctx: ExecutionContext = {
     executeToolCall,
     commandRecorder,
-    connectionReason: 'device-a',
+    connection: 'device-a',
     logPrefix: 'test',
   };
 
@@ -97,11 +97,11 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('bug-008: inspect steps and connection resolution', () => {
-  it('passes a per-step connectionReason on an inspect step straight through (already worked)', async () => {
+  it('passes a per-step connection on an inspect step straight through (already worked)', async () => {
     const { calls, ctx } = makeHarness();
     await executeSteps({
       sequence: seq([
-        { tool: 'inspect', params: { action: 'evaluateExpression', expression: 'location.href', connectionReason: 'device-b' } },
+        { tool: 'inspect', params: { action: 'evaluateExpression', expression: 'location.href', connection: 'device-b' } },
       ]),
       startStep: 0,
       ctx,
@@ -109,7 +109,7 @@ describe('bug-008: inspect steps and connection resolution', () => {
 
     const evals = find(calls, 'inspect', 'evaluateExpression');
     expect(evals).toHaveLength(1);
-    expect(evals[0].connectionReason).toBe('device-b');
+    expect(evals[0].connection).toBe('device-b');
   });
 
   it('injects the run-level connection into an inspect step that has none', async () => {
@@ -123,19 +123,19 @@ describe('bug-008: inspect steps and connection resolution', () => {
     });
 
     const evals = find(calls, 'inspect', 'evaluateExpression');
-    expect(evals[0].connectionReason).toBe('device-a');
+    expect(evals[0].connection).toBe('device-a');
   });
 
   it('refreshes a stale callFrameId against the step connection, not the run connection', async () => {
     const { calls, ctx } = makeHarness({
       // Only the step's own connection is paused, which is where the frame is.
-      'connection.status': (params: any) => params.connectionReason === 'device-b'
+      'connection.status': (params: any) => params.connection === 'device-b'
         ? pausedStatus('device-b', 'fresh-frame')
         : { content: [{ type: 'text', text: '' }] },
     });
     await executeSteps({
       sequence: seq([
-        { tool: 'inspect', params: { action: 'getVariables', callFrameId: 'stale', connectionReason: 'device-b' } },
+        { tool: 'inspect', params: { action: 'getVariables', callFrameId: 'stale', connection: 'device-b' } },
       ]),
       startStep: 0,
       ctx,
@@ -144,8 +144,8 @@ describe('bug-008: inspect steps and connection resolution', () => {
     const stackProbes = find(calls, 'connection', 'status');
     // [0] is the run-level pre-run resume probe; [1] is the callFrameId refresh,
     // which must target the step's own connection
-    expect(stackProbes[0].connectionReason).toBe('device-a');
-    expect(stackProbes[1].connectionReason).toBe('device-b');
+    expect(stackProbes[0].connection).toBe('device-a');
+    expect(stackProbes[1].connection).toBe('device-b');
     const getVars = find(calls, 'inspect', 'getVariables');
     expect(getVars[0].params.callFrameId).toBe('fresh-frame');
   });
@@ -155,7 +155,7 @@ describe('bug-008: inspect steps and connection resolution', () => {
     expect(TOOLS_NEEDING_CONNECTION).not.toContain('request');
     expect(TOOLS_ACCEPTING_CONNECTION).toContain('inspect');
 
-    // bench takes a required connectionReason and launches Chrome when the
+    // bench takes a required connection and launches Chrome when the
     // reference is unbound, so a sequence holding one must get it back after
     // the hoist - otherwise the replay fails on a missing parameter.
     expect(TOOLS_NEEDING_CONNECTION).toContain('bench');
@@ -191,22 +191,22 @@ describe('bug-009: validation machinery follows the per-step connection', () => 
 
     await executeSteps({
       sequence: seq([
-        { tool: 'input', params: { action: 'click', selector: '#go', connectionReason: 'device-b' } },
+        { tool: 'input', params: { action: 'click', selector: '#go', connection: 'device-b' } },
       ]),
       startStep: 0,
       ctx,
     });
 
     // calls[0] is the run-level "resume if a previous run left us paused" probe
-    expect(calls[0]).toMatchObject({ tool: 'connection', action: 'status', connectionReason: 'device-a' });
+    expect(calls[0]).toMatchObject({ tool: 'connection', action: 'status', connection: 'device-a' });
 
     // every observation around the click must target device-b (connection list
     // is the step-connection existence probe - it is session-wide, not per
     // connection, so it carries none)
     for (const c of calls.slice(1).filter(c => !(c.tool === 'connection' && c.action === 'list'))) {
       expect(
-        { tool: c.tool, action: c.action, connectionReason: c.connectionReason }
-      ).toMatchObject({ connectionReason: 'device-b' });
+        { tool: c.tool, action: c.action, connection: c.connection }
+      ).toMatchObject({ connection: 'device-b' });
     }
     // and the machinery really did run
     expect(find(calls, 'console').length).toBeGreaterThanOrEqual(2);
@@ -220,7 +220,7 @@ describe('bug-009: validation machinery follows the per-step connection', () => 
 
     await executeSteps({
       sequence: seq([
-        { tool: 'navigate', params: { action: 'goto', url: 'http://b/page', connectionReason: 'device-b' } },
+        { tool: 'navigate', params: { action: 'goto', url: 'http://b/page', connection: 'device-b' } },
       ]),
       startStep: 0,
       ctx,
@@ -228,7 +228,7 @@ describe('bug-009: validation machinery follows the per-step connection', () => 
 
     const infos = find(calls, 'navigate', 'info');
     expect(infos.length).toBeGreaterThanOrEqual(1);
-    expect(infos.every(c => c.connectionReason === 'device-b')).toBe(true);
+    expect(infos.every(c => c.connection === 'device-b')).toBe(true);
   });
 
   it('validates typed text against the step connection', async () => {
@@ -238,7 +238,7 @@ describe('bug-009: validation machinery follows the per-step connection', () => 
 
     await executeSteps({
       sequence: seq([
-        { tool: 'input', params: { action: 'type', selector: '#f', text: 'hello', connectionReason: 'device-b' } },
+        { tool: 'input', params: { action: 'type', selector: '#f', text: 'hello', connection: 'device-b' } },
       ]),
       startStep: 0,
       ctx,
@@ -246,7 +246,7 @@ describe('bug-009: validation machinery follows the per-step connection', () => 
 
     const evals = find(calls, 'inspect', 'evaluateExpression');
     expect(evals).toHaveLength(1);
-    expect(evals[0].connectionReason).toBe('device-b');
+    expect(evals[0].connection).toBe('device-b');
   });
 
   it('checks for a breakpoint pause on the step connection', async () => {
@@ -254,7 +254,7 @@ describe('bug-009: validation machinery follows the per-step connection', () => 
 
     await executeSteps({
       sequence: seq([
-        { tool: 'dom', params: { action: 'querySelector', selector: '#x', connectionReason: 'device-b' } },
+        { tool: 'dom', params: { action: 'querySelector', selector: '#x', connection: 'device-b' } },
       ]),
       startStep: 0,
       ctx,
@@ -262,7 +262,7 @@ describe('bug-009: validation machinery follows the per-step connection', () => 
 
     // first probe is the run-level pre-run resume check, second is the post-step check
     const stackProbes = find(calls, 'connection', 'status');
-    expect(stackProbes.map(c => c.connectionReason)).toEqual(['device-a', 'device-b']);
+    expect(stackProbes.map(c => c.connection)).toEqual(['device-a', 'device-b']);
   });
 
   it('prefetches the next element on the NEXT step connection', async () => {
@@ -273,7 +273,7 @@ describe('bug-009: validation machinery follows the per-step connection', () => 
     await executeSteps({
       sequence: seq([
         { tool: 'navigate', params: { action: 'goto', url: 'http://a/' } },
-        { tool: 'input', params: { action: 'click', selector: '#later', connectionReason: 'device-b' } },
+        { tool: 'input', params: { action: 'click', selector: '#later', connection: 'device-b' } },
       ]),
       startStep: 0,
       endStep: 1,
@@ -283,7 +283,7 @@ describe('bug-009: validation machinery follows the per-step connection', () => 
     const queries = find(calls, 'dom', 'querySelector');
     expect(queries).toHaveLength(1);
     expect(queries[0].params.selector).toBe('#later');
-    expect(queries[0].connectionReason).toBe('device-b');
+    expect(queries[0].connection).toBe('device-b');
   });
 
   it('gathers failure diagnostics from the step connection', async () => {
@@ -296,7 +296,7 @@ describe('bug-009: validation machinery follows the per-step connection', () => 
 
     await executeSteps({
       sequence: seq([
-        { tool: 'dom', params: { action: 'querySelector', selector: '#missing', connectionReason: 'device-b' } },
+        { tool: 'dom', params: { action: 'querySelector', selector: '#missing', connection: 'device-b' } },
       ]),
       startStep: 0,
       ctx,
@@ -309,7 +309,7 @@ describe('bug-009: validation machinery follows the per-step connection', () => 
       ...find(calls, 'content', 'findInteractive'),
     ];
     expect(diagnostics.length).toBe(4);   // console + 4xx + 5xx + interactive
-    expect(diagnostics.every(c => c.connectionReason === 'device-b')).toBe(true);
+    expect(diagnostics.every(c => c.connection === 'device-b')).toBe(true);
     // `network search` rejects a call with no pattern, and reads statusCode as
     // an exact code or an "Nxx" class - `{ statusCode: '4' }` matched nothing
     // and errored before that, losing the whole diagnostic block.
@@ -322,7 +322,7 @@ describe('bug-009: validation machinery follows the per-step connection', () => 
 
     await executeSteps({
       sequence: seq([
-        { tool: 'dom', params: { action: 'querySelector', selector: '#a', connectionReason: 'device-b' } },
+        { tool: 'dom', params: { action: 'querySelector', selector: '#a', connection: 'device-b' } },
         { tool: 'dom', params: { action: 'querySelector', selector: '#b' } },
       ]),
       startStep: 0,
@@ -330,9 +330,9 @@ describe('bug-009: validation machinery follows the per-step connection', () => 
     });
 
     const queries = find(calls, 'dom', 'querySelector');
-    expect(queries.map(q => q.connectionReason)).toEqual(['device-b', 'device-a']);
+    expect(queries.map(q => q.connection)).toEqual(['device-b', 'device-a']);
     // pause probes follow suit
-    expect(find(calls, 'connection', 'status').map(c => c.connectionReason))
+    expect(find(calls, 'connection', 'status').map(c => c.connection))
       .toEqual(['device-a', 'device-b', 'device-a']);
   });
 });

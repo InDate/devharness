@@ -72,7 +72,7 @@ async function handleWorkerConsole(connection: any, args: ConsoleArgs) {
 
 const consoleSchema = z.object({
   action: z.enum(['list', 'get', 'recent', 'search', 'clear', 'setObjectDepth']),
-  connectionReason: z.string()
+  connection: z.string()
     .describe('The connection, by the name connection launch or attach gave it'),
 
   // Shared filters
@@ -305,8 +305,8 @@ function handleGet(monitor: ConsoleMonitor, args: ConsoleArgs) {
   };
 }
 
-function handleClear(monitor: ConsoleMonitor, connectionReason: string, reason: string) {
-  console.error(`[devharness] console clear - Reason: ${reason}, Connection: ${connectionReason}`);
+function handleClear(monitor: ConsoleMonitor, connection: string, reason: string) {
+  console.error(`[devharness] console clear - Reason: ${reason}, Connection: ${connection}`);
   const count = monitor.getCount();
   monitor.clear();
   return createSuccessResponse('CONSOLE_CLEARED', { count });
@@ -328,7 +328,7 @@ function handleSetObjectDepth(monitor: ConsoleMonitor, depth: number) {
 // =============================================================================
 
 export function createConsoleTools(
-  resolveConnectionFromReason: (connectionReason: string) => Promise<any>
+  resolveConnectionByName: (connection: string) => Promise<any>
 ) {
   return {
     console: createTool(
@@ -340,10 +340,10 @@ export function createConsoleTools(
         if (validationError) return validationError;
 
         // Resolve connection
-        const resolved = await resolveConnectionFromReason(args.connectionReason);
+        const resolved = await resolveConnectionByName(args.connection);
         if (!resolved) {
           return createErrorResponse('CONNECTION_NOT_FOUND', {
-            message: `No connection named "${args.connectionReason}". \`connection({ action: 'list' })\` lists the connections this session holds.`,
+            message: `No connection named "${args.connection}". \`connection({ action: 'list' })\` lists the connections this session holds.`,
           });
         }
 
@@ -367,7 +367,7 @@ export function createConsoleTools(
           case 'recent': return handleRecent(monitor, manager, args);
           case 'search': return handleSearch(monitor, manager, args);
           case 'get': return handleGet(monitor, args);
-          case 'clear': return handleClear(monitor, args.connectionReason, args.reason!);
+          case 'clear': return handleClear(monitor, args.connection, args.reason!);
           case 'setObjectDepth': return handleSetObjectDepth(monitor, args.depth!);
           default: return createErrorResponse('INVALID_ACTION', { action: args.action });
         }

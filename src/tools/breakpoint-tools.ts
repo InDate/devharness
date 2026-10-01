@@ -53,7 +53,7 @@ const breakpointSchema = z.object({
     'set', 'remove', 'list', 'setLogpoint', 'validate', 'resetCounter', 'waitForScript',
     'setDOMBreakpoint', 'setEventBreakpoint', 'setXHRBreakpoint', 'await'
   ]),
-  connectionReason: z.string(),
+  connection: z.string(),
 
   // Location
   url: z.string().optional(),
@@ -88,7 +88,7 @@ const breakpointSchema = z.object({
 export function createBreakpointTools(
   sourceMapHandler: SourceMapHandler,
   logpointTracker: LogpointExecutionTracker | undefined,
-  resolveConnectionFromReason: (connectionReason: string) => Promise<{
+  resolveConnectionByName: (connection: string) => Promise<{
     connection: any;
     cdpManager: CDPManager;
     puppeteerManager: any;
@@ -103,9 +103,9 @@ export function createBreakpointTools(
       async (args, abortSignal) => {
         const { action } = args;
         // Appended to every call a reply suggests, so the call reaches this connection.
-        const on = `, connectionReason: '${args.connectionReason}'`;
+        const on = `, connection: '${args.connection}'`;
 
-        const resolved = await resolveConnectionFromReason(args.connectionReason);
+        const resolved = await resolveConnectionByName(args.connection);
         if (!resolved) {
           return createErrorResponse('CONNECTION_NOT_FOUND');
         }

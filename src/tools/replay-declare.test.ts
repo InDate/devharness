@@ -54,14 +54,14 @@ describe('declare', () => {
   it('records the browsers a sequence needs, and writes them back to its file', async () => {
     const res = await declare({
       requiredConnections: [
-        { reference: 'duo-member-two', profile: 'device-a', role: 'the enrolled member' },
+        { connection: 'duo-member-two', profile: 'device-a', role: 'the enrolled member' },
       ],
     });
 
     expect(text(res)).toContain('duo-member-two');
     expect(text(res)).toContain('device-a');
     expect((await onDisk()).requiredConnections).toEqual([
-      { reference: 'duo-member-two', profile: 'device-a', role: 'the enrolled member' },
+      { connection: 'duo-member-two', profile: 'device-a', role: 'the enrolled member' },
     ]);
   });
 
@@ -72,10 +72,10 @@ describe('declare', () => {
   });
 
   it('replaces rather than merges, so a browser can be removed', async () => {
-    await declare({ requiredConnections: [{ reference: 'device-one-phone' }, { reference: 'device-two-phone' }] });
-    await declare({ requiredConnections: [{ reference: 'device-one-phone' }] });
+    await declare({ requiredConnections: [{ connection: 'device-one-phone' }, { connection: 'device-two-phone' }] });
+    await declare({ requiredConnections: [{ connection: 'device-one-phone' }] });
 
-    expect((await onDisk()).requiredConnections).toEqual([{ reference: 'device-one-phone' }]);
+    expect((await onDisk()).requiredConnections).toEqual([{ connection: 'device-one-phone' }]);
   });
 
   it('clears a declaration with an empty list', async () => {
@@ -87,11 +87,11 @@ describe('declare', () => {
 
   it('leaves the other declaration alone', async () => {
     await declare({ requiredSockets: ['/api/sync/socket'] });
-    await declare({ requiredConnections: [{ reference: 'device-one-phone' }] });
+    await declare({ requiredConnections: [{ connection: 'device-one-phone' }] });
 
     const saved = await onDisk();
     expect(saved.requiredSockets).toEqual(['/api/sync/socket']);
-    expect(saved.requiredConnections).toEqual([{ reference: 'device-one-phone' }]);
+    expect(saved.requiredConnections).toEqual([{ connection: 'device-one-phone' }]);
   });
 });
 
@@ -99,8 +99,8 @@ describe('declarations that cannot mean what they say are refused at authoring t
   it('refuses two references on one profile', async () => {
     const res = await declare({
       requiredConnections: [
-        { reference: 'device-one-phone', profile: 'shared' },
-        { reference: 'device-two-phone', profile: 'shared' },
+        { connection: 'device-one-phone', profile: 'shared' },
+        { connection: 'device-two-phone', profile: 'shared' },
       ],
     });
 
@@ -109,7 +109,7 @@ describe('declarations that cannot mean what they say are refused at authoring t
   });
 
   it('refuses a reference that a launch would refuse, before the run reaches it', async () => {
-    const res = await declare({ requiredConnections: [{ reference: 'device-a' }] });
+    const res = await declare({ requiredConnections: [{ connection: 'device-a' }] });
 
     expect(text(res)).toContain('exactly 3 words');
     expect((await onDisk()).requiredConnections).toBeUndefined();
@@ -117,7 +117,7 @@ describe('declarations that cannot mean what they say are refused at authoring t
 
   it('refuses the same reference twice', async () => {
     const res = await declare({
-      requiredConnections: [{ reference: 'device-one-phone' }, { reference: 'device-one-phone' }],
+      requiredConnections: [{ connection: 'device-one-phone' }, { connection: 'device-one-phone' }],
     });
 
     expect(text(res)).toContain('declared twice');
@@ -125,7 +125,7 @@ describe('declarations that cannot mean what they say are refused at authoring t
 
   it('refuses a profile name that is not a safe directory segment', async () => {
     const res = await declare({
-      requiredConnections: [{ reference: 'device-one-phone', profile: '../escape' }],
+      requiredConnections: [{ connection: 'device-one-phone', profile: '../escape' }],
     });
 
     expect(text(res)).toContain('Invalid profile name');

@@ -38,15 +38,15 @@ claude mcp add devharness -- npx -y devharness
 
 ```javascript
 // Launch Chrome and start debugging
-connection({ action: 'launch', name: 'my debug session' })
-navigate({ action: 'goto', url: 'http://localhost:3000', connectionReason: 'my-debug-session' })
+connection({ action: 'launch', connection: 'my debug session' })
+navigate({ action: 'goto', url: 'http://localhost:3000', connection: 'my-debug-session' })
 
 // Set a breakpoint
-breakpoint({ action: 'set', url: 'http://localhost:3000/app.js', lineNumber: 42, connectionReason: 'my-debug-session' })
+breakpoint({ action: 'set', url: 'http://localhost:3000/app.js', lineNumber: 42, connection: 'my-debug-session' })
 
 // When paused, inspect state
-inspect({ action: 'getCallStack', connectionReason: 'my-debug-session' })
-inspect({ action: 'getVariables', callFrameId: '0', connectionReason: 'my-debug-session' })
+inspect({ action: 'getCallStack', connection: 'my-debug-session' })
+inspect({ action: 'getVariables', callFrameId: '0', connection: 'my-debug-session' })
 ```
 
 ## Core Concepts

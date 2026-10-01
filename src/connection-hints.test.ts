@@ -56,8 +56,8 @@ describe('hints name the connection the reply came from', () => {
     expect(result.blocked).toBe(true);
     const suggested = calls(text(result.response), ['resume', 'acknowledge', 'getCallStack', 'getVariables']);
     expect(suggested.length).toBe(4);
-    for (const call of suggested) expect(call).toContain("connectionReason: 'device-b'");
-    expect(result.block.resolve).toContain("connectionReason: 'device-b'");
+    for (const call of suggested) expect(call).toContain("connection: 'device-b'");
+    expect(result.block.resolve).toContain("connection: 'device-b'");
   });
 
   it('breakpoint await names the connection in its next steps', async () => {
@@ -67,11 +67,11 @@ describe('hints name the connection the reply came from', () => {
       async (reason) => (reason === 'device-b' ? { cdpManager: named } as any : null)
     );
 
-    const result: any = await breakpoint.handler({ action: 'await', connectionReason: 'device-b', timeout: 1000 } as any);
+    const result: any = await breakpoint.handler({ action: 'await', connection: 'device-b', timeout: 1000 } as any);
 
     const suggested = calls(text(result), ['getVariables', 'evaluateExpression', 'stepOver', 'resume']);
     expect(suggested.length).toBe(4);
-    for (const call of suggested) expect(call).toContain("connectionReason: 'device-b'");
+    for (const call of suggested) expect(call).toContain("connection: 'device-b'");
   });
 
   it('resetCounter names the connection in its next step', async () => {
@@ -83,11 +83,11 @@ describe('hints name the connection the reply came from', () => {
       async (reason) => (reason === 'device-b' ? { cdpManager: named } as any : null)
     );
 
-    const result: any = await breakpoint.handler({ action: 'resetCounter', connectionReason: 'device-b', breakpointId: 'bp-1' } as any);
+    const result: any = await breakpoint.handler({ action: 'resetCounter', connection: 'device-b', breakpointId: 'bp-1' } as any);
 
     const suggested = calls(text(result), ['resume']);
     expect(suggested.length).toBe(1);
-    expect(suggested[0]).toContain("connectionReason: 'device-b'");
+    expect(suggested[0]).toContain("connection: 'device-b'");
   });
 
   it('acknowledge names each paused connection in its resume', async () => {
@@ -99,7 +99,7 @@ describe('hints name the connection the reply came from', () => {
     const result: any = await execution.handler({ action: 'acknowledge' } as any);
 
     const suggested = calls(text(result), ['resume']);
-    expect(suggested.map(call => call.match(/connectionReason: '([\w-]+)'/)?.[1]).sort()).toEqual(['device-a', 'device-b']);
+    expect(suggested.map(call => call.match(/connection: '([\w-]+)'/)?.[1]).sort()).toEqual(['device-a', 'device-b']);
   });
 
   it('a pending promise while paused names the connection in its resume', async () => {
@@ -109,18 +109,18 @@ describe('hints name the connection the reply came from', () => {
       async (reason) => (reason === 'device-b' ? { cdpManager: named } as any : null)
     );
 
-    const result: any = await inspect.handler({ action: 'evaluateExpression', expression: 'p', connectionReason: 'device-b' } as any);
+    const result: any = await inspect.handler({ action: 'evaluateExpression', expression: 'p', connection: 'device-b' } as any);
 
     const suggested = calls(text(result), ['resume']);
     expect(suggested.length).toBe(1);
-    expect(suggested[0]).toContain("connectionReason: 'device-b'");
+    expect(suggested[0]).toContain("connection: 'device-b'");
   });
 
   it('a wait on a paused page names the connection in its suggestions', () => {
-    const body = getErrorMessage('WAIT_DEBUGGER_PAUSED', { condition: '#x', connectionReason: 'device-b' });
+    const body = getErrorMessage('WAIT_DEBUGGER_PAUSED', { condition: '#x', connection: 'device-b' });
 
     const suggested = calls(body, ['resume', 'getCallStack']);
     expect(suggested.length).toBe(2);
-    for (const call of suggested) expect(call).toContain("connectionReason: 'device-b'");
+    for (const call of suggested) expect(call).toContain("connection: 'device-b'");
   });
 });

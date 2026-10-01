@@ -30,7 +30,7 @@ describe('breakpoint setLogpoint on a named connection', () => {
 
     const result: any = await breakpoint.handler({
       action: 'setLogpoint',
-      connectionReason: 'second',
+      connection: 'second',
       url: 'app.js',
       lineNumber: 42,
       logMessage: 'hit',

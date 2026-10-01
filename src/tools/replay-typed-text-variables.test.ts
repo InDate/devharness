@@ -51,7 +51,7 @@ function makeHarness() {
   const ctx: ExecutionContext = {
     executeToolCall,
     commandRecorder: { recordCommand: vi.fn(), getCurrentHistoryIndex: () => 0, listSequences: () => [] } as any,
-    connectionReason: 'device-a',
+    connection: 'device-a',
     logPrefix: 'test',
     variableStore: {},
   };

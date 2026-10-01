@@ -125,7 +125,7 @@ describe('input: abort before dispatch means ZERO dispatches', () => {
 
     const outcome = await callInput(
       input,
-      { action: 'click', selector: '#go', connectionReason: 'app' },
+      { action: 'click', selector: '#go', connection: 'app' },
       controller.signal
     );
 
@@ -143,7 +143,7 @@ describe('input: abort before dispatch means ZERO dispatches', () => {
 
     const outcome = await callInput(
       input,
-      { action: 'click', x: 10, y: 20, connectionReason: 'app' },
+      { action: 'click', x: 10, y: 20, connection: 'app' },
       controller.signal
     );
 
@@ -169,7 +169,7 @@ describe('input: abort before dispatch means ZERO dispatches', () => {
     const controller = new AbortController();
     controller.abort();
 
-    const outcome = await callInput(input, { ...args, connectionReason: 'app' }, controller.signal);
+    const outcome = await callInput(input, { ...args, connection: 'app' }, controller.signal);
 
     expect(outcome.threw).toBe(true);
     expect(isAbortError((outcome as any).err)).toBe(true);
@@ -190,7 +190,7 @@ describe('input: multi-dispatch paths stop mid-gesture', () => {
 
     const outcome = await callInput(
       input,
-      { action: 'focusNext', count: 5, connectionReason: 'app' },
+      { action: 'focusNext', count: 5, connection: 'app' },
       controller.signal
     );
 
@@ -215,7 +215,7 @@ describe('input: multi-dispatch paths stop mid-gesture', () => {
 
     const outcome = await callInput(
       input,
-      { action: 'drag', from: { x: 0, y: 0 }, to: { x: 100, y: 0 }, steps: 20, connectionReason: 'app' },
+      { action: 'drag', from: { x: 0, y: 0 }, to: { x: 100, y: 0 }, steps: 20, connection: 'app' },
       controller.signal
     );
 
@@ -242,7 +242,7 @@ describe('input: multi-dispatch paths stop mid-gesture', () => {
 
     const outcome = await callInput(
       input,
-      { action: 'type', selector: '#field', text: 'new value', connectionReason: 'app' },
+      { action: 'type', selector: '#field', text: 'new value', connection: 'app' },
       controller.signal
     );
 
@@ -268,7 +268,7 @@ describe('input: cancellation does NOT undo what was already dispatched', () => 
 
     await callInput(
       input,
-      { action: 'click', selector: '#submit', connectionReason: 'app' },
+      { action: 'click', selector: '#submit', connection: 'app' },
       controller.signal
     );
 

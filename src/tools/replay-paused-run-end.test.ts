@@ -39,7 +39,7 @@ function makeReplay() {
 }
 
 async function pausedRun(replay: any): Promise<string> {
-  const started: any = await replay.handler({ action: 'run', sequenceId: 'seq-pause', connectionReason: 'test-debug-session', stepTo: 1 });
+  const started: any = await replay.handler({ action: 'run', sequenceId: 'seq-pause', connection: 'test-debug-session', stepTo: 1 });
   const runId = started._meta.replay.runId as string;
   await vi.waitFor(() => expect(runRegistry.get(runId)?.status).toBe('paused'));
   return runId;

@@ -1,5 +1,5 @@
 /**
- * These tools all accept a `connectionReason` in their schema. That parameter
+ * These tools all accept a `connection` in their schema. That parameter
  * is only honest if the work actually happens on the resolved connection - a
  * handler that resolves the connection and then quietly operates on the
  * default/active managers is the same "accepted but ignored parameter" bug as
@@ -34,7 +34,7 @@ const fakeSourceMapHandler = {
   mapToOriginal: vi.fn(async () => null),
 } as any;
 
-describe('inspect searchCode/searchFunctions honour connectionReason', () => {
+describe('inspect searchCode/searchFunctions honour connection', () => {
   let defaultCdp: any;
   let otherCdp: any;
   let inspect: any;
@@ -53,7 +53,7 @@ describe('inspect searchCode/searchFunctions honour connectionReason', () => {
   it('searchCode searches the scripts of the referenced connection, not the default one', async () => {
     const result = await inspect.handler({
       action: 'searchCode',
-      connectionReason: 'other-tab',
+      connection: 'other-tab',
       pattern: 'marker',
     });
 
@@ -72,7 +72,7 @@ describe('inspect searchCode/searchFunctions honour connectionReason', () => {
     // Only the named connection is read, and it reports not connected.
     const result = await inspect.handler({
       action: 'searchCode',
-      connectionReason: 'other-tab',
+      connection: 'other-tab',
       pattern: 'marker',
     });
 
@@ -83,7 +83,7 @@ describe('inspect searchCode/searchFunctions honour connectionReason', () => {
   it('searchFunctions searches the scripts of the referenced connection', async () => {
     const result = await inspect.handler({
       action: 'searchFunctions',
-      connectionReason: 'other-tab',
+      connection: 'other-tab',
       functionName: 'marker',
     });
 
@@ -120,7 +120,7 @@ function makeFakeNetworkMonitor() {
   } as any;
 }
 
-describe('network enable/disable honour connectionReason', () => {
+describe('network enable/disable honour connection', () => {
   let defaultPuppeteer: any;
   let defaultMonitor: any;
   let otherPuppeteer: any;
@@ -144,7 +144,7 @@ describe('network enable/disable honour connectionReason', () => {
   });
 
   it('enable starts monitoring on the referenced connection only', async () => {
-    const result = await network.handler({ action: 'enable', connectionReason: 'other-tab' });
+    const result = await network.handler({ action: 'enable', connection: 'other-tab' });
 
     expect(result.isError).toBeFalsy();
     expect(otherMonitor.startMonitoring).toHaveBeenCalledWith(otherPuppeteer.__page);
@@ -152,7 +152,7 @@ describe('network enable/disable honour connectionReason', () => {
   });
 
   it('disable stops monitoring on the referenced connection only', async () => {
-    const result = await network.handler({ action: 'disable', connectionReason: 'other-tab' });
+    const result = await network.handler({ action: 'disable', connection: 'other-tab' });
 
     expect(result.isError).toBeFalsy();
     expect(otherMonitor.stopMonitoring).toHaveBeenCalledWith(otherPuppeteer.__page);
@@ -160,7 +160,7 @@ describe('network enable/disable honour connectionReason', () => {
   });
 
   it('enable errors when the reference does not resolve', async () => {
-    const result = await network.handler({ action: 'enable', connectionReason: 'nope' });
+    const result = await network.handler({ action: 'enable', connection: 'nope' });
 
     expect(result.isError).toBe(true);
     expect(defaultMonitor.startMonitoring).not.toHaveBeenCalled();
@@ -168,12 +168,12 @@ describe('network enable/disable honour connectionReason', () => {
   });
 
   it.each(['list', 'get', 'search', 'enable', 'disable', 'setConditions', 'sockets', 'streams'])(
-    '%s without a reference fails validation naming connectionReason',
+    '%s without a reference fails validation naming connection',
     (action) => {
       const result = validateParams({ action }, network.zodSchema, 'network');
 
       expect(result.success).toBe(false);
-      expect((result as any).error.missingParameters.map((p: any) => p.name)).toContain('connectionReason');
+      expect((result as any).error.missingParameters.map((p: any) => p.name)).toContain('connection');
     }
   );
 
@@ -184,7 +184,7 @@ describe('network enable/disable honour connectionReason', () => {
     { action: 'streams' },
     { action: 'setConditions', preset: 'offline' },
   ])('$action on a connection with no page refuses rather than reading the default connection', async (args) => {
-    const result = await network.handler({ ...args, connectionReason: 'node-target' });
+    const result = await network.handler({ ...args, connection: 'node-target' });
 
     expect(result.isError).toBe(true);
     expect(defaultPuppeteer.getPage).not.toHaveBeenCalled();
@@ -245,7 +245,7 @@ describe('modal dismiss resolves its page from the connection', () => {
 
     const result = await tools.modal.handler({
       action: 'dismiss',
-      connectionReason: 'other-tab',
+      connection: 'other-tab',
       strategy: 'accept',
       retryAttempts: 3,
     });
@@ -269,7 +269,7 @@ describe('modal dismiss resolves its page from the connection', () => {
 
     const result = await tools.modal.handler({
       action: 'dismiss',
-      connectionReason: 'nope',
+      connection: 'nope',
       strategy: 'auto',
       retryAttempts: 3,
     });

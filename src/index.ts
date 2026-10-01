@@ -434,18 +434,18 @@ let sessionVerifyStarted = false;
 let orchestratorInstance: Orchestrator | null = null;
 
 /**
- * The connection `connectionReason` names, with its managers, or null when no
+ * The connection called `name`, with its managers, or null when no
  * connection has that name. Every tool that acts on a connection reaches it
  * here, and each reach counts as activity against the inactivity timeout.
  */
-async function resolveConnectionFromReason(connectionReason: string): Promise<{
+async function resolveConnectionByName(name: string): Promise<{
   connection: Connection;
   cdpManager: CDPManager;
   puppeteerManager: PuppeteerManager | null;
   consoleMonitor: ConsoleMonitor | null;
   networkMonitor: NetworkMonitor | null;
 } | null> {
-  const connection = connectionManager.findConnectionByReference(connectionReason);
+  const connection = connectionManager.findConnectionByReference(name);
   if (!connection) {
     return null;
   }
@@ -506,7 +506,7 @@ function pageHeldRefusal(toolName: string, args: Record<string, any>): any {
     || (toolName === 'check' && Number(args.withinMs) > 0)
     || (toolName === 'replay' && DRIVING_REPLAY.has(String(args.action)));
   if (!drives) return undefined;
-  const hold = benchHold(args.connectionReason);
+  const hold = benchHold(args.connection);
   return hold ? createErrorResponse('PAGE_HELD_BY_BENCH', { ...hold, toolName }) : undefined;
 }
 
@@ -588,40 +588,40 @@ const allTools = {
   // Connection tools (Chrome/debugger)
   ...(configManager.isToolEnabled('connection') ? toolset('connection', connectionTools) : {}),
   // CDP Debugging tools
-  ...(configManager.isToolEnabled('breakpoint') ? toolset('breakpoint', createBreakpointTools(sourceMapHandler, logpointTracker, resolveConnectionFromReason)) : {}),
-  ...(configManager.isToolEnabled('execution') ? toolset('execution', createExecutionTools(resolveConnectionFromReason, connectionManager, (port) => serverManager.retryPendingRestartByInspectorPort(port))) : {}),
-  ...(configManager.isToolEnabled('inspection') ? toolset('inspection', createInspectionTools(sourceMapHandler, resolveConnectionFromReason)) : {}),
-  ...(configManager.isToolEnabled('source') ? toolset('source', createSourceTools(sourceMapHandler, resolveConnectionFromReason)) : {}),
+  ...(configManager.isToolEnabled('breakpoint') ? toolset('breakpoint', createBreakpointTools(sourceMapHandler, logpointTracker, resolveConnectionByName)) : {}),
+  ...(configManager.isToolEnabled('execution') ? toolset('execution', createExecutionTools(resolveConnectionByName, connectionManager, (port) => serverManager.retryPendingRestartByInspectorPort(port))) : {}),
+  ...(configManager.isToolEnabled('inspection') ? toolset('inspection', createInspectionTools(sourceMapHandler, resolveConnectionByName)) : {}),
+  ...(configManager.isToolEnabled('source') ? toolset('source', createSourceTools(sourceMapHandler, resolveConnectionByName)) : {}),
   // Browser Automation tools
-  ...(configManager.isToolEnabled('console') ? toolset('console', createConsoleTools(resolveConnectionFromReason)) : {}),
-  ...(configManager.isToolEnabled('network') ? toolset('network', createNetworkTools(resolveConnectionFromReason)) : {}),
+  ...(configManager.isToolEnabled('console') ? toolset('console', createConsoleTools(resolveConnectionByName)) : {}),
+  ...(configManager.isToolEnabled('network') ? toolset('network', createNetworkTools(resolveConnectionByName)) : {}),
   ...toolset('proxy', createProxyTools()),
   ...toolset('hold', createHoldTools()),
-  ...(configManager.isToolEnabled('page') ? toolset('page', createPageTools(resolveConnectionFromReason, clickableCache, executeToolCall)) : {}),
-  ...(configManager.isToolEnabled('dom') ? toolset('dom', createDOMTools(resolveConnectionFromReason)) : {}),
-  ...(configManager.isToolEnabled('screenshot') ? toolset('screenshot', createScreenshotTools(resolveConnectionFromReason)) : {}),
-  ...(configManager.isToolEnabled('input') ? toolset('input', createInputTools(resolveConnectionFromReason)) : {}),
-  ...(configManager.isToolEnabled('content') ? toolset('content', createContentTools(resolveConnectionFromReason, clickableCache)) : {}),
-  ...(configManager.isToolEnabled('modal') ? toolset('modal', createModalTools(resolveConnectionFromReason)) : {}),
-  ...(configManager.isToolEnabled('bench') ? toolset('bench', createBenchTools(sourceMapHandler, commandRecorder, executeToolCall, resolveConnectionFromReason, toolCatalogue, toolValues, serverRows, serverLog)) : {}),
-  ...(configManager.isToolEnabled('storage') ? toolset('storage', createStorageTools(resolveConnectionFromReason)) : {}),
+  ...(configManager.isToolEnabled('page') ? toolset('page', createPageTools(resolveConnectionByName, clickableCache, executeToolCall)) : {}),
+  ...(configManager.isToolEnabled('dom') ? toolset('dom', createDOMTools(resolveConnectionByName)) : {}),
+  ...(configManager.isToolEnabled('screenshot') ? toolset('screenshot', createScreenshotTools(resolveConnectionByName)) : {}),
+  ...(configManager.isToolEnabled('input') ? toolset('input', createInputTools(resolveConnectionByName)) : {}),
+  ...(configManager.isToolEnabled('content') ? toolset('content', createContentTools(resolveConnectionByName, clickableCache)) : {}),
+  ...(configManager.isToolEnabled('modal') ? toolset('modal', createModalTools(resolveConnectionByName)) : {}),
+  ...(configManager.isToolEnabled('bench') ? toolset('bench', createBenchTools(sourceMapHandler, commandRecorder, executeToolCall, resolveConnectionByName, toolCatalogue, toolValues, serverRows, serverLog)) : {}),
+  ...(configManager.isToolEnabled('storage') ? toolset('storage', createStorageTools(resolveConnectionByName)) : {}),
   // Download tools
   ...(configManager.isToolEnabled('download') ? toolset('download', createDownloadTools()) : {}),
   // Request tools (HTTP requests as sequence steps, node or browser destination)
-  ...(configManager.isToolEnabled('request') ? toolset('request', createRequestTools(resolveConnectionFromReason)) : {}),
+  ...(configManager.isToolEnabled('request') ? toolset('request', createRequestTools(resolveConnectionByName)) : {}),
   // Assert tool (inline assertions as sequence steps)
-  ...(configManager.isToolEnabled('assert') ? toolset('assert', createAssertTools(resolveConnectionFromReason)) : {}),
+  ...(configManager.isToolEnabled('assert') ? toolset('assert', createAssertTools(resolveConnectionByName)) : {}),
   // Wait tool (wait primitive for sequences - MCP-side condition polling / sleep)
-  ...(configManager.isToolEnabled('wait') ? toolset('wait', createWaitTools(resolveConnectionFromReason)) : {}),
+  ...(configManager.isToolEnabled('wait') ? toolset('wait', createWaitTools(resolveConnectionByName)) : {}),
   // Check tool (one reading, held or failed; assert and wait are faces of it)
-  ...(configManager.isToolEnabled('check') ? toolset('check', createCheckTools(resolveConnectionFromReason, executeToolCall)) : {}),
+  ...(configManager.isToolEnabled('check') ? toolset('check', createCheckTools(resolveConnectionByName, executeToolCall)) : {}),
   // Replay tools
-  ...(configManager.isToolEnabled('replay') ? toolset('replay', createReplayTools(commandRecorder, executeToolCall, async (connectionReason: string) => {
-    const resolved = await resolveConnectionFromReason(connectionReason);
+  ...(configManager.isToolEnabled('replay') ? toolset('replay', createReplayTools(commandRecorder, executeToolCall, async (connection: string) => {
+    const resolved = await resolveConnectionByName(connection);
     if (!resolved?.puppeteerManager) return null;
     return resolved.puppeteerManager.getPage();
-  }, async (connectionReason: string) => {
-    const resolved = await resolveConnectionFromReason(connectionReason);
+  }, async (connection: string) => {
+    const resolved = await resolveConnectionByName(connection);
     return resolved?.connection.port ?? null;
     // Lazy: allTools is defined below this object literal, so the set of valid
     // tool names can only be read at call time (bug-010). The explicit return
@@ -651,8 +651,8 @@ const allTools = {
       if (existsSync(filepath)) return filepath;
       return null;
     },
-    async (connectionReason: string) => {
-      const resolved = await resolveConnectionFromReason(connectionReason);
+    async (connection: string) => {
+      const resolved = await resolveConnectionByName(connection);
       if (!resolved?.puppeteerManager) return null;
       return resolved.puppeteerManager.getPage();
     },
@@ -923,10 +923,10 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
         }
       }
 
-      // Append console log status if tool used a connectionReason
-      const connectionReason = validation.data?.connectionReason;
-      if (connectionReason) {
-        const connection = connectionManager.findConnectionByReference(connectionReason);
+      // Append console log status if tool used a connection
+      const named = validation.data?.connection;
+      if (named) {
+        const connection = connectionManager.findConnectionByReference(named);
         if (connection?.consoleMonitor) {
           // Read before getLogStats, which advances the cursor past it.
           const newestError = connection.consoleMonitor.peekNewestError();
@@ -979,11 +979,11 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
           dashboardInst.hub.updateSelf(connections, {
             tool: toolName,
             timestamp: Date.now(),
-            connectionReference: connectionReason,
+            connectionReference: named,
           });
         } else if (dashboardInst.client) {
           // We're a client - report to hub
-          dashboardInst.client.reportAction(toolName, connectionReason);
+          dashboardInst.client.reportAction(toolName, named);
         }
       }
 
@@ -1021,8 +1021,8 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
         // command and belongs to no step, which is what makes a gap readable
         // as the app's own traffic.
         const settle = configManager.getReplayConfig();
-        const reference = typeof validation.data?.connectionReason === 'string'
-          ? sanitizeReference(validation.data.connectionReason)
+        const reference = typeof validation.data?.connection === 'string'
+          ? sanitizeReference(validation.data.connection)
           : undefined;
         void releaseCommand(settle.stepSettleMs, settle.stepSettleCapMs, reference)
           .then(at => commandRecorder.attachRelease(commandIndex!, at))
@@ -1034,7 +1034,7 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
 
 // Start the server
 /**
- * CLI mode: `devharness run <sequenceName> [--connectionReason=X] [--headed] [--keep-chrome]`
+ * CLI mode: `devharness run <sequenceName> [--connection=X] [--headed] [--keep-chrome]`
  * Runs a saved sequence directly from the shell, no MCP client needed.
  * Pre-launches Chrome itself (headless by default, forceNewInstance) so
  * replay run's own auto-launch (always headed) never triggers.
@@ -1042,7 +1042,7 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
 async function runCliSequence(argv: string[]): Promise<void> {
   const sequenceName = argv[0];
   if (!sequenceName || sequenceName.startsWith('--')) {
-    console.error('Usage: devharness run <sequenceName> [--connectionReason=X] [--headed] [--keep-chrome]');
+    console.error('Usage: devharness run <sequenceName> [--connection=X] [--headed] [--keep-chrome]');
     process.exit(1);
   }
 
@@ -1060,7 +1060,7 @@ async function runCliSequence(argv: string[]): Promise<void> {
   }
   const headed = flags.has('headed');
   const keepChrome = flags.has('keep-chrome');
-  const connectionReason = kv.connectionReason || deriveConnectionReference(sequenceName);
+  const connection = kv.connection || deriveConnectionReference(sequenceName);
 
   initializePaths();
   await configManager.load();
@@ -1088,7 +1088,7 @@ async function runCliSequence(argv: string[]): Promise<void> {
   try {
     await executeToolCall('connection', {
       action: 'launch',
-      name: connectionReason,
+      connection: connection,
       headless: !headed,
       forceNewInstance: true,
     });
@@ -1098,7 +1098,7 @@ async function runCliSequence(argv: string[]): Promise<void> {
       // process exits right after - a background run would die mid-flight.
       wait: true,
       name: sequenceName,
-      connectionReason,
+      connection,
       killChromeOnFinish: !keepChrome,
       // A CLI run has nobody to answer a prompt, so a parameterised sequence
       // keeps its recorded values. Left undefined, every such sequence would
@@ -1489,7 +1489,7 @@ async function main() {
         idle: true,
         names,
         detail: `the proxy for ${names.map(n => `"${n}"`).join(', ')} has no live connection and no open bench`,
-        resolve: `proxy({ action: 'stop', connectionReason: '${names[0]}' })`,
+        resolve: `proxy({ action: 'stop', connection: '${names[0]}' })`,
       });
     }
   }, 60_000);

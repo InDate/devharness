@@ -31,7 +31,7 @@ export function benchHold(connection?: string): { connection: string; why: strin
       return {
         connection: name,
         why: `its ${held.map(layer => layer.layer).join(' and ')} ${held.length > 1 ? 'are' : 'is'} held by the ${held[0].source}`,
-        release: `bench({ action: 'release', connectionReason: '${name}' }), or the hold button in the bench`,
+        release: `bench({ action: 'release', connection: '${name}' }), or the hold button in the bench`,
       };
     }
   }

@@ -44,7 +44,7 @@ function makeHarness(responses: Record<string, any> = {}, nested?: CommandSequen
   const ctx: ExecutionContext = {
     executeToolCall,
     commandRecorder,
-    connectionReason: 'device-a',
+    connection: 'device-a',
     logPrefix: 'test',
   };
 

@@ -21,12 +21,12 @@ import { RECORDED_BODY_CAP, writeEvents } from './traffic.js';
 export async function runsView(): Promise<RunsView> {
   const running: RunRow[] = runRegistry.active().map(record => ({
     runId: record.runId, sequence: record.sequenceName,
-    ...(record.connectionReason ? { connection: record.connectionReason } : {}),
+    ...(record.connection ? { connection: record.connection } : {}),
     via: 'replay' as const, status: record.status, step: record.currentStep, total: record.totalSteps,
     ...(record.currentTool ? { tool: record.currentTool } : {}),
     startedAt: record.startedAt,
     ...(record.suite ? { suite: record.suite } : {}),
-    ...withTallies(record.connectionReason, record.startedAt, record.totalSteps, undefined, stepTimes(record.stepStarts ?? [], Date.now())),
+    ...withTallies(record.connection, record.startedAt, record.totalSteps, undefined, stepTimes(record.stepStarts ?? [], Date.now())),
   }));
   for (const [connection, session] of sessions) {
     const active = session.sequencePlaying ? session.sequences?.active() : null;
@@ -56,9 +56,9 @@ export async function runFromHome(connection: string, name: string): Promise<str
   const sequences = sessions.get(connection)?.sequences;
   if (!sequences) return 'this bench holds no replay side to run with';
   const reference = `home-run-${++homeRuns}`;
-  const launched = await sequences.callTool('connection', { action: 'launch', name: reference, headless: true, proxy: true, forceNewInstance: true });
+  const launched = await sequences.callTool('connection', { action: 'launch', connection: reference, headless: true, proxy: true, forceNewInstance: true });
   if (launched.failed) return launched.result;
-  const started = await sequences.callTool('replay', { action: 'run', name, connectionReason: reference, killChromeOnFinish: true });
+  const started = await sequences.callTool('replay', { action: 'run', name, connection: reference, killChromeOnFinish: true });
   return started.failed ? started.result : undefined;
 }
 

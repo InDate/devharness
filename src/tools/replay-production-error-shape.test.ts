@@ -50,7 +50,7 @@ describe('auto-launch failure', () => {
 
 describe('debug state', () => {
   const ctx = (executeToolCall: any): ExecutionContext =>
-    ({ executeToolCall, connectionReason: 'device-a', logPrefix: 'test' } as any);
+    ({ executeToolCall, connection: 'device-a', logPrefix: 'test' } as any);
   const status = (debuggerState: Record<string, unknown>) => ({
     ...createSuccessResponse('CONNECTION_STATUS', {}, debuggerState),
     _meta: { tool: 'connection', action: 'status', timestamp: 0, debugger: { reference: 'device-a', connected: true, ...debuggerState } },

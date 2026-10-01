@@ -31,9 +31,9 @@ export async function handleRunAll(
   args: ReplayArgs,
   recorder: CommandRecorder,
   executeToolCall: ExecuteToolCall,
-  getPageForConnection: (connectionReason: string) => Promise<any>,
+  getPageForConnection: (connection: string) => Promise<any>,
   abortSignal?: AbortSignal,
-  getConnectionPort?: (connectionReason: string) => Promise<number | null>
+  getConnectionPort?: (connection: string) => Promise<number | null>
 ) {
   // Stay inside ONE root. listSavedSequencesOnDisk merges the project dir with
   // ~/.devharness/sequences, and a bare runAll that swept in the user's global

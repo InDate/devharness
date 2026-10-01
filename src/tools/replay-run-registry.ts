@@ -22,7 +22,7 @@ export interface RunRecord {
   runId: string;
   sequenceId: string;
   sequenceName: string;
-  connectionReason?: string;
+  connection?: string;
   status: RunStatus;
   startedAt: number;
   /** Set when the background execution settles (including on pause). */

@@ -30,10 +30,10 @@ the browser.
 
 ```javascript
 // Launch Chrome with a meaningful name
-connection({ action: 'launch', name: "my-signup-test" })
+connection({ action: 'launch', connection: "my-signup-test" })
 
 // Start recording - THIS CALL BLOCKS until you finish in the browser
-replay({ action: 'recordInteraction', connectionReason: 'my-signup-test' })
+replay({ action: 'recordInteraction', connection: 'my-signup-test' })
 ```
 
 **`recordInteraction` blocks until the person finishes in the browser overlay.**
@@ -41,7 +41,7 @@ There is no separate stop call. The tool call returns only once you click ✓
 (complete) or ✕ (cancel) in the overlay, and its response *is* the created
 sequence summary. Because it waits on a human, don't call it unattended.
 
-If no connection exists for `connectionReason`, Chrome is auto-launched - but
+If no connection exists for `connection`, Chrome is auto-launched - but
 only if you also pass `startUrl` (or an `issueId` whose issue carries one). If a
 connection already exists and you pass `startUrl`, the page navigates there
 first.
@@ -75,7 +75,7 @@ in-memory sequence is created - the issue sequences are the output.
 The sequence is named, in order of preference:
 1. the `name` you passed,
 2. `<issueType>-<issueId>-repro` when you passed `issueId`,
-3. the `connectionReason`.
+3. the `connection`.
 
 If a sequence with that name already exists you get a conflict response. Re-run
 with a different `name`, or with `overwrite: true`.
@@ -98,7 +98,7 @@ wins** - the more portable of the two is chosen.
 ```javascript
 replay({
   action: 'recordInteraction',
-  connectionReason: 'canvas-bug-repro',
+  connection: 'canvas-bug-repro',
   preferCoordinates: true,   // a WebGL canvas has no useful selectors
   includeHovers: true,       // the bug is a hover artefact
   simplifyEvents: false
@@ -124,7 +124,7 @@ decide whether a step should use a selector or coordinates.
 ### Recording Against an Issue
 
 ```javascript
-replay({ action: 'recordInteraction', connectionReason: 'bug-seven-repro', issueId: 7 })
+replay({ action: 'recordInteraction', connection: 'bug-seven-repro', issueId: 7 })
 ```
 
 The issue's `type`, `title` and `startUrl` are used automatically, a fullscreen
@@ -258,7 +258,7 @@ replay({ action: 'repeat', indices: [12, 13] })
 replay({ action: 'runFromLog', lines: [3, 4, 5] })
 ```
 
-Both stop at the first failing command. Both infer `connectionReason` from a
+Both stop at the first failing command. Both infer `connection` from a
 `connection` launch or attach command in the selection if you don't pass one,
 and error out if the commands need a connection and none can be determined.
 
@@ -356,14 +356,14 @@ is no file to reload it from.
 replay({
   action: 'run',
   sequenceId: 'seq-1234567890',
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 ```
 
 Or by name, which also finds it on disk:
 
 ```javascript
-replay({ action: 'run', name: 'login-flow', connectionReason: 'test-debug-session' })
+replay({ action: 'run', name: 'login-flow', connection: 'test-debug-session' })
 ```
 
 ### Background by Default (breaking change in 0.7)
@@ -436,15 +436,15 @@ replay({ action: 'run', name: 'login-flow', wait: true })  // blocks, returns fu
 
 ### Auto-Launch Chrome
 
-If the sequence starts with a `connection` launch, no `connectionReason` is needed -
-the launch step's `name` becomes the run's connection.
+If the sequence starts with a `connection` launch, no `connection` is needed -
+the launch step's `connection` becomes the run's connection.
 
 ```javascript
 replay({ action: 'run', sequenceId: 'seq-my-flow' })
 ```
 
 Otherwise, if the sequence needs a browser and no connection is active, Chrome
-is launched as a **fresh instance** using `connectionReason` (or a reference
+is launched as a **fresh instance** using `connection` (or a reference
 derived from the sequence name when you didn't pass one).
 
 ### Retargeting a Run
@@ -480,7 +480,7 @@ replay({ action: 'run', name: 'magic-link-login', startUrl: 'https://app.example
 replay({
   action: 'run',
   sequenceId: 'seq-slow-flow',
-  connectionReason: 'test-debug-session',
+  connection: 'test-debug-session',
   stepTimeout: 60000,    // per step (default: 30000)
   totalTimeout: 600000   // whole run (default: 300000)
 })
@@ -507,7 +507,7 @@ Exceptions:
 replay({
   action: 'run',
   name: 'login-flow',
-  connectionReason: 'test-debug-session',
+  connection: 'test-debug-session',
   startFrom: 5  // Skip steps 1-4, start at step 5 (1-indexed)
 })
 ```
@@ -543,7 +543,7 @@ with `newName`); pass `overwrite: true` to edit the sequence in place.
 ### Closing Chrome Afterwards
 
 ```javascript
-replay({ action: 'run', name: 'smoke-test', connectionReason: 'ci-test-run',
+replay({ action: 'run', name: 'smoke-test', connection: 'ci-test-run',
          killChromeOnFinish: true })
 ```
 
@@ -608,7 +608,7 @@ the call read as an override.
 replay({
   action: 'run',
   sequenceId: 'seq-login-flow',
-  connectionReason: 'test-debug-session',
+  connection: 'test-debug-session',
   variables: {
     'var_2__email': 'new@email.com',
     'var_3__password': 'newpassword'
@@ -642,7 +642,7 @@ neither the file nor the tool call carries the secret.
 { tool: 'input', params: { action: 'type', selector: '#password', text: '{{env:APP_PASSWORD}}' } }
 
 // The run needs nothing else:
-replay({ action: 'run', name: 'login', connectionReason: 'my-web-app' })
+replay({ action: 'run', name: 'login', connection: 'my-web-app' })
 ```
 
 - An **unset or empty** variable fails the step, naming the variable. Resolving
@@ -660,7 +660,7 @@ replay({ action: 'run', name: 'login', connectionReason: 'my-web-app' })
 #### Pointing a run at a file: `envFile`
 
 ```javascript
-replay({ action: 'run', name: 'login', connectionReason: 'my-web-app',
+replay({ action: 'run', name: 'login', connection: 'my-web-app',
          envFile: 'sequences.env' })
 ```
 
@@ -758,17 +758,17 @@ before it executes.
 
 ## Per-Step Connections (Multi-Device Sequences)
 
-Any step may carry its own `connectionReason`. Steps that don't get the
+Any step may carry its own `connection`. Steps that don't get the
 run-level connection injected (for the tools that accept one).
 
 ```json
 { "tool": "input",    "params": { "action": "click", "selector": "#pair",
-                                  "connectionReason": "device-a-phone" } }
+                                  "connection": "device-a-phone" } }
 { "tool": "inspect",  "params": { "action": "evaluateExpression",
                                   "expression": "document.querySelector('#code').textContent",
-                                  "saveAs": "code", "connectionReason": "device-a-phone" } }
+                                  "saveAs": "code", "connection": "device-a-phone" } }
 { "tool": "navigate", "params": { "action": "goto", "url": "{{var:code}}",
-                                  "connectionReason": "device-b-phone" } }
+                                  "connection": "device-b-phone" } }
 ```
 
 A per-step connection is honoured for **everything wrapped around the step**,
@@ -792,14 +792,14 @@ Details:
   sequence won't spuriously launch Chrome.
 ### Recording a multi-connection sequence
 
-Recording **preserves** `connectionReason` (it used to be stripped, which meant
+Recording **preserves** `connection` (it used to be stripped, which meant
 a recorded two-browser sequence silently replayed in one). Pass it explicitly on
 **every** call while you drive the browsers, including the one that is already
 active, then `create` decides what to do with it:
 
 | Recording | `create` result |
 |---|---|
-| All steps on one connection | Hoisted off the steps, so the sequence stays portable and `run({ connectionReason })` still retargets it |
+| All steps on one connection | Hoisted off the steps, so the sequence stays portable and `run({ connection })` still retargets it |
 | Genuinely spans connections | Kept per step |
 | **Mixed** — some steps named, others driven implicitly | Kept as-is, with a warning |
 
@@ -815,7 +815,7 @@ its connection, so bare steps come from recordings made before that.
 
 A sequence can be both multi-connection **and** mixed, and that combination is
 the dangerous one: the bare steps land in a different browser depending on the
-run-level `connectionReason`, and the run reports success either way. `create`
+run-level `connection`, and the run reports success either way. `create`
 warns about both.
 
 ### Inserting into an existing sequence
@@ -833,7 +833,7 @@ first re-stamps the hoisted connection — recorded on the sequence as
 Without that re-stamp the merge always looked "mixed" (one named reference plus
 the sequence's own bare steps), the hoist was skipped, and an ordinary
 same-browser insert silently left the sequence half-pinned to this session — so
-a later `run({ connectionReason })` split it across two browsers and passed.
+a later `run({ connection })` split it across two browsers and passed.
 
 ### Rebinding references at run time
 
@@ -862,22 +862,22 @@ so a missing browser fails as *"step 3 needs connection duo-member-two, which
 does not exist in this session"* instead of a generic "not connected to browser"
 from inside the tool.
 
-A run-level `connectionReason` does not reach a step that names its own
+A run-level `connection` does not reach a step that names its own
 connection; that step resolves through `connections` alone. Where every
 connection-taking step names one reference and the run passes a different
-`connectionReason` with no mapping for it, no step would run on the passed
+`connection` with no mapping for it, no step would run on the passed
 connection: the steps drive the recorded reference, and a stale window under
 that name in the same session produces "element not found" at every step. The
 run is refused before step 1, naming the steps and the mapping that retargets
-them, `connections: { "<recorded>": "<connectionReason>" }`. A sequence where
+them, `connections: { "<recorded>": "<connection>" }`. A sequence where
 some steps name no connection, or whose reference is a `{{...}}` template, is
 not refused: the run-level connection reaches the bare steps, and a template
 resolves only at run time.
 
-Mapping also renames the `name` on `connection` launch and attach
+Mapping also renames the `connection` on `connection` launch and attach
 steps; otherwise a mapped sequence would launch the recorded name and then drive
 a different one. Where a mapping renames a launch, it wins over the run-level
-`connectionReason`, which would otherwise rename it straight back.
+`connection`, which would otherwise rename it straight back.
 
 **Two recorded references cannot be mapped onto one browser.** That would run
 the whole multi-browser sequence in a single browser and report success — the
@@ -975,7 +975,7 @@ enrolled once stays enrolled, while the reference is only a name for this
 session. Declaring the pair is what lets a saved multi-device sequence be re-run
 tomorrow without rewiring which reference means which device.
 
-Steps still address browsers by `connectionReason`. There is no per-step
+Steps still address browsers by `connection`. There is no per-step
 `profile`: a step names a browser, the declaration decides what that browser
 is.
 
@@ -1057,7 +1057,7 @@ undeclared and are ignored.
 
 History retains the connection each command was recorded with, so both replay
 each command against its own connection by default. An explicit
-`connectionReason`:
+`connection`:
 
 - **retargets** a batch that used a single connection (what the parameter has
   always meant), and
@@ -1085,7 +1085,7 @@ exporting it.
 
 ### Two deliberate non-behaviours
 
-- **A run-level `connectionReason` does not override a step's own.** The step
+- **A run-level `connection` does not override a step's own.** The step
   wins.
 - **A per-step reference that doesn't exist fails the step.** It never falls
   back to the run-level connection.
@@ -1219,7 +1219,7 @@ bare steps (`create` hoists the connection off them), so its steps have to
 follow the browser it created - otherwise the run opens a browser, does the work
 in the *caller's* browser, and still reports success. A nested login sequence
 whose browser already exists keeps running in whatever browser called it. Steps
-that name their own `connectionReason` are unaffected either way.
+that name their own `connection` are unaffected either way.
 
 > **Two connections are not two devices.** A plain `connection` launch reuses the
 > running instance and opens a *tab* in it, so both references share one profile
@@ -1230,7 +1230,7 @@ that name their own `connectionReason` are unaffected either way.
 > point of the test is that the two sides are genuinely separate:
 >
 > ```javascript
-> connection({ action: 'launch', name: 'duo-member-two', profile: 'member', forceNewInstance: true })
+> connection({ action: 'launch', connection: 'duo-member-two', profile: 'member', forceNewInstance: true })
 > ```
 >
 > `connection({ action: 'list' })` shows the giveaway: same `port` means same instance and
@@ -1382,13 +1382,13 @@ execution is paused, replay appends the current debug state:
 ⏸️ **Execution paused** at http://localhost:3101/client.js:6
 
 **Next steps:**
-- Inspect call stack: `inspect({ action: 'getCallStack', connectionReason: '...' })`
-- Get variables: `inspect({ action: 'getVariables', connectionReason: '...', callFrameId: '<from call stack>' })`
-- Resume execution: `execution({ action: 'resume', connectionReason: '...' })`
-- Step over: `execution({ action: 'stepOver', connectionReason: '...' })`
+- Inspect call stack: `inspect({ action: 'getCallStack', connection: '...' })`
+- Get variables: `inspect({ action: 'getVariables', connection: '...', callFrameId: '<from call stack>' })`
+- Resume execution: `execution({ action: 'resume', connection: '...' })`
+- Step over: `execution({ action: 'stepOver', connection: '...' })`
 
 🔴 **1 active breakpoint**
-- List breakpoints: `breakpoint({ action: 'list', connectionReason: '...' })`
+- List breakpoints: `breakpoint({ action: 'list', connection: '...' })`
 ```
 
 ## Step Robustness
@@ -1440,8 +1440,8 @@ work". Exactly one of four mutually exclusive forms:
 - On timeout the step returns an error (`WAIT_TIMEOUT`, including the last
   evaluation error if the predicate was throwing), which stops the sequence
   like any other failed step. A `wait` never hangs a run.
-- The run-level `connectionReason` is injected like any other step, and a
-  per-step `connectionReason` is honoured (multi-device sequences).
+- The run-level `connection` is injected like any other step, and a
+  per-step `connection` is honoured (multi-device sequences).
 - `wait({ ms })` needs no browser at all and never triggers a Chrome
   auto-launch; `wait({ expression })` also works against a Node.js target.
 - A `wait` is a check with a time limit (see [Check Steps](#check-steps)): one
@@ -1505,14 +1505,14 @@ Configure in `.devharness/config.json` (values shown are the defaults):
 
 ```javascript
 // Record interactions directly - this call blocks until you click ✓ in the browser
-connection({ action: 'launch', name: "checkout-flow-test" })
-replay({ action: 'recordInteraction', connectionReason: 'checkout-flow-test' })
+connection({ action: 'launch', connection: "checkout-flow-test" })
+replay({ action: 'recordInteraction', connection: 'checkout-flow-test' })
 
 // Export as Playwright test
 replay({ action: 'export', name: 'checkout-flow-test', format: 'playwright' })
 
 // Run anytime to verify
-replay({ action: 'run', name: 'checkout-flow-test', connectionReason: 'test-run-one' })
+replay({ action: 'run', name: 'checkout-flow-test', connection: 'test-run-one' })
 ```
 
 ### Debugging Workflows
@@ -1540,7 +1540,7 @@ replay({ action: 'run', name: 'checkout', baseUrl: 'https://staging.example.com'
 
 ### Cross-Device Handoff
 
-Hand-author steps with per-step `connectionReason` and capture the handoff value
+Hand-author steps with per-step `connection` and capture the handoff value
 with `saveAs` - see [Per-Step Connections](#per-step-connections-multi-device-sequences).
 
 ### Automation
@@ -1565,7 +1565,7 @@ replay({ action: 'run', name: 'daily-smoke-test', killChromeOnFinish: true })
 - **Persistence:** in-memory sequences are cleared on restart; use
   `export`/`load` for disk persistence. `run` and `get` load from disk by name
   automatically.
-- **Connection stripping:** `connectionReason` is removed from commands as they
+- **Connection stripping:** `connection` is removed from commands as they
   are recorded into history, for portability.
 - **Validation timing:** tool *names* are validated at `create`/`load` time;
   `run` does not re-validate, so a sequence edited on disk by hand is best

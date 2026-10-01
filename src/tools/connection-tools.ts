@@ -91,8 +91,8 @@ export function shareBrowserProxy(
 
 const connectionSchema = z.object({
   action: z.enum(['launch', 'attach', 'list', 'switch', 'rename', 'close', 'status', 'browsers']),
-  name: z.string().optional().describe('launch/attach: the name later calls pass as connectionReason (3 descriptive words; launch defaults to "unnamed-connection-default"). rename: the new name'),
-  connectionReason: z.string().optional().describe('switch/rename/close/status: the connection to act on'),
+  connection: z.string().optional().describe('The connection, 3 descriptive words. launch/attach: the name it is created under, which later calls pass (launch defaults to "unnamed-connection-default"). switch/rename/close/status: the one to act on'),
+  newName: z.string().optional().describe('rename: the new name, 3 descriptive words'),
   reason: z.string().optional().describe('close: why the connection is closed'),
   url: z.string().optional().describe('launch: URL to open (default: blank page)'),
   port: z.number().optional().describe('launch: debugging port (default: this session\'s reserved port); a Chrome already on it gets a tab. attach: debugger port (Node.js usually 9229)'),
@@ -160,9 +160,9 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
 
   const launch = async (args: ConnectionArgs): Promise<any> => {
       // Validate the name FIRST, before launching Chrome
-      const userReference = args.name;
-      if (userReference) {
-        requireValidReference(userReference, 'name'); // Throws InvalidReferenceError if invalid
+      const requested = args.connection;
+      if (requested) {
+        requireValidReference(requested, 'connection'); // Throws InvalidReferenceError if invalid
       }
 
       // Validate the profile name before anything else - an invalid name must
@@ -181,7 +181,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
         // NOTE: the "profile already held" check deliberately happens further
         // down (profileGate), where this call is known to have to spawn a
         // second Chrome. Checking here broke the standard idempotent call pattern
-        // `connection({ action: 'launch', profile, name })`: re-calling it to make sure
+        // `connection({ action: 'launch', profile, connection })`: re-calling it to make sure
         // the browser is up always errored instead of reusing the very
         // connection that holds the profile.
       }
@@ -266,7 +266,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
         ? chromeLauncher.findPortForProfile(profileName)
         : undefined;
       const port = profileHolderPort ?? decision.port;
-      await debugLog('index', `launch called: port=${port}, requested=${args.port}, reserved=${configManager.getCurrentPort()}, profileHolder=${profileHolderPort ?? 'none'}, forceNewInstance=${args.forceNewInstance}, url=${args.url}, autoConnect=${args.autoConnect}, name=${args.name}`);
+      await debugLog('index', `launch called: port=${port}, requested=${args.port}, reserved=${configManager.getCurrentPort()}, profileHolder=${profileHolderPort ?? 'none'}, forceNewInstance=${args.forceNewInstance}, url=${args.url}, autoConnect=${args.autoConnect}, connection=${args.connection}`);
       const url = args.url;
       const autoConnect = args.autoConnect ?? true;
 
@@ -275,10 +275,10 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
       // Under forceNewInstance we still run this lookup, but a live match is an
       // error rather than a reuse: a fresh process bound to an already-bound
       // reference would leave two Chromes answering to the same name (bug-005).
-      if (userReference) {
-        const existingConnection = await connectionManager.findConnectionByReferenceValidated(userReference);
+      if (requested) {
+        const existingConnection = await connectionManager.findConnectionByReferenceValidated(requested);
         if (existingConnection) {
-          const sanitizedRef = validateReference(userReference).sanitized!;
+          const sanitizedRef = validateReference(requested).sanitized!;
 
           if (args.forceNewInstance) {
             await debugLog('index', `launch: forceNewInstance with name "${sanitizedRef}" already bound to a live connection - refusing to double-bind`);
@@ -343,8 +343,8 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
           // Registered under the sanitized reference, which is what every other
           // tool addresses the connection by. Under the raw one, the reference
           // the launch tells the caller to use resolved to no proxy.
-          const proxyKey = userReference
-            ? validateReference(userReference).sanitized!
+          const proxyKey = requested
+            ? validateReference(requested).sanitized!
             : `port-${port}`;
           const proxyArgs = args.proxy
             ? (await startProxyFor(proxyKey, url)).chromeArgs
@@ -488,9 +488,9 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
             // Registered under the name given, validated at the start of the
             // handler, or under the default
             let connectionReference = UNNAMED_CONNECTION;
-            if (userReference) {
+            if (requested) {
               // Use the sanitized version (lowercase with hyphens)
-              const validation = validateReference(userReference);
+              const validation = validateReference(requested);
               connectionReference = validation.sanitized!;
             }
 
@@ -550,7 +550,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
           const reference = connection?.reference || UNNAMED_CONNECTION;
           const inactivityTimeoutMinutes = configManager.getChromeConfig().inactivityTimeoutMinutes;
           const inactivityNote = inactivityTimeoutMinutes > 0
-            ? `\n\nNote: This connection auto-closes after ${inactivityTimeoutMinutes} min of no tool activity against it. Any tool call using this connectionReason resets the timer.`
+            ? `\n\nNote: This connection auto-closes after ${inactivityTimeoutMinutes} min of no tool activity against it. Any tool call using this connection resets the timer.`
             : '';
 
           return withLaunchMeta(
@@ -559,7 +559,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
               title: title || '(no title)',
               url: pageUrl,
               consoleStats: consoleStats || undefined,
-              hasUserReference: !!userReference,
+              hasUserReference: !!requested,
               viewport: viewportSet,
               viewportClamped: viewportClamped ? true : undefined,
               inactivityNote,
@@ -638,7 +638,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
 
   const attach = async (args: ConnectionArgs): Promise<any> => {
       // The name in its stored form; throws when it is not three words
-      const reference = requireValidReference(args.name!, 'name');
+      const reference = requireValidReference(args.connection!, 'connection');
 
       // A name held by a live connection is refused; one held by a dead connection is freed by the lookup
       const existingConnection = await connectionManager.findConnectionByReferenceValidated(reference);
@@ -819,11 +819,11 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
 
   const status = async (args: ConnectionArgs): Promise<any> => {
       // Find connection by reference
-      const connection = connectionManager.findConnectionByReference(args.connectionReason!);
+      const connection = connectionManager.findConnectionByReference(args.connection!);
 
       if (!connection) {
         return createErrorResponse('CONNECTION_NOT_FOUND', {
-          reference: args.connectionReason!
+          reference: args.connection!
         });
       }
 
@@ -970,14 +970,14 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
       return createSuccessResponse('CHROME_LAUNCHER_RESET');
   };
 
-  /** The live connection `connectionReason` names; a dead one is removed and reads as absent. */
+  /** The live connection `connection` names; a dead one is removed and reads as absent. */
   const addressed = (args: ConnectionArgs) =>
-    connectionManager.findConnectionByReferenceValidated(sanitizeReference(args.connectionReason!));
+    connectionManager.findConnectionByReferenceValidated(sanitizeReference(args.connection!));
 
   const switchTo = async (args: ConnectionArgs): Promise<any> => {
     const connection = await addressed(args);
     if (!connection) {
-      return createErrorResponse('CONNECTION_NOT_FOUND', { reference: args.connectionReason });
+      return createErrorResponse('CONNECTION_NOT_FOUND', { reference: args.connection });
     }
     activateConnection(connection.id);
 
@@ -1002,25 +1002,25 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
   };
 
   const rename = async (args: ConnectionArgs): Promise<any> => {
-    const newName = requireValidReference(args.name!, 'name');
+    const newName = requireValidReference(args.newName!, 'newName');
     if (await connectionManager.findConnectionByReferenceValidated(newName)) {
       return createErrorResponse('REFERENCE_IN_USE', { reference: newName });
     }
     const connection = await addressed(args);
     if (!connection || !connectionManager.updateReference(connection.id, newName)) {
-      return createErrorResponse('CONNECTION_NOT_FOUND', { reference: args.connectionReason });
+      return createErrorResponse('CONNECTION_NOT_FOUND', { reference: args.connection });
     }
     return createSuccessResponse('CONNECTION_RENAMED', {
-      oldName: args.connectionReason,
+      oldName: args.connection,
       newName,
     });
   };
 
   const close = async (args: ConnectionArgs): Promise<any> => {
-    console.error(`[devharness] connection close - Reason: ${args.reason}, Connection: ${args.connectionReason}`);
+    console.error(`[devharness] connection close - Reason: ${args.reason}, Connection: ${args.connection}`);
     const connection = await addressed(args);
     if (!connection) {
-      return createErrorResponse('CONNECTION_NOT_FOUND', { reference: args.connectionReason });
+      return createErrorResponse('CONNECTION_NOT_FOUND', { reference: args.connection });
     }
     const reference = connection.reference || UNNAMED_CONNECTION;
     if (!(await connectionManager.closeConnection(connection.id))) {
@@ -1035,12 +1035,12 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
   /** Parameters each action cannot run without, checked before it runs. */
   const REQUIRED: Record<ConnectionArgs['action'], Array<keyof ConnectionArgs>> = {
     launch: [],
-    attach: ['name'],
+    attach: ['connection'],
     list: [],
-    switch: ['connectionReason'],
-    rename: ['connectionReason', 'name'],
-    close: ['connectionReason', 'reason'],
-    status: ['connectionReason'],
+    switch: ['connection'],
+    rename: ['connection', 'newName'],
+    close: ['connection', 'reason'],
+    status: ['connection'],
     browsers: [],
   };
 

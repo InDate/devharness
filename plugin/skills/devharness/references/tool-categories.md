@@ -4,11 +4,11 @@ Most tools are **grouped**: one tool name plus an `action` param, e.g.
 `navigate({ action: 'goto', url })`, not a separate `navigateTo` tool. The
 actions below are the complete enums accepted by each tool.
 
-Nearly every tool also takes `connectionReason` to pick which connection it
+Nearly every tool also takes `connection` to pick which connection it
 runs against (see the skill's Quick Start).
 
 **Connection**: `connection` (actions: launch, attach, list, switch, rename, close, status, browsers) and `browser` (actions: kill, resetLauncher)
-- `name` creates (launch, attach) or renames a connection; `connectionReason` addresses one that exists (switch, rename, close, status)
+- `connection` names the connection on every call: the one launch or attach creates, and the one switch, rename, close and status act on. Rename's new name is `newName`
 - `launch` also connects - don't follow it with `attach`. `launch` with the `port` of a running Chrome opens a new tab in it
 - `list` gives each connection's URL and title and drops dead ones; `switch` makes a connection active and selects its page
 - `close` and both `browser` actions require a `reason`. Closing the last connection to a Chrome kills that Chrome. `browser` is separate so that allowing `connection` allows no kill
@@ -117,7 +117,7 @@ runs against (see the skill's Quick Start).
 
 **Replay**: `replay` (actions: history, create, list, get, delete, export, load, listSaved, deleteSaved, run, runAll, step, finish, insert, addCheck, status, cancel, repeat, runFromLog, recordInteraction)
 - `recordInteraction`: record mouse, keyboard, and navigation events with a visual overlay
-- `runAll`: run every sequence in a folder and report one line each - `replay({ action: 'runAll', folder: 'spine', connectionReason: 'my-web-app' })`. Sequences may live in SUBFOLDERS of the sequences dir (`spine/`, `story/`, `_helpers/`); filenames are relative to that root (`spine/spine-01.json`) and `load` still accepts the bare basename. The whole tree is LOADED before anything runs, so a sequence in one folder can still reference a helper in another by name (a check's `{ run }`, a forEach's `do`) - those resolve by sequence name, not by path. Folders whose name starts with `_` are loaded but never run by a bare `runAll`, which is where preamble guards and forEach bodies belong; naming such a folder explicitly runs it anyway. A failure is recorded and the suite continues (`continueOnFailure`, default true). Scoped to one root: the project sequences dir, or the global one with `global: true`. Accepts `baseUrl`, so one call runs a suite against any deployment
+- `runAll`: run every sequence in a folder and report one line each - `replay({ action: 'runAll', folder: 'spine', connection: 'my-web-app' })`. Sequences may live in SUBFOLDERS of the sequences dir (`spine/`, `story/`, `_helpers/`); filenames are relative to that root (`spine/spine-01.json`) and `load` still accepts the bare basename. The whole tree is LOADED before anything runs, so a sequence in one folder can still reference a helper in another by name (a check's `{ run }`, a forEach's `do`) - those resolve by sequence name, not by path. Folders whose name starts with `_` are loaded but never run by a bare `runAll`, which is where preamble guards and forEach bodies belong; naming such a folder explicitly runs it anyway. A failure is recorded and the suite continues (`continueOnFailure`, default true). Scoped to one root: the project sequences dir, or the global one with `global: true`. Accepts `baseUrl`, so one call runs a suite against any deployment
 - `addCheck`: add a check step - `replay({ action: 'addCheck', name: 'flow', check: { selector: '.cookie-banner', condition: 'present', holds: { run: 'dismiss-banner' }, fails: 'continue' } })`
 - `export`: export a sequence to file - `format: sequence | playwright | puppeteer`
 - `repeat`: instantly re-execute commands by history index - `replay({ action: 'repeat', indices: [0, 1, 2] })`. One index answers with that call's own reply; `params` replaces fields of that one call (`null` removes one). Each tool response shows its history index in its `Replay: N` footer. History also holds bench and CLI calls and every step of a sequence run, marked with the run's name

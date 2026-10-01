@@ -32,7 +32,7 @@ function makeReplay(
     name: 'declared-seq',
     commands,
     createdAt: 1,
-    requiredConnections: opts.declared ?? [{ reference: 'declared-b' }],
+    requiredConnections: opts.declared ?? [{ connection: 'declared-b' }],
   } as CommandSequence;
 
   let activeSequence: any = null;
@@ -56,7 +56,7 @@ function makeReplay(
       if (opts.launchAnswer === 'bound') {
         return { isError: true, _errorId: 'CHROME_REFERENCE_ALREADY_BOUND', content: [{ type: 'text', text: 'Error: name in use' }] };
       }
-      return { content: [{ type: 'text', text: '' }], _meta: { launch: { name: params.name, reused: opts.launchAnswer === 'reused' } } };
+      return { content: [{ type: 'text', text: '' }], _meta: { launch: { name: params.connection, reused: opts.launchAnswer === 'reused' } } };
     }
     if (tool === 'connection' && params.action === 'list') {
       return {
@@ -96,11 +96,11 @@ describe('declared browsers', () => {
 
     const paused: any = await replay.handler({
       action: 'run', wait: true, sequenceId: 'seq-declared',
-      connectionReason: 'run-device', stepTo: 1,
+      connection: 'run-device', stepTo: 1,
     } as any);
 
     expect(paused.content[0].text).toMatch(/paus/i);
-    expect(calls.some(c => c.tool === 'connection' && c.params.action === 'launch' && c.params.name === 'declared-b')).toBe(true);
+    expect(calls.some(c => c.tool === 'connection' && c.params.action === 'launch' && c.params.connection === 'declared-b')).toBe(true);
     // A pause keeps them: that is the state the user stopped to inspect.
     expect(killedPorts(calls)).not.toContain(PORTS['declared-b']);
 
@@ -111,7 +111,7 @@ describe('declared browsers', () => {
     // against a browser that no longer exists.
     // With a reason: connection close requires one, and a call
     // without it is refused by validation before it releases anything.
-    const release = calls.find(c => c.tool === 'connection' && c.params.action === 'close' && c.params.connectionReason === 'declared-b');
+    const release = calls.find(c => c.tool === 'connection' && c.params.action === 'close' && c.params.connection === 'declared-b');
     expect(release?.params.reason).toEqual(expect.stringContaining('declared-b'));
   });
 
@@ -120,7 +120,7 @@ describe('declared browsers', () => {
 
     await replay.handler({
       action: 'run', wait: true, sequenceId: 'seq-declared',
-      connectionReason: 'run-device', stepTo: 1,
+      connection: 'run-device', stepTo: 1,
     } as any);
     await replay.handler({ action: 'finish' } as any);
 
@@ -133,7 +133,7 @@ describe('declared browsers', () => {
     const { replay, calls } = makeReplay(twoSteps);
 
     const started: any = await replay.handler({
-      action: 'run', sequenceId: 'seq-declared', connectionReason: 'run-device',
+      action: 'run', sequenceId: 'seq-declared', connection: 'run-device',
     } as any);
     const runId = started._meta?.replay?.runId ?? started.content[0].text.match(/run-\d+-\w+/)?.[0];
 
@@ -147,11 +147,11 @@ describe('declared browsers', () => {
 
   it('are left running when the launch found the browser already up under that name', async () => {
     const { replay, calls } = makeReplay(twoSteps, {
-      declared: [{ reference: 'declared-b', profile: 'member' }],
+      declared: [{ connection: 'declared-b', profile: 'member' }],
       launchAnswer: 'reused',
     });
 
-    await replay.handler({ action: 'run', wait: true, sequenceId: 'seq-declared', connectionReason: 'run-device' } as any);
+    await replay.handler({ action: 'run', wait: true, sequenceId: 'seq-declared', connection: 'run-device' } as any);
 
     expect(calls.some(c => c.tool === 'connection' && c.params.action === 'launch')).toBe(true);
     expect(killedPorts(calls)).not.toContain(PORTS['declared-b']);
@@ -160,7 +160,7 @@ describe('declared browsers', () => {
   it('reuse a browser already bound to the name, read from the error id', async () => {
     const { replay, calls } = makeReplay(twoSteps, { launchAnswer: 'bound' });
 
-    const result: any = await replay.handler({ action: 'run', wait: true, sequenceId: 'seq-declared', connectionReason: 'run-device' } as any);
+    const result: any = await replay.handler({ action: 'run', wait: true, sequenceId: 'seq-declared', connection: 'run-device' } as any);
 
     expect(result.isError).toBeFalsy();
     expect(killedPorts(calls)).not.toContain(PORTS['declared-b']);

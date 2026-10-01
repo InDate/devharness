@@ -68,8 +68,8 @@ describe('rebaseSequence', () => {
 describe('rebaseSequence: declared connections', () => {
   const declared = (): CommandSequence => seq({
     requiredConnections: [
-      { reference: 'member-one', url: 'http://localhost:5174/join?code=7' },
-      { reference: 'member-two' },
+      { connection: 'member-one', url: 'http://localhost:5174/join?code=7' },
+      { connection: 'member-two' },
     ],
   });
 
@@ -80,7 +80,7 @@ describe('rebaseSequence: declared connections', () => {
 
   it('leaves a declaration without a url alone', () => {
     const out = rebaseSequence(declared(), { baseUrl: 'https://cue-test.pages.dev' });
-    expect(out.requiredConnections![1]).toEqual({ reference: 'member-two' });
+    expect(out.requiredConnections![1]).toEqual({ connection: 'member-two' });
   });
 
   it('does not mutate the stored declaration', () => {

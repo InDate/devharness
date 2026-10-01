@@ -63,7 +63,7 @@ slash command. They are here, once, rather than restated by each of those.
   literal gets templatized for you, no manual edit needed.
 - **Do the work with the tools; don't describe it.** Every call you make is
   recorded, and the sequence is assembled from that history afterwards.
-- **Pass `connectionReason` on every browser call** - including the connection
+- **Pass `connection` on every browser call** - including the connection
   that is already active, and including tools where it is optional (`inspect`,
   `execution`, `storage`, `network`, `breakpoint`, `request`). A call without it
   records nothing about which browser it ran in, so on replay it lands wherever
@@ -81,7 +81,7 @@ slash command. They are here, once, rather than restated by each of those.
 **Record what a human does** - `recordInteraction`
 
 ```
-replay({ action: 'recordInteraction', connectionReason: 'signup-flow-test' })
+replay({ action: 'recordInteraction', connection: 'signup-flow-test' })
 ```
 
 Opens the page with a recording overlay and captures real mouse, keyboard and
@@ -165,7 +165,7 @@ sequence built from history has no file to reload from.
 ## Running
 
 ```
-replay({ action: 'run', sequenceId: 'seq-login', connectionReason: 'my-web-app' })
+replay({ action: 'run', sequenceId: 'seq-login', connection: 'my-web-app' })
 ```
 
 **`run` does not block** (changed in 0.7): it returns a run id immediately and
@@ -204,7 +204,7 @@ kills in-flight runs), the id returns `REPLAY_RUN_NOT_FOUND`. Nested sequences
 (a check's `{ run }`, `replay run` steps) are part of their parent run, never
 separate runs. Pass `wait: true` to block until completion and get the full
 result in one call (the pre-0.7 behaviour). `bench: true` plays it instead in
-the bench open on `connectionReason`, from step 1, so its rows, badges and
+the bench open on `connection`, from step 1, so its rows, badges and
 check outcomes show there; `replay status` does not track that play.
 
 Useful `run` parameters:
@@ -324,28 +324,28 @@ existed. Don't copy the pattern into new sequences; use `wait` and `assert`.
 
 ## Multi-device / multi-browser sequences
 
-Any step may carry its own `connectionReason`, and it is honoured for
+Any step may carry its own `connection`, and it is honoured for
 validation and pause handling, not just dispatch. That's what makes
 "device A scans, device B confirms" sequences work in one run:
 
 ```
 { tool: 'input',   params: { action: 'click', selector: '#pair',
-                             connectionReason: 'device-a-phone' } }
+                             connection: 'device-a-phone' } }
 { tool: 'inspect', params: { action: 'evaluateExpression',
                              expression: '...', saveAs: 'code',
-                             connectionReason: 'device-a-phone' } }
+                             connection: 'device-a-phone' } }
 { tool: 'navigate', params: { action: 'goto', url: '{{var:code}}',
-                              connectionReason: 'device-b-phone' } }
+                              connection: 'device-b-phone' } }
 ```
 
-Steps without an explicit `connectionReason` use the run-level one.
+Steps without an explicit `connection` use the run-level one.
 
-**Recording one.** Pass `connectionReason` explicitly on **every** call while you
+**Recording one.** Pass `connection` explicitly on **every** call while you
 drive the browsers - including the one that happens to be active. Recording
 preserves it, and `create` decides what to do with it:
 
 - all steps on one connection - hoisted off the steps, so the sequence stays
-  portable and `run({ connectionReason })` still retargets it
+  portable and `run({ connection })` still retargets it
 - genuinely spanning connections - kept per step
 - **mixed** (some steps named, some recorded bare) - kept as-is with a warning, because nothing can tell which
   browser the bare steps belonged to. `create` says so; re-record naming every
@@ -355,7 +355,7 @@ preserves it, and `create` decides what to do with it:
 not just the browser-only tools. Calls now have to name their connection, so
 bare steps come from recordings made before that. A sequence can be both
 multi-connection and mixed, and that is the worst case: the bare steps land in a
-different browser depending on the run-level `connectionReason`, green either
+different browser depending on the run-level `connection`, green either
 way. `create` warns about both.
 
 **Inserting into one.** `insert` re-stamps the connection `create` hoisted off
@@ -401,7 +401,7 @@ should come up on - the same ones `connection({ action: 'launch', profile })` cr
 
 Storage (cookies, localStorage, IndexedDB, non-extractable CryptoKeys) survives
 between runs, so a device enrolled once stays enrolled; the reference is just
-this session's name for it. Steps still address browsers by `connectionReason` -
+this session's name for it. Steps still address browsers by `connection` -
 there is no per-step `profile`.
 
 Two rules follow. `forceNewInstance` defaults to **false** when a profile is
@@ -453,16 +453,16 @@ session first, so a missing browser fails as *"step 3 needs connection
 duo-member-two, which does not exist in this session"* rather than as a generic
 "not connected to browser" from somewhere inside the tool.
 
-**A run-level `connectionReason` does not reach a step that names its own
+**A run-level `connection` does not reach a step that names its own
 connection.** Such a step resolves through `connections` alone. A sequence
 whose steps all name one reference (a hand-built one, or one never hoisted by
-`create`) run with a different `connectionReason` would drive the recorded
+`create`) run with a different `connection` would drive the recorded
 reference, and a stale window under that name in this session turns every step
 into "element not found". The run is refused before step 1 with the mapping
-that retargets it: `connections: { "<recorded>": "<connectionReason>" }`.
+that retargets it: `connections: { "<recorded>": "<connection>" }`.
 
 **repeat / runFromLog.** Each command replays against the connection it was
-recorded with. An explicit `connectionReason` retargets a single-connection
+recorded with. An explicit `connection` retargets a single-connection
 batch and is refused for a multi-connection one.
 
 **Exported code.** `outputFormat: 'playwright' | 'puppeteer'` gives each recorded
@@ -472,7 +472,7 @@ connection its own page rather than merging them into one. Only `navigate` and
 sequence where nothing could be generated exports a test that **throws** instead
 of an empty one that passes. Setup sequences are for `run`, not for export.
 
-Two things that deliberately do not happen: a run-level `connectionReason` does
+Two things that deliberately do not happen: a run-level `connection` does
 **not** override a step's own, and a per-step reference that doesn't exist in
 this session **fails the step** - it never falls back to the run-level
 connection. Falling back is what made a two-browser sequence silently replay in
@@ -540,7 +540,7 @@ plus bare steps, since `create` hoists the connection off them - leaving them on
 the caller would open a browser and then do the work in the wrong one); if the
 launch was skipped or absent, they run in the calling run's connection, so a
 nested login sequence still works wherever it's called from. Steps naming their
-own `connectionReason` are unaffected.
+own `connection` are unaffected.
 
 **Two connections are not two devices.** A plain `connection launch` opens a tab in
 the running instance, so both references share one profile - one cookie jar, one
@@ -548,7 +548,7 @@ localStorage, one IndexedDB. A duo test built that way has ONE device identity
 under two names, and a cross-user propagation check passes without a second
 device existing. When the two sides must be genuinely separate, launch the
 second with its own profile:
-`connection({ action: 'launch', name: 'duo-member-two', profile: 'member', forceNewInstance: true })`.
+`connection({ action: 'launch', connection: 'duo-member-two', profile: 'member', forceNewInstance: true })`.
 Same `port` in `connection list` means same instance, so shared storage.
 
 Nesting depth is capped by `replay.maxConditionalDepth` (default 10) and regexes
@@ -649,7 +649,7 @@ behind it, documented in `docs/replay.md`:
 | Stale content while requests are in flight | `wait({ expression })` on a flag the app sets, not a fixed sleep |
 | localhost URL fails because nothing is running | The port check fails fast - start the server (`server({ action: 'start' })`) |
 | A run hangs or takes far too long | `stepTimeout` / `totalTimeout`; a step exceeding its budget fails the run at that step |
-| A step ran against the wrong browser | See the multi-device section - almost always a bare `connectionReason` |
+| A step ran against the wrong browser | See the multi-device section - almost always a bare `connection` |
 
 ## Verifying a fix
 

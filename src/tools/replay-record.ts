@@ -27,15 +27,15 @@ import { type ReplayArgs } from './replay-schema.js';
 export async function handleRecordInteraction(
   args: ReplayArgs,
   executeToolCall: ExecuteToolCall,
-  getPageForConnection?: (connectionReason: string) => Promise<any>,
+  getPageForConnection?: (connection: string) => Promise<any>,
   recorder?: CommandRecorder,
   abortSignal?: AbortSignal
 ) {
-  if (!args.connectionReason) {
+  if (!args.connection) {
     return createErrorResponse('MISSING_PARAMETER', {
       action: 'recordInteraction',
-      missing: 'connectionReason',
-      message: 'The "recordInteraction" action requires a "connectionReason" to identify the browser tab'
+      missing: 'connection',
+      message: 'The "recordInteraction" action requires a "connection" to identify the browser tab'
     });
   }
 
@@ -50,7 +50,7 @@ export async function handleRecordInteraction(
     try {
       const navResult = await executeToolCall('navigate', {
         action: 'goto',
-        connectionReason: args.connectionReason!,
+        connection: args.connection!,
         url
       });
       return navResult?.isError ? (navResult?.content?.[0]?.text || 'Unknown error') : null;
@@ -85,17 +85,17 @@ export async function handleRecordInteraction(
     startUrl = startUrl || issue.startUrl;  // Use provided startUrl or fall back to issue's startUrl
   }
 
-  const sequenceName = args.name || (issueId ? `${issueType}-${issueId}-repro` : args.connectionReason);
+  const sequenceName = args.name || (issueId ? `${issueType}-${issueId}-repro` : args.connection);
   // Refused before anything is launched or recorded: a conflict found after the
   // recording asks for it to be made again under another name.
   if (recorder && !args.overwrite && recorder.sequenceNameExists(sequenceName)) {
     return createSuccessResponse('RECORDING_NAME_CONFLICT', {
       sequenceName,
-      connectionReason: args.connectionReason
+      connection: args.connection
     });
   }
 
-  let page = await getPageForConnection(args.connectionReason);
+  let page = await getPageForConnection(args.connection);
 
   // Auto-launch Chrome if no connection found (requires startUrl)
   if (!page) {
@@ -107,10 +107,10 @@ export async function handleRecordInteraction(
       });
     }
 
-    const launchResult = await autoLaunchChrome(executeToolCall, args.connectionReason, 'recordInteraction');
+    const launchResult = await autoLaunchChrome(executeToolCall, args.connection, 'recordInteraction');
     if (!launchResult.success) {
       return createErrorResponse(launchResult.errorType, {
-        reference: args.connectionReason,
+        reference: args.connection,
         error: launchResult.error
       });
     }
@@ -125,10 +125,10 @@ export async function handleRecordInteraction(
     }
 
     // Try getting the page again after launch
-    page = await getPageForConnection(args.connectionReason);
+    page = await getPageForConnection(args.connection);
     if (!page) {
       return createErrorResponse('CONNECTION_NOT_FOUND', {
-        connectionReason: args.connectionReason,
+        connection: args.connection,
         message: 'Failed to connect to Chrome after auto-launch'
       });
     }
@@ -147,7 +147,7 @@ export async function handleRecordInteraction(
 
   // startRecording blocks until the recording completes. With an issueId it
   // shows a fullscreen overlay with the issue's details.
-  const result = await startRecording(page, args.connectionReason, {
+  const result = await startRecording(page, args.connection, {
     showOverlay,
     closeTabOnDone: args.closeTabOnDone,
     abortSignal,
@@ -160,7 +160,7 @@ export async function handleRecordInteraction(
       await executeToolCall('connection', {
         action: 'close',
         reason: 'recording finished with closeTabOnDone',
-        connectionReason: args.connectionReason,
+        connection: args.connection,
       });
     } catch {
       // Non-fatal - tab may already be closed
@@ -221,7 +221,7 @@ export async function handleRecordInteraction(
     commands,
     createdAt: Date.now(),
     startUrl: recording.startUrl,
-    description: `Recorded from ${args.connectionReason}`,
+    description: `Recorded from ${args.connection}`,
   };
 
   // Only create in-memory sequence if no issues (issues go to issues folder only)
@@ -239,13 +239,13 @@ export async function handleRecordInteraction(
     if (recorder.sequenceNameExists(sequenceName) && !args.overwrite) {
       return createSuccessResponse('RECORDING_NAME_CONFLICT', {
         sequenceName,
-        connectionReason: args.connectionReason
+        connection: args.connection
       });
     }
 
     sequence = await recorder.createSequenceFromCommands(sequenceName, commands, {
       startUrl: recording.startUrl,
-      description: `Recorded from ${args.connectionReason}`,
+      description: `Recorded from ${args.connection}`,
     });
   }
 

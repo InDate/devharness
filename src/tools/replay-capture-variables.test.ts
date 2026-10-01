@@ -13,14 +13,14 @@ import { productionShaped } from '../test-support/fake-execute-tool-call.js';
 interface Call {
   tool: string;
   action?: string;
-  connectionReason?: string;
+  connection?: string;
   params: Record<string, any>;
 }
 
 function makeHarness(responses: Record<string, any> = {}, ctxOverrides: Partial<ExecutionContext> = {}) {
   const calls: Call[] = [];
   const executeToolCall = vi.fn(productionShaped(async (tool: string, params: Record<string, any>) => {
-    calls.push({ tool, action: params.action, connectionReason: params.connectionReason, params });
+    calls.push({ tool, action: params.action, connection: params.connection, params });
     const key = `${tool}.${params.action}`;
     if (key in responses) {
       const r = responses[key];
@@ -41,7 +41,7 @@ function makeHarness(responses: Record<string, any> = {}, ctxOverrides: Partial<
   const ctx: ExecutionContext = {
     executeToolCall,
     commandRecorder,
-    connectionReason: 'device-a',
+    connection: 'device-a',
     logPrefix: 'test',
     ...ctxOverrides,
   };
@@ -141,7 +141,7 @@ describe('inspect({ action: "evaluateExpression" }) _meta', () => {
       rawValue: { token: 't-1', count: 3, quotedNumber: '42' },
       rawCaptured: true,
     }));
-    const res = await tool.handler({ action: 'evaluateExpression', connectionReason: 'app', expression: 'state' } as any);
+    const res = await tool.handler({ action: 'evaluateExpression', connection: 'app', expression: 'state' } as any);
     // '42' stays a string - no deformat quoting heuristics applied to exact captures.
     expect(res._meta.inspect.value).toEqual({ token: 't-1', count: 3, quotedNumber: '42' });
     expect(res._meta.inspect.valueSource).toBe('exact');
@@ -150,7 +150,7 @@ describe('inspect({ action: "evaluateExpression" }) _meta', () => {
   it('requests promise awaiting and raw capture from the manager by default', async () => {
     const detailed = vi.fn(async () => ({ formatted: '1', rawValue: 1, rawCaptured: true }));
     const tool = makeInspectToolDetailed(detailed);
-    await tool.handler({ action: 'evaluateExpression', connectionReason: 'app', expression: '1' } as any);
+    await tool.handler({ action: 'evaluateExpression', connection: 'app', expression: '1' } as any);
     expect(detailed).toHaveBeenCalledWith('1', undefined, true, 2, {
       awaitPromise: true,
       captureRaw: true,
@@ -160,7 +160,7 @@ describe('inspect({ action: "evaluateExpression" }) _meta', () => {
   it('passes awaitPromise: false through when the caller opts out', async () => {
     const detailed = vi.fn(async () => ({ formatted: 'Promise', rawCaptured: false }));
     const tool = makeInspectToolDetailed(detailed);
-    await tool.handler({ action: 'evaluateExpression', connectionReason: 'app', expression: 'p', awaitPromise: false } as any);
+    await tool.handler({ action: 'evaluateExpression', connection: 'app', expression: 'p', awaitPromise: false } as any);
     expect(detailed).toHaveBeenCalledWith('p', undefined, true, 2, {
       awaitPromise: false,
       captureRaw: true,
@@ -171,7 +171,7 @@ describe('inspect({ action: "evaluateExpression" }) _meta', () => {
     const tool = makeInspectTool(async () => '"https://pair.example/abc"');
     const res = await tool.handler({
       action: 'evaluateExpression',
-      connectionReason: 'app',
+      connection: 'app',
       expression: 'window.pairingUrl',
     } as any);
 
@@ -190,7 +190,7 @@ describe('inspect({ action: "evaluateExpression" }) _meta', () => {
 
   it('carries object results through as structured data', async () => {
     const tool = makeInspectTool(async () => ({ token: '"t-1"', count: '3' }));
-    const res = await tool.handler({ action: 'evaluateExpression', connectionReason: 'app', expression: 'state' } as any);
+    const res = await tool.handler({ action: 'evaluateExpression', connection: 'app', expression: 'state' } as any);
     expect(res._meta.inspect.value).toEqual({ token: 't-1', count: 3 });
     expect(res._meta.inspect.valueType).toBe('object');
   });
@@ -199,7 +199,7 @@ describe('inspect({ action: "evaluateExpression" }) _meta', () => {
     const tool = makeInspectTool(async () => '1');
     const res = await tool.handler({
       action: 'evaluateExpression',
-      connectionReason: 'app',
+      connection: 'app',
       expression: 'x',
       callFrameId: 'frame-7',
     } as any);
@@ -210,7 +210,7 @@ describe('inspect({ action: "evaluateExpression" }) _meta', () => {
     const tool = makeInspectTool(async () => '1');
     const parsed = tool.zodSchema.safeParse({
       action: 'evaluateExpression',
-      connectionReason: 'app',
+      connection: 'app',
       expression: 'x',
       saveAs: 'pairingUrl',
     });
@@ -219,7 +219,7 @@ describe('inspect({ action: "evaluateExpression" }) _meta', () => {
 
   it('emits no capturable _meta on error responses', async () => {
     const tool = makeInspectTool(async () => { throw new Error('boom'); });
-    const res = await tool.handler({ action: 'evaluateExpression', connectionReason: 'app', expression: 'x' } as any);
+    const res = await tool.handler({ action: 'evaluateExpression', connection: 'app', expression: 'x' } as any);
     expect(res.isError).toBe(true);
     expect(res._meta).toBeUndefined();
   });
@@ -368,7 +368,7 @@ describe('feature-014: variable store is seeded once and shared by reference', (
     await executeSteps({
       sequence: seq([
         // step runs on its own connection -> executor uses a cloned stepCtx
-        { tool: 'inspect', params: { action: 'evaluateExpression', expression: 'x', connectionReason: 'device-b', saveAs: 'b' } },
+        { tool: 'inspect', params: { action: 'evaluateExpression', expression: 'x', connection: 'device-b', saveAs: 'b' } },
         { tool: 'navigate', params: { action: 'goto', url: '{{var:b}}' } },
       ]),
       startStep: 0,
@@ -378,7 +378,7 @@ describe('feature-014: variable store is seeded once and shared by reference', (
     expect(ctx.variableStore).toEqual({ b: 'from-device-b' });
     expect(find(calls, 'navigate', 'goto')[0].params.url).toBe('from-device-b');
     // and the step really did run on its own connection (no regression)
-    expect(find(calls, 'inspect', 'evaluateExpression')[0].connectionReason).toBe('device-b');
+    expect(find(calls, 'inspect', 'evaluateExpression')[0].connection).toBe('device-b');
   });
 
   it('keeps an externally supplied store object identity', async () => {

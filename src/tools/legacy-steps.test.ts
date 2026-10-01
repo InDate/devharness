@@ -4,14 +4,14 @@ import { translateCall, translateSequence, replacementFor, callTarget, unknownTo
 describe('translateCall', () => {
   it('turns a launchChrome reference into a connection launch name, keeping the other parameters', () => {
     expect(translateCall('launchChrome', { reference: 'app', url: 'http://a/', port: 9333, proxy: true }))
-      .toEqual({ tool: 'connection', params: { action: 'launch', name: 'app', url: 'http://a/', port: 9333, proxy: true } });
+      .toEqual({ tool: 'connection', params: { action: 'launch', connection: 'app', url: 'http://a/', port: 9333, proxy: true } });
   });
 
-  it('turns calls that address a connection into connectionReason', () => {
+  it('turns calls that address a connection into connection', () => {
     expect(translateCall('disconnectDebugger', { reference: 'app', reason: 'done' }))
-      .toEqual({ tool: 'connection', params: { action: 'close', connectionReason: 'app', reason: 'done' } });
+      .toEqual({ tool: 'connection', params: { action: 'close', connection: 'app', reason: 'done' } });
     expect(translateCall('getDebuggerStatus', { reference: 'app' }))
-      .toEqual({ tool: 'connection', params: { action: 'status', connectionReason: 'app' } });
+      .toEqual({ tool: 'connection', params: { action: 'status', connection: 'app' } });
   });
 
   it('moves kill and resetLauncher to browser', () => {
@@ -23,11 +23,11 @@ describe('translateCall', () => {
 
   it('maps each tab action onto connection', () => {
     expect(translateCall('tab', { action: 'create', reference: 'b', url: 'http://b/' }))
-      .toEqual({ tool: 'connection', params: { action: 'launch', name: 'b', url: 'http://b/' } });
+      .toEqual({ tool: 'connection', params: { action: 'launch', connection: 'b', url: 'http://b/' } });
     expect(translateCall('tab', { action: 'rename', reference: 'a', newReference: 'b' }))
-      .toEqual({ tool: 'connection', params: { action: 'rename', connectionReason: 'a', name: 'b' } });
+      .toEqual({ tool: 'connection', params: { action: 'rename', connection: 'a', newName: 'b' } });
     expect(translateCall('tab', { action: 'close', reference: 'a' }).params)
-      .toMatchObject({ action: 'close', connectionReason: 'a', reason: expect.any(String) });
+      .toMatchObject({ action: 'close', connection: 'a', reason: expect.any(String) });
     expect(translateCall('tab', { action: 'list' }))
       .toEqual({ tool: 'connection', params: { action: 'list' } });
   });
@@ -37,10 +37,10 @@ describe('translateCall', () => {
       .toEqual({ tool: 'source', params: { action: 'get', url: 'app.js', startLine: 3 } });
     expect(translateCall('loadSourceMaps', { directory: 'dist' }))
       .toEqual({ tool: 'source', params: { action: 'loadMaps', directory: 'dist' } });
-    expect(translateCall('detectModals', { connectionReason: 'app' }))
-      .toEqual({ tool: 'modal', params: { action: 'detect', connectionReason: 'app' } });
-    expect(translateCall('dismissModal', { connectionReason: 'app', index: 1 }))
-      .toEqual({ tool: 'modal', params: { action: 'dismiss', connectionReason: 'app', index: 1 } });
+    expect(translateCall('detectModals', { connection: 'app' }))
+      .toEqual({ tool: 'modal', params: { action: 'detect', connection: 'app' } });
+    expect(translateCall('dismissModal', { connection: 'app', index: 1 }))
+      .toEqual({ tool: 'modal', params: { action: 'dismiss', connection: 'app', index: 1 } });
     expect(translateCall('saveToDisk', { url: 'http://a/f.txt', filename: 'f.txt' }))
       .toEqual({ tool: 'download', params: { url: 'http://a/f.txt', filename: 'f.txt' } });
     expect(translateCall('setDebugLogging', { enabled: true }))
@@ -54,17 +54,17 @@ describe('translateCall', () => {
     expect(translateCall('tab', { action: 'list', ...stray }))
       .toEqual({ tool: 'connection', params: { action: 'list' } });
     expect(translateCall('tab', { action: 'switch', ...stray }))
-      .toEqual({ tool: 'connection', params: { action: 'switch', connectionReason: 'a', bringToFront: true } });
+      .toEqual({ tool: 'connection', params: { action: 'switch', connection: 'a', bringToFront: true } });
     expect(translateCall('tab', { action: 'close', ...stray }).params)
-      .toEqual({ action: 'close', connectionReason: 'a', reason: expect.any(String) });
+      .toEqual({ action: 'close', connection: 'a', reason: expect.any(String) });
     expect(translateCall('tab', { action: 'rename', ...stray }))
-      .toEqual({ tool: 'connection', params: { action: 'rename', connectionReason: 'a', name: 'b' } });
+      .toEqual({ tool: 'connection', params: { action: 'rename', connection: 'a', newName: 'b' } });
     expect(translateCall('tab', { action: 'create', ...stray }))
-      .toEqual({ tool: 'connection', params: { action: 'launch', name: 'a', url: 'http://a/', bringToFront: true } });
+      .toEqual({ tool: 'connection', params: { action: 'launch', connection: 'a', url: 'http://a/', bringToFront: true } });
   });
 
   it('leaves a call to a tool that still exists unchanged', () => {
-    const params = { action: 'goto', url: 'http://a/', connectionReason: 'app' };
+    const params = { action: 'goto', url: 'http://a/', connection: 'app' };
     expect(translateCall('navigate', params)).toEqual({ tool: 'navigate', params });
   });
 });
@@ -83,7 +83,7 @@ describe('translateSequence', () => {
     expect(translateSequence(sequence)).toEqual({
       id: 's', name: 'n', createdAt: 1,
       commands: [
-        { tool: 'connection', params: { action: 'launch', name: 'app' }, note: 'kept' },
+        { tool: 'connection', params: { action: 'launch', connection: 'app' }, note: 'kept' },
         { tool: 'navigate', params: { action: 'goto', url: 'http://a/' } },
       ],
       teardown: [{ tool: 'browser', params: { action: 'kill', reason: 'end' } }],
@@ -103,7 +103,7 @@ describe('callTarget', () => {
 
   it('reaches the tool that replaced an old name, with the parameters translated', () => {
     expect(callTarget(tools, 'launchChrome', { reference: 'shop' })).toEqual({
-      toolName: 'connection', params: { action: 'launch', name: 'shop' }, tool: 'connection-tool',
+      toolName: 'connection', params: { action: 'launch', connection: 'shop' }, tool: 'connection-tool',
     });
   });
 

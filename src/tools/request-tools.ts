@@ -18,7 +18,7 @@ const requestSchema = z.object({
   headers: z.record(z.string()).optional().describe('Request headers'),
   body: z.string().optional().describe('Raw request body, e.g. a JSON string'),
   destination: z.enum(['browser', 'node']).describe('Where the request is sent from'),
-  connectionReason: z.string().optional().describe('browser destination: the tab that runs the fetch'),
+  connection: z.string().optional().describe('browser destination: the tab that runs the fetch'),
   timeoutMs: z.number().optional().describe('Request timeout in ms (default 30000)'),
   saveAs: z.string().optional().describe('Sequence step only: stores {ok,status,statusText,headers,body,durationMs} for later {{var:name.path}} use'),
 }).strict();
@@ -33,7 +33,7 @@ interface RawResponse {
   body: string;
 }
 
-export function createRequestTools(resolveConnectionFromReason: (connectionReason: string) => Promise<any>) {
+export function createRequestTools(resolveConnectionByName: (connection: string) => Promise<any>) {
   return {
     request: createTool(
       'An HTTP request as a sequence step: node sends it from the server process (no browser, cookies or CORS); browser runs fetch() inside a connected tab (its cookies, session and origin).',
@@ -51,18 +51,18 @@ export function createRequestTools(resolveConnectionFromReason: (connectionReaso
         throwIfAborted(abortSignal);
 
         if (args.destination === 'browser') {
-          if (!args.connectionReason) {
+          if (!args.connection) {
             return createErrorResponse('MISSING_PARAMETER', {
               action: 'request',
-              missing: 'connectionReason',
-              message: 'destination "browser" requires connectionReason to identify which tab runs the fetch'
+              missing: 'connection',
+              message: 'destination "browser" requires connection to identify which tab runs the fetch'
             });
           }
 
-          const resolved = await resolveConnectionFromReason(args.connectionReason);
+          const resolved = await resolveConnectionByName(args.connection);
           if (!resolved?.puppeteerManager) {
             return createErrorResponse('CONNECTION_NOT_FOUND', {
-              message: `No active browser connection "${args.connectionReason}". Start one with connection({ action: 'launch' }).`
+              message: `No active browser connection "${args.connection}". Start one with connection({ action: 'launch' }).`
             });
           }
 

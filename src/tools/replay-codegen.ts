@@ -46,7 +46,7 @@ function buildPageVars(commands: Array<{ tool: string; params: Record<string, an
     multi: references.length > 1,
     /** The page a step runs against; bare steps fall back to the first page. */
     varFor: (cmd: { params: Record<string, any> }) =>
-      (typeof cmd.params.connectionReason === 'string' && vars.get(sanitizeReference(cmd.params.connectionReason))) || 'page',
+      (typeof cmd.params.connection === 'string' && vars.get(sanitizeReference(cmd.params.connection))) || 'page',
     /** `page` is declared by the caller's preamble; these are the extras. */
     extras: references.slice(1).map(ref => ({ ref, name: vars.get(ref)! })),
   };

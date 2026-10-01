@@ -24,7 +24,7 @@ const verifyCheckTypes = ['handlers', 'viewport', 'touch', 'overflow', 'clickabi
 
 const contentSchema = z.object({
   action: z.enum(['extractText', 'findInteractive', 'verify', 'parse']),
-  connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it'),
+  connection: z.string().describe('The connection, by the name connection launch or attach gave it'),
 
   // extractText parameters
   mode: z.enum(['outline', 'full', 'section']).optional().describe('extractText: outline (headings and metadata), full (entire page), section (one section by heading)'),
@@ -47,7 +47,7 @@ const contentSchema = z.object({
   waitMs: z.number().optional().describe("parse: max ms to wait for the plugin's waitFor predicate (default 8000; 0 skips)"),
 }).strict();
 
-export function createContentTools(resolveConnectionFromReason: (connectionReason: string) => Promise<any>, clickableCache: ClickableCache) {
+export function createContentTools(resolveConnectionByName: (connection: string) => Promise<any>, clickableCache: ClickableCache) {
   /**
    * Save extracted content to disk
    */
@@ -83,7 +83,7 @@ export function createContentTools(resolveConnectionFromReason: (connectionReaso
         throwIfAborted(abortSignal);
 
         // Resolve connection from reason
-        const resolved = await resolveConnectionFromReason(args.connectionReason);
+        const resolved = await resolveConnectionByName(args.connection);
         if (!resolved) {
           return createErrorResponse('CONNECTION_NOT_FOUND', {
             message: 'No Chrome browser available. Start one with `connection` action `launch`.'
@@ -99,7 +99,7 @@ export function createContentTools(resolveConnectionFromReason: (connectionReaso
         }
 
         const page = targetPuppeteerManager.getPage();
-        const on = `connectionReason: '${args.connectionReason}'`;
+        const on = `connection: '${args.connection}'`;
 
         // findInteractive and verify read the page title first, and a paused
         // page answers no page JS until it resumes.

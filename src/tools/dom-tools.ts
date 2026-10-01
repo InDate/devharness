@@ -12,7 +12,7 @@ import { resolveSelector, isExtendedSelector, cleanupResolvedSelector } from '..
 // Consolidated schema for DOM tools
 const domSchema = z.object({
   action: z.enum(['querySelector', 'getProperties', 'snapshot', 'hitTest']),
-  connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it'),
+  connection: z.string().describe('The connection, by the name connection launch or attach gave it'),
   // Parameters for querySelector and getProperties actions
   selector: z.string().optional().describe('CSS selector; :has-text("x") partial, :text("x") exact'),
   // Parameters for snapshot action
@@ -20,14 +20,14 @@ const domSchema = z.object({
 }).strict();
 
 export function createDOMTools(
-  resolveConnectionFromReason: (connectionReason: string) => Promise<any>
+  resolveConnectionByName: (connection: string) => Promise<any>
 ) {
   return {
     dom: createTool(
       'Inspect and query the DOM. Actions: querySelector (find element by CSS selector and get basic info), getProperties (get detailed properties of an element), snapshot (get full DOM structure snapshot), hitTest (for every match, whether it is topmost at its own centre and what covers it when not)',
       domSchema,
       async (args) => {
-        const { action, connectionReason } = args;
+        const { action, connection } = args;
 
         // Validate required parameters for each action
         if ((action === 'querySelector' || action === 'getProperties' || action === 'hitTest') && !args.selector) {
@@ -39,7 +39,7 @@ export function createDOMTools(
         }
 
         // Resolve connection from reason
-        const resolved = await resolveConnectionFromReason(connectionReason);
+        const resolved = await resolveConnectionByName(connection);
         if (!resolved) {
           return createErrorResponse('CONNECTION_NOT_FOUND', {
             message: 'No Chrome browser available. Start one with `connection` action `launch`.'

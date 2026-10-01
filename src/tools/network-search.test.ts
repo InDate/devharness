@@ -22,7 +22,7 @@ function networkWith(requests: any[]) {
 }
 
 const search = (network: any, params: Record<string, unknown>) =>
-  network.handler({ action: 'search', connectionReason: 'shop-web-app', ...params });
+  network.handler({ action: 'search', connection: 'shop-web-app', ...params });
 
 describe('network search', () => {
   it('finds every matching URL when the pattern carries the g flag', async () => {
@@ -64,7 +64,7 @@ describe('a network call naming no connection that exists', () => {
     const network = networkWith([]);
 
     for (const action of ['list', 'get', 'search', 'enable', 'setConditions', 'sockets', 'streams']) {
-      const result: any = await network.handler({ action, connectionReason: 'no-such-tab', id: '1', pattern: '.', preset: 'online' } as any);
+      const result: any = await network.handler({ action, connection: 'no-such-tab', id: '1', pattern: '.', preset: 'online' } as any);
       expect(result.isError, action).toBe(true);
       expect(result.content[0].text, action).toContain('"no-such-tab"');
     }

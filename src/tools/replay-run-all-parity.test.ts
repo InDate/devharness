@@ -29,7 +29,7 @@ let killCalls: number;
 const writeSequence = async (name: string, url: string) => {
   await fs.writeFile(join(dir, `${name}.json`), JSON.stringify({
     id: `seq-${name}`, name, createdAt: 1,
-    commands: [{ tool: 'navigate', params: { action: 'goto', url, connectionReason: 'suite' } }],
+    commands: [{ tool: 'navigate', params: { action: 'goto', url, connection: 'suite' } }],
   }));
 };
 
@@ -66,7 +66,7 @@ describe('runAll carries baseUrl', () => {
     await writeSequence('a-first', 'https://staging.example.com/one');
     await writeSequence('b-second', 'https://staging.example.com/two?q=1');
 
-    await runAll({ baseUrl: 'https://cue-test.pages.dev', connectionReason: 'suite' });
+    await runAll({ baseUrl: 'https://cue-test.pages.dev', connection: 'suite' });
 
     expect(gotoUrls).toEqual([
       'https://cue-test.pages.dev/one',
@@ -77,7 +77,7 @@ describe('runAll carries baseUrl', () => {
   it('leaves the recorded origin in place when no baseUrl is given', async () => {
     await writeSequence('a-first', 'https://staging.example.com/one');
 
-    await runAll({ connectionReason: 'suite' });
+    await runAll({ connection: 'suite' });
 
     expect(gotoUrls).toEqual(['https://staging.example.com/one']);
   });
@@ -85,7 +85,7 @@ describe('runAll carries baseUrl', () => {
   it('does not write the retarget back to the sequence file', async () => {
     await writeSequence('a-first', 'https://staging.example.com/one');
 
-    await runAll({ baseUrl: 'https://cue-test.pages.dev', connectionReason: 'suite' });
+    await runAll({ baseUrl: 'https://cue-test.pages.dev', connection: 'suite' });
 
     const onDisk = JSON.parse(await fs.readFile(join(dir, 'a-first.json'), 'utf-8'));
     expect(onDisk.commands[0].params.url).toBe('https://staging.example.com/one');
@@ -97,7 +97,7 @@ describe('runAll carries killChromeOnFinish once', () => {
     await writeSequence('a-first', 'https://staging.example.com/one');
     await writeSequence('b-second', 'https://staging.example.com/two');
 
-    await runAll({ killChromeOnFinish: true, connectionReason: 'suite' });
+    await runAll({ killChromeOnFinish: true, connection: 'suite' });
 
     expect(gotoUrls.length).toBe(2);
     expect(killCalls).toBe(1);
@@ -107,7 +107,7 @@ describe('runAll carries killChromeOnFinish once', () => {
     await writeSequence('a-first', 'https://staging.example.com/one');
     await writeSequence('b-second', 'https://staging.example.com/two');
 
-    await runAll({ connectionReason: 'suite' });
+    await runAll({ connection: 'suite' });
 
     expect(killCalls).toBe(0);
   });

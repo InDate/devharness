@@ -50,7 +50,7 @@ export function navigatedConnections(commands: RecordedCommand[], runConnection:
   const refs: string[] = [];
   for (const cmd of commands) {
     if (cmd.tool !== 'navigate') continue;
-    const raw = cmd.params?.connectionReason;
+    const raw = cmd.params?.connection;
     const ref = typeof raw === 'string' && raw.trim() ? sanitizeReference(raw) : runConnection;
     if (ref && !refs.includes(ref)) refs.push(ref);
   }
@@ -72,7 +72,7 @@ export function navigatedConnections(commands: RecordedCommand[], runConnection:
 export async function ensureDeclaredConnections(
   sequence: CommandSequence,
   executeToolCall: ExecuteToolCall,
-  getPageForConnection: (connectionReason: string) => Promise<any>,
+  getPageForConnection: (connection: string) => Promise<any>,
   connectionMap: Record<string, string> | undefined
 ): Promise<{ launched: string[]; error?: string; invalid?: boolean }> {
   const declared = sequence.requiredConnections;
@@ -83,7 +83,7 @@ export async function ensureDeclaredConnections(
 
   const launched: string[] = [];
   for (const decl of declared) {
-    const wanted = sanitizeReference(decl.reference);
+    const wanted = sanitizeReference(decl.connection);
     if (!wanted) continue;
     // Rebound onto an existing session connection: nothing to launch.
     const target = connectionMap?.[wanted] ?? wanted;
@@ -96,7 +96,7 @@ export async function ensureDeclaredConnections(
     try {
       const result: any = await executeToolCall('connection', {
         action: 'launch',
-        name: target,
+        connection: target,
         url: decl.url ?? sequence.startUrl,
         // A profile IS the browser this declaration wants, so a live Chrome
         // already running it is the target rather than something to spawn
@@ -137,7 +137,7 @@ export async function ensureDeclaredConnections(
 export async function closeLaunchedConnections(
   launched: string[],
   executeToolCall: ExecuteToolCall,
-  getConnectionPort: ((connectionReason: string) => Promise<number | null>) | undefined,
+  getConnectionPort: ((connection: string) => Promise<number | null>) | undefined,
   sequenceName: string,
   /** How the run came to own these, for the kill reason and the closing note. */
   origin: string = 'declared and launched'
@@ -155,7 +155,7 @@ export async function closeLaunchedConnections(
       // Release the reference as well. Killing the process leaves the name
       // bound, and the next sequence in a suite declaring the same reference
       // then fails to launch against a browser that no longer exists.
-      await executeToolCall('connection', { action: 'close', reason, connectionReason: ref }).catch(() => {});
+      await executeToolCall('connection', { action: 'close', reason, connection: ref }).catch(() => {});
       closed.push(ref);
     } catch {
       // Best-effort: a browser that will not close is not a run failure.

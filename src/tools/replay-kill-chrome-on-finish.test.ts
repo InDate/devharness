@@ -1,6 +1,6 @@
 /**
  * killChromeOnFinish must only tear down the browser behind the RUN's own
- * connection. A step that names its own connectionReason is typically pointing
+ * connection. A step that names its own connection is typically pointing
  * at a long-lived instance the user launched by hand (the multi-device case);
  * killing it would destroy state they cannot get back, so those are left alone.
  */
@@ -68,8 +68,8 @@ function makeReplay(
         content: [{ type: 'text', text: '' }],
         _meta: {
           launch: {
-            name: params.name,
-            reused: (opts.reused || []).includes(params.name),
+            name: params.connection,
+            reused: (opts.reused || []).includes(params.connection),
           },
         },
       };
@@ -101,7 +101,7 @@ const run = (replay: any, extra: Record<string, any> = {}) =>
     // These tests assert on the run's final text, so they use the blocking mode.
     wait: true,
     sequenceId: 'seq-kill',
-    connectionReason: 'run-device',
+    connection: 'run-device',
     killChromeOnFinish: true,
     ...extra,
   } as any);
@@ -123,7 +123,7 @@ describe('killChromeOnFinish', () => {
     const { replay, calls } = makeReplay([
       { tool: 'dom', params: { action: 'querySelector', selector: '#a' } },
       // a browser the user launched themselves and expects to keep
-      { tool: 'dom', params: { action: 'querySelector', selector: '#b', connectionReason: 'borrowed-device' } },
+      { tool: 'dom', params: { action: 'querySelector', selector: '#b', connection: 'borrowed-device' } },
     ]);
 
     await run(replay);
@@ -131,12 +131,12 @@ describe('killChromeOnFinish', () => {
     expect(killedPorts(calls)).toEqual([RUN_PORT]);
     expect(killedPorts(calls)).not.toContain(BORROWED_PORT);
     // the step really did run against the borrowed connection
-    expect(calls.some(c => c.tool === 'dom' && c.params.connectionReason === 'borrowed-device')).toBe(true);
+    expect(calls.some(c => c.tool === 'dom' && c.params.connection === 'borrowed-device')).toBe(true);
   });
 
   it('leaves a borrowed connection running even when its reference comes from a variable', async () => {
     const { replay, calls, getConnectionPort } = makeReplay([
-      { tool: 'dom', params: { action: 'querySelector', selector: '#b', connectionReason: '{{var:device}}' } },
+      { tool: 'dom', params: { action: 'querySelector', selector: '#b', connection: '{{var:device}}' } },
     ]);
 
     await run(replay);
@@ -177,35 +177,35 @@ describe('killChromeOnFinish', () => {
   // A step's browser is only spared when the step BORROWED it (issue #103).
   it('kills a per-step browser the run itself launched', async () => {
     // The device shape: the sequence brings up its own browsers, so the run
-    // takes no connectionReason of its own and the second launch is a browser
+    // takes no connection of its own and the second launch is a browser
     // that exists only because this run opened it.
     const { replay, calls } = makeReplay([
-      { tool: 'connection', params: { action: 'launch', name: 'run-device' } },
-      { tool: 'dom', params: { action: 'querySelector', selector: '#a', connectionReason: 'run-device' } },
-      { tool: 'connection', params: { action: 'launch', name: 'phone' } },
-      { tool: 'dom', params: { action: 'querySelector', selector: '#b', connectionReason: 'phone' } },
+      { tool: 'connection', params: { action: 'launch', connection: 'run-device' } },
+      { tool: 'dom', params: { action: 'querySelector', selector: '#a', connection: 'run-device' } },
+      { tool: 'connection', params: { action: 'launch', connection: 'phone' } },
+      { tool: 'dom', params: { action: 'querySelector', selector: '#b', connection: 'phone' } },
     ]);
 
-    await run(replay, { connectionReason: undefined });
+    await run(replay, { connection: undefined });
 
     expect(killedPorts(calls)).toContain(PORTS['phone']);
     // and the reference is released, so the next run can launch it again
-    const release = calls.find(c => c.tool === 'connection' && c.params.action === 'close' && c.params.connectionReason === 'phone');
+    const release = calls.find(c => c.tool === 'connection' && c.params.action === 'close' && c.params.connection === 'phone');
     expect(release?.params.reason).toEqual(expect.stringContaining('phone'));
   });
 
   it('leaves a per-step browser alone when the launch only reused it', async () => {
     const { replay, calls } = makeReplay(
       [
-        { tool: 'connection', params: { action: 'launch', name: 'run-device' } },
-        { tool: 'dom', params: { action: 'querySelector', selector: '#a', connectionReason: 'run-device' } },
-        { tool: 'connection', params: { action: 'launch', name: 'borrowed-device' } },
-        { tool: 'dom', params: { action: 'querySelector', selector: '#b', connectionReason: 'borrowed-device' } },
+        { tool: 'connection', params: { action: 'launch', connection: 'run-device' } },
+        { tool: 'dom', params: { action: 'querySelector', selector: '#a', connection: 'run-device' } },
+        { tool: 'connection', params: { action: 'launch', connection: 'borrowed-device' } },
+        { tool: 'dom', params: { action: 'querySelector', selector: '#b', connection: 'borrowed-device' } },
       ],
       { reused: ['borrowed-device'] },
     );
 
-    await run(replay, { connectionReason: undefined });
+    await run(replay, { connection: undefined });
 
     expect(killedPorts(calls)).toEqual([RUN_PORT]);
     expect(killedPorts(calls)).not.toContain(BORROWED_PORT);
@@ -232,7 +232,7 @@ describe('killChromeOnFinish', () => {
 
   it('kills nothing when killChromeOnFinish is not set', async () => {
     const { replay, calls } = makeReplay([
-      { tool: 'dom', params: { action: 'querySelector', selector: '#a', connectionReason: 'borrowed-device' } },
+      { tool: 'dom', params: { action: 'querySelector', selector: '#a', connection: 'borrowed-device' } },
     ]);
 
     await run(replay, { killChromeOnFinish: undefined });

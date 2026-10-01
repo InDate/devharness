@@ -48,7 +48,7 @@ export async function evaluateCondition(
   condition: string,
   ctx: ExecutionContext
 ): Promise<ConditionResult> {
-  const { executeToolCall, connectionReason, logPrefix = 'executor' } = ctx;
+  const { executeToolCall, connection, logPrefix = 'executor' } = ctx;
   const replayConfig = configManager.getReplayConfig();
 
   // Parse the handlebar pattern
@@ -78,7 +78,7 @@ export async function evaluateCondition(
             await executeToolCall('dom', {
               action: 'querySelector',
               selector: value,
-              connectionReason
+              connection
             });
             return {};
           } catch (selectorError: any) {
@@ -109,7 +109,7 @@ export async function evaluateCondition(
       case 'url': {
         const pageInfo = await executeToolCall('navigate', {
           action: 'info',
-          connectionReason
+          connection
         });
         // From `_meta`: the rendered text ends the URL at the first comma or
         // space, so a data: URL or a `?ids=1,2` query would compare truncated.
@@ -152,7 +152,7 @@ export async function evaluateCondition(
       case 'cookie': {
         const result = await executeToolCall('storage', {
           action: 'getCookies',
-          connectionReason
+          connection
         });
         // Names from `_meta`: grepping the rendered JSON matched another
         // cookie's VALUE, and the `name=wanted` form matched any cookie whose
@@ -165,7 +165,7 @@ export async function evaluateCondition(
         const result = await executeToolCall('storage', {
           action: 'getLocalStorage',
           key: value,
-          connectionReason
+          connection
         });
         // Presence from `_meta`. The old text test read the whole rendered
         // response, so a key whose VALUE was "null" - or contained "not found",
@@ -209,8 +209,8 @@ export async function evaluateCondition(
         const probe = async (probeKey?: string | number) => {
           try {
             const res: any = probeKey !== undefined
-              ? await executeToolCall('storage', { action: 'idbGet', db, store, key: probeKey, connectionReason })
-              : await executeToolCall('storage', { action: 'idbGetAll', db, store, limit: 1, connectionReason });
+              ? await executeToolCall('storage', { action: 'idbGet', db, store, key: probeKey, connection })
+              : await executeToolCall('storage', { action: 'idbGetAll', db, store, limit: 1, connection });
             return { res };
           } catch (idbError: any) {
             return { failure: idbError?.message || String(idbError) };

@@ -488,10 +488,11 @@ function optionsOf(tool: ToolCard, action: string | undefined, kept: string[] = 
 /**
  * A value the bench holds for an option, or undefined: the bench's own
  * connection, the page's URL for navigate, the open sequence for a replay that
- * reads one, and a reason saying where the call came from.
+ * reads one, and a reason saying where the call came from. A connection launch
+ * or attach names the connection it creates, so it starts empty.
  */
 function knownValue(tool: string, action: string | undefined, name: string, context: ToolContext): unknown {
-  if (name === 'connectionReason') return context.connection;
+  if (name === 'connection') return tool === 'connection' && (action === 'launch' || action === 'attach') ? undefined : context.connection;
   if (name === 'url' && tool === 'navigate') return context.pageUrl;
   if (name === 'name' && tool === 'replay' && context.sequence && ['run', 'get', 'export'].includes(action ?? '')) return context.sequence;
   if (name === 'reason') return 'from the bench Tools tab';
@@ -521,7 +522,7 @@ function startingPayload(tool: ToolCard, action: string | undefined, context: To
 
 /** Values devharness holds for an option, offered as the field's suggestions. */
 function suggestionsFor(tool: string, name: string, values: ToolValues, context: ToolContext): string[] {
-  if (name === 'connectionReason') return values.connections;
+  if (name === 'connection') return values.connections;
   if ((name === 'serverId' || name === 'id') && tool === 'server') return values.servers;
   if ((name === 'name' && tool === 'replay') || (name === 'sequence' && tool === 'bench')) return values.sequences;
   if (name === 'profile') return values.profiles;

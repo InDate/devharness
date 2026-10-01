@@ -12,11 +12,11 @@ import { hold, isHeld, release } from '../hold.js';
 
 const executionSchema = z.object({
   action: z.enum(['pause', 'resume', 'stepOver', 'stepInto', 'stepOut', 'acknowledge']).describe('Execution control action to perform'),
-  connectionReason: z.string().optional().describe('The connection, by the name connection launch or attach gave it; acknowledge without one covers every paused connection'),
+  connection: z.string().optional().describe('The connection, by the name connection launch or attach gave it; acknowledge without one covers every paused connection'),
 }).strict();
 
 export function createExecutionTools(
-  resolveConnectionFromReason: (connectionReason: string) => Promise<{
+  resolveConnectionByName: (connection: string) => Promise<{
     connection: any;
     cdpManager: CDPManager;
     puppeteerManager: any;
@@ -32,10 +32,10 @@ export function createExecutionTools(
       'Control execution flow when paused at breakpoints. Actions: pause (stop at the next statement the page runs), resume (resume execution), stepOver (step to next line), stepInto (step into function call), stepOut (step out of current function), acknowledge (acknowledge breakpoint pause to allow other tools to run while paused)',
       executionSchema,
       async (args) => {
-        const { action, connectionReason } = args;
+        const { action, connection } = args;
 
         const resumeCall = (reference?: string): string => reference
-          ? `\`execution({ action: 'resume', connectionReason: '${reference}' })\``
+          ? `\`execution({ action: 'resume', connection: '${reference}' })\``
           : `\`execution({ action: 'resume' })\``;
         const locationOf = (manager: CDPManager): string => {
           const pauseInfo = manager.getPausedInfo();
@@ -44,7 +44,7 @@ export function createExecutionTools(
             : 'unknown location';
         };
 
-        if (!connectionReason) {
+        if (!connection) {
           // With no connection named, acknowledge covers every paused
           // connection, since the pause guard blocks on any of them.
           if (action === 'acknowledge' && connectionManager) {
@@ -64,12 +64,12 @@ export function createExecutionTools(
           }
           return createErrorResponse('MISSING_PARAMETER', {
             action,
-            missing: 'connectionReason',
-            message: `The "${action}" action requires "connectionReason"`,
+            missing: 'connection',
+            message: `The "${action}" action requires "connection"`,
           });
         }
 
-        const resolved = await resolveConnectionFromReason(connectionReason);
+        const resolved = await resolveConnectionByName(connection);
         if (!resolved) {
           return createErrorResponse('CONNECTION_NOT_FOUND');
         }
@@ -89,7 +89,7 @@ export function createExecutionTools(
             } else {
               await targetCdpManager.pause();
             }
-            return createSuccessResponse('EXECUTION_PAUSED', { reference: connectionReason });
+            return createSuccessResponse('EXECUTION_PAUSED', { reference: connection });
 
           case 'resume': {
             // A logpoint that reached its limit paused the page. Resume is

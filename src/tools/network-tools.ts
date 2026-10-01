@@ -15,7 +15,7 @@ import type { ToolResponseMeta, NetworkToolMeta } from '../tool-response.js';
 // Consolidated network tool schema
 const networkToolSchema = z.object({
   action: z.enum(['list', 'get', 'search', 'enable', 'disable', 'setConditions', 'sockets', 'streams']),
-  connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it'),
+  connection: z.string().describe('The connection, by the name connection launch or attach gave it'),
 
   // list action parameters
   resourceType: z.string().optional().describe('list/search: resource type filter'),
@@ -135,15 +135,15 @@ function frameLines(sock: any, frames: any[]): string[] {
 }
 
 export function createNetworkTools(
-  resolveConnectionFromReason: (connectionReason: string) => Promise<any>
+  resolveConnectionByName: (connection: string) => Promise<any>
 ) {
   // A Node.js target from connection attach resolves with no page, and so no
   // network to read; it is answered as that rather than with an empty list.
-  const noPage = (connectionReason: string) => createErrorResponse('CONNECTION_NOT_FOUND', {
-    message: `Connection "${connectionReason}" has no browser page to monitor (a Node.js debugger target has no page). Network monitoring requires a browser connection.`
+  const noPage = (connection: string) => createErrorResponse('CONNECTION_NOT_FOUND', {
+    message: `Connection "${connection}" has no browser page to monitor (a Node.js debugger target has no page). Network monitoring requires a browser connection.`
   });
-  const notFound = (connectionReason: string) => createErrorResponse('CONNECTION_NOT_FOUND', {
-    message: `No connection named "${connectionReason}". \`connection({ action: 'list' })\` lists the ones this session holds.`
+  const notFound = (connection: string) => createErrorResponse('CONNECTION_NOT_FOUND', {
+    message: `No connection named "${connection}". \`connection({ action: 'list' })\` lists the ones this session holds.`
   });
 
   return {
@@ -151,13 +151,13 @@ export function createNetworkTools(
       'Network traffic of a browser connection. Actions: list (requests, filtered and paged), get (one request by ID), search (requests by regex), enable, disable (monitoring), setConditions (throttling preset), sockets (WebSocket opens, closes, errors and frames), streams (EventSource messages)',
       networkToolSchema,
       async (args) => {
-        const { action, connectionReason } = args;
+        const { action, connection } = args;
 
         switch (action) {
           case 'streams': {
-            const resolved = await resolveConnectionFromReason(connectionReason);
-            if (!resolved) return notFound(connectionReason);
-            if (!resolved.puppeteerManager || !resolved.networkMonitor) return noPage(connectionReason);
+            const resolved = await resolveConnectionByName(connection);
+            if (!resolved) return notFound(connection);
+            if (!resolved.puppeteerManager || !resolved.networkMonitor) return noPage(connection);
             const targetPuppeteerManager = resolved.puppeteerManager;
             const targetNetworkMonitor = resolved.networkMonitor;
             if (!targetNetworkMonitor.isActive() && targetPuppeteerManager.isConnected()) {
@@ -198,9 +198,9 @@ export function createNetworkTools(
           }
 
           case 'sockets': {
-            const resolved = await resolveConnectionFromReason(connectionReason);
-            if (!resolved) return notFound(connectionReason);
-            if (!resolved.puppeteerManager || !resolved.networkMonitor) return noPage(connectionReason);
+            const resolved = await resolveConnectionByName(connection);
+            if (!resolved) return notFound(connection);
+            if (!resolved.puppeteerManager || !resolved.networkMonitor) return noPage(connection);
             const targetPuppeteerManager = resolved.puppeteerManager;
             const targetNetworkMonitor = resolved.networkMonitor;
             if (!targetNetworkMonitor.isActive() && targetPuppeteerManager.isConnected()) {
@@ -271,10 +271,10 @@ export function createNetworkTools(
           case 'list': {
             const { resourceType, limit = 100, offset = 0, since, until } = args;
 
-                  const resolved = await resolveConnectionFromReason(connectionReason);
-            if (!resolved) return notFound(connectionReason);
+                  const resolved = await resolveConnectionByName(connection);
+            if (!resolved) return notFound(connection);
 
-            if (!resolved.puppeteerManager || !resolved.networkMonitor) return noPage(connectionReason);
+            if (!resolved.puppeteerManager || !resolved.networkMonitor) return noPage(connection);
             const targetPuppeteerManager = resolved.puppeteerManager;
             const targetNetworkMonitor = resolved.networkMonitor;
 
@@ -359,9 +359,9 @@ export function createNetworkTools(
               };
             }
 
-            const resolved = await resolveConnectionFromReason(connectionReason);
-            if (!resolved) return notFound(connectionReason);
-            if (!resolved.networkMonitor) return noPage(connectionReason);
+            const resolved = await resolveConnectionByName(connection);
+            if (!resolved) return notFound(connection);
+            if (!resolved.networkMonitor) return noPage(connection);
 
             const request = resolved.networkMonitor.getRequest(id);
 
@@ -444,9 +444,9 @@ export function createNetworkTools(
 
           case 'enable':
           case 'disable': {
-            const resolved = await resolveConnectionFromReason(connectionReason);
-            if (!resolved) return notFound(connectionReason);
-            if (!resolved.puppeteerManager || !resolved.networkMonitor) return noPage(connectionReason);
+            const resolved = await resolveConnectionByName(connection);
+            if (!resolved) return notFound(connection);
+            if (!resolved.puppeteerManager || !resolved.networkMonitor) return noPage(connection);
             const targetPuppeteerManager = resolved.puppeteerManager;
             const targetNetworkMonitor = resolved.networkMonitor;
 
@@ -480,10 +480,10 @@ export function createNetworkTools(
               };
             }
 
-                  const resolved = await resolveConnectionFromReason(connectionReason);
-            if (!resolved) return notFound(connectionReason);
+                  const resolved = await resolveConnectionByName(connection);
+            if (!resolved) return notFound(connection);
 
-            if (!resolved.puppeteerManager || !resolved.networkMonitor) return noPage(connectionReason);
+            if (!resolved.puppeteerManager || !resolved.networkMonitor) return noPage(connection);
             const targetPuppeteerManager = resolved.puppeteerManager;
             const targetNetworkMonitor = resolved.networkMonitor;
 
@@ -588,10 +588,10 @@ export function createNetworkTools(
               };
             }
 
-                  const resolved = await resolveConnectionFromReason(connectionReason);
-            if (!resolved) return notFound(connectionReason);
+                  const resolved = await resolveConnectionByName(connection);
+            if (!resolved) return notFound(connection);
 
-            if (!resolved.puppeteerManager) return noPage(connectionReason);
+            if (!resolved.puppeteerManager) return noPage(connection);
             const targetPuppeteerManager = resolved.puppeteerManager;
 
             if (!targetPuppeteerManager.isConnected()) {

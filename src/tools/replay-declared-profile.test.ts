@@ -1,6 +1,6 @@
 /**
  * A sequence can declare which persistent Chrome profile a browser comes up
- * on: `requiredConnections: [{ reference: 'device-a', profile: 'device-a' }]`.
+ * on: `requiredConnections: [{ connection: 'device-a', profile: 'device-a' }]`.
  *
  * The profile is the durable half - cookies, localStorage and IndexedDB
  * survive between runs, so a device enrolled once stays enrolled - while the
@@ -55,7 +55,7 @@ function makeReplay(declared: Declaration[], commands?: RecordedCommand[]) {
 const run = (replay: any, extra: Record<string, any> = {}) =>
   replay.handler({
     action: 'run', wait: true, sequenceId: 'seq-profile',
-    connectionReason: 'run-device', ...extra,
+    connection: 'run-device', ...extra,
   } as any);
 
 const launches = (calls: Array<{ tool: string; params: Record<string, any> }>) =>
@@ -66,13 +66,13 @@ const text = (res: any) => res.content[0].text as string;
 describe('a declared connection with a profile', () => {
   it('launches the reference on that profile', async () => {
     const { replay, calls } = makeReplay([
-      { reference: 'device-a', profile: 'device-a', role: 'the enrolled member' },
+      { connection: 'device-a', profile: 'device-a', role: 'the enrolled member' },
     ]);
 
     await run(replay);
 
     expect(launches(calls)).toContainEqual(expect.objectContaining({
-      name: 'device-a',
+      connection: 'device-a',
       profile: 'device-a',
     }));
   });
@@ -80,36 +80,36 @@ describe('a declared connection with a profile', () => {
   it('reuses the browser already on that profile rather than forcing a second', async () => {
     // Only one live Chrome may hold a profile, so the declaration default of
     // "a distinct process" would fail against the very browser it wants.
-    const { replay, calls } = makeReplay([{ reference: 'device-a', profile: 'device-a' }]);
+    const { replay, calls } = makeReplay([{ connection: 'device-a', profile: 'device-a' }]);
 
     await run(replay);
 
     expect(launches(calls)).toContainEqual(expect.objectContaining({
-      name: 'device-a',
+      connection: 'device-a',
       forceNewInstance: false,
     }));
   });
 
   it('still forces a new process when the declaration asks for one explicitly', async () => {
     const { replay, calls } = makeReplay([
-      { reference: 'device-a', profile: 'device-a', forceNewInstance: true },
+      { connection: 'device-a', profile: 'device-a', forceNewInstance: true },
     ]);
 
     await run(replay);
 
     expect(launches(calls)).toContainEqual(expect.objectContaining({
-      name: 'device-a',
+      connection: 'device-a',
       forceNewInstance: true,
     }));
   });
 
   it('keeps the profile-less default of a distinct process', async () => {
-    const { replay, calls } = makeReplay([{ reference: 'plain-b' }]);
+    const { replay, calls } = makeReplay([{ connection: 'plain-b' }]);
 
     await run(replay);
 
     expect(launches(calls)).toContainEqual(expect.objectContaining({
-      name: 'plain-b',
+      connection: 'plain-b',
       forceNewInstance: true,
     }));
     expect(launches(calls).every(p => p.profile === undefined)).toBe(true);
@@ -119,8 +119,8 @@ describe('a declared connection with a profile', () => {
 describe('declarations that cannot mean what they say', () => {
   it('refuses two references on one profile, before launching anything', async () => {
     const { replay, calls } = makeReplay([
-      { reference: 'device-a', profile: 'shared' },
-      { reference: 'device-b', profile: 'shared' },
+      { connection: 'device-a', profile: 'shared' },
+      { connection: 'device-b', profile: 'shared' },
     ]);
 
     const res = await run(replay);
@@ -135,8 +135,8 @@ describe('declarations that cannot mean what they say', () => {
     // profile is an identity claim: pointing it elsewhere would run device-a's
     // steps in a browser that is not device-a, and pass.
     const { replay, calls } = makeReplay(
-      [{ reference: 'device-a', profile: 'device-a' }],
-      [{ tool: 'dom', params: { action: 'querySelector', selector: '#a', connectionReason: 'device-a' } }],
+      [{ connection: 'device-a', profile: 'device-a' }],
+      [{ tool: 'dom', params: { action: 'querySelector', selector: '#a', connection: 'device-a' } }],
     );
 
     const res = await run(replay, { connections: { 'device-a': 'some-other-browser' } });
@@ -148,8 +148,8 @@ describe('declarations that cannot mean what they say', () => {
 
   it('still lets a profile-less declaration be rebound', async () => {
     const { replay, calls } = makeReplay(
-      [{ reference: 'plain-b' }],
-      [{ tool: 'dom', params: { action: 'querySelector', selector: '#a', connectionReason: 'plain-b' } }],
+      [{ connection: 'plain-b' }],
+      [{ tool: 'dom', params: { action: 'querySelector', selector: '#a', connection: 'plain-b' } }],
     );
 
     await run(replay, { connections: { 'plain-b': 'my-second-browser' } });

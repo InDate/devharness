@@ -35,7 +35,7 @@ const write = async (name: string, commands: any[]) => {
 };
 
 const typeStep = (selector: string, text: string) =>
-  ({ tool: 'input', params: { action: 'type', selector, text, connectionReason: 'suite' } });
+  ({ tool: 'input', params: { action: 'type', selector, text, connection: 'suite' } });
 
 beforeEach(async () => {
   dir = await fs.mkdtemp(join(tmpdir(), 'cdp-varkeys-'));
@@ -79,7 +79,7 @@ describe('run rejects a key that names no step', () => {
 
   it('names the key, states the transform, and lists what is substitutable', async () => {
     const res = await replay.handler({
-      action: 'run', wait: true, name: 'login', connectionReason: 'suite',
+      action: 'run', wait: true, name: 'login', connection: 'suite',
       variables: { 'var_0_#password': 'supplied' },
     } as any);
 
@@ -91,7 +91,7 @@ describe('run rejects a key that names no step', () => {
 
   it('accepts the key the executor actually builds', async () => {
     const res = await replay.handler({
-      action: 'run', wait: true, name: 'login', connectionReason: 'suite',
+      action: 'run', wait: true, name: 'login', connection: 'suite',
       variables: { var_0__password: 'supplied' },
     } as any);
 
@@ -104,7 +104,7 @@ describe('run rejects a key that names no step', () => {
     await recorder.loadSequenceFromDisk(join(dir, 'outer.json'));
 
     const res = await replay.handler({
-      action: 'run', wait: true, name: 'outer', connectionReason: 'suite',
+      action: 'run', wait: true, name: 'outer', connection: 'suite',
       variables: { var_0__password: 'supplied' },
     } as any);
 
@@ -113,7 +113,7 @@ describe('run rejects a key that names no step', () => {
 
   it('accepts an empty map, which is how a caller keeps the recorded values', async () => {
     const res = await replay.handler({
-      action: 'run', wait: true, name: 'login', connectionReason: 'suite', variables: {},
+      action: 'run', wait: true, name: 'login', connection: 'suite', variables: {},
     } as any);
 
     expect(res.isError).toBeUndefined();
@@ -129,7 +129,7 @@ describe('runAll checks the map against the whole suite', () => {
 
   it('accepts a key that matches only one member, and leaves the other on its recorded text', async () => {
     const res = await replay.handler({
-      action: 'runAll', connectionReason: 'suite',
+      action: 'runAll', connection: 'suite',
       variables: { var_0__password: 'supplied' },
     } as any);
 
@@ -142,7 +142,7 @@ describe('runAll checks the map against the whole suite', () => {
 
   it('rejects a key that matches no member, before anything runs', async () => {
     const res = await replay.handler({
-      action: 'runAll', connectionReason: 'suite',
+      action: 'runAll', connection: 'suite',
       variables: { var_0__nosuchfield: 'supplied' },
     } as any);
 

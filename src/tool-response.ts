@@ -670,12 +670,12 @@ export function checkBreakpointPause(
   // Every suggested call names the paused connection: a call without one is
   // refused, and with two connections open only the name selects the paused one.
   const first = pausedConnections[0];
-  const on = `connectionReason: '${first.reference}'`;
+  const on = `connection: '${first.reference}'`;
   const getVariablesHint = first.callFrameId
     ? `\`inspect({ action: 'getVariables', callFrameId: '${first.callFrameId}', ${on} })\``
     : `\`inspect({ action: 'getVariables', ${on} })\``;
   const othersHint = pausedConnections.length > 1
-    ? `\n- The same calls with ${pausedConnections.slice(1).map(p => `\`connectionReason: '${p.reference}'\``).join(', ')} reach the other paused connection(s)`
+    ? `\n- The same calls with ${pausedConnections.slice(1).map(p => `\`connection: '${p.reference}'\``).join(', ')} reach the other paused connection(s)`
     : '';
 
   const firstPendingRestart = pausedConnections.find(p => p.pendingRestart)?.pendingRestart;

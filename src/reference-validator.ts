@@ -88,7 +88,7 @@ export class InvalidReferenceError extends Error {
  * Validate and return sanitized reference, or throw InvalidReferenceError
  * Use this in tool handlers - throws if invalid, returns sanitized string if valid
  */
-export function requireValidReference(ref: string, parameter: 'name' | 'connectionReason'): string {
+export function requireValidReference(ref: string, parameter: 'connection' | 'newName'): string {
   const result = validateReference(ref);
   if (!result.valid) {
     throw new InvalidReferenceError(result.error!, parameter);

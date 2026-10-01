@@ -80,7 +80,7 @@ const issuesSchema = z.object({
     .describe('create/edit: existing sequence to link, copied into the issues folder'),
   startUrl: z.string().optional()
     .describe('create: URL verification starts at; required without sequenceName'),
-  connectionReason: z.string().optional()
+  connection: z.string().optional()
     .describe('workOn: browser connection the sequence replays in'),
   connections: z.record(z.string()).optional()
     .describe('workOn/resolve: { "<recorded reference>": "<reference here>" } for a multi-connection sequence'),
@@ -314,7 +314,7 @@ function formatIssueDetails(issue: TrackedIssue): string {
 export function createIssuesTools(
   executeToolCall: ExecuteToolCall,
   getSequencePath?: (name: string) => Promise<string | null>,
-  getPageForConnection?: (connectionReason: string) => Promise<any>,
+  getPageForConnection?: (connection: string) => Promise<any>,
   getKnownToolNames?: () => string[]
 ) {
   return {
@@ -600,10 +600,10 @@ export function createIssuesTools(
             // Update status to in_progress
             await updateIssueStatus(args.id, 'in_progress');
 
-            // Use provided connectionReason or generate one
+            // Use provided connection or generate one
             let connectionRef: string | null = null;
-            if (args.connectionReason) {
-              connectionRef = requireValidReference(args.connectionReason, 'connectionReason');
+            if (args.connection) {
+              connectionRef = requireValidReference(args.connection, 'connection');
             } else {
               connectionRef = `${issue.type} ${issue.id} workOn`;
             }
@@ -619,7 +619,7 @@ export function createIssuesTools(
             let detachAbortListener: (() => void) | undefined;
             if (abortSignal && connectionRef) {
               const onAbort = () => {
-                executeToolCall('connection', { action: 'close', reason: 'issue work cancelled', connectionReason: connectionRef }).catch(() => {});
+                executeToolCall('connection', { action: 'close', reason: 'issue work cancelled', connection: connectionRef }).catch(() => {});
               };
               abortSignal.addEventListener('abort', onAbort, { once: true });
               detachAbortListener = () => abortSignal.removeEventListener('abort', onAbort);
@@ -643,7 +643,7 @@ export function createIssuesTools(
                   // the run must complete (or fail) before we return.
                   wait: true,
                   name: sequenceName,
-                  connectionReason: connectionRef,
+                  connection: connectionRef,
                   // A repro that spans two browsers has per-step references from
                   // the session that recorded it; without this there is no way to
                   // rebind them and the repro cannot run here at all.
@@ -661,7 +661,7 @@ export function createIssuesTools(
                   try {
                     await executeToolCall('connection', {
                       action: 'launch',
-                      name: connectionRef,
+                      connection: connectionRef,
                     });
                     page = await getPageForConnection(connectionRef);
                   } catch (error: any) {
@@ -680,7 +680,7 @@ export function createIssuesTools(
                 // Navigate to startUrl
                 await executeToolCall('navigate', {
                   action: 'goto',
-                  connectionReason: connectionRef,
+                  connection: connectionRef,
                   url: issue.startUrl,
                   waitUntil: 'load',
                 });
@@ -710,7 +710,7 @@ export function createIssuesTools(
                   // Start recording user's actions - this blocks until recording completes
                   const recordingResult = await executeToolCall('replay', {
                     action: 'recordInteraction',
-                    connectionReason: connectionRef,
+                    connection: connectionRef,
                     name: `${issue.type}-${issue.id}-repro`,
                     startUrl: issue.startUrl,
                     issueId: issue.id,
@@ -733,7 +733,7 @@ export function createIssuesTools(
                 details: formatIssueDetails(issue),
                 replayStarted: hasSequence,
                 browserLaunched: !hasSequence && !!issue.startUrl,
-                connectionReason: connectionRef,
+                connection: connectionRef,
               });
             } finally {
               detachAbortListener?.();
@@ -779,7 +779,7 @@ export function createIssuesTools(
               try {
                 await executeToolCall('connection', {
                   action: 'launch',
-                  name: connectionRef,
+                  connection: connectionRef,
                 });
                 page = await getPageForConnection(connectionRef);
               } catch (error: any) {
@@ -806,7 +806,7 @@ export function createIssuesTools(
               // executeToolCall throws on error
               await executeToolCall('navigate', {
                 action: 'goto',
-                connectionReason: connectionRef,
+                connection: connectionRef,
                 url: targetUrl,
                 waitUntil: 'load',
               });
@@ -839,7 +839,7 @@ export function createIssuesTools(
                 if (error instanceof IssuesResolveTimeoutError) {
                   if (!args.keepBrowserOpen) {
                     try {
-                      await executeToolCall('connection', { action: 'close', reason: 'issue verification finished', connectionReason: connectionRef });
+                      await executeToolCall('connection', { action: 'close', reason: 'issue verification finished', connection: connectionRef });
                     } catch {
                       // Non-fatal
                     }
@@ -855,7 +855,7 @@ export function createIssuesTools(
 
             if (readyAction === 'cancel') {
               if (!args.keepBrowserOpen) {
-                await executeToolCall('connection', { action: 'close', reason: 'issue verification cancelled', connectionReason: connectionRef }).catch(() => {});
+                await executeToolCall('connection', { action: 'close', reason: 'issue verification cancelled', connection: connectionRef }).catch(() => {});
               }
               return createSuccessResponse('ISSUES_VERIFICATION_CANCELLED', {
                 id: issue.id,
@@ -871,7 +871,7 @@ export function createIssuesTools(
               // recordInteraction will navigate to startUrl if provided
               const recordingResult = await executeToolCall('replay', {
                 action: 'recordInteraction',
-                connectionReason: connectionRef,
+                connection: connectionRef,
                 name: `${issue.type}-${issue.id}-repro`,
                 startUrl: issue.startUrl || 'about:blank',
                 issueId: issue.id,
@@ -907,7 +907,7 @@ export function createIssuesTools(
               const closeVerificationTab = async () => {
                 if (args.keepBrowserOpen) return;
                 try {
-                  await executeToolCall('connection', { action: 'close', reason: 'issue verification finished', connectionReason: connectionRef });
+                  await executeToolCall('connection', { action: 'close', reason: 'issue verification finished', connection: connectionRef });
                 } catch {
                   // Non-fatal
                 }
@@ -930,7 +930,7 @@ export function createIssuesTools(
                   // Blocking: the failure check below parses the run's result.
                   wait: true,
                   name: sequenceName,
-                  connectionReason: connectionRef,
+                  connection: connectionRef,
                   ...(args.connections && { connections: args.connections }),
                   showReplayOverlay: true,
                   issueId: issue.id,
@@ -974,7 +974,7 @@ export function createIssuesTools(
               // No sequence and not skipping - start recording user's actions (executeToolCall throws on error)
               const recordingResult = await executeToolCall('replay', {
                 action: 'recordInteraction',
-                connectionReason: connectionRef,
+                connection: connectionRef,
                 name: `verify-${issue.type}-${issue.id}`,
                 startUrl: issue.startUrl || 'about:blank',
                 // Pass issue info so recording saves to issues folder
@@ -1021,7 +1021,7 @@ export function createIssuesTools(
               if (error instanceof IssuesResolveTimeoutError) {
                 if (!args.keepBrowserOpen) {
                   try {
-                    await executeToolCall('connection', { action: 'close', reason: 'issue verification finished', connectionReason: connectionRef });
+                    await executeToolCall('connection', { action: 'close', reason: 'issue verification finished', connection: connectionRef });
                   } catch {
                     // Non-fatal
                   }
@@ -1040,7 +1040,7 @@ export function createIssuesTools(
                 await executeToolCall('connection', {
                   action: 'close',
                   reason: 'issue verification finished',
-                  connectionReason: connectionRef,
+                  connection: connectionRef,
                 });
               } catch (error: any) {
                 // Non-fatal - tab close failed but verification completed

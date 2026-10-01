@@ -25,7 +25,7 @@ const coordinateSchema = z.object({
 // Consolidated input tool schema
 const inputToolSchema = z.object({
   action: z.enum(['click', 'type', 'press', 'hover', 'focus', 'focusNext', 'focusPrevious', 'drag', 'scroll', 'mousemove', 'pinch', 'tap', 'swipe']),
-  connectionReason: z.string(),
+  connection: z.string(),
 
   // Selector-based actions
   selector: z.string().optional().describe('CSS selector. Supports :has-text("x"), :text("x")'),
@@ -156,7 +156,7 @@ function stoppedResponse(result: ActionResult, action: string, target: string): 
 }
 
 export function createInputTools(
-  resolveConnectionFromReason: (connectionReason: string) => Promise<any>
+  resolveConnectionByName: (connection: string) => Promise<any>
 ) {
   return {
     input: createTool(
@@ -171,12 +171,12 @@ export function createInputTools(
       // abort the handler THROWS an abort-shaped error; already-issued
       // dispatches are NOT undone.
       async (args, abortSignal?: AbortSignal) => {
-        const { action, connectionReason } = args;
+        const { action, connection } = args;
 
         throwIfAborted(abortSignal);
 
         // Resolve connection from reason
-        const resolved = await resolveConnectionFromReason(connectionReason);
+        const resolved = await resolveConnectionByName(connection);
         if (!resolved) {
           return createErrorResponse('CONNECTION_NOT_FOUND', {
             message: 'No Chrome browser available. Start one with `connection` action `launch`.'
@@ -200,7 +200,7 @@ export function createInputTools(
 
         // Start observing DOM changes before interaction
         if (shouldDetectChanges && ['click', 'type', 'hover'].includes(action)) {
-          await domChangeMonitor.startObserving(connectionReason, page);
+          await domChangeMonitor.startObserving(connection, page);
         }
 
         // Abort checkpoint used at every point where nothing (further) has
@@ -209,9 +209,9 @@ export function createInputTools(
         // a MutationObserver running in the page, then throws abort-shaped.
         const checkAborted = async (): Promise<void> => {
           if (!abortSignal?.aborted) return;
-          if (shouldDetectChanges && domChangeMonitor.isObserving(connectionReason)) {
+          if (shouldDetectChanges && domChangeMonitor.isObserving(connection)) {
             try {
-              await domChangeMonitor.stopObserving(connectionReason, { settleTimeout: 0 });
+              await domChangeMonitor.stopObserving(connection, { settleTimeout: 0 });
             } catch { /* cleanup is best-effort */ }
           }
           throw abortErrorFor(abortSignal);
@@ -455,7 +455,7 @@ export function createInputTools(
               if (result.pausedAtBreakpoint || result.result?.pausedDuringClick) {
                 // The page is paused, so the observer is left in it rather than collected
                 if (shouldDetectChanges) {
-                  domChangeMonitor.drop(connectionReason);
+                  domChangeMonitor.drop(connection);
                 }
 
                 // Get pause info if we detected pause inside the action
@@ -478,7 +478,7 @@ export function createInputTools(
               let changesText = '';
               let changes: DOMChanges | null = null;
               if (shouldDetectChanges) {
-                changes = await domChangeMonitor.stopObserving(connectionReason, { settleTimeout, signal: abortSignal });
+                changes = await domChangeMonitor.stopObserving(connection, { settleTimeout, signal: abortSignal });
                 changesText = formatDOMChanges(changes);
               }
 
@@ -702,7 +702,7 @@ export function createInputTools(
               // If paused at breakpoint, return immediately - don't try any more page interactions
               if (result.pausedAtBreakpoint) {
                 if (shouldDetectChanges) {
-                  domChangeMonitor.drop(connectionReason);
+                  domChangeMonitor.drop(connection);
                 }
                 return createSuccessResponse('ACTION_PAUSED_AT_BREAKPOINT', {
                   action: 'type',
@@ -714,7 +714,7 @@ export function createInputTools(
               // Collect DOM changes
               let changesText = '';
               if (shouldDetectChanges) {
-                const changes = await domChangeMonitor.stopObserving(connectionReason, { settleTimeout, signal: abortSignal });
+                const changes = await domChangeMonitor.stopObserving(connection, { settleTimeout, signal: abortSignal });
                 changesText = formatDOMChanges(changes);
               }
 
@@ -891,7 +891,7 @@ export function createInputTools(
               // If paused at breakpoint, return immediately - don't try any more page interactions
               if (result.pausedAtBreakpoint) {
                 if (shouldDetectChanges) {
-                  domChangeMonitor.drop(connectionReason);
+                  domChangeMonitor.drop(connection);
                 }
                 return createSuccessResponse('ACTION_PAUSED_AT_BREAKPOINT', {
                   action: 'hover',
@@ -903,7 +903,7 @@ export function createInputTools(
               // Collect DOM changes
               let changesText = '';
               if (shouldDetectChanges) {
-                const changes = await domChangeMonitor.stopObserving(connectionReason, { settleTimeout, signal: abortSignal });
+                const changes = await domChangeMonitor.stopObserving(connection, { settleTimeout, signal: abortSignal });
                 changesText = formatDOMChanges(changes);
               }
 
@@ -1556,9 +1556,9 @@ export function createInputTools(
         } finally {
           // An early return leaves the observer started above in the page; a
           // paused page never answers its removal, so there it is dropped.
-          if (shouldDetectChanges && domChangeMonitor.isObserving(connectionReason)) {
-            if (targetCdpManager.isPaused()) domChangeMonitor.drop(connectionReason);
-            else await domChangeMonitor.stopObserving(connectionReason, { settleTimeout: 0 }).catch(() => {});
+          if (shouldDetectChanges && domChangeMonitor.isObserving(connection)) {
+            if (targetCdpManager.isPaused()) domChangeMonitor.drop(connection);
+            else await domChangeMonitor.stopObserving(connection, { settleTimeout: 0 }).catch(() => {});
           }
         }
       }

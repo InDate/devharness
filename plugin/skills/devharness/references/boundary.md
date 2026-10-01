@@ -5,7 +5,7 @@ browser. What it holds is what reached the outside world — local reads and
 writes never appear, which is the point: it answers "what did the app do
 externally", and CDP answers the rest.
 
-Read it with `proxy({ action, connectionReason })`.
+Read it with `proxy({ action, connection })`.
 
 | action | answers |
 |---|---|

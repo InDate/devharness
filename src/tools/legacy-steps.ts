@@ -2,7 +2,10 @@
  * Calls written against tools the merge removed, rewritten into the calls
  * that replace them: the connection tools and `tab` into `connection` and
  * `browser`, and the single-operation tools into `source`, `modal`,
- * `download` and `config`.
+ * `download` and `config`. Calls to tools that remain have their renamed
+ * fields rewritten: `connectionReason` became `connection` on every tool, and
+ * on `connection`, launch and attach's `name` became `connection` and
+ * rename's `name` became `newName`.
  *
  * Saved sequences, sequences pulled from GitHub, `history.log`, and calls typed
  * at the CLI or in the bench's Tools tab can carry the old names. Each is
@@ -32,12 +35,12 @@ function withParams(base: Record<string, any>, drop: string[], set: Record<strin
 }
 
 const REWRITES: Record<string, Rewrite> = {
-  launchChrome: p => ({ tool: 'connection', params: withParams(p, ['reference'], { action: 'launch', name: p.reference }) }),
-  connectDebugger: p => ({ tool: 'connection', params: withParams(p, ['reference'], { action: 'attach', name: p.reference }) }),
-  disconnectDebugger: p => ({ tool: 'connection', params: withParams(p, ['reference'], { action: 'close', connectionReason: p.reference }) }),
-  switchConnection: p => ({ tool: 'connection', params: withParams(p, ['reference'], { action: 'switch', connectionReason: p.reference }) }),
+  launchChrome: p => ({ tool: 'connection', params: withParams(p, ['reference'], { action: 'launch', connection: p.reference }) }),
+  connectDebugger: p => ({ tool: 'connection', params: withParams(p, ['reference'], { action: 'attach', connection: p.reference }) }),
+  disconnectDebugger: p => ({ tool: 'connection', params: withParams(p, ['reference'], { action: 'close', connection: p.reference }) }),
+  switchConnection: p => ({ tool: 'connection', params: withParams(p, ['reference'], { action: 'switch', connection: p.reference }) }),
   listConnections: p => ({ tool: 'connection', params: withParams(p, [], { action: 'list' }) }),
-  getDebuggerStatus: p => ({ tool: 'connection', params: withParams(p, ['reference'], { action: 'status', connectionReason: p.reference }) }),
+  getDebuggerStatus: p => ({ tool: 'connection', params: withParams(p, ['reference'], { action: 'status', connection: p.reference }) }),
   getChromeStatus: p => ({ tool: 'connection', params: withParams(p, [], { action: 'browsers' }) }),
   killChrome: p => ({ tool: 'browser', params: withParams(p, [], { action: 'kill' }) }),
   resetChromeLauncher: p => ({ tool: 'browser', params: withParams(p, [], { action: 'resetLauncher' }) }),
@@ -53,13 +56,13 @@ const REWRITES: Record<string, Rewrite> = {
   tab: p => {
     switch (p.action) {
       case 'create':
-        return { tool: 'connection', params: withParams({}, [], { action: 'launch', name: p.reference, url: p.url, bringToFront: p.bringToFront }) };
+        return { tool: 'connection', params: withParams({}, [], { action: 'launch', connection: p.reference, url: p.url, bringToFront: p.bringToFront }) };
       case 'rename':
-        return { tool: 'connection', params: withParams({}, [], { action: 'rename', connectionReason: p.reference, name: p.newReference }) };
+        return { tool: 'connection', params: withParams({}, [], { action: 'rename', connection: p.reference, newName: p.newReference }) };
       case 'switch':
-        return { tool: 'connection', params: withParams({}, [], { action: 'switch', connectionReason: p.reference, bringToFront: p.bringToFront }) };
+        return { tool: 'connection', params: withParams({}, [], { action: 'switch', connection: p.reference, bringToFront: p.bringToFront }) };
       case 'close':
-        return { tool: 'connection', params: withParams({}, [], { action: 'close', connectionReason: p.reference, reason: p.reason ?? 'closed with tab close' }) };
+        return { tool: 'connection', params: withParams({}, [], { action: 'close', connection: p.reference, reason: p.reason ?? 'closed with tab close' }) };
       default:
         return { tool: 'connection', params: { action: 'list' } };
     }
@@ -68,12 +71,12 @@ const REWRITES: Record<string, Rewrite> = {
 
 /** What an old tool name became, for the error an MCP call to it returns. */
 const REPLACEMENTS: Record<string, string> = {
-  launchChrome: "connection with action: 'launch' (reference is now name)",
-  connectDebugger: "connection with action: 'attach' (reference is now name)",
-  disconnectDebugger: "connection with action: 'close' (reference is now connectionReason)",
-  switchConnection: "connection with action: 'switch' (reference is now connectionReason)",
+  launchChrome: "connection with action: 'launch' (reference is now connection)",
+  connectDebugger: "connection with action: 'attach' (reference is now connection)",
+  disconnectDebugger: "connection with action: 'close' (reference is now connection)",
+  switchConnection: "connection with action: 'switch' (reference is now connection)",
   listConnections: "connection with action: 'list'",
-  getDebuggerStatus: "connection with action: 'status' (reference is now connectionReason)",
+  getDebuggerStatus: "connection with action: 'status' (reference is now connection)",
   getChromeStatus: "connection with action: 'browsers'",
   killChrome: "browser with action: 'kill'",
   resetChromeLauncher: "browser with action: 'resetLauncher'",
@@ -95,10 +98,27 @@ function own<T>(table: Record<string, T>, key: string): T | undefined {
   return Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
 }
 
-/** The call an old one became, or the call unchanged when its tool still exists. */
+/** `params` with the field `from` moved to `to`; a call already holding `to` keeps it. */
+function moved(params: Record<string, any>, from: string, to: string): Record<string, any> {
+  if (!(from in params)) return params;
+  const { [from]: value, ...rest } = params;
+  return to in rest ? rest : { ...rest, [to]: value };
+}
+
+/** A current tool's call with its renamed fields under their current names. */
+function withCurrentFields(call: Call): Call {
+  let params = moved(call.params, 'connectionReason', 'connection');
+  if (call.tool === 'connection') {
+    if (params.action === 'launch' || params.action === 'attach') params = moved(params, 'name', 'connection');
+    if (params.action === 'rename') params = moved(params, 'name', 'newName');
+  }
+  return params === call.params ? call : { tool: call.tool, params };
+}
+
+/** The call an old one became: a removed tool's call rewritten, and renamed fields moved. */
 export function translateCall(tool: string, params: Record<string, any> | undefined): Call {
   const rewrite = own(REWRITES, tool);
-  return rewrite ? rewrite(params ?? {}) : { tool, params: params ?? {} };
+  return withCurrentFields(rewrite ? rewrite(params ?? {}) : { tool, params: params ?? {} });
 }
 
 /** What replaced an old tool name, or undefined for a name that was never replaced. */
@@ -106,18 +126,27 @@ export function replacementFor(tool: string): string | undefined {
   return own(REPLACEMENTS, tool);
 }
 
-/** A sequence's steps and teardown rewritten step by step; everything else kept. */
-export function translateSequence<T extends { commands?: Array<{ tool: string; params?: Record<string, any> }>; teardown?: Array<{ tool: string; params?: Record<string, any> }> }>(sequence: T): T {
+/**
+ * A sequence's steps and teardown rewritten step by step, and its declared
+ * browsers' `reference` moved to `connection`; everything else kept.
+ */
+export function translateSequence<T extends {
+  commands?: Array<{ tool: string; params?: Record<string, any> }>;
+  teardown?: Array<{ tool: string; params?: Record<string, any> }>;
+  requiredConnections?: Array<Record<string, any>>;
+}>(sequence: T): T {
   const translateSteps = (steps: Array<{ tool: string; params?: Record<string, any> }>) =>
     steps.map(step => {
-      if (!own(REWRITES, step.tool)) return step;
       const { tool, params } = translateCall(step.tool, step.params);
-      return { ...step, tool, params };
+      return tool === step.tool && params === step.params ? step : { ...step, tool, params };
     });
   return {
     ...sequence,
     ...(sequence.commands ? { commands: translateSteps(sequence.commands) } : {}),
     ...(sequence.teardown ? { teardown: translateSteps(sequence.teardown) } : {}),
+    ...(sequence.requiredConnections
+      ? { requiredConnections: sequence.requiredConnections.map(decl => moved(decl, 'reference', 'connection')) }
+      : {}),
   };
 }
 

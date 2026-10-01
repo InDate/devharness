@@ -50,7 +50,7 @@ function makeCtx(before: Entry[], after: Entry[]): ExecutionContext {
     }
     return { content: [{ type: 'text', text: '' }] };
   });
-  return { executeToolCall, commandRecorder: {} as any, connectionReason: 'test', logPrefix: 'test' };
+  return { executeToolCall, commandRecorder: {} as any, connection: 'test', logPrefix: 'test' };
 }
 
 describe('click validation - console error noise filtering', () => {

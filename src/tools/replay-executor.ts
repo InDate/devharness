@@ -23,7 +23,7 @@ import type { CheckOutcome as CheckAction } from './check-tools.js';
 import { assertAsCheck, subjectOf as subjectOfCheck, waitAsCheck } from './check-engine.js';
 import type { CheckOutcome as CheckOutcomeRecord, RanStep } from '../proxy/registry.js';
 import { asStep, withinRun } from '../call-origin.js';
-import { addressesConnection, createsConnection, createdName, isLaunchStep } from './connection-steps.js';
+import { addressedConnection, addressesConnection, createsConnection, createdName, isLaunchStep } from './connection-steps.js';
 
 // Re-export replay cursor functions
 export { injectReplayCursor, showClickEffect, showKeyPress, removeReplayCursor } from '../replay-cursor.js';
@@ -203,7 +203,7 @@ async function prepareNestedSequence(
     ? launchedConnection
     : undefined;
   if (nestedConnection) {
-    await debugLog(logPrefix, `Nested sequence "${label}" runs against the connection it created ("${nestedConnection}"), not the caller's "${ctx.connectionReason}"`);
+    await debugLog(logPrefix, `Nested sequence "${label}" runs against the connection it created ("${nestedConnection}"), not the caller's "${ctx.connection}"`);
   }
 
   return { filteredSequence: { ...sequence, commands: filteredCommands }, filteredCommands, nestedConnection };
@@ -252,7 +252,7 @@ export async function runBranch(
     startStep: 0,
     ctx: {
       ...ctx,
-      ...(nestedConnection ? { connectionReason: nestedConnection } : {}),
+      ...(nestedConnection ? { connection: nestedConnection } : {}),
       nestingDepth: currentDepth + 1,
       nestingCallStack: [...callStack, sequenceName]
     },
@@ -414,7 +414,7 @@ export async function resolveForEachItems(
       const result = await ctx.executeToolCall('inspect', {
         action: 'evaluateExpression',
         expression,
-        ...(ctx.connectionReason ? { connectionReason: ctx.connectionReason } : {}),
+        ...(ctx.connection ? { connection: ctx.connection } : {}),
       });
       const value = (result as any)?._meta?.inspect?.value;
       if (!Array.isArray(value)) {
@@ -452,7 +452,7 @@ async function evaluateForEachFilter(
     const result = await ctx.executeToolCall('inspect', {
       action: 'evaluateExpression',
       expression,
-      ...(ctx.connectionReason ? { connectionReason: ctx.connectionReason } : {}),
+      ...(ctx.connection ? { connection: ctx.connection } : {}),
     });
     return { ok: true, keep: (result as any)?._meta?.inspect?.value === true };
   } catch (err: any) {
@@ -561,7 +561,7 @@ export async function executeForEachFlow(
       startStep: 0,
       ctx: {
         ...ctx,
-        ...(nestedConnection ? { connectionReason: nestedConnection } : {}),
+        ...(nestedConnection ? { connection: nestedConnection } : {}),
         nestingDepth: currentDepth + 1,
         nestingCallStack: [...callStack, sequenceName],
       },
@@ -853,7 +853,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
     onProgress
   } = options;
 
-  const { executeToolCall, commandRecorder, connectionReason, connectionMap, logPrefix = 'executor' } = ctx;
+  const { executeToolCall, commandRecorder, connection, connectionMap, logPrefix = 'executor' } = ctx;
   // The option wins for a direct caller (teardown, tests); the context is what
   // carries the run's substitutions into every nesting depth.
   const activeVariables = variables ?? ctx.variables;
@@ -864,7 +864,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
 
   // A sequence whose steps name more than one connection can only be replayed
   // faithfully against those connections. `overrideConnectionReason` (the
-  // run-level connectionReason) must therefore NOT be stamped onto its
+  // run-level connection) must therefore NOT be stamped onto its
   // launch steps - that would point every launch at one reference and
   // collapse the very interleaving the sequence exists to reproduce (bug-018).
   const recordedConnections = analyzeRecordedStepConnections(commands);
@@ -903,7 +903,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
 
   // Auto-resume if debugger is paused from a previous run. A nested run starts
   // inside its parent, so a pause it finds is the parent's to judge.
-  if (connectionReason && startStep === 0 && !ctx.nestingDepth) {
+  if (connection && startStep === 0 && !ctx.nestingDepth) {
     await resumeIfPaused(ctx);
   }
 
@@ -949,7 +949,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
   const releaseStep = async (step: number): Promise<void> => {
     const at = await releaseCommand(
       settleConfig.stepSettleMs, settleConfig.stepSettleCapMs,
-      overrideConnectionReason ?? ctx.connectionReason
+      overrideConnectionReason ?? ctx.connection
     ).catch(() => Date.now());
     stepReleasedAt.set(step, at);
   };
@@ -961,7 +961,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
   // pass into several that no comparison could join.
   const proxyRun = `run-${runTimestamp.toString(36)}`;
   // The browser a check's outcome is kept against, for the bench to read.
-  const checked = overrideConnectionReason ?? ctx.connectionReason;
+  const checked = overrideConnectionReason ?? ctx.connection;
   // A run inside another step stamps that step, with its own position beside
   // it, so what it causes is kept apart from the parent's steps of the same
   // number and still lands under the step that ran it.
@@ -1070,22 +1070,22 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
         params.wait = true;
       }
 
-      // A per-step connectionReason is a reference from the RECORDING session, so
+      // A per-step connection is a reference from the RECORDING session, so
       // rebind it onto this one before anything uses it, then require that it
       // actually exists here. There is deliberately no fallback to the run-level
       // connection: that is precisely how a two-browser sequence used to replay
       // green in one browser (bug-018).
-      if (typeof params.connectionReason === 'string' && params.connectionReason.trim()) {
-        const recorded = sanitizeReference(params.connectionReason);
+      if (addressedConnection({ tool: cmd.tool, params }) !== undefined) {
+        const recorded = sanitizeReference(params.connection);
         const resolved = mapConnection(recorded);
-        params.connectionReason = resolved;
+        params.connection = resolved;
 
         // Checked for ANY step naming a connection other than the run's, not
         // just multi-connection sequences: a single-reference sequence pointed
         // at a browser that isn't here otherwise fails deep inside the tool
         // with a generic "Not connected to browser" and never names the
         // connection it wanted.
-        if (resolved !== connectionReason) {
+        if (resolved !== connection) {
           const { known, live } = await stepConnectionExists(resolved);
           if (!known) {
             results.push({
@@ -1098,7 +1098,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
                 recorded,
                 resolved,
                 mapped: resolved !== recorded,
-                runConnection: connectionReason,
+                runConnection: connection,
                 live,
               }),
             });
@@ -1111,40 +1111,40 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
       // launch too or the sequence would open the recorded name and then drive a
       // differently-named one.
       let launchRenamedByMap = false;
-      if (createsConnection(cmd) && typeof params.name === 'string' && connectionMap) {
-        const mappedRef = connectionMap[sanitizeReference(params.name)];
+      if (createsConnection(cmd) && typeof params.connection === 'string' && connectionMap) {
+        const mappedRef = connectionMap[sanitizeReference(params.connection)];
         if (mappedRef) {
-          params.name = mappedRef;
+          params.connection = mappedRef;
           launchRenamedByMap = true;
         }
       }
 
-      // Inject the run-level connectionReason for tools that accept one, unless the
+      // Inject the run-level connection for tools that accept one, unless the
       // step names its own (per-step connection wins - multi-device sequences).
-      if (connectionReason && (TOOLS_ACCEPTING_CONNECTION.includes(cmd.tool) || addressesConnection(cmd))
-          && !actsWithoutConnection(cmd) && !params.connectionReason) {
-        params.connectionReason = connectionReason;
+      if (connection && (TOOLS_ACCEPTING_CONNECTION.includes(cmd.tool) || addressesConnection(cmd))
+          && !actsWithoutConnection(cmd) && !params.connection) {
+        params.connection = connection;
       }
 
-      // request({ destination: 'browser' }) needs a connectionReason too, but request
+      // request({ destination: 'browser' }) needs a connection too, but request
       // is deliberately in neither list (destination:'node' sequences must not force a
       // Chrome auto-launch, and destination:'node' takes no connection at all)
-      if (cmd.tool === 'request' && params.destination === 'browser' && !params.connectionReason && connectionReason) {
-        params.connectionReason = connectionReason;
+      if (cmd.tool === 'request' && params.destination === 'browser' && !params.connection && connection) {
+        params.connection = connection;
       }
 
       // The connection this step actually runs against: its own if it named one,
       // otherwise the run-level connection. Everything wrapped around the step -
       // pre/post-click state, navigation + typed-text validation, pause detection,
       // failure diagnostics - must observe THIS connection, not the run-level one.
-      // Helpers keep reading ctx.connectionReason; we just hand them a ctx whose
+      // Helpers keep reading ctx.connection; we just hand them a ctx whose
       // connection is the step's (bug-009).
-      const stepConnection: string | undefined = params.connectionReason || connectionReason;
-      const stepCtx: ExecutionContext = stepConnection === connectionReason
+      const stepConnection: string | undefined = addressedConnection({ tool: cmd.tool, params }) || connection;
+      const stepCtx: ExecutionContext = stepConnection === connection
         ? ctx
         : {
             ...ctx,
-            connectionReason: stepConnection as string,
+            connection: stepConnection as string,
             // share the run's variable store with the clone, don't fork it
             variableStore,
           };
@@ -1162,7 +1162,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
         return expected ? null : at;
       };
 
-      // Override the launched name if a custom connectionReason was provided.
+      // Override the launched name if a custom connection was provided.
       // Skipped for multi-connection sequences: stamping one reference onto every
       // launch would collapse them into a single browser (see recordedConnections).
       // An explicit `connections` entry for this launch is the more specific
@@ -1170,18 +1170,18 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
       // silently renames it back, with the two writers disagreeing and no signal.
       if (isLaunchStep(cmd) && overrideConnectionReason) {
         if (recordedConnections.multiConnection) {
-          debugLog(logPrefix, `Not overriding launched name "${params.name}" with "${overrideConnectionReason}": sequence spans ${recordedConnections.references.length} connections`);
+          debugLog(logPrefix, `Not overriding launched name "${params.connection}" with "${overrideConnectionReason}": sequence spans ${recordedConnections.references.length} connections`);
         } else if (launchRenamedByMap) {
-          debugLog(logPrefix, `Not overriding launched name "${params.name}" with "${overrideConnectionReason}": connections mapping already rebound this launch`);
+          debugLog(logPrefix, `Not overriding launched name "${params.connection}" with "${overrideConnectionReason}": connections mapping already rebound this launch`);
         } else {
-          params.name = overrideConnectionReason;
+          params.connection = overrideConnectionReason;
         }
       }
 
       // Handle stale callFrameId for getVariables
       if (cmd.tool === 'inspect' && params.action === 'getVariables' && params.callFrameId && stepConnection) {
         debugLog(logPrefix, `Refreshing stale callFrameId`);
-        const fresh = (await debuggerStatusOf({ ...ctx, connectionReason: stepConnection }))?.pausedAt?.callFrameId;
+        const fresh = (await debuggerStatusOf({ ...ctx, connection: stepConnection }))?.pausedAt?.callFrameId;
         if (fresh) params.callFrameId = fresh;
         else debugLog(logPrefix, `Warning: no paused frame on ${stepConnection} to refresh the callFrameId from`);
       }
@@ -1577,13 +1577,13 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
         // Rebind the same way the step itself will be, or this pre-emptive wait
         // polls a recorded reference that may not exist in this session - which
         // costs the step its whole settle budget before being swallowed.
-        const nextConnection: string | undefined = nextCmd.params.connectionReason
-          ? mapConnection(nextCmd.params.connectionReason)
-          : connectionReason;
+        const nextConnection: string | undefined = addressedConnection(nextCmd)
+          ? mapConnection(nextCmd.params.connection)
+          : connection;
         if (nextCmd.tool === 'input' && nextCmd.params.selector && nextConnection) {
-          const nextCtx: ExecutionContext = nextConnection === connectionReason
+          const nextCtx: ExecutionContext = nextConnection === connection
             ? ctx
-            : { ...ctx, connectionReason: nextConnection, variableStore };
+            : { ...ctx, connection: nextConnection, variableStore };
           await waitForElement(nextCtx, nextCmd.params.selector);
         }
       }
@@ -1645,7 +1645,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
   const behaviourDrift = comparesBehaviour
     ? await compareBehaviour(
         commands, stepStartedAt, stepReleasedAt, ctx, proxyRun,
-        overrideConnectionReason ?? ctx.connectionReason,
+        overrideConnectionReason ?? ctx.connection,
         (sequence as any).shapeRules)
     : undefined;
 
@@ -1683,7 +1683,7 @@ async function compareBehaviour(
   /** What a person ruled about each payload shape when this was recorded. */
   rules?: ShapeRules
 ): Promise<ExecutionResult['behaviourDrift']> {
-  const { executeToolCall, connectionReason } = ctx;
+  const { executeToolCall, connection } = ctx;
   const indices = [...stepStartedAt.keys()].sort((a, b) => a - b);
   const drift: NonNullable<ExecutionResult['behaviourDrift']> = [];
 
@@ -1696,16 +1696,16 @@ async function compareBehaviour(
       ?? Date.now();
 
     const http = await executeToolCall('network', {
-      action: 'list', connectionReason, since: from, until: to, limit: 100000,
+      action: 'list', connection, since: from, until: to, limit: 100000,
     }).catch(() => null);
     const rows = http?._meta?.network?.requests ?? [];
     const streams = await executeToolCall('network', {
-      action: 'streams', connectionReason, since: from, until: to,
+      action: 'streams', connection, since: from, until: to,
     }).catch(() => null);
     const events = (streams?._meta?.streamList ?? []).reduce(
       (total: number, s: any) => total + (s.events ?? 0), 0);
     const stored = await executeToolCall('storage', {
-      action: 'writes', connectionReason, since: from, until: to,
+      action: 'writes', connection, since: from, until: to,
     }).catch(() => null);
     const writes = (stored?._meta?.storage?.writes ?? []).length;
 
@@ -1828,7 +1828,7 @@ export async function executeSequenceWithPause(
   options: ExecuteStepsOptions & { stepTo?: number }
 ): Promise<ExecutionResult> {
   const { sequence, ctx, stepTo } = options;
-  const { commandRecorder, connectionReason } = ctx;
+  const { commandRecorder, connection } = ctx;
 
   const result = await executeSteps({
     ...options,
@@ -1842,7 +1842,7 @@ export async function executeSequenceWithPause(
       const activeState: ActiveSequenceState = {
         sequenceId: sequence.id,
         sequenceName: sequence.name,
-        connectionReason: connectionReason || '',
+        connection: connection || '',
         currentStep: lastResult.step,
         totalSteps: sequence.commands.length,
         pausedAt: Date.now(),

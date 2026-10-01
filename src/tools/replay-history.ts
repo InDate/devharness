@@ -9,7 +9,7 @@ import { createErrorResponse, historyFooter } from '../messages.js';
 import { ToolError } from '../tool-error.js';
 import { sanitizeReference, InvalidReferenceError } from '../reference-validator.js';
 import { commandTakesInjectedConnection } from './replay-executor.js';
-import { createdName } from './connection-steps.js';
+import { addressedConnection, createdName } from './connection-steps.js';
 import { formatHistory } from './replay-formatters.js';
 import { readHistoryLines, getHistoryFilePath } from '../debug-logger.js';
 import { type ReplayArgs } from './replay-schema.js';
@@ -31,7 +31,7 @@ export async function handleHistory(args: ReplayArgs, recorder: CommandRecorder)
 }
 
 /**
- * Whether an explicit batch-level `connectionReason` replaces the connections
+ * Whether an explicit batch-level `connection` replaces the connections
  * the commands were recorded against (`repeat`, `runFromLog`).
  *
  * Yes for a single-connection batch - that is what the parameter has always
@@ -49,18 +49,19 @@ function resolveBatchOverride(
 
   const refs = new Set(
     commands
-      .filter(c => typeof c.params.connectionReason === 'string' && c.params.connectionReason.trim())
-      .map(c => sanitizeReference(c.params.connectionReason))
+      .map(addressedConnection)
+      .filter((named): named is string => named !== undefined)
+      .map(sanitizeReference)
   );
 
   if (refs.size > 1) {
     return {
       error: createErrorResponse('INVALID_PARAMETER', {
-        parameter: 'connectionReason',
+        parameter: 'connection',
         value: requested,
         message: `These commands were recorded against ${refs.size} different connections (${[...refs].join(', ')}), ` +
-          `so a single connectionReason cannot apply to all of them - running them in one browser would report success without ever using the second. ` +
-          `Omit connectionReason to replay each command against the connection it was recorded with, or ${action} the commands for one connection at a time.`
+          `so a single connection cannot apply to all of them - running them in one browser would report success without ever using the second. ` +
+          `Omit connection to replay each command against the connection it was recorded with, or ${action} the commands for one connection at a time.`
       })
     };
   }
@@ -100,7 +101,7 @@ export async function handleRepeat(
     commands.push({ tool: cmd.tool, params: args.params ? withFields(cmd.params, args.params) : cmd.params, index: idx });
   }
 
-  if (commands.length === 1) return repeatOne(commands[0], args.connectionReason, recorder, executeToolCall);
+  if (commands.length === 1) return repeatOne(commands[0], args.connection, recorder, executeToolCall);
 
   // A command replays against the connection it was RECORDED with when it has one
   // (bug-018) - repeating a batch that spans two browsers used to resolve one
@@ -110,33 +111,33 @@ export async function handleRepeat(
   // replays from this session's own history, so the recorded references are the
   // live ones by construction.
   const needsConnection = commands.some(cmd =>
-    commandTakesInjectedConnection(cmd) && !cmd.params.connectionReason
+    commandTakesInjectedConnection(cmd) && !cmd.params.connection
   );
-  let connectionReason = args.connectionReason;
+  let connection = args.connection;
 
-  // An explicitly passed connectionReason must still mean "run these against
+  // An explicitly passed connection must still mean "run these against
   // that connection" - history retains the recorded one for every command that
   // named a connection, so honouring only bare commands would turn this
   // documented parameter into a silent no-op. It can only be honoured when the batch is
   // single-connection; overriding a two-browser batch is the collapse bug-018
   // is about, so that combination is refused rather than silently picking one.
-  const override = resolveBatchOverride(commands, args.connectionReason, 'repeat');
+  const override = resolveBatchOverride(commands, args.connection, 'repeat');
   if ('error' in override) return override.error;
 
   // Try to extract connection from commands if not provided
-  if (!connectionReason && needsConnection) {
+  if (!connection && needsConnection) {
     // A launch or attach among the commands names the connection they run on.
     const created = commands.map(createdName).find(Boolean);
     if (created) {
-      connectionReason = created;
+      connection = created;
     }
   }
 
-  if (!connectionReason && needsConnection) {
+  if (!connection && needsConnection) {
     return createErrorResponse('MISSING_PARAMETER', {
       action: 'repeat',
-      missing: 'connectionReason',
-      message: 'These commands act on a connection and name none. Provide connectionReason parameter.'
+      missing: 'connection',
+      message: 'These commands act on a connection and name none. Provide connection parameter.'
     });
   }
 
@@ -154,9 +155,9 @@ export async function handleRepeat(
       // the recorded one only when the caller explicitly asked to retarget a
       // single-connection batch (see resolveBatchOverride).
       const params = { ...cmd.params };
-      if (connectionReason && commandTakesInjectedConnection(cmd) &&
-          (override.replaceRecorded || !params.connectionReason)) {
-        params.connectionReason = connectionReason;
+      if (connection && commandTakesInjectedConnection(cmd) &&
+          (override.replaceRecorded || !params.connection)) {
+        params.connection = connection;
       }
 
       await executeToolCall(cmd.tool, params);
@@ -211,12 +212,12 @@ async function repeatOne(
   executeToolCall: ExecuteToolCall
 ) {
   const params = { ...cmd.params };
-  if (requested && commandTakesInjectedConnection(cmd)) params.connectionReason = requested;
-  if (!params.connectionReason && commandTakesInjectedConnection(cmd)) {
+  if (requested && commandTakesInjectedConnection(cmd)) params.connection = requested;
+  if (!params.connection && commandTakesInjectedConnection(cmd)) {
     return createErrorResponse('MISSING_PARAMETER', {
       action: 'repeat',
-      missing: 'connectionReason',
-      message: 'This command acts on a connection and names none. Provide connectionReason parameter.'
+      missing: 'connection',
+      message: 'This command acts on a connection and names none. Provide connection parameter.'
     });
   }
 
@@ -268,28 +269,28 @@ export async function handleRunFromLog(
   // As in repeat: a logged command keeps the connection it was recorded with, so
   // only the bare ones need a batch-level connection (bug-018).
   const needsConnection = commands.some(cmd =>
-    commandTakesInjectedConnection(cmd) && !cmd.params.connectionReason
+    commandTakesInjectedConnection(cmd) && !cmd.params.connection
   );
-  let connectionReason = args.connectionReason;
+  let connection = args.connection;
 
-  // Same rule as repeat: an explicit connectionReason retargets a
+  // Same rule as repeat: an explicit connection retargets a
   // single-connection batch, and is refused for a multi-connection one.
-  const override = resolveBatchOverride(commands, args.connectionReason, 'runFromLog');
+  const override = resolveBatchOverride(commands, args.connection, 'runFromLog');
   if ('error' in override) return override.error;
 
   // Try to extract connection from commands if not provided
-  if (!connectionReason && needsConnection) {
+  if (!connection && needsConnection) {
     const created = commands.map(createdName).find(Boolean);
     if (created) {
-      connectionReason = created;
+      connection = created;
     }
   }
 
-  if (!connectionReason && needsConnection) {
+  if (!connection && needsConnection) {
     return createErrorResponse('MISSING_PARAMETER', {
       action: 'runFromLog',
-      missing: 'connectionReason',
-      message: 'These commands act on a connection and name none. Provide connectionReason parameter.'
+      missing: 'connection',
+      message: 'These commands act on a connection and name none. Provide connection parameter.'
     });
   }
 
@@ -300,9 +301,9 @@ export async function handleRunFromLog(
   for (const cmd of commands) {
     try {
       const params = { ...cmd.params };
-      if (connectionReason && commandTakesInjectedConnection(cmd) &&
-          (override.replaceRecorded || !params.connectionReason)) {
-        params.connectionReason = connectionReason;
+      if (connection && commandTakesInjectedConnection(cmd) &&
+          (override.replaceRecorded || !params.connection)) {
+        params.connection = connection;
       }
 
       await executeToolCall(cmd.tool, params);

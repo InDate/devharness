@@ -82,7 +82,7 @@ describe('envFile through a run', () => {
 
     await fs.writeFile(join(dir, 'login.json'), JSON.stringify({
       id: 'seq-login', name: 'login', createdAt: 1,
-      commands: [{ tool: 'input', params: { action: 'type', selector: '#password', text: '{{env:APP_PASSWORD}}', connectionReason: 'app' } }],
+      commands: [{ tool: 'input', params: { action: 'type', selector: '#password', text: '{{env:APP_PASSWORD}}', connection: 'app' } }],
     }));
     await recorder.loadSequenceFromDisk(join(dir, 'login.json'));
   });
@@ -94,7 +94,7 @@ describe('envFile through a run', () => {
   });
 
   const run = (extra: Record<string, any>) =>
-    replay.handler({ action: 'run', wait: true, name: 'login', connectionReason: 'app', ...extra } as any);
+    replay.handler({ action: 'run', wait: true, name: 'login', connection: 'app', ...extra } as any);
 
   const text = (res: any) => res.content.map((c: any) => c.text).join('\n');
 

@@ -27,7 +27,7 @@ describe('a call that acts on a connection without naming one', () => {
     const loadMaps: any = await source.handler({ action: 'loadMaps', directory: tmpdir() } as any);
 
     expect(get.isError).toBe(true);
-    expect(get.content[0].text).toContain('connectionReason');
+    expect(get.content[0].text).toContain('connection');
     expect(loadMaps.isError).toBeFalsy();
     expect(sourceMapHandler.registerSourceMapsFromDirectory).toHaveBeenCalledWith(tmpdir());
   });

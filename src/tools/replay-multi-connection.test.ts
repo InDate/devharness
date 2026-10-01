@@ -2,7 +2,7 @@
  * bug-018: a recorded multi-browser sequence must replay against the browsers it
  * was recorded against.
  *
- * `recordCommand` used to delete `connectionReason` from every recorded command
+ * `recordCommand` used to delete `connection` from every recorded command
  * "to make sequences reusable", so `replay create` produced steps with no
  * connection at all and the executor injected the single run-level connection
  * into all of them. A two-browser sequence therefore replayed in ONE browser -
@@ -63,7 +63,7 @@ function makeHarness(opts: { live?: string[] } = {}) {
 /** The connection each dom step actually executed against, in order. */
 const domConnections = (calls: Array<{ tool: string; params: Record<string, any> }>) =>
   calls.filter(c => c.tool === 'dom' && c.params.action === 'querySelector')
-    .map(c => c.params.connectionReason);
+    .map(c => c.params.connection);
 
 const domSelectors = (calls: Array<{ tool: string; params: Record<string, any> }>) =>
   calls.filter(c => c.tool === 'dom' && c.params.action === 'querySelector')
@@ -73,9 +73,9 @@ const text = (res: any) => res.content[0].text as string;
 
 /** Drive the two-browser recording the issue describes. */
 async function recordDuo(recorder: CommandRecorder) {
-  await recorder.recordCommand('dom', { action: 'querySelector', selector: '#owner-stock', connectionReason: OWNER });
-  await recorder.recordCommand('dom', { action: 'querySelector', selector: '#member-draw', connectionReason: MEMBER });
-  await recorder.recordCommand('dom', { action: 'querySelector', selector: '#owner-stock-again', connectionReason: OWNER });
+  await recorder.recordCommand('dom', { action: 'querySelector', selector: '#owner-stock', connection: OWNER });
+  await recorder.recordCommand('dom', { action: 'querySelector', selector: '#member-draw', connection: MEMBER });
+  await recorder.recordCommand('dom', { action: 'querySelector', selector: '#owner-stock-again', connection: OWNER });
 }
 
 const commandsOf = (recorder: CommandRecorder, name: string) =>
@@ -89,18 +89,18 @@ const run = (replay: any, extra: Record<string, any>) =>
 // ---------------------------------------------------------------------------
 
 describe('recordCommand keeps the connection the call was made with', () => {
-  it('preserves connectionReason in history, sanitized to the stored reference form', async () => {
+  it('preserves connection in history, sanitized to the stored reference form', async () => {
     const recorder = new CommandRecorder();
-    await recorder.recordCommand('input', { action: 'click', selector: '#go', connectionReason: 'Duo Member Two' });
+    await recorder.recordCommand('input', { action: 'click', selector: '#go', connection: 'Duo Member Two' });
 
-    // PRE-FIX: connectionReason is deleted here, so this is undefined.
-    expect(recorder.getCommand(0)!.params.connectionReason).toBe(MEMBER);
+    // PRE-FIX: connection is deleted here, so this is undefined.
+    expect(recorder.getCommand(0)!.params.connection).toBe(MEMBER);
   });
 
   it('does not invent a connection for a call that had none', async () => {
     const recorder = new CommandRecorder();
     await recorder.recordCommand('dom', { action: 'querySelector', selector: '#x' });
-    expect(recorder.getCommand(0)!.params).not.toHaveProperty('connectionReason');
+    expect(recorder.getCommand(0)!.params).not.toHaveProperty('connection');
   });
 });
 
@@ -116,7 +116,7 @@ describe('create preserves a two-connection recording', () => {
     await replay.handler({ action: 'create', name: 'duo-seq', indices: [0, 1, 2] } as any);
 
     // PRE-FIX: all three steps come out bare, so this is [undefined x3].
-    expect(commandsOf(recorder, 'duo-seq').map(c => c.params.connectionReason))
+    expect(commandsOf(recorder, 'duo-seq').map(c => c.params.connection))
       .toEqual([OWNER, MEMBER, OWNER]);
   });
 
@@ -133,25 +133,25 @@ describe('create preserves a two-connection recording', () => {
 
   it('does not rewrite the history entries it built the sequence from', async () => {
     const { replay, recorder } = makeHarness();
-    await recorder.recordCommand('dom', { action: 'querySelector', selector: '#a', connectionReason: OWNER });
-    await recorder.recordCommand('dom', { action: 'querySelector', selector: '#b', connectionReason: OWNER });
+    await recorder.recordCommand('dom', { action: 'querySelector', selector: '#a', connection: OWNER });
+    await recorder.recordCommand('dom', { action: 'querySelector', selector: '#b', connection: OWNER });
 
     // uniform -> hoisted off the sequence steps...
     await replay.handler({ action: 'create', name: 'solo-seq', indices: [0, 1] } as any);
-    expect(commandsOf(recorder, 'solo-seq').map(c => c.params.connectionReason)).toEqual([undefined, undefined]);
+    expect(commandsOf(recorder, 'solo-seq').map(c => c.params.connection)).toEqual([undefined, undefined]);
 
     // ...but history still knows what each call was driven against
-    expect(recorder.getCommand(0)!.params.connectionReason).toBe(OWNER);
+    expect(recorder.getCommand(0)!.params.connection).toBe(OWNER);
   });
 
   it('hoists a uniform connection so the sequence stays portable', async () => {
     const { replay, recorder } = makeHarness();
-    await recorder.recordCommand('dom', { action: 'querySelector', selector: '#a', connectionReason: OWNER });
-    await recorder.recordCommand('dom', { action: 'querySelector', selector: '#b', connectionReason: OWNER });
+    await recorder.recordCommand('dom', { action: 'querySelector', selector: '#a', connection: OWNER });
+    await recorder.recordCommand('dom', { action: 'querySelector', selector: '#b', connection: OWNER });
 
     const res = await replay.handler({ action: 'create', name: 'solo-seq', indices: [0, 1] } as any);
 
-    expect(commandsOf(recorder, 'solo-seq').every(c => !('connectionReason' in c.params))).toBe(true);
+    expect(commandsOf(recorder, 'solo-seq').every(c => !('connection' in c.params))).toBe(true);
     expect(text(res)).toContain('hoisted');
   });
 
@@ -160,11 +160,11 @@ describe('create preserves a two-connection recording', () => {
     // recorded bare, as recordings made before every call named its connection are...
     await recorder.recordCommand('dom', { action: 'querySelector', selector: '#a' });
     // ...and explicitly
-    await recorder.recordCommand('dom', { action: 'querySelector', selector: '#b', connectionReason: MEMBER });
+    await recorder.recordCommand('dom', { action: 'querySelector', selector: '#b', connection: MEMBER });
 
     const res = await replay.handler({ action: 'create', name: 'mixed-seq', indices: [0, 1] } as any);
 
-    expect(commandsOf(recorder, 'mixed-seq').map(c => c.params.connectionReason)).toEqual([undefined, MEMBER]);
+    expect(commandsOf(recorder, 'mixed-seq').map(c => c.params.connection)).toEqual([undefined, MEMBER]);
     expect(text(res)).toContain('Mixed connections');
   });
 });
@@ -180,19 +180,19 @@ describe('run against a two-connection sequence', () => {
     await replay.handler({ action: 'create', name: 'duo-seq', indices: [0, 1, 2] } as any);
     const sequenceId = recorder.listSequences()[0].id;
 
-    await run(replay, { sequenceId, connectionReason: OWNER });
+    await run(replay, { sequenceId, connection: OWNER });
 
     // PRE-FIX: [OWNER, OWNER, OWNER] - the member step ran in the owner's browser.
     expect(domConnections(calls)).toEqual([OWNER, MEMBER, OWNER]);
   });
 
-  it('does not let a run-level connectionReason collapse it', async () => {
+  it('does not let a run-level connection collapse it', async () => {
     const { replay, recorder, calls } = makeHarness({ live: [OWNER, MEMBER, 'other-browser-one'] });
     await recordDuo(recorder);
     await replay.handler({ action: 'create', name: 'duo-seq', indices: [0, 1, 2] } as any);
     const sequenceId = recorder.listSequences()[0].id;
 
-    await run(replay, { sequenceId, connectionReason: 'other-browser-one' });
+    await run(replay, { sequenceId, connection: 'other-browser-one' });
 
     expect(domConnections(calls)).toEqual([OWNER, MEMBER, OWNER]);
   });
@@ -205,7 +205,7 @@ describe('run against a two-connection sequence', () => {
 
     await run(replay, {
       sequenceId,
-      connectionReason: OWNER,
+      connection: OWNER,
       connections: { [MEMBER]: 'my-second-browser' },
     });
 
@@ -214,19 +214,19 @@ describe('run against a two-connection sequence', () => {
 
   it('renames the launch of a mapped reference too', async () => {
     const { replay, recorder, calls } = makeHarness({ live: [OWNER, 'my-second-browser'] });
-    await recorder.recordCommand('connection', { action: 'launch', name: MEMBER });
-    await recorder.recordCommand('dom', { action: 'querySelector', selector: '#a', connectionReason: OWNER });
-    await recorder.recordCommand('dom', { action: 'querySelector', selector: '#b', connectionReason: MEMBER });
+    await recorder.recordCommand('connection', { action: 'launch', connection: MEMBER });
+    await recorder.recordCommand('dom', { action: 'querySelector', selector: '#a', connection: OWNER });
+    await recorder.recordCommand('dom', { action: 'querySelector', selector: '#b', connection: MEMBER });
     await replay.handler({ action: 'create', name: 'duo-launch', indices: [0, 1, 2] } as any);
     const sequenceId = recorder.listSequences()[0].id;
 
     await run(replay, {
       sequenceId,
-      connectionReason: OWNER,
+      connection: OWNER,
       connections: { [MEMBER]: 'my-second-browser' },
     });
 
-    expect(calls.filter(c => c.tool === 'connection' && c.params.action === 'launch').map(c => c.params.name))
+    expect(calls.filter(c => c.tool === 'connection' && c.params.action === 'launch').map(c => c.params.connection))
       .toEqual(['my-second-browser']);
     expect(domConnections(calls)).toEqual([OWNER, 'my-second-browser']);
   });
@@ -238,7 +238,7 @@ describe('run against a two-connection sequence', () => {
     await replay.handler({ action: 'create', name: 'duo-seq', indices: [0, 1, 2] } as any);
     const sequenceId = recorder.listSequences()[0].id;
 
-    const res = await run(replay, { sequenceId, connectionReason: OWNER });
+    const res = await run(replay, { sequenceId, connection: OWNER });
     const out = text(res);
 
     expect(out).toContain(MEMBER);
@@ -258,7 +258,7 @@ describe('run against a two-connection sequence', () => {
 
     const res = await run(replay, {
       sequenceId,
-      connectionReason: OWNER,
+      connection: OWNER,
       connections: { 'duo-member-twoo': 'my-second-browser' },
     });
 
@@ -273,8 +273,8 @@ describe('run against a two-connection sequence', () => {
   it('accepts a key that only a nested sequence names', async () => {
     const { replay, recorder, calls } = makeHarness({ live: [OWNER, 'my-second-browser'] });
     await recorder.createSequenceFromCommands('duo-setup', [
-      { tool: 'connection', params: { action: 'launch', name: MEMBER } },
-      { tool: 'dom', params: { action: 'querySelector', selector: '#member-claim', connectionReason: MEMBER } },
+      { tool: 'connection', params: { action: 'launch', connection: MEMBER } },
+      { tool: 'dom', params: { action: 'querySelector', selector: '#member-claim', connection: MEMBER } },
     ]);
     await recorder.createSequenceFromCommands('duo-outer', [
       runsOnPass('duo-setup'),
@@ -283,7 +283,7 @@ describe('run against a two-connection sequence', () => {
 
     const res = await run(replay, {
       sequenceId,
-      connectionReason: OWNER,
+      connection: OWNER,
       connections: { [MEMBER]: 'my-second-browser' },
     });
 
@@ -299,7 +299,7 @@ describe('run against a two-connection sequence', () => {
   it('accepts a key that only a forEach body names', async () => {
     const { replay, recorder, calls } = makeHarness({ live: [OWNER, 'my-second-browser'] });
     await recorder.createSequenceFromCommands('per-member', [
-      { tool: 'dom', params: { action: 'querySelector', selector: '#member-claim', connectionReason: MEMBER } },
+      { tool: 'dom', params: { action: 'querySelector', selector: '#member-claim', connection: MEMBER } },
     ]);
     await recorder.createSequenceFromCommands('duo-each', [
       { tool: 'forEach', params: { in: [1], as: 'row', do: 'per-member' } },
@@ -308,7 +308,7 @@ describe('run against a two-connection sequence', () => {
 
     const res = await run(replay, {
       sequenceId,
-      connectionReason: OWNER,
+      connection: OWNER,
       connections: { [MEMBER]: 'my-second-browser' },
     });
 
@@ -319,8 +319,8 @@ describe('run against a two-connection sequence', () => {
   it('launches the mapped browser when the session does not have it', async () => {
     const { replay, recorder, calls } = makeHarness({ live: [OWNER] });
     await recorder.createSequenceFromCommands('duo-setup', [
-      { tool: 'connection', params: { action: 'launch', name: MEMBER } },
-      { tool: 'dom', params: { action: 'querySelector', selector: '#member-claim', connectionReason: MEMBER } },
+      { tool: 'connection', params: { action: 'launch', connection: MEMBER } },
+      { tool: 'dom', params: { action: 'querySelector', selector: '#member-claim', connection: MEMBER } },
     ]);
     await recorder.createSequenceFromCommands('duo-outer', [
       runsOnPass('duo-setup'),
@@ -329,18 +329,18 @@ describe('run against a two-connection sequence', () => {
 
     await run(replay, {
       sequenceId,
-      connectionReason: OWNER,
+      connection: OWNER,
       connections: { [MEMBER]: 'my-second-browser' },
     });
 
-    expect(calls.filter(c => c.tool === 'connection' && c.params.action === 'launch').map(c => c.params.name))
+    expect(calls.filter(c => c.tool === 'connection' && c.params.action === 'launch').map(c => c.params.connection))
       .toEqual(['my-second-browser']);
   });
 
   it('still rejects a typo when every sub-sequence is resolvable', async () => {
     const { replay, recorder } = makeHarness({ live: [OWNER, 'my-second-browser'] });
     await recorder.createSequenceFromCommands('duo-setup', [
-      { tool: 'dom', params: { action: 'querySelector', selector: '#member-claim', connectionReason: MEMBER } },
+      { tool: 'dom', params: { action: 'querySelector', selector: '#member-claim', connection: MEMBER } },
     ]);
     await recorder.createSequenceFromCommands('duo-outer', [
       runsOnPass('duo-setup'),
@@ -349,7 +349,7 @@ describe('run against a two-connection sequence', () => {
 
     const res = await run(replay, {
       sequenceId,
-      connectionReason: OWNER,
+      connection: OWNER,
       connections: { 'duo-member-twoo': 'my-second-browser' },
     });
 
@@ -370,7 +370,7 @@ describe('run against a two-connection sequence', () => {
 
     const res = await run(replay, {
       sequenceId,
-      connectionReason: OWNER,
+      connection: OWNER,
       connections: { 'nobody-names-this': 'my-second-browser' },
     });
 
@@ -388,7 +388,7 @@ describe('run against an existing single-connection sequence', () => {
     ]);
     const sequenceId = recorder.listSequences()[0].id;
 
-    await run(replay, { sequenceId, connectionReason: 'legacy-run-one' });
+    await run(replay, { sequenceId, connection: 'legacy-run-one' });
 
     expect(domConnections(calls)).toEqual(['legacy-run-one', 'legacy-run-one']);
     // no connection probing for a sequence that names none
@@ -398,14 +398,14 @@ describe('run against an existing single-connection sequence', () => {
   it('still stamps the run connection onto a launch step', async () => {
     const { replay, recorder, calls } = makeHarness();
     await recorder.createSequenceFromCommands('legacy-launch', [
-      { tool: 'connection', params: { action: 'launch', name: 'recorded-ref-one' } },
+      { tool: 'connection', params: { action: 'launch', connection: 'recorded-ref-one' } },
       { tool: 'dom', params: { action: 'querySelector', selector: '#a' } },
     ]);
     const sequenceId = recorder.listSequences()[0].id;
 
-    await run(replay, { sequenceId, connectionReason: 'legacy-run-one' });
+    await run(replay, { sequenceId, connection: 'legacy-run-one' });
 
-    expect(calls.filter(c => c.tool === 'connection' && c.params.action === 'launch').map(c => c.params.name))
+    expect(calls.filter(c => c.tool === 'connection' && c.params.action === 'launch').map(c => c.params.connection))
       .toEqual(['legacy-run-one']);
   });
 });
@@ -413,8 +413,8 @@ describe('run against an existing single-connection sequence', () => {
 describe('a node-only sequence with per-step connections', () => {
   it('never launches Chrome, mapped or not', async () => {
     const { replay, recorder, calls } = makeHarness({ live: ['node-one-app', 'node-two-app'] });
-    await recorder.recordCommand('inspect', { action: 'evaluateExpression', expression: '1+1', connectionReason: 'node-one-app' });
-    await recorder.recordCommand('inspect', { action: 'evaluateExpression', expression: '2+2', connectionReason: 'node-two-app' });
+    await recorder.recordCommand('inspect', { action: 'evaluateExpression', expression: '1+1', connection: 'node-one-app' });
+    await recorder.recordCommand('inspect', { action: 'evaluateExpression', expression: '2+2', connection: 'node-two-app' });
     await replay.handler({ action: 'create', name: 'node-duo', indices: [0, 1] } as any);
     const sequenceId = recorder.listSequences()[0].id;
 
@@ -422,7 +422,7 @@ describe('a node-only sequence with per-step connections', () => {
 
     expect(calls.some(c => c.tool === 'connection' && c.params.action === 'launch')).toBe(false);
     expect(calls.filter(c => c.tool === 'inspect' && c.params.action === 'evaluateExpression')
-      .map(c => c.params.connectionReason)).toEqual(['node-one-app', 'node-two-app']);
+      .map(c => c.params.connection)).toEqual(['node-one-app', 'node-two-app']);
   });
 });
 
@@ -435,7 +435,7 @@ describe('repeat across two connections', () => {
     const { replay, recorder, calls } = makeHarness();
     await recordDuo(recorder);
 
-    // No connectionReason: every command already knows its own.
+    // No connection: every command already knows its own.
     // PRE-FIX: the recorded connections are gone, so this errors with
     // MISSING_PARAMETER instead of running anything.
     const res = await replay.handler({ action: 'repeat', indices: [0, 1, 2] } as any);
@@ -444,11 +444,11 @@ describe('repeat across two connections', () => {
     expect(domConnections(calls)).toEqual([OWNER, MEMBER, OWNER]);
   });
 
-  it('refuses a batch-level connectionReason rather than collapsing it', async () => {
+  it('refuses a batch-level connection rather than collapsing it', async () => {
     const { replay, recorder, calls } = makeHarness();
     await recordDuo(recorder);
 
-    const res = await replay.handler({ action: 'repeat', indices: [0, 1, 2], connectionReason: 'other-browser-one' } as any);
+    const res = await replay.handler({ action: 'repeat', indices: [0, 1, 2], connection: 'other-browser-one' } as any);
 
     // Running two browsers' commands in one would report success without ever
     // using the second, so there is no honest answer here - say so and run
@@ -459,12 +459,12 @@ describe('repeat across two connections', () => {
     expect(calls.length).toBe(0);
   });
 
-  it('honours a batch-level connectionReason when the batch is single-connection', async () => {
+  it('honours a batch-level connection when the batch is single-connection', async () => {
     const { replay, recorder, calls } = makeHarness();
     await recorder.recordCommand('dom', { action: 'querySelector', selector: '#a' });
-    await recorder.recordCommand('dom', { action: 'querySelector', selector: '#b', connectionReason: MEMBER });
+    await recorder.recordCommand('dom', { action: 'querySelector', selector: '#b', connection: MEMBER });
 
-    await replay.handler({ action: 'repeat', indices: [0, 1], connectionReason: OWNER } as any);
+    await replay.handler({ action: 'repeat', indices: [0, 1], connection: OWNER } as any);
 
     // This is what the parameter has always meant. Once history started
     // retaining connections, honouring only the bare command turned it into a
@@ -481,7 +481,7 @@ describe('analyzeRecordedStepConnections / normalizeStepConnections', () => {
   it('does not count a bare wait({ms}) as an ambiguous browser step', () => {
     const commands = [
       { tool: 'wait', params: { ms: 100 } },
-      { tool: 'dom', params: { action: 'querySelector', selector: '#a', connectionReason: OWNER } },
+      { tool: 'dom', params: { action: 'querySelector', selector: '#a', connection: OWNER } },
     ];
     const normalized = normalizeStepConnections(commands);
     expect(normalized.hoisted).toBe(OWNER);
@@ -491,7 +491,7 @@ describe('analyzeRecordedStepConnections / normalizeStepConnections', () => {
   it('treats a bare wait({selector}) as ambiguous', () => {
     const commands = [
       { tool: 'wait', params: { selector: '#a' } },
-      { tool: 'dom', params: { action: 'querySelector', selector: '#a', connectionReason: OWNER } },
+      { tool: 'dom', params: { action: 'querySelector', selector: '#a', connection: OWNER } },
     ];
     const normalized = normalizeStepConnections(commands);
     expect(normalized.hoisted).toBeUndefined();
@@ -500,8 +500,8 @@ describe('analyzeRecordedStepConnections / normalizeStepConnections', () => {
 
   it('reports references in first-seen order and never mutates the input', () => {
     const commands = [
-      { tool: 'dom', params: { action: 'querySelector', selector: '#a', connectionReason: OWNER } },
-      { tool: 'dom', params: { action: 'querySelector', selector: '#b', connectionReason: MEMBER } },
+      { tool: 'dom', params: { action: 'querySelector', selector: '#a', connection: OWNER } },
+      { tool: 'dom', params: { action: 'querySelector', selector: '#b', connection: MEMBER } },
     ];
     const analysis = analyzeRecordedStepConnections(commands);
     expect(analysis.references).toEqual([OWNER, MEMBER]);
@@ -510,7 +510,7 @@ describe('analyzeRecordedStepConnections / normalizeStepConnections', () => {
 
     const normalized = normalizeStepConnections(commands);
     expect(normalized.hoisted).toBeUndefined();
-    expect(commands[0].params.connectionReason).toBe(OWNER);
+    expect(commands[0].params.connection).toBe(OWNER);
   });
 });
 
@@ -523,8 +523,8 @@ const seqOf = (recorder: CommandRecorder, name: string) =>
 
 /** Record N steps against one connection and create a (hoisted) sequence. */
 async function createSolo(recorder: CommandRecorder, replay: any, name: string, ref: string) {
-  await recorder.recordCommand('dom', { action: 'querySelector', selector: '#a', connectionReason: ref });
-  await recorder.recordCommand('dom', { action: 'querySelector', selector: '#b', connectionReason: ref });
+  await recorder.recordCommand('dom', { action: 'querySelector', selector: '#a', connection: ref });
+  await recorder.recordCommand('dom', { action: 'querySelector', selector: '#b', connection: ref });
   await replay.handler({ action: 'create', name, indices: [0, 1] } as any);
 }
 
@@ -535,7 +535,7 @@ describe('insert into a hoisted sequence', () => {
     expect(seqOf(recorder, 'solo').recordedConnection).toBe(OWNER);
 
     await replay.handler({ action: 'run', wait: true, name: 'solo', stepTo: 1 } as any);
-    await recorder.recordCommand('dom', { action: 'querySelector', selector: '#c', connectionReason: OWNER });
+    await recorder.recordCommand('dom', { action: 'querySelector', selector: '#c', connection: OWNER });
     const idx = recorder.getCurrentHistoryIndex();
     await replay.handler({ action: 'history' } as any);   // insert requires history to be viewed first
     await replay.handler({ action: 'insert', name: 'solo', insertIndices: [idx], overwrite: true } as any);
@@ -545,22 +545,22 @@ describe('insert into a hoisted sequence', () => {
     // left half-pinned to this session - unportable, and green on a run that
     // split it across two browsers.
     const cmds = seqOf(recorder, 'solo').commands;
-    expect(cmds.map(c => c.params.connectionReason)).toEqual([undefined, undefined, undefined]);
+    expect(cmds.map(c => c.params.connection)).toEqual([undefined, undefined, undefined]);
     expect(seqOf(recorder, 'solo').recordedConnection).toBe(OWNER);
   });
 
-  it('stays retargetable by a run-level connectionReason afterwards', async () => {
+  it('stays retargetable by a run-level connection afterwards', async () => {
     const { replay, recorder, calls } = makeHarness({ live: [OWNER, 'other-browser-one'] });
     await createSolo(recorder, replay, 'solo', OWNER);
 
     await replay.handler({ action: 'run', wait: true, name: 'solo', stepTo: 1 } as any);
-    await recorder.recordCommand('dom', { action: 'querySelector', selector: '#c', connectionReason: OWNER });
+    await recorder.recordCommand('dom', { action: 'querySelector', selector: '#c', connection: OWNER });
     const idx = recorder.getCurrentHistoryIndex();
     await replay.handler({ action: 'history' } as any);   // insert requires history to be viewed first
     await replay.handler({ action: 'insert', name: 'solo', insertIndices: [idx], overwrite: true } as any);
 
     calls.length = 0;
-    await run(replay, { name: 'solo', connectionReason: 'other-browser-one' });
+    await run(replay, { name: 'solo', connection: 'other-browser-one' });
 
     // PRE-FIX: ['other-browser-one', 'duo-owner-console', 'other-browser-one']
     // - a silent two-browser split, reported as a green run.
@@ -572,7 +572,7 @@ describe('insert into a hoisted sequence', () => {
     await createSolo(recorder, replay, 'solo', OWNER);
 
     await replay.handler({ action: 'run', wait: true, name: 'solo', stepTo: 1 } as any);
-    await recorder.recordCommand('dom', { action: 'querySelector', selector: '#c', connectionReason: MEMBER });
+    await recorder.recordCommand('dom', { action: 'querySelector', selector: '#c', connection: MEMBER });
     const idx = recorder.getCurrentHistoryIndex();
     await replay.handler({ action: 'history' } as any);
     const res = await replay.handler({ action: 'insert', name: 'solo', insertIndices: [idx], overwrite: true } as any);
@@ -580,8 +580,8 @@ describe('insert into a hoisted sequence', () => {
     // The sequence genuinely spans two browsers now: every step must be explicit
     // so the executor's existence guard (gated on multiConnection) applies.
     const cmds = seqOf(recorder, 'solo').commands;
-    expect(cmds.map(c => c.params.connectionReason).filter(Boolean).length).toBe(cmds.length);
-    expect(new Set(cmds.map(c => c.params.connectionReason))).toEqual(new Set([OWNER, MEMBER]));
+    expect(cmds.map(c => c.params.connection).filter(Boolean).length).toBe(cmds.length);
+    expect(new Set(cmds.map(c => c.params.connection))).toEqual(new Set([OWNER, MEMBER]));
     expect(seqOf(recorder, 'solo').recordedConnection).toBeUndefined();
     expect(text(res)).toContain('Multi-connection sequence');
   });
@@ -591,7 +591,7 @@ describe('warnings that were unreachable', () => {
   it('warns about bare steps in a sequence that ALSO spans connections', async () => {
     const { replay, recorder } = makeHarness();
     await recordDuo(recorder);
-    // A step recorded without a connectionReason, as recordings made before
+    // A step recorded without a connection, as recordings made before
     // every call had to name one hold: nothing records which browser it belonged to.
     await recorder.recordCommand('inspect', { action: 'evaluateExpression', expression: '1' });
 
@@ -600,7 +600,7 @@ describe('warnings that were unreachable', () => {
     // PRE-FIX: formatConnectionNote returned early on multiConnection, so the
     // "some steps name no connection" warning was unreachable in exactly the
     // case where a bare step silently lands in a different browser depending on
-    // the run-level connectionReason - green either way.
+    // the run-level connection - green either way.
     expect(text(res)).toContain('Multi-connection sequence');
     expect(text(res)).toContain('Some steps name no connection');
   });
@@ -643,8 +643,8 @@ describe('generated test code', () => {
     const { replay, recorder } = makeHarness();
     // The generators only emit navigate/input steps, so drive the recording with
     // clicks rather than the dom probes the other tests use.
-    await recorder.recordCommand('input', { action: 'click', selector: '#owner-btn', connectionReason: OWNER });
-    await recorder.recordCommand('input', { action: 'click', selector: '#member-btn', connectionReason: MEMBER });
+    await recorder.recordCommand('input', { action: 'click', selector: '#owner-btn', connection: OWNER });
+    await recorder.recordCommand('input', { action: 'click', selector: '#member-btn', connection: MEMBER });
     await replay.handler({ action: 'create', name: 'duo', indices: [0, 1] } as any);
 
     const pw = text(await replay.handler({ action: 'get', name: 'duo', outputFormat: 'playwright' } as any));
@@ -665,7 +665,7 @@ describe('generated test code', () => {
     const { replay, recorder } = makeHarness();
     await recorder.createSequenceFromCommands('setup-only', [
       runsOnPass('mint-identity'),
-      { tool: 'connection', params: { action: 'launch', name: MEMBER } },
+      { tool: 'connection', params: { action: 'launch', connection: MEMBER } },
     ]);
 
     for (const format of ['playwright', 'puppeteer'] as const) {
@@ -679,7 +679,7 @@ describe('generated test code', () => {
 
   it('does not add the guard when something was generated', async () => {
     const { replay, recorder } = makeHarness();
-    await recorder.recordCommand('input', { action: 'click', selector: '#go', connectionReason: OWNER });
+    await recorder.recordCommand('input', { action: 'click', selector: '#go', connection: OWNER });
     await replay.handler({ action: 'create', name: 'has-steps', indices: [0] } as any);
 
     const pw = text(await replay.handler({ action: 'get', name: 'has-steps', outputFormat: 'playwright' } as any));

@@ -27,7 +27,7 @@ beforeEach(() => {
 
 describe('modal on a page paused at a breakpoint', () => {
   it('detect reports the pause, not an empty page', async () => {
-    const result: any = await makeModal({ paused: true }).handler({ action: 'detect', connectionReason: 'shop-web-app' });
+    const result: any = await makeModal({ paused: true }).handler({ action: 'detect', connection: 'shop-web-app' });
 
     expect(result.isError).toBe(true);
     expect(text(result)).toContain('paused at a breakpoint');
@@ -35,7 +35,7 @@ describe('modal on a page paused at a breakpoint', () => {
   });
 
   it('dismiss reports the pause, not that there is nothing to dismiss', async () => {
-    const result: any = await makeModal({ paused: true }).handler({ action: 'dismiss', connectionReason: 'shop-web-app' });
+    const result: any = await makeModal({ paused: true }).handler({ action: 'dismiss', connection: 'shop-web-app' });
 
     expect(result.isError).toBe(true);
     expect(text(result)).toContain('paused at a breakpoint');
@@ -45,7 +45,7 @@ describe('modal on a page paused at a breakpoint', () => {
 describe('modal dismiss', () => {
   it('detects with the options detect was given, so an index means the same modal', async () => {
     await makeModal({ paused: false }).handler({
-      action: 'dismiss', connectionReason: 'shop-web-app', index: 1, minZIndex: 10, minViewportCoverage: 0.1, includeBackdrops: false,
+      action: 'dismiss', connection: 'shop-web-app', index: 1, minZIndex: 10, minViewportCoverage: 0.1, includeBackdrops: false,
     });
 
     expect(detectMock).toHaveBeenCalledWith(expect.anything(), { minZIndex: 10, minViewportCoverage: 0.1, includeBackdrops: false });

@@ -22,10 +22,10 @@ import type { BreakpointHitInfo, ConnectionAnalysis, ExecutionContext } from './
  * Undefined when the connection cannot be read.
  */
 export async function debuggerStatusOf(ctx: ExecutionContext): Promise<DebuggerStatusMeta | undefined> {
-  const { executeToolCall, connectionReason } = ctx;
-  if (!connectionReason) return undefined;
+  const { executeToolCall, connection } = ctx;
+  if (!connection) return undefined;
   try {
-    const result = await executeToolCall('connection', { action: 'status', connectionReason });
+    const result = await executeToolCall('connection', { action: 'status', connection });
     return result?._meta?.debugger;
   } catch {
     return undefined;
@@ -57,9 +57,9 @@ export async function checkIfPaused(
 export async function resumeIfPaused(
   ctx: ExecutionContext
 ): Promise<void> {
-  const { executeToolCall, connectionReason, logPrefix = 'executor' } = ctx;
+  const { executeToolCall, connection, logPrefix = 'executor' } = ctx;
 
-  if (!connectionReason) return;
+  if (!connection) return;
 
   const pauseInfo = await checkIfPaused(ctx);
   if (pauseInfo) {
@@ -67,7 +67,7 @@ export async function resumeIfPaused(
     try {
       await executeToolCall('execution', {
         action: 'resume',
-        connectionReason
+        connection
       });
       await new Promise(resolve => setTimeout(resolve, 100));
     } catch {
@@ -94,7 +94,7 @@ export type AutoLaunchResult = {
  */
 export async function autoLaunchChrome(
   executeToolCall: ExecuteToolCall,
-  connectionReason: string,
+  connection: string,
   logPrefix: string = 'auto-launch',
   forceNewInstance: boolean = false,
   proxy: boolean = false
@@ -102,23 +102,23 @@ export async function autoLaunchChrome(
   // Answered as a result rather than thrown: this runs inside ensureConnection's
   // catch, where a throw escapes the run's own LAUNCH_FAILED handling.
   try {
-    requireValidReference(connectionReason, 'connectionReason');
+    requireValidReference(connection, 'connection');
   } catch (invalid: any) {
     return {
       success: false,
-      error: invalid?.response?.content?.[0]?.text || invalid?.message || `Invalid connection name "${connectionReason}"`,
+      error: invalid?.response?.content?.[0]?.text || invalid?.message || `Invalid connection name "${connection}"`,
       errorType: 'INVALID_REFERENCE',
     };
   }
 
-  await debugLog(logPrefix, `Auto-launching Chrome with reference: ${connectionReason} (forceNewInstance=${forceNewInstance})`);
+  await debugLog(logPrefix, `Auto-launching Chrome with reference: ${connection} (forceNewInstance=${forceNewInstance})`);
 
   // A launch failure arrives as a throw (executeToolCall raises isError), and
   // is answered as LAUNCH_FAILED for the same reason.
   try {
     await executeToolCall('connection', {
       action: 'launch',
-      name: connectionReason,
+      connection,
       forceNewInstance,
       ...(proxy && { proxy: true }),
     });
@@ -130,7 +130,7 @@ export async function autoLaunchChrome(
     };
   }
 
-  await debugLog(logPrefix, `Chrome launched successfully with reference: ${connectionReason}`);
+  await debugLog(logPrefix, `Chrome launched successfully with reference: ${connection}`);
   return { success: true };
 }
 
@@ -145,30 +145,30 @@ export async function ensureConnection(
    *  too - otherwise the replay drives an app whose traffic nothing captures. */
   throughProxy: boolean = false
 ): Promise<{ success: true; didAutoLaunch: boolean } | { success: false; error: string }> {
-  const { executeToolCall, connectionReason, logPrefix = 'executor' } = ctx;
+  const { executeToolCall, connection, logPrefix = 'executor' } = ctx;
 
   if (!needsConnection || createsBeforeUse) {
     return { success: true, didAutoLaunch: false };
   }
 
   try {
-    await debugLog(logPrefix, `Checking connection: ${connectionReason}`);
-    const infoResult = await executeToolCall('navigate', { action: 'info', connectionReason });
+    await debugLog(logPrefix, `Checking connection: ${connection}`);
+    const infoResult = await executeToolCall('navigate', { action: 'info', connection });
     // In production this throws instead, into the same catch below; the check
     // is for a caller wired not to rethrow.
     if (infoResult?.isError) {
       throw new Error('Connection not active');
     }
-    await debugLog(logPrefix, `Connection ${connectionReason} is active`);
+    await debugLog(logPrefix, `Connection ${connection} is active`);
 
     // Auto-resume if paused at a breakpoint
     await resumeIfPaused(ctx);
 
     return { success: true, didAutoLaunch: false };
   } catch {
-    await debugLog(logPrefix, `Connection ${connectionReason} not active, launching Chrome...`);
+    await debugLog(logPrefix, `Connection ${connection} not active, launching Chrome...`);
     // Sequence runs always get a fresh Chrome process, not a tab in an existing one
-    const launchResult = await autoLaunchChrome(executeToolCall, connectionReason, logPrefix, true, throughProxy);
+    const launchResult = await autoLaunchChrome(executeToolCall, connection, logPrefix, true, throughProxy);
     if (!launchResult.success) {
       return { success: false, error: launchResult.error };
     }
@@ -209,9 +209,9 @@ export async function navigateToStartUrl(
   sequence: CommandSequence,
   analysis: ConnectionAnalysis
 ): Promise<{ success: true } | { success: false; error: string }> {
-  const { executeToolCall, connectionReason, logPrefix = 'executor' } = ctx;
+  const { executeToolCall, connection, logPrefix = 'executor' } = ctx;
 
-  if (!sequence.startUrl || !connectionReason) {
+  if (!sequence.startUrl || !connection) {
     return { success: true };
   }
 
@@ -237,7 +237,7 @@ export async function navigateToStartUrl(
     await executeToolCall('navigate', {
       action: 'goto',
       url: sequence.startUrl,
-      connectionReason
+      connection
     });
     await debugLog(logPrefix, `Navigated to startUrl: ${sequence.startUrl}`);
     return { success: true };
@@ -256,12 +256,12 @@ export async function validateNavigation(
   ctx: ExecutionContext,
   expectedUrl?: string
 ): Promise<{ success: boolean; error?: string }> {
-  const { executeToolCall, connectionReason, logPrefix = 'executor' } = ctx;
+  const { executeToolCall, connection, logPrefix = 'executor' } = ctx;
 
   try {
     const infoResult = await executeToolCall('navigate', {
       action: 'info',
-      connectionReason
+      connection
     });
 
     // The page's URL and title from `_meta`: the rendered text also carries
@@ -295,7 +295,7 @@ export async function waitForElement(
   ctx: ExecutionContext,
   selector: string
 ): Promise<void> {
-  const { executeToolCall, connectionReason, logPrefix = 'executor' } = ctx;
+  const { executeToolCall, connection, logPrefix = 'executor' } = ctx;
 
   debugLog(logPrefix, `Waiting for element: ${selector}`);
 
@@ -305,7 +305,7 @@ export async function waitForElement(
       const result = await executeToolCall('dom', {
         action: 'querySelector',
         selector,
-        connectionReason
+        connection
       });
 
       if (result && !result.isError) {
@@ -335,7 +335,7 @@ export async function validateTypedText(
   expectedText: string,
   append: boolean = false
 ): Promise<void> {
-  const { executeToolCall, connectionReason, logPrefix = 'executor' } = ctx;
+  const { executeToolCall, connection, logPrefix = 'executor' } = ctx;
 
   debugLog(logPrefix, `Validating typed text in ${selector}${append ? ' (append mode)' : ''}`);
 
@@ -354,7 +354,7 @@ export async function validateTypedText(
         if (el.isContentEditable || el.contentEditable === 'true') return el.innerText?.trim() || '';
         return el.value || '';
       })()`,
-      connectionReason
+      connection
     });
 
     const evaluated = evalResult?._meta?.inspect?.value;
@@ -428,7 +428,7 @@ export interface ClickValidationResult {
  * Capture pre-click state for delta comparison
  */
 export async function capturePreClickState(ctx: ExecutionContext): Promise<PreClickState> {
-  const { executeToolCall, connectionReason, logPrefix = 'executor' } = ctx;
+  const { executeToolCall, connection, logPrefix = 'executor' } = ctx;
 
   let consoleErrorCount = 0;
   let consoleWarnCount = 0;
@@ -442,7 +442,7 @@ export async function capturePreClickState(ctx: ExecutionContext): Promise<PreCl
     // Get console counts via _meta, plus the most recent errors' ids so a
     // post-click diff can tell which ones are actually new.
     const consoleResult = await executeToolCall('console', {
-      action: 'recent', type: 'error', count: CLICK_VALIDATION_ERROR_SAMPLE, connectionReason
+      action: 'recent', type: 'error', count: CLICK_VALIDATION_ERROR_SAMPLE, connection
     });
     consoleErrorCount = consoleResult?._meta?.console?.errorCount || 0;
     consoleWarnCount = consoleResult?._meta?.console?.warnCount || 0;
@@ -455,7 +455,7 @@ export async function capturePreClickState(ctx: ExecutionContext): Promise<PreCl
   try {
     // Get network request count via _meta
     const networkResult = await executeToolCall('network', {
-      action: 'list', limit: 1, connectionReason
+      action: 'list', limit: 1, connection
     });
     networkRequestCount = networkResult?._meta?.network?.totalCount || 0;
     networkSince = networkResult?._meta?.network?.at;
@@ -466,7 +466,7 @@ export async function capturePreClickState(ctx: ExecutionContext): Promise<PreCl
   try {
     // Get current URL via _meta
     const pageResult = await executeToolCall('navigate', {
-      action: 'info', connectionReason
+      action: 'info', connection
     });
     url = pageResult?._meta?.navigate?.url || '';
   } catch {
@@ -487,7 +487,7 @@ export async function validateClickAction(
   /** What this step did when it was recorded, where the sequence kept it. */
   recorded?: StepTraffic,
 ): Promise<ClickValidationResult> {
-  const { executeToolCall, connectionReason, logPrefix = 'executor' } = ctx;
+  const { executeToolCall, connection, logPrefix = 'executor' } = ctx;
   const errors: string[] = [];
   const warnings: string[] = [];
   const info: string[] = [];
@@ -523,7 +523,7 @@ export async function validateClickAction(
   // 3. Check for new console messages
   try {
     const consoleResult = await executeToolCall('console', {
-      action: 'recent', type: 'error', count: CLICK_VALIDATION_ERROR_SAMPLE, connectionReason
+      action: 'recent', type: 'error', count: CLICK_VALIDATION_ERROR_SAMPLE, connection
     });
     const newErrorCount = consoleResult?._meta?.console?.errorCount || 0;
     const newWarnCount = consoleResult?._meta?.console?.warnCount || 0;
@@ -584,7 +584,7 @@ export async function validateClickAction(
       // clock nothing separates the two, and nothing is charged.
       if (preState.networkSince !== undefined) {
         const networkResult = await executeToolCall('network', {
-          action: 'list', connectionReason, since: preState.networkSince, limit: 100000,
+          action: 'list', connection, since: preState.networkSince, limit: 100000,
         });
         const rows: Array<{ method: string; status?: number }> = networkResult?._meta?.network?.requests ?? [];
         const failedPosts = rows.filter(r => r.method === 'POST' && r.status !== undefined && r.status >= 400 && r.status < 500);
@@ -621,15 +621,15 @@ export async function validateClickAction(
  * Gather diagnostic information after a failure
  */
 export async function gatherDiagnostics(ctx: ExecutionContext): Promise<string> {
-  const { executeToolCall, connectionReason } = ctx;
+  const { executeToolCall, connection } = ctx;
 
-  if (!connectionReason) return '';
+  if (!connection) return '';
 
   try {
     const consoleResult = await executeToolCall('console', {
       action: 'list',
       type: 'error',
-      connectionReason
+      connection
     });
     // Counts from `_meta`: the rendered text carries logged messages and URLs,
     // whose own words and digits would count too.
@@ -642,7 +642,7 @@ export async function gatherDiagnostics(ctx: ExecutionContext): Promise<string> 
         action: 'search',
         pattern: '.',
         statusCode,
-        connectionReason
+        connection
       });
       return result?._meta?.network?.matchCount ?? 0;
     };
@@ -658,7 +658,7 @@ export async function gatherDiagnostics(ctx: ExecutionContext): Promise<string> 
 
     const interactiveResult = await executeToolCall('content', {
       action: 'findInteractive',
-      connectionReason
+      connection
     });
     const interactiveCount = interactiveResult?._meta?.content?.totalCount ?? 'unknown';
 

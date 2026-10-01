@@ -87,7 +87,7 @@ describe('a paused frame in a script a directory map covers', () => {
     };
     const { inspect } = createInspectionTools(handler, async () => ({ cdpManager }) as any);
 
-    const result: any = await inspect.handler({ action: 'getCallStack', connectionReason: 'my-web-app' });
+    const result: any = await inspect.handler({ action: 'getCallStack', connection: 'my-web-app' });
 
     expect(result.content[0].text).toContain('Paused at: ../../src/app.ts:10');
     expect(result.content[0].text).toContain('../../src/app.ts:10:3');
@@ -103,8 +103,8 @@ describe('a breakpoint set on an original line a directory map covers', () => {
     const cdpManager = { getRuntimeType: () => 'chrome', isConnected: () => true, isScriptLoaded: () => false, setBreakpoint };
     const { breakpoint } = createBreakpointTools(handler, undefined, async () => ({ cdpManager }) as any);
 
-    await breakpoint.handler({ action: 'set', connectionReason: 'my-web-app', url: 'src/app.ts', lineNumber: 10 } as any);
-    await breakpoint.handler({ action: 'set', connectionReason: 'my-web-app', url: 'src/app.ts', lineNumber: 10, columnNumber: 3 } as any);
+    await breakpoint.handler({ action: 'set', connection: 'my-web-app', url: 'src/app.ts', lineNumber: 10 } as any);
+    await breakpoint.handler({ action: 'set', connection: 'my-web-app', url: 'src/app.ts', lineNumber: 10, columnNumber: 3 } as any);
 
     expect(setBreakpoint.mock.calls.map(call => call.slice(0, 3))).toEqual([
       ['assets/app.js', 3, 1],
@@ -124,7 +124,7 @@ describe('a paused frame no source map covers', () => {
     };
     const { inspect } = createInspectionTools(new SourceMapHandler(), async () => ({ cdpManager }) as any);
 
-    const result: any = await inspect.handler({ action: 'getCallStack', connectionReason: 'my-web-app' });
+    const result: any = await inspect.handler({ action: 'getCallStack', connection: 'my-web-app' });
 
     expect(result.content[0].text).toContain('http://localhost:3000/plain.js:19:30');
   });

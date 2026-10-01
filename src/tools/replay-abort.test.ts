@@ -55,13 +55,13 @@ function makeHarness(opts: {
     }),
   };
 
-  const resolveConnectionFromReason = async () => ({
+  const resolveConnectionByName = async () => ({
     connection: { port: 9222 },
     cdpManager,
     puppeteerManager: {} as any,
   });
 
-  const { wait } = createWaitTools(resolveConnectionFromReason as any);
+  const { wait } = createWaitTools(resolveConnectionByName as any);
 
   // productionShaped mirrors index.ts: any isError response becomes a thrown
   // ToolError, carrying the response the classifiers read.
@@ -90,7 +90,7 @@ function makeHarness(opts: {
   const ctx: ExecutionContext = {
     executeToolCall,
     commandRecorder,
-    connectionReason: 'test-conn',
+    connection: 'test-conn',
     logPrefix: 'abort-test',
   };
 
@@ -101,7 +101,7 @@ function makeHarness(opts: {
     commandRecorder,
     cdpManager,
     getPollCount: () => pollCount,
-    resolveConnectionFromReason,
+    resolveConnectionByName,
     waitTool: wait,
   };
 }
@@ -302,7 +302,7 @@ describe('replay cancel end to end', () => {
     const { replay } = createReplayTools(recorder, h.executeToolCall, async () => null, async () => 9222, undefined);
 
     const started = await replay.handler({
-      action: 'run', sequenceId: sequence.id, connectionReason: 'test-conn',
+      action: 'run', sequenceId: sequence.id, connection: 'test-conn',
     } as any);
     const runId = started._meta.replay.runId as string;
 

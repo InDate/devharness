@@ -48,14 +48,14 @@ export function logRun(record: RunRecord): void {
     const bench = await import('../bench-mode.js');
     const readings: Array<StepCheck | undefined> = [];
     for (const result of record.results) readings[result.step - 1] = checkReadingOf(result);
-    const steps = record.connectionReason
-      ? bench.stepTallies(record.connectionReason, record.startedAt, record.endedAt ?? Date.now(), record.totalSteps, readings,
+    const steps = record.connection
+      ? bench.stepTallies(record.connection, record.startedAt, record.endedAt ?? Date.now(), record.totalSteps, readings,
           bench.stepTimes(record.stepStarts ?? [], record.endedAt ?? Date.now()))
       : undefined;
     await appendRun({
       runId: record.runId,
       sequence: record.sequenceName,
-      ...(record.connectionReason ? { connection: record.connectionReason } : {}),
+      ...(record.connection ? { connection: record.connection } : {}),
       via: 'replay',
       status: record.status,
       startedAt: record.startedAt,
@@ -268,7 +268,7 @@ export async function handleStep(
   const ctx: ExecutionContext = {
     executeToolCall,
     commandRecorder: recorder,
-    connectionReason: activeSeq.connectionReason,
+    connection: activeSeq.connection,
     logPrefix: 'step',
     variableStore: activeSeq.capturedVariables ?? (activeSeq.capturedVariables = {}),
     runTimestamp: activeSeq.runTimestamp ?? (activeSeq.runTimestamp = Date.now()),
@@ -348,7 +348,7 @@ export async function handleFinish(
   const ctx: ExecutionContext = {
     executeToolCall,
     commandRecorder: recorder,
-    connectionReason: activeSeq.connectionReason,
+    connection: activeSeq.connection,
     logPrefix: 'finish',
     variableStore: activeSeq.capturedVariables ?? (activeSeq.capturedVariables = {}),
     runTimestamp: activeSeq.runTimestamp ?? (activeSeq.runTimestamp = Date.now()),

@@ -16,14 +16,14 @@ const sourceSchema = z.object({
   startLine: z.number().optional().describe('get: start line number'),
   endLine: z.number().optional().describe('get: end line number'),
   directory: z.string().optional().describe('loadMaps: the directory whose .js.map files, subdirectories included, are registered'),
-  connectionReason: z.string().optional().describe('get: the connection, by the name connection launch or attach gave it'),
+  connection: z.string().optional().describe('get: the connection, by the name connection launch or attach gave it'),
 }).strict();
 
 type SourceArgs = z.infer<typeof sourceSchema>;
 
 export function createSourceTools(
   sourceMapHandler: SourceMapHandler,
-  resolveConnectionFromReason: (connectionReason: string) => Promise<{
+  resolveConnectionByName: (connection: string) => Promise<{
     connection: any;
     cdpManager: CDPManager;
     puppeteerManager: any;
@@ -35,9 +35,9 @@ export function createSourceTools(
     const { startLine, endLine } = args;
     const url = args.url!;
 
-    const resolved = await resolveConnectionFromReason(args.connectionReason!);
+    const resolved = await resolveConnectionByName(args.connection!);
     if (!resolved) {
-      return createErrorResponse('CONNECTION_NOT_FOUND', { reference: args.connectionReason });
+      return createErrorResponse('CONNECTION_NOT_FOUND', { reference: args.connection });
     }
     const targetCdpManager = resolved.cdpManager;
 
@@ -80,7 +80,7 @@ export function createSourceTools(
 
   /** Parameters each action cannot run without, checked before it runs. */
   const REQUIRED: Record<SourceArgs['action'], Array<keyof SourceArgs>> = {
-    get: ['url', 'connectionReason'],
+    get: ['url', 'connection'],
     loadMaps: ['directory'],
   };
 

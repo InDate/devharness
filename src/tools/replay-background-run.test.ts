@@ -78,7 +78,7 @@ describe('background run', () => {
     );
 
     const res = await replay.handler({
-      action: 'run', sequenceId: 'seq-a', connectionReason: 'test-conn',
+      action: 'run', sequenceId: 'seq-a', connection: 'test-conn',
     } as any);
 
     // Returned before all three (slow) steps could possibly have run
@@ -107,7 +107,7 @@ describe('background run', () => {
     const { replay, calls } = makeReplay([seq('seq-b', 'flow-b', commands)], { stepDelayMs: 50 });
 
     const res = await replay.handler({
-      action: 'run', sequenceId: 'seq-b', connectionReason: 'test-conn',
+      action: 'run', sequenceId: 'seq-b', connection: 'test-conn',
     } as any);
     const runId = res._meta.replay.runId as string;
 
@@ -134,8 +134,8 @@ describe('background run', () => {
     );
 
     const [r1, r2] = await Promise.all([
-      replay.handler({ action: 'run', sequenceId: 'seq-c', connectionReason: 'conn-1' } as any),
-      replay.handler({ action: 'run', sequenceId: 'seq-c', connectionReason: 'conn-2' } as any),
+      replay.handler({ action: 'run', sequenceId: 'seq-c', connection: 'conn-1' } as any),
+      replay.handler({ action: 'run', sequenceId: 'seq-c', connection: 'conn-2' } as any),
     ]);
 
     const id1 = r1._meta.replay.runId as string;
@@ -146,8 +146,8 @@ describe('background run', () => {
     await waitFor(() =>
       runRegistry.get(id1)!.status === 'completed' && runRegistry.get(id2)!.status === 'completed'
     );
-    expect(runRegistry.get(id1)!.connectionReason).toBe('conn-1');
-    expect(runRegistry.get(id2)!.connectionReason).toBe('conn-2');
+    expect(runRegistry.get(id1)!.connection).toBe('conn-1');
+    expect(runRegistry.get(id2)!.connection).toBe('conn-2');
   });
 
   it('a sequence a check runs does not register as a separate run', async () => {
@@ -158,7 +158,7 @@ describe('background run', () => {
     const { replay, calls } = makeReplay([outer, inner]);
 
     const res = await replay.handler({
-      action: 'run', sequenceId: 'seq-outer', connectionReason: 'test-conn',
+      action: 'run', sequenceId: 'seq-outer', connection: 'test-conn',
     } as any);
     const runId = res._meta.replay.runId as string;
 
@@ -199,7 +199,7 @@ describe('background run', () => {
     const { replay } = makeReplay([seq('seq-w', 'wait-flow', [domStep('#a'), domStep('#b')])]);
 
     const res = await replay.handler({
-      action: 'run', sequenceId: 'seq-w', connectionReason: 'test-conn', wait: true,
+      action: 'run', sequenceId: 'seq-w', connection: 'test-conn', wait: true,
     } as any);
 
     expect(res._meta.replay.success).toBe(true);
@@ -212,8 +212,8 @@ describe('background run', () => {
     const commands = Array.from({ length: 8 }, (_, i) => domStep(`#s${i}`));
     const { replay } = makeReplay([seq('seq-d', 'flow-d', commands)], { stepDelayMs: 40 });
 
-    const r1 = await replay.handler({ action: 'run', sequenceId: 'seq-d', connectionReason: 'c1' } as any);
-    const r2 = await replay.handler({ action: 'run', sequenceId: 'seq-d', connectionReason: 'c2' } as any);
+    const r1 = await replay.handler({ action: 'run', sequenceId: 'seq-d', connection: 'c1' } as any);
+    const r2 = await replay.handler({ action: 'run', sequenceId: 'seq-d', connection: 'c2' } as any);
 
     // Two executing runs: ambiguous
     const ambiguous = await replay.handler({ action: 'cancel' } as any);

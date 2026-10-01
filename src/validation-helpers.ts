@@ -116,7 +116,10 @@ export function validateParams<T extends z.ZodTypeAny>(
   const parameters: Record<string, string> = {};
   for (const issue of result.error.issues) {
     if (issue.code === 'unrecognized_keys') {
-      for (const key of issue.keys) parameters[key] = 'not a parameter of this tool';
+      for (const key of issue.keys) {
+        parameters[key] = renamedTo(toolName, key) ?? 'not a parameter of this tool';
+        if (key === 'connectionReason' || key === 'reference') parameters.connection ??= `takes what ${key} held`;
+      }
     } else {
       parameters[issue.path.join('.') || 'root'] = isMissingRequiredIssue(issue) ? 'missing' : fieldIssue(issue);
     }
@@ -131,7 +134,7 @@ export function validateParams<T extends z.ZodTypeAny>(
       parameters,
     };
     if (otherIssues.length > 0) {
-      error.validationErrors = formatZodErrors(result.error, otherIssues);
+      error.validationErrors = formatZodErrors(toolName, result.error, otherIssues);
     }
     return { success: false, error };
   }
@@ -142,10 +145,17 @@ export function validateParams<T extends z.ZodTypeAny>(
       success: false,
       error: `Invalid parameters for tool '${toolName}'`,
       code: 'INVALID_PARAMS',
-      validationErrors: formatZodErrors(result.error),
+      validationErrors: formatZodErrors(toolName, result.error),
       parameters,
     }
   };
+}
+
+/** Where a field an earlier version took went, for a call still written with it. */
+function renamedTo(toolName: string, key: string): string | undefined {
+  if (key === 'connectionReason' || key === 'reference') return 'renamed to connection';
+  if (toolName === 'connection' && key === 'name') return 'renamed to connection (launch, attach) and newName (rename)';
+  return undefined;
 }
 
 /** What is wrong with one field's value, without the field's name. */
@@ -173,8 +183,8 @@ export function describeRefusal(error: { missingParameters?: MissingParamInfo[];
 /**
  * Converts Zod validation errors to user-friendly messages
  */
-function formatZodErrors(error: z.ZodError, issues: z.ZodIssue[] = error.issues): string[] {
-  return issues.map(issue => {
+function formatZodErrors(toolName: string, error: z.ZodError, issues: z.ZodIssue[] = error.issues): string[] {
+  return issues.flatMap(issue => {
     const path = issue.path.length > 0 ? issue.path.join('.') : 'root';
 
     switch (issue.code) {
@@ -185,7 +195,10 @@ function formatZodErrors(error: z.ZodError, issues: z.ZodIssue[] = error.issues)
         return `Parameter '${path}' must be ${issue.expected}, got ${issue.received}`;
 
       case 'unrecognized_keys':
-        return `Unknown parameter(s): ${issue.keys.join(', ')}`;
+        return issue.keys.map(key => {
+          const renamed = renamedTo(toolName, key);
+          return renamed ? `\`${key}\` ${renamed}` : `Unknown parameter: ${key}`;
+        });
 
       case 'too_small':
         if (issue.type === 'string') {

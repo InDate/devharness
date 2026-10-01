@@ -30,7 +30,7 @@ describe('a sequence file written with removed tools', () => {
       id: 'old-form', name: 'old-form', createdAt: 1,
       commands: [
         { tool: 'launchChrome', params: { reference: 'shop', url: 'http://shop.test/' } },
-        { tool: 'getSourceCode', params: { url: 'app.js', connectionReason: 'shop' } },
+        { tool: 'getSourceCode', params: { url: 'app.js', connection: 'shop' } },
       ],
       teardown: [{ tool: 'killChrome', params: { reason: 'done' } }],
     }));
@@ -38,8 +38,8 @@ describe('a sequence file written with removed tools', () => {
     const sequence = await new CommandRecorder().loadSequenceFromDisk(file);
 
     expect(sequence!.commands.map(c => [c.tool, c.params])).toEqual([
-      ['connection', { action: 'launch', name: 'shop', url: 'http://shop.test/' }],
-      ['source', { action: 'get', url: 'app.js', connectionReason: 'shop' }],
+      ['connection', { action: 'launch', connection: 'shop', url: 'http://shop.test/' }],
+      ['source', { action: 'get', url: 'app.js', connection: 'shop' }],
     ]);
     expect(sequence!.teardown!.map(c => [c.tool, c.params])).toEqual([
       ['browser', { action: 'kill', reason: 'done' }],
@@ -53,14 +53,14 @@ describe('a history.log line logged against a removed tool', () => {
     await fsp.mkdir(logs, { recursive: true });
     await fsp.writeFile(join(logs, 'history.log'), [
       JSON.stringify({ tool: 'disconnectDebugger', params: { reference: 'shop', reason: 'done' } }),
-      JSON.stringify({ tool: 'navigate', params: { action: 'reload', connectionReason: 'shop' } }),
+      JSON.stringify({ tool: 'navigate', params: { action: 'reload', connection: 'shop' } }),
     ].join('\n') + '\n');
 
     const lines = await readHistoryLines([1, 2]);
 
     expect(lines).toEqual([
-      { line: 1, tool: 'connection', params: { action: 'close', connectionReason: 'shop', reason: 'done' } },
-      { line: 2, tool: 'navigate', params: { action: 'reload', connectionReason: 'shop' } },
+      { line: 1, tool: 'connection', params: { action: 'close', connection: 'shop', reason: 'done' } },
+      { line: 2, tool: 'navigate', params: { action: 'reload', connection: 'shop' } },
     ]);
   });
 });

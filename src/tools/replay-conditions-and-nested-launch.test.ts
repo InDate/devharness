@@ -44,7 +44,7 @@ function makeHarness(responses: Record<string, any> = {}, nested?: CommandSequen
   const ctx: ExecutionContext = {
     executeToolCall,
     commandRecorder,
-    connectionReason: 'device-a',
+    connection: 'device-a',
     logPrefix: 'test',
   };
 
@@ -102,7 +102,7 @@ describe('indexedDB conditions', () => {
       .toEqual({ met: true });
     expect(found.calls[0]).toMatchObject({
       tool: 'storage',
-      params: { action: 'idbGet', db: 'identity', store: 'keys', key: 'device', connectionReason: 'device-a' },
+      params: { action: 'idbGet', db: 'identity', store: 'keys', key: 'device', connection: 'device-a' },
     });
 
     const missing = makeHarness({
@@ -272,7 +272,7 @@ describe('selector conditions', () => {
     expect(await evaluateCondition('{{!selector:#enrol-marker}}', ctx)).toEqual({ met: false });
     expect(calls[0]).toMatchObject({
       tool: 'dom',
-      params: { action: 'querySelector', selector: '#enrol-marker', connectionReason: 'device-a' },
+      params: { action: 'querySelector', selector: '#enrol-marker', connection: 'device-a' },
     });
   });
 
@@ -357,8 +357,8 @@ describe('conditions read structure, not rendered text', () => {
 
 describe('a launch inside a nested sequence', () => {
   const nested = (ref: string) => seq('setup', [
-    { tool: 'connection', params: { action: 'launch', name: ref } },
-    { tool: 'navigate', params: { action: 'goto', url: 'https://example.com/', connectionReason: ref } },
+    { tool: 'connection', params: { action: 'launch', connection: ref } },
+    { tool: 'navigate', params: { action: 'goto', url: 'https://example.com/', connection: ref } },
   ]);
 
   const outer = seq('outer', [
@@ -376,7 +376,7 @@ describe('a launch inside a nested sequence', () => {
         _meta: { tool: 'navigate', action: 'info', timestamp: 0, navigate: { url: 'https://example.com/', title: 't', action: 'info' } },
       },
       'connection.launch': (params: Record<string, any>) => {
-        live.add(params.name);
+        live.add(params.connection);
         return text('Chrome launched and connected');
       },
       'connection.list': () => connectionsList([...live].map(reference => ({ reference }))),
@@ -390,7 +390,7 @@ describe('a launch inside a nested sequence', () => {
 
     expect(result.results[0].success).toBe(true);
     expect(calls.filter(c => c.tool === 'connection' && c.params.action === 'launch')).toHaveLength(1);
-    expect(calls.find(c => c.tool === 'connection' && c.params.action === 'launch')!.params.name).toBe('member-two');
+    expect(calls.find(c => c.tool === 'connection' && c.params.action === 'launch')!.params.connection).toBe('member-two');
   });
 
   it('does not relaunch a browser that is already connected', async () => {
@@ -406,7 +406,7 @@ describe('a launch inside a nested sequence', () => {
   // what happened - the condition held, there was simply nothing left to do.
   it('reports an emptied sub-sequence as held with nothing run, not as failed', async () => {
     const launchOnly = seq('launch-only', [
-      { tool: 'connection', params: { action: 'launch', name: 'member-two' } },
+      { tool: 'connection', params: { action: 'launch', connection: 'member-two' } },
     ]);
     const { ctx } = makeHarness(baseResponses(['device-a', 'member-two']), launchOnly);
 
@@ -435,7 +435,7 @@ describe('a launch inside a nested sequence', () => {
       ]),
     };
     const { ctx, calls } = makeHarness(responses, seq('setup', [
-      { tool: 'connection', params: { action: 'launch', name: 'member-two' } },
+      { tool: 'connection', params: { action: 'launch', connection: 'member-two' } },
     ]));
 
     await executeSteps({
@@ -452,7 +452,7 @@ describe('a launch inside a nested sequence', () => {
   // CALLER's browser, and reported success - healing the wrong browser.
   it('runs a launched setup sequence in the browser it just launched', async () => {
     const hoisted = seq('setup', [
-      { tool: 'connection', params: { action: 'launch', name: 'member-two' } },
+      { tool: 'connection', params: { action: 'launch', connection: 'member-two' } },
       { tool: 'navigate', params: { action: 'goto', url: 'https://example.com/enrol' } },
       { tool: 'inspect', params: { action: 'evaluateExpression', expression: 'mint()' } },
     ]);
@@ -464,8 +464,8 @@ describe('a launch inside a nested sequence', () => {
     });
 
     const enrolStep = calls.find(c => c.tool === 'navigate' && c.params.url === 'https://example.com/enrol');
-    expect(enrolStep!.params.connectionReason).toBe('member-two');
-    expect(calls.find(c => c.tool === 'inspect' && c.params.expression === 'mint()')!.params.connectionReason)
+    expect(enrolStep!.params.connection).toBe('member-two');
+    expect(calls.find(c => c.tool === 'inspect' && c.params.expression === 'mint()')!.params.connection)
       .toBe('member-two');
   });
 
@@ -474,7 +474,7 @@ describe('a launch inside a nested sequence', () => {
   // it, the way it always has.
   it('leaves bare steps on the caller when the launch was dropped', async () => {
     const hoisted = seq('setup', [
-      { tool: 'connection', params: { action: 'launch', name: 'member-two' } },
+      { tool: 'connection', params: { action: 'launch', connection: 'member-two' } },
       { tool: 'inspect', params: { action: 'evaluateExpression', expression: 'login()' } },
     ]);
     const { ctx, calls } = makeHarness(baseResponses(['device-a', 'member-two']), hoisted);
@@ -485,7 +485,7 @@ describe('a launch inside a nested sequence', () => {
     });
 
     expect(calls.filter(c => c.tool === 'connection' && c.params.action === 'launch')).toEqual([]);
-    expect(calls.find(c => c.tool === 'inspect' && c.params.expression === 'login()')!.params.connectionReason)
+    expect(calls.find(c => c.tool === 'inspect' && c.params.expression === 'login()')!.params.connection)
       .toBe('device-a');
   });
 
@@ -495,6 +495,6 @@ describe('a launch inside a nested sequence', () => {
 
     await executeSteps({ sequence: outer, ctx, startStep: 0, stepTimeout: 2000, totalTimeout: 20_000 });
 
-    expect(calls.find(c => c.tool === 'connection' && c.params.action === 'launch')!.params.name).toBe('my-second-browser');
+    expect(calls.find(c => c.tool === 'connection' && c.params.action === 'launch')!.params.connection).toBe('my-second-browser');
   });
 });

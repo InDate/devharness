@@ -14,6 +14,7 @@ import { subjectOf as subjectOfCheck } from './check-engine.js';
 import { rehydrateStepConnections, formatConnectionNote } from './replay-library.js';
 import { type ReplayArgs } from './replay-schema.js';
 import { handleLoadSequenceError, normalizeTags, declaredProfileConflict } from './replay-validation.js';
+import { addressedConnection } from './connection-steps.js';
 
 /**
  * Put commands from the history into a named sequence after one of its steps,
@@ -40,10 +41,11 @@ async function insertIntoNamed(args: ReplayArgs, recorder: CommandRecorder) {
   // A sequence whose steps name no browser runs against whichever one the run
   // is given; a step brought in naming the browser it was tried in would pin
   // itself there and split the run across two.
-  const unpinned = !existingCommands.some(command => typeof command.params?.connectionReason === 'string');
+  const unpinned = !existingCommands.some(command => addressedConnection(command) !== undefined);
   const brought = unpinned
     ? commandsToInsert.map(command => {
-        const { connectionReason: _pinned, ...params } = command.params ?? {};
+        if (addressedConnection(command) === undefined) return command;
+        const { connection: _pinned, ...params } = command.params ?? {};
         return { ...command, params };
       })
     : commandsToInsert;
@@ -356,12 +358,12 @@ export async function handleDeclare(args: ReplayArgs, recorder: CommandRecorder)
     for (const decl of args.requiredConnections) {
       // The run launches each declared reference by name, and a launch refuses
       // a name that is not three words - refused here, while it is written.
-      const validation = validateReference(decl.reference);
+      const validation = validateReference(decl.connection);
       if (!validation.valid) {
         return createErrorResponse('INVALID_PARAMETER', {
           parameter: 'requiredConnections',
-          value: decl.reference,
-          message: `"${decl.reference}" is not a usable connection reference: ${validation.error}.`,
+          value: decl.connection,
+          message: `"${decl.connection}" is not a usable connection name: ${validation.error}.`,
         });
       }
       const reference = validation.sanitized!;
@@ -396,7 +398,7 @@ export async function handleDeclare(args: ReplayArgs, recorder: CommandRecorder)
       });
     }
     (sequence as any).requiredConnections = args.requiredConnections.length > 0
-      ? args.requiredConnections.map(d => ({ ...d, reference: sanitizeReference(d.reference) }))
+      ? args.requiredConnections.map(d => ({ ...d, connection: sanitizeReference(d.connection) }))
       : undefined;
   }
 

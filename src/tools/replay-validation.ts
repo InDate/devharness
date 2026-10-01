@@ -188,7 +188,7 @@ export function declaredProfileConflict(
   const byProfile = new Map<string, string[]>();
   for (const decl of declared) {
     if (!decl.profile) continue;
-    const reference = sanitizeReference(decl.reference);
+    const reference = sanitizeReference(decl.connection);
     if (!reference) continue;
 
     const rebound = connectionMap?.[reference];

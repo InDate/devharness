@@ -18,7 +18,7 @@ const tools = createConsoleTools(async () => ({
 describe('console recent on a worker target', () => {
   it('returns the last `count` messages, as recent on the page does', async () => {
     const result: any = await tools.console.handler({
-      action: 'recent', connectionReason: 'shop-web-app', target: 'sw.js', count: 2,
+      action: 'recent', connection: 'shop-web-app', target: 'sw.js', count: 2,
     });
 
     const text = result.content[0].text as string;

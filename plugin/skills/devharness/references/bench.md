@@ -5,8 +5,8 @@ feature, letting someone point at what is wrong, walking a sequence step by
 step, or reading what crossed the boundary under a step.
 
 ```
-bench({ action: 'start', connectionReason: 'my-web-app' })          # returns the pane's URL
-bench({ action: 'start', connectionReason: 'my-web-app', sequence: 'checkout', step: 3 })
+bench({ action: 'start', connection: 'my-web-app' })          # returns the pane's URL
+bench({ action: 'start', connection: 'my-web-app', sequence: 'checkout', step: 3 })
 ```
 
 `start` returns as soon as the pane is open and never blocks. Open its URL in a

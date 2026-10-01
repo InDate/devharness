@@ -43,7 +43,7 @@ const storageSchema = z.object({
     'clear', 'writes',
     'authenticatorAdd', 'authenticatorCredentials', 'authenticatorRemove',
   ]),
-  connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it'),
+  connection: z.string().describe('The connection, by the name connection launch or attach gave it'),
   since: z.number().optional().describe('writes: epoch ms; only writes at or after this'),
   until: z.number().optional().describe('writes: epoch ms; only writes before this'),
 
@@ -79,7 +79,7 @@ const sessionStorageKey = (key: string | number | undefined) => key === undefine
 const authenticators = new WeakMap<object, { session: any; authenticatorId: string; userVerified: boolean }>();
 
 export function createStorageTools(
-  resolveConnectionFromReason: (connectionReason: string) => Promise<{
+  resolveConnectionByName: (connection: string) => Promise<{
     connection: any;
     cdpManager: CDPManager;
     puppeteerManager: any;
@@ -92,7 +92,7 @@ export function createStorageTools(
       'Browser storage: cookies (getCookies, setCookie), localStorage and sessionStorage (get, set and remove each; a get without key reads the whole store), IndexedDB (idbListDatabases, idbListStores, idbGet, idbGetAll, idbPut, idbDelete), clear, writes (the localStorage and sessionStorage writes as they happened), and a virtual WebAuthn authenticator answering passkey prompts (authenticatorAdd, authenticatorCredentials, authenticatorRemove).',
       storageSchema,
       async (args) => {
-        const { action, connectionReason } = args;
+        const { action, connection } = args;
 
         // Validate required parameters for each action
         if (action === 'setCookie') {
@@ -198,9 +198,9 @@ export function createStorageTools(
           });
         }
 
-        const resolved = await resolveConnectionFromReason(connectionReason);
+        const resolved = await resolveConnectionByName(connection);
         if (!resolved) {
-          return createErrorResponse('CONNECTION_NOT_FOUND', { reference: connectionReason });
+          return createErrorResponse('CONNECTION_NOT_FOUND', { reference: connection });
         }
         if (!resolved.puppeteerManager) {
           return createErrorResponse('PUPPETEER_NOT_CONNECTED');
@@ -745,7 +745,7 @@ export function createStorageTools(
           case 'clear': {
             // Log the reason for audit purposes
             const types = args.types || ['cookies', 'localStorage', 'sessionStorage'];
-            console.error(`[devharness] clearStorage called - Reason: ${args.reason}, Types: ${types.join(', ')}, Connection: ${connectionReason}`);
+            console.error(`[devharness] clearStorage called - Reason: ${args.reason}, Types: ${types.join(', ')}, Connection: ${connection}`);
 
             const result = await executeWithPauseDetection(
               targetCdpManager,

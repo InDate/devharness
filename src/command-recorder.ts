@@ -129,7 +129,7 @@ export interface CommandSequence {
   createdAt: number;
   /**
    * The connection every step was recorded against, when `create` hoisted a
-   * uniform per-step `connectionReason` off the steps (bug-018). Hoisting is
+   * uniform per-step `connection` off the steps (bug-018). Hoisting is
    * what keeps a sequence portable, but it is lossy: without this, a later
    * `insert` cannot tell whether the incoming steps came from the SAME browser
    * as the bare ones (hoist again) or a different one (genuinely
@@ -173,8 +173,8 @@ export interface CommandSequence {
    * default, not an override.
    */
   requiredConnections?: Array<{
-    /** Connection reference the steps use, e.g. 'duo-member-two'. */
-    reference: string;
+    /** The connection the steps use, e.g. 'duo-member-two'. */
+    connection: string;
     /** Opened on launch. Defaults to the sequence's startUrl. */
     url?: string;
     /**
@@ -262,7 +262,7 @@ interface HistoryCommand extends RecordedCommand {
 export interface ActiveSequenceState {
   sequenceId: string;
   sequenceName: string;
-  connectionReason: string;
+  connection: string;
   currentStep: number;        // 0-indexed, next step to execute
   totalSteps: number;
   pausedAt: number;           // Timestamp when paused
@@ -521,28 +521,27 @@ export class CommandRecorder {
 
     const paramsClone = JSON.parse(JSON.stringify(params));
 
-    // Keep the connectionReason the call was actually made with (bug-018).
+    // Keep the connection the call was actually made with (bug-018).
     // It used to be deleted here "to make sequences reusable", which meant a
     // recording that drove two browsers could not be replayed against two
     // browsers - every step fell back to the run-level connection and the
     // sequence silently collapsed into one browser. Reusability is preserved at
     // `create` time instead: a sequence whose steps all share one connection has
     // it hoisted back off the steps (see normalizeStepConnections), so a
-    // run-level connectionReason still overrides. Only genuinely
+    // run-level connection still overrides. Only genuinely
     // multi-connection sequences keep it per-step.
     //
     // Sanitized so a recorded reference always matches the stored connection
     // reference ("Duo Owner Console" -> "duo-owner-console"), which is what
-    // connection lookup and a launch's `name` below use.
-    if (typeof paramsClone.connectionReason === 'string') {
-      paramsClone.connectionReason = sanitizeReference(paramsClone.connectionReason);
+    // connection lookup uses.
+    if (typeof paramsClone.connection === 'string') {
+      paramsClone.connection = sanitizeReference(paramsClone.connection);
     }
 
-    // A name a connection is created or renamed to is stored sanitized, as the
-    // connection itself stores it, so a replay addresses the same connection.
-    if (typeof paramsClone.name === 'string' && tool === 'connection'
-        && ['launch', 'attach', 'rename'].includes(paramsClone.action)) {
-      paramsClone.name = sanitizeReference(paramsClone.name);
+    // A connection's new name is stored sanitized, as the connection itself
+    // stores it, so a replay addresses the same connection.
+    if (typeof paramsClone.newName === 'string' && tool === 'connection' && paramsClone.action === 'rename') {
+      paramsClone.newName = sanitizeReference(paramsClone.newName);
     }
 
     const command: HistoryCommand = {
@@ -622,7 +621,7 @@ export class CommandRecorder {
       if (!cmd) return null;
 
       // params is DEEP-CLONED: the sequence is edited after creation (hoisting a
-      // uniform connectionReason off the steps, rebasing URLs), and sharing the
+      // uniform connection off the steps, rebasing URLs), and sharing the
       // object with the history entry made those edits silently rewrite history.
       const paramsClone = JSON.parse(JSON.stringify(cmd.params));
       // Written as the check it is: assert and wait are faces of it.

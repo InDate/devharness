@@ -188,7 +188,7 @@ export function formatClickValidationFailure(
   pausedAtStep: number,
   durationMs: number,
   failure: ClickValidationFailure,
-  connectionReason: string
+  connection: string
 ): string {
   const commands = sequence.commands;
   const successful = results.filter(r => r.success).length;
@@ -219,7 +219,7 @@ export function formatClickValidationFailure(
   });
 
   response += `\n---\n\n**Actions**\n`;
-  response += `- Inspect error: \`console({ action: 'list', type: 'error', connectionReason: '${connectionReason}' })\`\n`;
+  response += `- Inspect error: \`console({ action: 'list', type: 'error', connection: '${connection}' })\`\n`;
   response += `- Retry the step: \`replay({ action: 'step' })\`\n`;
   response += `- Finish remaining: \`replay({ action: 'finish' })\`\n`;
   response += `- Cancel: \`replay({ action: 'cancel' })\`\n`;
@@ -236,7 +236,7 @@ export function formatBreakpointHit(
   totalCommands: number,
   durationMs: number,
   breakpointInfo: BreakpointHitInfo,
-  connectionReason: string
+  connection: string
 ): string {
   const location = `${breakpointInfo.url}:${breakpointInfo.lineNumber}`;
 
@@ -260,10 +260,10 @@ export function formatBreakpointHit(
   });
 
   response += `\n---\n\n**Debug Actions**\n`;
-  response += `- Inspect call stack: \`inspect({ action: 'getCallStack', connectionReason: '${connectionReason}' })\`\n`;
-  response += `- Get variables: \`inspect({ action: 'getVariables', connectionReason: '${connectionReason}', callFrameId: '<from call stack>' })\`\n`;
-  response += `- Resume execution: \`execution({ action: 'resume', connectionReason: '${connectionReason}' })\`\n`;
-  response += `- Step over: \`execution({ action: 'stepOver', connectionReason: '${connectionReason}' })\`\n`;
+  response += `- Inspect call stack: \`inspect({ action: 'getCallStack', connection: '${connection}' })\`\n`;
+  response += `- Get variables: \`inspect({ action: 'getVariables', connection: '${connection}', callFrameId: '<from call stack>' })\`\n`;
+  response += `- Resume execution: \`execution({ action: 'resume', connection: '${connection}' })\`\n`;
+  response += `- Step over: \`execution({ action: 'stepOver', connection: '${connection}' })\`\n`;
 
   return response;
 }
@@ -271,7 +271,7 @@ export function formatBreakpointHit(
 /**
  * Format debug state section
  */
-export function formatDebugState(debugState: DebugState, connectionReason: string): string {
+export function formatDebugState(debugState: DebugState, connection: string): string {
   if (!debugState.isPaused && debugState.breakpointCount === 0) {
     return '';
   }
@@ -281,16 +281,16 @@ export function formatDebugState(debugState: DebugState, connectionReason: strin
   if (debugState.isPaused) {
     section += `\n**Execution paused** at ${debugState.pauseLocation}\n\n`;
     section += `**Next steps:**\n`;
-    section += `- Inspect call stack: \`inspect({ action: 'getCallStack', connectionReason: '${connectionReason}' })\`\n`;
-    section += `- Get variables: \`inspect({ action: 'getVariables', connectionReason: '${connectionReason}', callFrameId: '<from call stack>' })\`\n`;
-    section += `- Resume execution: \`execution({ action: 'resume', connectionReason: '${connectionReason}' })\`\n`;
-    section += `- Step over: \`execution({ action: 'stepOver', connectionReason: '${connectionReason}' })\`\n`;
+    section += `- Inspect call stack: \`inspect({ action: 'getCallStack', connection: '${connection}' })\`\n`;
+    section += `- Get variables: \`inspect({ action: 'getVariables', connection: '${connection}', callFrameId: '<from call stack>' })\`\n`;
+    section += `- Resume execution: \`execution({ action: 'resume', connection: '${connection}' })\`\n`;
+    section += `- Step over: \`execution({ action: 'stepOver', connection: '${connection}' })\`\n`;
   }
 
   if (debugState.breakpointCount > 0) {
     section += `\n**${debugState.breakpointCount} active breakpoint${debugState.breakpointCount > 1 ? 's' : ''}**\n`;
-    section += `- List breakpoints: \`breakpoint({ action: 'list', connectionReason: '${connectionReason}' })\`\n`;
-    section += `- Remove one: \`breakpoint({ action: 'remove', connectionReason: '${connectionReason}', breakpointId: '<id>' })\`\n`;
+    section += `- List breakpoints: \`breakpoint({ action: 'list', connection: '${connection}' })\`\n`;
+    section += `- Remove one: \`breakpoint({ action: 'remove', connection: '${connection}', breakpointId: '<id>' })\`\n`;
   }
 
   return section;
@@ -331,7 +331,7 @@ export function formatVariablePrompt(
   sequenceName: string,
   sequenceIdOrName: string,
   variables: Record<string, ExtractedVariable>,
-  connectionReason: string | undefined
+  connection: string | undefined
 ): string {
   let response = getFormattedResponse('REPLAY_VARIABLE_PROMPT', {
     sequenceName,
@@ -347,8 +347,8 @@ export function formatVariablePrompt(
   response += `**Option 1: Keep original values**\n`;
   response += `\`\`\`javascript\n`;
   response += `replay({ action: 'run', name: '${sequenceIdOrName}'`;
-  if (connectionReason) {
-    response += `, connectionReason: '${connectionReason}'`;
+  if (connection) {
+    response += `, connection: '${connection}'`;
   }
   response += `, variables: {} })\n`;
   response += `\`\`\`\n\n`;
@@ -356,8 +356,8 @@ export function formatVariablePrompt(
   response += `**Option 2: Custom values** (replace variable values as needed)\n`;
   response += `\`\`\`javascript\n`;
   response += `replay({ action: 'run', name: '${sequenceIdOrName}'`;
-  if (connectionReason) {
-    response += `, connectionReason: '${connectionReason}'`;
+  if (connection) {
+    response += `, connection: '${connection}'`;
   }
   response += `, variables: {\n`;
   Object.keys(variables).forEach((varName, idx, arr) => {
@@ -748,7 +748,7 @@ export function formatActiveStatus(
     totalSteps: activeSeq.totalSteps
   });
 
-  response += `\n\n**Connection:** ${activeSeq.connectionReason || 'none'}`;
+  response += `\n\n**Connection:** ${activeSeq.connection || 'none'}`;
   response += `\n**Paused for:** ${pausedDuration}s`;
 
   if (commandsSincePause.length > 0) {
@@ -1106,7 +1106,7 @@ export function formatDeclarations(sequence: CommandSequence, persistedTo?: stri
         decl.profile && decl.forceNewInstance !== true ? 'reuses the Chrome already on that profile' : null,
         !decl.profile && decl.forceNewInstance === false ? 'may share an existing browser' : null,
       ].filter(Boolean);
-      lines.push(`  - \`${decl.reference}\`${notes.length ? ` - ${notes.join('; ')}` : ''}`);
+      lines.push(`  - \`${decl.connection}\`${notes.length ? ` - ${notes.join('; ')}` : ''}`);
     }
   }
 

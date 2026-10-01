@@ -59,7 +59,7 @@ describe('a connection paused at a breakpoint', () => {
     const paused = fakeConnection('paused-app', true);
     const connection = makeTools([paused.connection]);
 
-    const result: any = await within(connection.handler({ action: 'switch', connectionReason: 'paused-app' }));
+    const result: any = await within(connection.handler({ action: 'switch', connection: 'paused-app' }));
 
     expect(result.isError).toBeFalsy();
     expect(result.content[0].text).toContain('http://app/paused-app');

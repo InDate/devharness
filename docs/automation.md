@@ -7,19 +7,19 @@
 navigate({
   action: 'goto',
   url: 'https://myapp.com/login',
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 // Response: "144 total clickable elements (53 in viewport)"
 
 // Reload page
-navigate({ action: 'reload', connectionReason: 'test-debug-session' })
+navigate({ action: 'reload', connection: 'test-debug-session' })
 
 // Go back/forward
-navigate({ action: 'back', connectionReason: 'test-debug-session' })
-navigate({ action: 'forward', connectionReason: 'test-debug-session' })
+navigate({ action: 'back', connection: 'test-debug-session' })
+navigate({ action: 'forward', connection: 'test-debug-session' })
 
 // Get page info
-navigate({ action: 'info', connectionReason: 'test-debug-session' })
+navigate({ action: 'info', connection: 'test-debug-session' })
 ```
 
 ## Finding Elements
@@ -28,28 +28,28 @@ navigate({ action: 'info', connectionReason: 'test-debug-session' })
 // Get summary of all interactive elements (default mode)
 content({
   action: 'findInteractive',
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 
 // Search all elements by text
 content({
   action: 'findInteractive',
   search: 'login',
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 
 // Filter by type
 content({
   action: 'findInteractive',
   types: ['button', 'link'],
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 
 // Find all input fields
 content({
   action: 'findInteractive',
   types: ['text', 'email', 'password', 'textarea'],
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 ```
 
@@ -60,7 +60,7 @@ content({
 input({
   action: 'click',
   selector: '#login-button',
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 
 // Type text
@@ -68,21 +68,21 @@ input({
   action: 'type',
   selector: '#username',
   text: 'testuser@example.com',
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 
 // Press key
 input({
   action: 'press',
   key: 'Enter',
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 
 // Hover
 input({
   action: 'hover',
   selector: '.dropdown-menu',
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 ```
 
@@ -96,7 +96,7 @@ input({
   selector: '#submit',
   handleModals: true,
   dismissStrategy: 'auto',  // or 'accept', 'reject', 'close', 'remove'
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 ```
 
@@ -116,21 +116,21 @@ input({
 dom({
   action: 'querySelector',
   selector: '#main-content',
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 
 // Get element properties
 dom({
   action: 'getProperties',
   selector: '#user-form',
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 
 // Get full DOM snapshot
 dom({
   action: 'snapshot',
   maxDepth: 5,
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 ```
 
@@ -140,26 +140,26 @@ dom({
 // Full page screenshot
 screenshot({
   action: 'fullPage',
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 
 // Viewport only
 screenshot({
   action: 'viewport',
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 
 // Specific element
 screenshot({
   action: 'element',
   selector: '#chart',
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 
 // PDF export
 screenshot({
   action: 'pdf',
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 ```
 
@@ -176,7 +176,7 @@ console({
   action: 'list',
   type: 'error',
   limit: 50,
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 // Output: id,type,preview,tokens,truncated
 // cm-1,error,"Failed to fetch user data",25,false
@@ -185,21 +185,21 @@ console({
 console({
   action: 'recent',
   count: 20,
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 
 // Search console (CSV output)
 console({
   action: 'search',
   pattern: 'API.*failed',
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 
 // Get full message details (TOON format with smart truncation)
 console({
   action: 'get',
   id: 'cm-1',
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 // For messages >100 tokens, shows summary with extraction helpers
 
@@ -209,7 +209,7 @@ console({
   id: 'cm-1',
   textOffset: 0,
   textLimit: 500,
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 
 // Get specific args index
@@ -217,21 +217,21 @@ console({
   action: 'get',
   id: 'cm-1',
   argsIndex: 0,
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 
 // Set object expansion depth (1-10, default: 2)
 console({
   action: 'setObjectDepth',
   depth: 4,
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 
 // Clear console
 console({
   action: 'clear',
   reason: 'Starting fresh test',
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 ```
 
@@ -241,21 +241,21 @@ console({
 // Enable monitoring
 network({
   action: 'enable',
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 
 // List requests
 network({
   action: 'list',
   resourceType: 'xhr',
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 
 // Search requests
 network({
   action: 'search',
   pattern: '/api/users',
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 
 // Get specific request with body
@@ -263,14 +263,14 @@ network({
   action: 'get',
   id: 'request-123',
   includeBody: true,
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 
 // Set network conditions (throttling)
 network({
   action: 'setConditions',
   preset: 'slow-3g',
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 ```
 
@@ -280,7 +280,7 @@ network({
 // Get localStorage
 storage({
   action: 'getLocalStorage',
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 
 // Set localStorage
@@ -288,14 +288,14 @@ storage({
   action: 'setLocalStorage',
   key: 'theme',
   value: 'dark',
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 
 // Get cookies
 storage({
   action: 'getCookies',
   url: 'https://myapp.com',
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 
 // Set cookie
@@ -304,7 +304,7 @@ storage({
   name: 'session',
   value: 'abc123',
   domain: 'myapp.com',
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 
 // Clear storage
@@ -312,7 +312,7 @@ storage({
   action: 'clear',
   types: ['localStorage', 'cookies'],
   reason: 'Reset test state',
-  connectionReason: 'test-debug-session'
+  connection: 'test-debug-session'
 })
 ```
 
@@ -335,20 +335,20 @@ connection({ action: 'list' })
 // Make a connection active and select its page
 connection({
   action: 'switch',
-  connectionReason: 'second-tab-page'
+  connection: 'second-tab-page'
 })
 
 // Rename a connection
 connection({
   action: 'rename',
-  connectionReason: 'second-tab-page',
+  connection: 'second-tab-page',
   name: 'checkout page tab'
 })
 
 // Close a connection; the last one in a Chrome kills that Chrome
 connection({
   action: 'close',
-  connectionReason: 'checkout-page-tab',
+  connection: 'checkout-page-tab',
   reason: 'checkout flow checked'
 })
 ```
@@ -357,25 +357,25 @@ connection({
 
 1. **Navigate with element caching**
 ```javascript
-navigate({ action: 'goto', url: 'https://myapp.com/signup', connectionReason: 'test-flow-run' })
+navigate({ action: 'goto', url: 'https://myapp.com/signup', connection: 'test-flow-run' })
 ```
 
 2. **Find form elements from cache**
 ```javascript
-content({ action: 'findInput', search: 'email', connectionReason: 'test-flow-run' })
+content({ action: 'findInput', search: 'email', connection: 'test-flow-run' })
 ```
 
 3. **Fill form**
 ```javascript
-input({ action: 'type', selector: '#email', text: 'test@example.com', connectionReason: 'test-flow-run' })
-input({ action: 'type', selector: '#password', text: 'testpass123', connectionReason: 'test-flow-run' })
+input({ action: 'type', selector: '#email', text: 'test@example.com', connection: 'test-flow-run' })
+input({ action: 'type', selector: '#password', text: 'testpass123', connection: 'test-flow-run' })
 ```
 
 4. **Submit and monitor**
 ```javascript
-input({ action: 'click', selector: '#submit-button', connectionReason: 'test-flow-run' })
-console({ action: 'recent', count: 10, connectionReason: 'test-flow-run' })
-network({ action: 'search', pattern: '/api/signup', connectionReason: 'test-flow-run' })
+input({ action: 'click', selector: '#submit-button', connection: 'test-flow-run' })
+console({ action: 'recent', count: 10, connection: 'test-flow-run' })
+network({ action: 'search', pattern: '/api/signup', connection: 'test-flow-run' })
 ```
 
 ## Server Management
@@ -538,17 +538,17 @@ When a local config doesn't exist, it's automatically seeded from global setting
 
 1. **Enable network monitoring**
 ```javascript
-network({ action: 'enable', connectionReason: 'perf-check-run' })
+network({ action: 'enable', connection: 'perf-check-run' })
 ```
 
 2. **Navigate and capture requests**
 ```javascript
-navigate({ action: 'goto', url: 'http://localhost:3000', connectionReason: 'perf-check-run' })
+navigate({ action: 'goto', url: 'http://localhost:3000', connection: 'perf-check-run' })
 ```
 
 3. **Find slow requests**
 ```javascript
-network({ action: 'list', connectionReason: 'perf-check-run' })
+network({ action: 'list', connection: 'perf-check-run' })
 // Look for long timing.duration values
 ```
 
@@ -559,6 +559,6 @@ breakpoint({
   url: 'http://localhost:3000/api-client.js',
   lineNumber: 75,
   logMessage: 'API call started at {Date.now()}',
-  connectionReason: 'perf-check-run'
+  connection: 'perf-check-run'
 })
 ```

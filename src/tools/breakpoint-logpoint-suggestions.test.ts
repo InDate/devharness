@@ -28,7 +28,7 @@ describe('a logpoint whose expressions fail where CDP placed it', () => {
     const breakpoint = movedLogpointWithFailedSearch();
 
     const result: any = await breakpoint.handler({
-      action: 'setLogpoint', connectionReason: 'shop-web-app', url: 'http://shop.test/app.js', lineNumber: 10, logMessage: 'total {order.total}',
+      action: 'setLogpoint', connection: 'shop-web-app', url: 'http://shop.test/app.js', lineNumber: 10, logMessage: 'total {order.total}',
     } as any);
 
     const text = result.content[0].text as string;

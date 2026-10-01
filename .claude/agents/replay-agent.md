@@ -15,7 +15,7 @@ call you make is recorded; a sequence is then assembled from that history.
 authority on the `replay` tool - actions, run semantics, variables, waits,
 per-step connections, checks. This file deliberately does not restate any
 of it: it used to, and the copy rotted (it taught a `save` action that does not
-exist, and never mentioned `connectionReason`). Anything factual about the tool
+exist, and never mentioned `connection`). Anything factual about the tool
 belongs there, not here.
 
 ---
@@ -51,12 +51,12 @@ belongs there, not here.
 ## Rules
 
 The build rules - never hand-write JSON, do it don't describe it, pass
-`connectionReason` on every browser call, check `listSaved` first, keep the path
+`connection` on every browser call, check `listSaved` first, keep the path
 minimal, write a specific `expectedOutcome` - are in the **"Rules for building
 one"** section of `sequences.md`. Read them there; they are not repeated here so
 the two cannot drift.
 
-The one that bites hardest: a browser call without `connectionReason` records
+The one that bites hardest: a browser call without `connection` records
 nothing about which browser it ran in, so the sequence replays wherever the
 run-level connection points and still passes.
 

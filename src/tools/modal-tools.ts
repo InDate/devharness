@@ -16,7 +16,7 @@ import { createTool } from '../validation-helpers.js';
 
 const modalSchema = z.object({
   action: z.enum(['detect', 'dismiss']),
-  connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it'),
+  connection: z.string().describe('The connection, by the name connection launch or attach gave it'),
   minZIndex: z.number().optional().describe('detect/dismiss: min z-index to consider'),
   minViewportCoverage: z.number().optional().describe('detect/dismiss: min viewport coverage (0-1, default: 0.25)'),
   includeBackdrops: z.boolean().optional().describe('detect/dismiss: include backdrop/overlay elements; the same options keep detect\'s index valid for dismiss'),
@@ -29,14 +29,14 @@ const modalSchema = z.object({
 /**
  * Create modal handling tools
  */
-export function createModalTools(resolveConnectionFromReason: (connectionReason: string) => Promise<any>) {
+export function createModalTools(resolveConnectionByName: (connection: string) => Promise<any>) {
   return {
     modal: createTool(
       'Blocking modals and overlays on the page. Actions: detect (list them with the strategies each can be dismissed by), dismiss (dismiss one, the topmost by default)',
       modalSchema,
       async ({ action, ...args }) => action === 'detect'
-        ? await detectModalsImpl(args, resolveConnectionFromReason)
-        : await dismissModalImpl(args, resolveConnectionFromReason)
+        ? await detectModalsImpl(args, resolveConnectionByName)
+        : await dismissModalImpl(args, resolveConnectionByName)
     ),
   };
 }
@@ -46,20 +46,20 @@ export function createModalTools(resolveConnectionFromReason: (connectionReason:
  */
 async function detectModalsImpl(
   args: {
-    connectionReason: string;
+    connection: string;
     minZIndex?: number;
     minViewportCoverage?: number;
     includeBackdrops?: boolean;
     selector?: string;
     index?: number;
   },
-  resolveConnectionFromReason: (connectionReason: string) => Promise<any>
+  resolveConnectionByName: (connection: string) => Promise<any>
 ) {
-  const { connectionReason, minZIndex, minViewportCoverage, includeBackdrops } = args;
+  const { connection, minZIndex, minViewportCoverage, includeBackdrops } = args;
   const detectionOptions = { minZIndex, minViewportCoverage, includeBackdrops };
 
   try {
-    const resolved = await resolveConnectionFromReason(connectionReason);
+    const resolved = await resolveConnectionByName(connection);
     if (!resolved || !resolved.puppeteerManager) {
       return formatToolError('connection_not_found', 'No Chrome browser available. Start one with `connection` action `launch`.');
     }
@@ -121,7 +121,7 @@ async function detectModalsImpl(
         modals: formattedModals,
         recommendation:
           modals.length > 0
-            ? `Use modal({ action: 'dismiss', connectionReason: "${connectionReason}", index: ${formattedModals[0].index} }) or selector "${formattedModals[0].selector}"`
+            ? `Use modal({ action: 'dismiss', connection: "${connection}", index: ${formattedModals[0].index} }) or selector "${formattedModals[0].selector}"`
             : undefined,
       }
     );
@@ -138,7 +138,7 @@ async function detectModalsImpl(
  */
 async function dismissModalImpl(
   args: {
-    connectionReason: string;
+    connection: string;
     selector?: string;
     index?: number;
     strategy?: 'accept' | 'reject' | 'close' | 'remove' | 'auto';
@@ -147,10 +147,10 @@ async function dismissModalImpl(
     minViewportCoverage?: number;
     includeBackdrops?: boolean;
   },
-  resolveConnectionFromReason: (connectionReason: string) => Promise<any>
+  resolveConnectionByName: (connection: string) => Promise<any>
 ) {
   const {
-    connectionReason,
+    connection,
     selector,
     index,
     strategy = 'auto',
@@ -161,10 +161,10 @@ async function dismissModalImpl(
   } = args;
 
   try {
-    // resolveConnectionFromReason yields { connection, cdpManager,
+    // resolveConnectionByName yields { connection, cdpManager,
     // puppeteerManager, ... } - there is no `page` on it, so the page has to
     // come from the puppeteerManager (same as detect does).
-    const resolved = await resolveConnectionFromReason(connectionReason);
+    const resolved = await resolveConnectionByName(connection);
     if (!resolved || !resolved.puppeteerManager) {
       return formatToolError('connection_not_found', 'No Chrome browser available. Start one with `connection` action `launch`.');
     }

@@ -27,7 +27,7 @@ const within = <T>(promise: Promise<T>, ms = 500) =>
   Promise.race([promise, new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`still waiting after ${ms}ms`)), ms))]);
 
 const button = { type: 'button', text: 'Buy', href: '', selector: '#buy', width: 10, height: 10, visible: true };
-const on = { connectionReason: 'shop-web-app' };
+const on = { connection: 'shop-web-app' };
 
 describe('content', () => {
   it('reports a parse whose extract throws as failed, not as a null result', async () => {
@@ -59,6 +59,6 @@ describe('content', () => {
 
     const suggested = [...`${outline.content[0].text}\n${interactive.content[0].text}`.matchAll(/(content|input)\(\{[^}]*\}\)/g)].map(m => m[0]);
     expect(suggested.length).toBeGreaterThanOrEqual(4);
-    for (const call of suggested) expect(call).toContain("connectionReason: 'shop-web-app'");
+    for (const call of suggested) expect(call).toContain("connection: 'shop-web-app'");
   });
 });

@@ -244,7 +244,7 @@ export interface ProfileReuseRequest {
  *
  * The ordering this encodes is the whole point: a live instance already running
  * the requested profile is REUSED, exactly as it would be without a profile, so
- * the idempotent `connection({ action: 'launch', profile, name })` "make sure it's up"
+ * the idempotent `connection({ action: 'launch', profile, connection })` "make sure it's up"
  * pattern keeps working. "Profile in use" is only an error when the call would
  * have to put a SECOND Chrome on a profile another instance holds.
  */

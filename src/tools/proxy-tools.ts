@@ -39,7 +39,7 @@ function stampOf(e: ProxyEvent): string {
 
 const proxySchema = z.object({
   action: z.enum(['status', 'events', 'sockets', 'body', 'answer', 'answerFrame', 'withdraw', 'answers', 'refuse', 'stop']),
-  connectionReason: z.string()
+  connection: z.string()
     .describe("The browser, by the name connection({ action: 'launch', proxy: true }) gave it"),
   since: z.number().optional().describe('events: epoch ms, at or after'),
   until: z.number().optional().describe('events: epoch ms, before'),
@@ -61,10 +61,10 @@ export function createProxyTools() {
       'Read and steer the intercepting proxy a browser was launched through. Actions: status, events (what crossed the boundary, newest last), sockets (what each socket did: reply or push), body (one event\'s kept payload), answer (a URL answered with a value in place of the server), answerFrame (a socket message replaced or dropped), withdraw (an answer), answers (the ones in force), refuse (unmatched writes answered 403, or forwarded), stop (drop the proxy under this name). Holding traffic in time is the hold tool.',
       proxySchema,
       async (args) => {
-        const proxy = getProxy(args.connectionReason);
+        const proxy = getProxy(args.connection);
         if (!proxy) {
           return createErrorResponse('CONNECTION_NOT_FOUND', {
-            message: `No proxy for "${args.connectionReason}". Launch with connection({ action: 'launch', proxy: true }). Running: ${listProxies().join(', ') || 'none'}`,
+            message: `No proxy for "${args.connection}". Launch with connection({ action: 'launch', proxy: true }). Running: ${listProxies().join(', ') || 'none'}`,
           });
         }
 
@@ -83,19 +83,19 @@ export function createProxyTools() {
           });
         }
 
-        const namesOf = namesSharing(args.connectionReason);
+        const namesOf = namesSharing(args.connection);
         const meta = (extra: Record<string, unknown>) => ({
           tool: 'proxy', action: args.action, timestamp: Date.now(), ...extra,
         });
 
         switch (args.action) {
           case 'stop': {
-            await stopProxyFor(args.connectionReason);
-            const remaining = namesSharing(namesOf.find(name => name !== args.connectionReason) ?? '');
+            await stopProxyFor(args.connection);
+            const remaining = namesSharing(namesOf.find(name => name !== args.connection) ?? '');
             return {
               content: [{ type: 'text', text: remaining.length
-                ? `Dropped the proxy for "${args.connectionReason}". It keeps running for ${remaining.map(n => `"${n}"`).join(', ')}, other tabs of the same browser.`
-                : `Stopped the proxy for "${args.connectionReason}", and with it what it recorded. A browser still running through it loses its network until relaunched.` }],
+                ? `Dropped the proxy for "${args.connection}". It keeps running for ${remaining.map(n => `"${n}"`).join(', ')}, other tabs of the same browser.`
+                : `Stopped the proxy for "${args.connection}", and with it what it recorded. A browser still running through it loses its network until relaunched.` }],
               _meta: meta({ proxy: { stopped: remaining.length === 0, remaining } }),
             };
           }
@@ -105,7 +105,7 @@ export function createProxyTools() {
             const allowed = proxy.listAllowedHosts();
             const refusals = proxy.refusals();
             const lines = [
-              `Proxy running for "${args.connectionReason}". ${events.length} event(s) seen.`,
+              `Proxy running for "${args.connection}". ${events.length} event(s) seen.`,
               allowed.length
                 ? `Only these reach the network: ${allowed.join(', ')}. Everything else is refused.`
                 : 'The browser\'s own service hosts are refused; everything else reaches the network.',

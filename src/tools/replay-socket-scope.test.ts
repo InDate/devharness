@@ -19,7 +19,7 @@ function makeReplay(commands: RecordedCommand[]) {
   const sequence = {
     id: 'seq-sockets', name: 'socket-seq', createdAt: 1,
     commands,
-    requiredConnections: [{ reference: 'member-a' }],
+    requiredConnections: [{ connection: 'member-a' }],
     requiredSockets: ['/api/sync/socket'],
   } as CommandSequence;
 
@@ -38,7 +38,7 @@ function makeReplay(commands: RecordedCommand[]) {
   const executeToolCall = vi.fn(productionShaped(async (tool: string, params: Record<string, any>) => {
     if (tool === 'network' && params.action === 'sockets') {
       // Only the browser that navigated ever opened the sync socket.
-      const list = params.connectionReason === 'member-a'
+      const list = params.connection === 'member-a'
         ? [{ id: 's1', url: 'wss://app.test/api/sync/socket', target: 'page', closed: false, errors: 0 }]
         : [];
       return { content: [{ type: 'text', text: '' }], _meta: { socketList: list } };
@@ -54,7 +54,7 @@ function makeReplay(commands: RecordedCommand[]) {
 }
 
 const run = (replay: any) => replay.handler({
-  action: 'run', wait: true, sequenceId: 'seq-sockets', connectionReason: 'the-run-connection',
+  action: 'run', wait: true, sequenceId: 'seq-sockets', connection: 'the-run-connection',
 } as any);
 
 const text = (res: any) => res.content[0].text as string;
@@ -62,8 +62,8 @@ const text = (res: any) => res.content[0].text as string;
 describe('a declared socket', () => {
   it('is not demanded of the run\'s own browser when every navigate names another', async () => {
     const { replay } = makeReplay([
-      { tool: 'navigate', params: { action: 'goto', url: 'https://app.test/', connectionReason: 'member-a' } },
-      { tool: 'input', params: { action: 'click', selector: '#draw', connectionReason: 'member-a' } },
+      { tool: 'navigate', params: { action: 'goto', url: 'https://app.test/', connection: 'member-a' } },
+      { tool: 'input', params: { action: 'click', selector: '#draw', connection: 'member-a' } },
       // Takes a connection, loads nothing: this is what used to make the run's
       // idle browser look driven.
       { tool: 'assert', params: { value: '{{var:count}}', equals: '1' } },

@@ -32,7 +32,7 @@ import { createSequenceDriver, getSequencesRoot, labelFor } from '../bench-mode/
 
 const benchSchema = z.object({
   action: z.enum(['start', 'stop', 'tick', 'hold', 'release', 'picker', 'list', 'status', 'keepStep', 'dropStep', 'flagStep', 'sweep', 'retake', 'capture']),
-  connectionReason: z.string()
+  connection: z.string()
     .describe('The connection, by the name connection launch or attach gave it'),
   steps: z.number().int().positive().max(1000).optional()
     .describe('tick: callbacks to run before holding again (default 1)'),
@@ -205,7 +205,7 @@ export function createBenchTools(
   sourceMapHandler: SourceMapHandler,
   commandRecorder: CommandRecorder,
   executeToolCall: (tool: string, args: Record<string, unknown>) => Promise<any>,
-  resolveConnectionFromReason: (connectionReason: string) => Promise<any>,
+  resolveConnectionByName: (connection: string) => Promise<any>,
   catalogue: () => ToolGroup[],
   values: () => Promise<ToolValues> = async () => NO_TOOL_VALUES,
   servers: () => Promise<ServerRow[]> = async () => [],
@@ -215,7 +215,7 @@ export function createBenchTools(
       'Open the bench beside a driven app: hold the page still, read what crossed its boundary and what caused each thing, record and step sequences, and collect element-level comments. Actions: start (the page running, the picker idle), hold/release (the whole page, with the bench left open), picker (armed or disarmed), tick (run a held page forward by steps or budgetMs), stop (release the page and close), keepStep/dropStep/flagStep (settle a recorded step), sweep (note captures no sequence cites), retake (a capture\'s region again, compared), capture (a capture file\'s record and element facts), list, status.',
       benchSchema,
       async (args: BenchArgs) => {
-        const { action, connectionReason } = args;
+        const { action, connection: named } = args;
         const sessionName = resolveSessionName(getSessionInfo()?.shortId);
 
         if (action === 'list') {
@@ -276,19 +276,19 @@ export function createBenchTools(
           return { ...response, _meta: buildMeta('sweep', { swept }) };
         }
 
-        let resolved = await resolveConnectionFromReason(connectionReason);
+        let resolved = await resolveConnectionByName(named);
         if (!resolved && action === 'start') {
           // A reference whose proxy is still recording was launched through it,
           // and a browser launched outside it leaves every crossing unseen.
           const launched = await autoLaunchChrome(
-            executeToolCall, connectionReason, 'bench.start', false, getProxy(connectionReason) !== undefined);
+            executeToolCall, named, 'bench.start', false, getProxy(named) !== undefined);
           if (!launched.success) {
             return createErrorResponse(launched.errorType, {
-              reference: connectionReason,
+              reference: named,
               error: launched.error,
             });
           }
-          resolved = await resolveConnectionFromReason(connectionReason);
+          resolved = await resolveConnectionByName(named);
         }
         if (!resolved) {
           return createErrorResponse('CONNECTION_NOT_FOUND', {
@@ -305,7 +305,7 @@ export function createBenchTools(
             active: state ? 'open' : 'closed',
             detail: state
               ? `Page ${state.frozen ? 'held' : 'running'}, picker ${state.pickerArmed ? 'armed' : 'idle'}, ${state.totalSteps} callback(s)/${state.tickMs}ms stepped, ${state.picks} pick(s), ${state.annotations} annotation(s). Bench: ${state.benchUrl}`
-              : `The bench is closed here. \`bench({ action: "start", connectionReason: "${connection}" })\` opens it with the page running.`,
+              : `The bench is closed here. \`bench({ action: "start", connection: "${connection}" })\` opens it with the page running.`,
           });
           return { ...response, _meta: buildMeta('status', { active: !!state, connection, state }) };
         }

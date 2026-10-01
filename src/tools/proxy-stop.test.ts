@@ -10,19 +10,19 @@ describe('proxy stop', () => {
     shareProxy('stop first tab', 'stop second tab');
     const { proxy } = createProxyTools();
 
-    const result: any = await proxy.handler({ action: 'stop', connectionReason: 'stop second tab' } as any);
+    const result: any = await proxy.handler({ action: 'stop', connection: 'stop second tab' } as any);
 
     expect(getProxy('stop second tab')).toBeUndefined();
     expect(getProxy('stop first tab')).toBe(running);
     expect(text(result)).toContain('stop first tab');
-    await proxy.handler({ action: 'stop', connectionReason: 'stop first tab' } as any);
+    await proxy.handler({ action: 'stop', connection: 'stop first tab' } as any);
   });
 
   it('stops the proxy when the name is the last one holding it', async () => {
     const { proxy: running } = await startProxyFor('stop only tab');
     const { proxy } = createProxyTools();
 
-    const result: any = await proxy.handler({ action: 'stop', connectionReason: 'stop only tab' } as any);
+    const result: any = await proxy.handler({ action: 'stop', connection: 'stop only tab' } as any);
 
     expect(getProxy('stop only tab')).toBeUndefined();
     expect((running as any).front.listening).toBe(false);
@@ -41,11 +41,11 @@ describe('proxy actions missing what they act on', () => {
       { action: 'body' },
       { action: 'withdraw' },
     ]) {
-      const result: any = await proxy.handler({ ...args, connectionReason: 'pin guard tab' } as any);
+      const result: any = await proxy.handler({ ...args, connection: 'pin guard tab' } as any);
       expect(result.isError, args.action).toBe(true);
     }
     expect(running.listPins()).toEqual([]);
     expect(running.listFramePins()).toEqual([]);
-    await proxy.handler({ action: 'stop', connectionReason: 'pin guard tab' } as any);
+    await proxy.handler({ action: 'stop', connection: 'pin guard tab' } as any);
   });
 });

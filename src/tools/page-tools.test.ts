@@ -23,7 +23,7 @@ describe('navigate', () => {
   it('reports a goto whose navigation throws as failed, with the reason', async () => {
     const navigate = makeNavigate({ goto: vi.fn(async () => { throw new Error('net::ERR_NAME_NOT_RESOLVED'); }) });
 
-    const result: any = await navigate.handler({ action: 'goto', connectionReason: 'shop-web-app', url: 'http://nowhere.invalid/' });
+    const result: any = await navigate.handler({ action: 'goto', connection: 'shop-web-app', url: 'http://nowhere.invalid/' });
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain('ERR_NAME_NOT_RESOLVED');
@@ -32,7 +32,7 @@ describe('navigate', () => {
   it('reports a reload whose navigation throws as failed', async () => {
     const navigate = makeNavigate({ reload: vi.fn(async () => { throw new Error('Navigation timeout of 30000 ms exceeded'); }) });
 
-    const result: any = await navigate.handler({ action: 'reload', connectionReason: 'shop-web-app' });
+    const result: any = await navigate.handler({ action: 'reload', connection: 'shop-web-app' });
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain('timeout');
@@ -49,7 +49,7 @@ describe('the hints in a navigation reply', () => {
     }, 'shop-web-app');
 
     for (const hint of [response.clickableElements.hint, response.console.hint, response.network.hint]) {
-      expect(hint).toContain("connectionReason: 'shop-web-app'");
+      expect(hint).toContain("connection: 'shop-web-app'");
     }
   });
 });

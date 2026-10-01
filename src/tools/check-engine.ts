@@ -153,8 +153,8 @@ export interface CheckReading {
 }
 
 export interface CheckDeps {
-  connectionReason?: string;
-  resolveConnection?: (connectionReason: string) => Promise<any>;
+  connection?: string;
+  resolveConnection?: (connection: string) => Promise<any>;
   /** For url, cookie and storage reads, which go through those tools. */
   executeToolCall?: ExecuteToolCall;
   abortSignal?: AbortSignal;
@@ -482,10 +482,10 @@ async function readerFor(
   if (form === 'time') return async () => ({ held: true, found: `${spec.afterMs ?? 0}ms passed` });
 
   if (form === 'traffic' || form === 'socket') {
-    const proxy = deps.connectionReason ? getProxy(deps.connectionReason) : undefined;
+    const proxy = deps.connection ? getProxy(deps.connection) : undefined;
     if (!proxy) {
       throw new CheckError(
-        `a ${form} check reads what crosses the proxy, and "${deps.connectionReason ?? '(no connection)'}" was not launched through one - connection({ action: 'launch', proxy: true })`,
+        `a ${form} check reads what crosses the proxy, and "${deps.connection ?? '(no connection)'}" was not launched through one - connection({ action: 'launch', proxy: true })`,
         'no-proxy');
     }
     if (form === 'socket') {
@@ -525,7 +525,7 @@ async function readerFor(
   }
 
   if (form === 'url' || form === 'cookie' || form === 'localStorage' || form === 'indexedDB') {
-    if (!deps.executeToolCall || !deps.connectionReason) {
+    if (!deps.executeToolCall || !deps.connection) {
       throw new CheckError(`a ${form} check reads a browser, so it needs a connection`, 'no-connection');
     }
     const negated = form !== 'url' && spec.condition === 'absent';
@@ -533,7 +533,7 @@ async function readerFor(
       ? (spec.operator === 'contains' ? `contains:${spec.url}` : spec.operator === 'matches' ? `matches:${spec.url}` : spec.url!)
       : (spec[form] as string);
     const condition = `{{${negated ? '!' : ''}${form}:${value}}}`;
-    const ctx = { executeToolCall: deps.executeToolCall, connectionReason: deps.connectionReason } as ExecutionContext;
+    const ctx = { executeToolCall: deps.executeToolCall, connection: deps.connection } as ExecutionContext;
     return async () => {
       const result = await evaluateCondition(condition, ctx);
       if (!result.met && 'isError' in result && result.isError) throw new CheckError(result.reason, 'unreadable');
@@ -542,11 +542,11 @@ async function readerFor(
   }
 
   // element and expression read the page through the debugger.
-  if (!deps.resolveConnection || !deps.connectionReason) {
-    throw new CheckError(`a ${form} check reads a page, so it needs a connectionReason`, 'no-connection');
+  if (!deps.resolveConnection || !deps.connection) {
+    throw new CheckError(`a ${form} check reads a page, so it needs a connection`, 'no-connection');
   }
-  const resolved = await deps.resolveConnection(deps.connectionReason);
-  if (!resolved) throw new CheckError(`no connection named "${deps.connectionReason}"`, 'no-connection');
+  const resolved = await deps.resolveConnection(deps.connection);
+  if (!resolved) throw new CheckError(`no connection named "${deps.connection}"`, 'no-connection');
   const cdpManager = resolved.cdpManager;
   if (!cdpManager?.isConnected?.()) throw new CheckError('the debugger is not connected', 'not-connected');
   onManager(cdpManager);

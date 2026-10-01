@@ -101,7 +101,7 @@ describe('a token-bearing step does not prompt for variables', () => {
 
     await fs.writeFile(join(dir, 'login.json'), JSON.stringify({
       id: 'seq-login', name: 'login', createdAt: 1,
-      commands: [{ tool: 'input', params: { action: 'type', selector: '#password', text: '{{env:APP_PASSWORD}}', connectionReason: 'suite' } }],
+      commands: [{ tool: 'input', params: { action: 'type', selector: '#password', text: '{{env:APP_PASSWORD}}', connection: 'suite' } }],
     }));
     await recorder.loadSequenceFromDisk(join(dir, 'login.json'));
   });
@@ -115,7 +115,7 @@ describe('a token-bearing step does not prompt for variables', () => {
   it('runs without variables and types the environment value', async () => {
     process.env.APP_PASSWORD = 'from-env';
 
-    const res = await replay.handler({ action: 'run', wait: true, name: 'login', connectionReason: 'suite' } as any);
+    const res = await replay.handler({ action: 'run', wait: true, name: 'login', connection: 'suite' } as any);
 
     expect(res._meta?.replay?.prompted).toBeUndefined();
     expect(typed).toEqual(['from-env']);
@@ -125,7 +125,7 @@ describe('a token-bearing step does not prompt for variables', () => {
     process.env.APP_PASSWORD = 'from-env';
 
     await replay.handler({
-      action: 'run', wait: true, name: 'login', connectionReason: 'suite',
+      action: 'run', wait: true, name: 'login', connection: 'suite',
       variables: { var_0__password: 'from-caller' },
     } as any);
 
@@ -135,7 +135,7 @@ describe('a token-bearing step does not prompt for variables', () => {
   it('fails the run when the variable is unset', async () => {
     delete process.env.APP_PASSWORD;
 
-    const res = await replay.handler({ action: 'run', wait: true, name: 'login', connectionReason: 'suite' } as any);
+    const res = await replay.handler({ action: 'run', wait: true, name: 'login', connection: 'suite' } as any);
 
     expect(res._meta?.replay?.success).toBe(false);
     expect(typed).toEqual([]);

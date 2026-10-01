@@ -305,7 +305,7 @@ export function createSequenceDriver(
       }
     }
     try {
-      await executeToolCall('navigate', { action: 'goto', url, connectionReason: connection });
+      await executeToolCall('navigate', { action: 'goto', url, connection });
     } catch (error) {
       debugLog('bench', `could not open the sequence's start url ${url}: ${error}`);
     }
@@ -329,11 +329,11 @@ export function createSequenceDriver(
 
     const references = new Set<string>();
     for (const command of sequence.commands ?? []) {
-      const recorded = command.params?.connectionReason ?? createdName(command);
+      const recorded = command.params?.connection ?? createdName(command);
       if (typeof recorded === 'string' && recorded) references.add(recorded);
     }
     for (const declared of (sequence as any).requiredConnections ?? []) {
-      if (declared?.reference) references.add(String(declared.reference));
+      if (declared?.connection) references.add(String(declared.connection));
     }
 
     references.delete(connection);
@@ -478,7 +478,7 @@ export function createSequenceDriver(
 
     history: () => commandRecorder.getHistory(Number.MAX_SAFE_INTEGER).map(command => {
       const text = textOf(command.result);
-      const connection = command.params?.connectionReason ?? createdName(command);
+      const connection = command.params?.connection ?? createdName(command);
       return {
         index: command.index,
         at: command.timestamp,
@@ -674,7 +674,7 @@ export function createSequenceDriver(
       }
       if (selected) {
         return replay({
-          action: 'run', name: selected, stepTo: 1, wait: true, connectionReason: selectedConnection,
+          action: 'run', name: selected, stepTo: 1, wait: true, connection: selectedConnection,
           ...(rebindOnto(selected, selectedConnection) ? { connections: rebindOnto(selected, selectedConnection) } : {}),
           ...(baseUrl ? { baseUrl } : {}),
         }, signal);
@@ -690,7 +690,7 @@ export function createSequenceDriver(
       }
       if (selected) {
         const failure = await replay({
-          action: 'run', name: selected, wait: true, connectionReason: selectedConnection,
+          action: 'run', name: selected, wait: true, connection: selectedConnection,
           ...(rebindOnto(selected, selectedConnection) ? { connections: rebindOnto(selected, selectedConnection) } : {}),
           ...(baseUrl ? { baseUrl } : {}),
         });
@@ -720,7 +720,7 @@ export function createSequenceDriver(
       if (ourRun()) await replay({ action: 'cancel' });
       selected = name;
       return replay({
-        action: 'run', name, stepTo: step + 1, wait: true, connectionReason: selectedConnection,
+        action: 'run', name, stepTo: step + 1, wait: true, connection: selectedConnection,
         ...(rebindOnto(name, selectedConnection) ? { connections: rebindOnto(name, selectedConnection) } : {}),
         ...(baseUrl ? { baseUrl } : {}),
       });
@@ -839,7 +839,7 @@ export function createSequenceDriver(
       selected = null;
       const result = await executeToolCall('replay', {
         action: 'recordInteraction',
-        connectionReason: connection,
+        connection,
         showOverlay: false,
         closeTabOnDone: false,
         ...(name ? { name } : {}),
@@ -1108,7 +1108,7 @@ export function createSequenceDriver(
     trafficIn: (connection: string, from: number, to: number) => unlisted(async () => {
       const empty = { requests: 0, failed: 0, opened: 0, writes: 0, lines: [] as string[] };
       const http = await executeToolCall('network', {
-        action: 'list', connectionReason: connection, since: from, until: to, limit: 50,
+        action: 'list', connection, since: from, until: to, limit: 50,
       }).catch(() => null);
       const rows = http?._meta?.network?.requests ?? [];
       // A transport counts against the action that OPENED it, by its open
@@ -1117,17 +1117,17 @@ export function createSequenceDriver(
       // arrived, not to whoever opened the pipe.
       const inWindow = (t: any) => t.openedAt >= from && t.openedAt < to;
       const sockets = await executeToolCall('network', {
-        action: 'sockets', connectionReason: connection,
+        action: 'sockets', connection,
       }).catch(() => null);
       const streams = await executeToolCall('network', {
-        action: 'streams', connectionReason: connection,
+        action: 'streams', connection,
       }).catch(() => null);
       const transports = [
         ...(sockets?._meta?.socketList ?? []).filter(inWindow),
         ...(streams?._meta?.streamList ?? []).filter(inWindow),
       ];
       const stored = await executeToolCall('storage', {
-        action: 'writes', connectionReason: connection, since: from, until: to,
+        action: 'writes', connection, since: from, until: to,
       }).catch(() => null);
       const written = (stored?._meta?.storage?.writes ?? []) as any[];
       if (rows.length === 0 && transports.length === 0 && written.length === 0) return empty;

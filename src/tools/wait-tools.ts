@@ -36,7 +36,7 @@ const waitSchema = z.object({
   ms: z.number().int().positive().max(300000).optional().describe('Fixed sleep ms, a last resort'),
   timeoutMs: z.number().int().positive().max(300000).optional().describe('Give up after this many ms (default 15000); the step then fails'),
   pollIntervalMs: z.number().int().min(25).max(5000).optional().describe('Interval between condition checks in ms (default: 100)'),
-  connectionReason: z.string().optional().describe('selector/selectorGone/expression: the connection; a run supplies its own'),
+  connection: z.string().optional().describe('selector/selectorGone/expression: the connection; a run supplies its own'),
 }).strict();
 
 type WaitArgs = z.infer<typeof waitSchema>;
@@ -49,7 +49,7 @@ export function buildPresencePredicate(selector: string): string | { error: stri
 
 
 export function createWaitTools(
-  resolveConnectionFromReason: (connectionReason: string) => Promise<{
+  resolveConnectionByName: (connection: string) => Promise<{
     connection: { port: number };
     cdpManager: any;
     puppeteerManager: any;
@@ -63,7 +63,7 @@ export function createWaitTools(
       // engine THROWS an abort-shaped error (never returns an isError
       // response); the executor classifies it.
       async (args: WaitArgs, abortSignal?: AbortSignal) => {
-        const { selector, selectorGone, expression, ms, connectionReason } = args;
+        const { selector, selectorGone, expression, ms, connection } = args;
         const forms = [
           selector !== undefined ? 'selector' : null,
           selectorGone !== undefined ? 'selectorGone' : null,
@@ -79,14 +79,14 @@ export function createWaitTools(
           });
         }
         const form = forms[0] as 'selector' | 'selectorGone' | 'expression' | 'ms';
-        if (form !== 'ms' && !connectionReason) {
+        if (form !== 'ms' && !connection) {
           return createErrorResponse('WAIT_INVALID_ARGS', {
-            message: `wait({ ${form} }) requires a connectionReason (the name connection launch or attach gave it).`,
+            message: `wait({ ${form} }) requires a connection (the name connection launch or attach gave it).`,
           });
         }
 
         const reading = await runCheck(waitAsCheck(args), {
-          connectionReason, resolveConnection: resolveConnectionFromReason, abortSignal,
+          connection, resolveConnection: resolveConnectionByName, abortSignal,
         });
         const meta: ToolResponseMeta = {
           tool: 'wait', action: form, timestamp: Date.now(),
@@ -122,10 +122,10 @@ export function createWaitTools(
         }
         switch (reading.errorKind) {
           case 'paused':
-            return { ...createErrorResponse('WAIT_DEBUGGER_PAUSED', { condition: conditionLabel, connectionReason }), _meta: meta };
+            return { ...createErrorResponse('WAIT_DEBUGGER_PAUSED', { condition: conditionLabel, connection }), _meta: meta };
           case 'no-connection':
             return createErrorResponse('CONNECTION_NOT_FOUND', {
-              message: `No connection is named "${connectionReason}". Start one with connection({ action: 'launch' }), or see the names in use with connection({ action: 'list' }).`,
+              message: `No connection is named "${connection}". Start one with connection({ action: 'launch' }), or see the names in use with connection({ action: 'list' }).`,
             });
           case 'not-connected':
             return createErrorResponse('DEBUGGER_NOT_CONNECTED');

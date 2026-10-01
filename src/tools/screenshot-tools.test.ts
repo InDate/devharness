@@ -19,7 +19,7 @@ function makeScreenshot(page: Record<string, any>, opts: { paused?: boolean } = 
   return screenshot;
 }
 
-const on = { connectionReason: 'shop-web-app' };
+const on = { connection: 'shop-web-app' };
 let dir: string;
 
 beforeAll(async () => {

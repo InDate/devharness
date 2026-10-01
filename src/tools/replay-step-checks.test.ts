@@ -19,7 +19,7 @@ function ctxWith(answer: (tool: string, params: Record<string, any>) => any): Ex
     calls.push({ tool, params });
     return answer(tool, params) ?? { content: [{ type: 'text', text: '' }] };
   });
-  return { executeToolCall, commandRecorder: { recordCommand: vi.fn(), getCurrentHistoryIndex: () => 0 } as any, connectionReason: 'shop-web-app', logPrefix: 'test', calls };
+  return { executeToolCall, commandRecorder: { recordCommand: vi.fn(), getCurrentHistoryIndex: () => 0 } as any, connection: 'shop-web-app', logPrefix: 'test', calls };
 }
 
 const pageInfo = (url: string, title: string) => ({

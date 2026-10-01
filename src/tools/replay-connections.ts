@@ -8,7 +8,7 @@ import type { RecordedCommand } from '../command-recorder.js';
 import type { ExecuteToolCall } from '../types.js';
 import type { ConnectionMeta } from '../tool-response.js';
 import { sanitizeReference } from '../reference-validator.js';
-import { addressesConnection, createsConnection, createdName } from './connection-steps.js';
+import { addressesConnection, addressedConnection, createsConnection, createdName } from './connection-steps.js';
 import type { ConnectionAnalysis } from './replay-types.js';
 
 /**
@@ -22,7 +22,7 @@ import type { ConnectionAnalysis } from './replay-types.js';
  */
 export const TOOLS_NEEDING_CONNECTION = [
   'navigate', 'content', 'input', 'console', 'network', 'dom', 'screenshot', 'storage',
-  // `bench` takes a required connectionReason and launches Chrome when the
+  // `bench` takes a required connection and launches Chrome when the
   // reference is unbound. Left out, a sequence holding a bench step has its
   // connection hoisted off and never given back, and the replay fails on a
   // missing parameter rather than on anything the sequence did.
@@ -30,7 +30,7 @@ export const TOOLS_NEEDING_CONNECTION = [
 ];
 
 /**
- * Tools whose params accept a `connectionReason` and should therefore have the
+ * Tools whose params accept a `connection` and should therefore have the
  * run-level connection injected when the step doesn't name one itself. Superset of
  * TOOLS_NEEDING_CONNECTION: it adds the target-agnostic (Chrome *or* Node) debugging
  * tools, which need to be pinned to the run's target but must NOT drag a browser
@@ -85,7 +85,7 @@ export function actsWithoutConnection(cmd: { tool: string; params?: Record<strin
  * Deliberately wider than `commandNeedsBrowserConnection`, which answers a
  * different question (does this drag a Chrome launch in?). A step of
  * `inspect`, `execution`, `storage` and the other target-agnostic tools
- * recorded without a connectionReason - which recordings made before every
+ * recorded without a connection - which recordings made before every
  * call had to name one hold - captures nothing about which browser it ran
  * against, and on replay it lands wherever the run-level connection points.
  * Measuring ambiguity with the narrower predicate missed exactly those tools.
@@ -154,8 +154,8 @@ export function analyzeRecordedStepConnections(commands: RecordedCommand[]): Rec
   let bareSteps = 0;
 
   for (const cmd of commands) {
-    const raw = cmd.params?.connectionReason;
-    if (typeof raw === 'string' && raw.trim()) {
+    const raw = addressedConnection(cmd);
+    if (raw) {
       const ref = sanitizeReference(raw);
       if (!references.includes(ref)) references.push(ref);
     } else if (commandTakesInjectedConnection(cmd)) {
@@ -173,7 +173,7 @@ export function analyzeRecordedStepConnections(commands: RecordedCommand[]): Rec
 
 /**
  * Hoist a uniform per-step connection back off the steps so the sequence stays
- * portable: `replay({ action: 'run', connectionReason: 'other' })` can then
+ * portable: `replay({ action: 'run', connection: 'other' })` can then
  * retarget the whole thing. Steps keep their own connection only where the
  * sequence genuinely spans connections (or where it is ambiguous - see
  * `mixed`), which is the case a run-level connection cannot express.
@@ -194,8 +194,8 @@ export function normalizeStepConnections(commands: RecordedCommand[]): {
 
   const hoisted = analysis.uniform;
   const stripped = commands.map(cmd => {
-    if (cmd.params?.connectionReason === undefined) return cmd;
-    const { connectionReason, ...rest } = cmd.params;
+    if (addressedConnection(cmd) === undefined) return cmd;
+    const { connection, ...rest } = cmd.params;
     return { ...cmd, params: rest };
   });
 
@@ -224,7 +224,7 @@ export function sanitizeConnectionMap(
  */
 export function sequenceNeedsConnection(commands: RecordedCommand[]): boolean {
   return commands.some(cmd =>
-    commandNeedsBrowserConnection(cmd) && !cmd.params.connectionReason
+    commandNeedsBrowserConnection(cmd) && !cmd.params.connection
   );
 }
 
@@ -269,7 +269,7 @@ export function connectionsOf(response: any): ConnectionMeta[] | null {
 }
 
 /**
- * Resolve a step's RECORDED connectionReason onto this session, and refuse to
+ * Resolve a step's RECORDED connection onto this session, and refuse to
  * proceed if it doesn't exist here (bug-018).
  *
  * Falling back to the run-level connection with a warning is exactly the failure
@@ -293,7 +293,7 @@ export function formatMissingStepConnection(opts: {
     `The step names its own connection, so it is NOT run against` +
       ` the run-level connection${runConnection ? ` "${runConnection}"` : ''} - that would replay a` +
       ` multi-browser sequence in a single browser and report success.`,
-    `Either create it (connection({ action: 'launch', name: "${resolved}" })) or rebind it:` +
+    `Either create it (connection({ action: 'launch', connection: "${resolved}" })) or rebind it:` +
       ` replay({ action: 'run', ..., connections: { "${recorded}": "<a reference from this session>" } }).`,
   ].join(' ');
 }

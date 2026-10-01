@@ -20,8 +20,8 @@ export { findUnknownStepTools, type UnknownStepTool } from './replay-validation.
 export function createReplayTools(
   commandRecorder: CommandRecorder,
   executeToolCall: ExecuteToolCall,
-  getPageForConnection?: (connectionReason: string) => Promise<any>,
-  getConnectionPort?: (connectionReason: string) => Promise<number | null>,
+  getPageForConnection?: (connection: string) => Promise<any>,
+  getConnectionPort?: (connection: string) => Promise<number | null>,
   /**
    * Lazy provider for the set of registered tool names, used to reject sequence
    * steps naming a nonexistent tool at create/load time (bug-010). Lazy because

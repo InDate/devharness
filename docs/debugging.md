@@ -8,7 +8,7 @@ breakpoint({
   action: 'set',
   url: 'http://localhost:3000/app.js',
   lineNumber: 42,
-  connectionReason: 'my-debug-session'
+  connection: 'my-debug-session'
 })
 ```
 
@@ -19,7 +19,7 @@ breakpoint({
   url: 'http://localhost:3000/app.js',
   lineNumber: 42,
   condition: 'userId === "123"',
-  connectionReason: 'my-debug-session'
+  connection: 'my-debug-session'
 })
 ```
 
@@ -32,7 +32,7 @@ breakpoint({
   logMessage: 'User {userId} with role {userRole}',
   includeCallStack: true,
   maxExecutions: 50,
-  connectionReason: 'my-debug-session'
+  connection: 'my-debug-session'
 })
 ```
 
@@ -42,28 +42,28 @@ When paused at a breakpoint:
 
 ```javascript
 // Get call stack
-inspect({ action: 'getCallStack', connectionReason: 'my-debug-session' })
+inspect({ action: 'getCallStack', connection: 'my-debug-session' })
 
 // Get variables in current scope
-inspect({ action: 'getVariables', callFrameId: '0', connectionReason: 'my-debug-session' })
+inspect({ action: 'getVariables', callFrameId: '0', connection: 'my-debug-session' })
 
 // Filter variables by name pattern
-inspect({ action: 'getVariables', callFrameId: '0', filter: 'user|config', connectionReason: 'my-debug-session' })
+inspect({ action: 'getVariables', callFrameId: '0', filter: 'user|config', connection: 'my-debug-session' })
 
 // Evaluate expression
-inspect({ action: 'evaluateExpression', expression: 'user.email', connectionReason: 'my-debug-session' })
+inspect({ action: 'evaluateExpression', expression: 'user.email', connection: 'my-debug-session' })
 
 // Step over
-execution({ action: 'stepOver', connectionReason: 'my-debug-session' })
+execution({ action: 'stepOver', connection: 'my-debug-session' })
 
 // Step into
-execution({ action: 'stepInto', connectionReason: 'my-debug-session' })
+execution({ action: 'stepInto', connection: 'my-debug-session' })
 
 // Step out
-execution({ action: 'stepOut', connectionReason: 'my-debug-session' })
+execution({ action: 'stepOut', connection: 'my-debug-session' })
 
 // Resume
-execution({ action: 'resume', connectionReason: 'my-debug-session' })
+execution({ action: 'resume', connection: 'my-debug-session' })
 ```
 
 ## Source Maps
@@ -101,14 +101,14 @@ inspect({
   action: 'searchCode',
   pattern: 'fetchUser',
   urlFilter: 'localhost',
-  connectionReason: 'my-debug-session'
+  connection: 'my-debug-session'
 })
 
 // Find function definitions
 inspect({
   action: 'searchFunctions',
   functionName: 'handleSubmit',
-  connectionReason: 'my-debug-session'
+  connection: 'my-debug-session'
 })
 
 // Get source code at specific lines
@@ -117,7 +117,7 @@ source({
   url: 'http://localhost:3000/app.js',
   startLine: 40,
   endLine: 60,
-  connectionReason: 'my-debug-session'
+  connection: 'my-debug-session'
 })
 ```
 
@@ -134,14 +134,14 @@ node --inspect=9229 server.js
 
 ```javascript
 // Connect to Node.js debugger
-connection({ action: 'attach', name: 'backend debug session', port: 9229 })
+connection({ action: 'attach', connection: 'backend debug session', port: 9229 })
 
 // Set breakpoints
 breakpoint({
   action: 'set',
   url: 'file:///app/server.js',
   lineNumber: 50,
-  connectionReason: 'backend-debug-session'
+  connection: 'backend-debug-session'
 })
 ```
 
@@ -151,14 +151,14 @@ Debug Chrome and Node.js simultaneously:
 
 **Chrome:**
 ```javascript
-connection({ action: 'launch', name: 'frontend debug session' })
-navigate({ action: 'goto', url: 'http://localhost:3000', connectionReason: 'frontend-debug-session' })
+connection({ action: 'launch', connection: 'frontend debug session' })
+navigate({ action: 'goto', url: 'http://localhost:3000', connection: 'frontend-debug-session' })
 ```
 
 **Node.js (separate connection):**
 ```javascript
-connection({ action: 'attach', name: 'backend debug session', port: 9229 })
-breakpoint({ action: 'set', url: 'file:///app/server.js', lineNumber: 50, connectionReason: 'backend-debug-session' })
+connection({ action: 'attach', connection: 'backend debug session', port: 9229 })
+breakpoint({ action: 'set', url: 'file:///app/server.js', lineNumber: 50, connection: 'backend-debug-session' })
 ```
 
 ## Logpoint Expressions
@@ -192,23 +192,23 @@ To inspect specific variables at full depth, use `filter` or `evaluateExpression
 
 ```javascript
 // Filter to specific variable
-inspect({ action: 'getVariables', callFrameId: '0', filter: '^myVar$', connectionReason: 'my-debug-session' })
+inspect({ action: 'getVariables', callFrameId: '0', filter: '^myVar$', connection: 'my-debug-session' })
 
 // Or evaluate directly
-inspect({ action: 'evaluateExpression', expression: 'myVar', connectionReason: 'my-debug-session' })
+inspect({ action: 'evaluateExpression', expression: 'myVar', connection: 'my-debug-session' })
 ```
 
 ## Bug Hunting Pattern
 
 1. **Launch and navigate**
 ```javascript
-connection({ action: 'launch', name: 'bug hunt session' })
-navigate({ action: 'goto', url: 'http://localhost:3000/problematic-page', connectionReason: 'bug-hunt-session' })
+connection({ action: 'launch', connection: 'bug hunt session' })
+navigate({ action: 'goto', url: 'http://localhost:3000/problematic-page', connection: 'bug-hunt-session' })
 ```
 
 2. **Monitor console errors**
 ```javascript
-console({ action: 'list', type: 'error', connectionReason: 'bug-hunt-session' })
+console({ action: 'list', type: 'error', connection: 'bug-hunt-session' })
 ```
 
 3. **Set breakpoints**
@@ -217,14 +217,14 @@ breakpoint({
   action: 'set',
   url: 'http://localhost:3000/app.js',
   lineNumber: 150,
-  connectionReason: 'bug-hunt-session'
+  connection: 'bug-hunt-session'
 })
 ```
 
 4. **Trigger the bug and inspect**
 ```javascript
-input({ action: 'click', selector: '#trigger-button', connectionReason: 'bug-hunt-session' })
+input({ action: 'click', selector: '#trigger-button', connection: 'bug-hunt-session' })
 // Pauses at breakpoint
-inspect({ action: 'getCallStack', connectionReason: 'bug-hunt-session' })
-inspect({ action: 'getVariables', callFrameId: '0', connectionReason: 'bug-hunt-session' })
+inspect({ action: 'getCallStack', connection: 'bug-hunt-session' })
+inspect({ action: 'getVariables', callFrameId: '0', connection: 'bug-hunt-session' })
 ```

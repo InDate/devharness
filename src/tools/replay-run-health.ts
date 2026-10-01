@@ -13,7 +13,7 @@ export async function snapshotConsole(
   const out: Record<string, { errors: number; warnings: number }> = {};
   for (const ref of refs) {
     try {
-      const res: any = await executeToolCall('console', { action: 'list', limit: 1, connectionReason: ref });
+      const res: any = await executeToolCall('console', { action: 'list', limit: 1, connection: ref });
       out[ref] = {
         errors: res?._meta?.console?.errorCount || 0,
         warnings: res?._meta?.console?.warnCount || 0,
@@ -78,7 +78,7 @@ export async function snapshotSockets(
   const out: Record<string, SocketSnapshot[] | { unreadable: string }> = {};
   for (const ref of refs) {
     try {
-      const res: any = await executeToolCall('network', { action: 'sockets', connectionReason: ref });
+      const res: any = await executeToolCall('network', { action: 'sockets', connection: ref });
       const list = res?._meta?.socketList;
       out[ref] = Array.isArray(list)
         ? list

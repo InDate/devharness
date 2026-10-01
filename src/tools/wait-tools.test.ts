@@ -75,11 +75,11 @@ describe('wait form validation', () => {
     expect(result.content[0].text).toContain('selector + ms');
   });
 
-  it('requires connectionReason for condition forms', async () => {
+  it('requires connection for condition forms', async () => {
     const { wait } = makeWait();
     const result = await wait.handler({ selector: '#a' } as any);
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('connectionReason');
+    expect(result.content[0].text).toContain('connection');
   });
 });
 
@@ -106,7 +106,7 @@ describe('wait condition polling', () => {
     });
     const { wait } = makeWait(cdp);
     const result = await wait.handler({
-      expression: 'window.__x === 1', connectionReason: 'test', pollIntervalMs: 25,
+      expression: 'window.__x === 1', connection: 'test', pollIntervalMs: 25,
     } as any);
     expect(result.isError).toBeUndefined();
     expect(calls).toBe(3);
@@ -124,7 +124,7 @@ describe('wait condition polling', () => {
     });
     const { wait } = makeWait(cdp);
     const result = await wait.handler({
-      selector: '#after-nav', connectionReason: 'test', pollIntervalMs: 25,
+      selector: '#after-nav', connection: 'test', pollIntervalMs: 25,
     } as any);
     expect(result.isError).toBeUndefined();
     expect(calls).toBe(3);
@@ -136,7 +136,7 @@ describe('wait condition polling', () => {
     });
     const { wait } = makeWait(cdp);
     const result = await wait.handler({
-      expression: 'false', connectionReason: 'test', timeoutMs: 120, pollIntervalMs: 25,
+      expression: 'false', connection: 'test', timeoutMs: 120, pollIntervalMs: 25,
     } as any);
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain('Timed out after 120ms');
@@ -149,7 +149,7 @@ describe('wait condition polling', () => {
     });
     const { wait } = makeWait(cdp);
     const result = await wait.handler({
-      expression: 'myGlobal.ready', connectionReason: 'test', timeoutMs: 80, pollIntervalMs: 25,
+      expression: 'myGlobal.ready', connection: 'test', timeoutMs: 80, pollIntervalMs: 25,
     } as any);
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain('myGlobal is not defined');
@@ -161,7 +161,7 @@ describe('wait condition polling', () => {
     const { wait } = makeWait(cdp);
     const start = Date.now();
     const result = await wait.handler({
-      selector: '#x', connectionReason: 'test', timeoutMs: 5000,
+      selector: '#x', connection: 'test', timeoutMs: 5000,
     } as any);
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain('paused');
@@ -178,7 +178,7 @@ describe('wait condition polling', () => {
     const { wait } = makeWait(cdp);
     const start = Date.now();
     const result = await wait.handler({
-      selector: '###', connectionReason: 'test', timeoutMs: 10000,
+      selector: '###', connection: 'test', timeoutMs: 10000,
     } as any);
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain('not a valid selector');
@@ -188,16 +188,16 @@ describe('wait condition polling', () => {
   it('rejects selector waits against a Node.js target but allows expression waits', async () => {
     const cdp = makeCdpManager({ getRuntimeType: () => 'node' });
     const { wait } = makeWait(cdp);
-    const selectorResult = await wait.handler({ selector: '#x', connectionReason: 'node-app' } as any);
+    const selectorResult = await wait.handler({ selector: '#x', connection: 'node-app' } as any);
     expect(selectorResult.isError).toBe(true);
-    const exprResult = await wait.handler({ expression: 'true', connectionReason: 'node-app' } as any);
+    const exprResult = await wait.handler({ expression: 'true', connection: 'node-app' } as any);
     expect(exprResult.isError).toBeUndefined();
   });
 
   it('negates the predicate for selectorGone', async () => {
     const cdp = makeCdpManager();
     const { wait } = makeWait(cdp);
-    await wait.handler({ selectorGone: '.spinner', connectionReason: 'test' } as any);
+    await wait.handler({ selectorGone: '.spinner', connection: 'test' } as any);
     const predicate = (cdp.evaluateExpressionDetailed as any).mock.calls[0][0];
     expect(predicate).toBe('!(!!document.querySelector(".spinner"))');
   });

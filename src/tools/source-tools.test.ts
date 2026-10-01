@@ -26,7 +26,7 @@ describe('source get', () => {
   it('reports the range it returned, clamped to the end of the script', async () => {
     const source = sourceTool(managerWithScript('http://app/app.js', 12));
 
-    const result: any = await source.handler({ action: 'get', url: 'http://app/app.js', startLine: 5, endLine: 500, connectionReason: 'my-web-app' });
+    const result: any = await source.handler({ action: 'get', url: 'http://app/app.js', startLine: 5, endLine: 500, connection: 'my-web-app' });
 
     expect(text(result)).toContain('(lines 5-12)');
     expect(text(result)).toContain('  12 | line 12');
@@ -35,7 +35,7 @@ describe('source get', () => {
   it('refuses a start line past the end of the script', async () => {
     const source = sourceTool(managerWithScript('http://app/app.js', 12));
 
-    const result: any = await source.handler({ action: 'get', url: 'http://app/app.js', startLine: 40, connectionReason: 'my-web-app' });
+    const result: any = await source.handler({ action: 'get', url: 'http://app/app.js', startLine: 40, connection: 'my-web-app' });
 
     expect(result.isError).toBe(true);
     expect(text(result)).toContain('12 lines');
@@ -46,7 +46,7 @@ describe('source get on a name no connection has', () => {
   it('names the connection it could not find', async () => {
     const source = createSourceTools({} as any, async () => null).source;
 
-    const result: any = await source.handler({ action: 'get', url: 'app.js', connectionReason: 'no-such-tab' });
+    const result: any = await source.handler({ action: 'get', url: 'app.js', connection: 'no-such-tab' });
 
     expect(result.isError).toBe(true);
     expect(text(result)).toContain('No connection is named "no-such-tab"');

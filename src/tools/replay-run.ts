@@ -28,7 +28,7 @@ import {
   sanitizeConnectionMap,
   type ExecutionContext,
 } from './replay-executor.js';
-import { createdName } from './connection-steps.js';
+import { addressedConnection, createdName } from './connection-steps.js';
 import {
   formatExecutionResults,
   formatPausedResponse,
@@ -53,11 +53,11 @@ interface PerformRunDeps {
   args: ReplayArgs;
   recorder: CommandRecorder;
   executeToolCall: ExecuteToolCall;
-  getPageForConnection: (connectionReason: string) => Promise<any>;
-  getConnectionPort?: (connectionReason: string) => Promise<number | null>;
+  getPageForConnection: (connection: string) => Promise<any>;
+  getConnectionPort?: (connection: string) => Promise<number | null>;
   sequence: CommandSequence;
   analysis: ReturnType<typeof analyzeSequenceConnections>;
-  connectionReason: string | undefined;
+  connection: string | undefined;
   needsConnection: boolean;
   /** Recorded-reference -> this-session-reference rebinding (args.connections). */
   connectionMap?: Record<string, string>;
@@ -78,9 +78,9 @@ const WAIT_BOUND_MS = 120_000;
  */
 async function runInBench(args: ReplayArgs) {
   const bench = await import('../bench-mode.js');
-  const connection = args.connectionReason;
+  const connection = args.connection;
   if (!connection || !bench.isBenchOpen(connection)) {
-    return createErrorResponse('REPLAY_BENCH_NOT_OPEN', { connectionReason: connection ?? '(none given)' });
+    return createErrorResponse('REPLAY_BENCH_NOT_OPEN', { connection: connection ?? '(none given)' });
   }
   const carried = (['baseUrl', 'startUrl', 'variables', 'envFile', 'connections', 'startFrom', 'stepTo'] as const)
     .filter(key => args[key] !== undefined);
@@ -94,7 +94,7 @@ async function runInBench(args: ReplayArgs) {
   const benchUrl = bench.getBenchSession(connection)?.benchUrl ?? '';
   if (!args.wait) {
     play.catch(() => {});
-    return createSuccessResponse('REPLAY_BENCH_PLAYING', { name, connectionReason: connection, benchUrl });
+    return createSuccessResponse('REPLAY_BENCH_PLAYING', { name, connection, benchUrl });
   }
   const state = await play;
   return createSuccessResponse('REPLAY_BENCH_PLAYED', {
@@ -108,9 +108,9 @@ export async function handleRun(
   args: ReplayArgs,
   recorder: CommandRecorder,
   executeToolCall: ExecuteToolCall,
-  getPageForConnection: (connectionReason: string) => Promise<any>,
+  getPageForConnection: (connection: string) => Promise<any>,
   abortSignal?: AbortSignal,
-  getConnectionPort?: (connectionReason: string) => Promise<number | null>,
+  getConnectionPort?: (connection: string) => Promise<number | null>,
   /**
    * `validateVariableKeys: false` for a sequence running as part of a suite:
    * `runAll` validates the one map it holds against the whole suite's keys and
@@ -136,13 +136,13 @@ export async function handleRun(
   const analysis = analyzeSequenceConnections(commands);
 
   // Determine connection reason
-  let connectionReason = args.connectionReason || extractConnectionFromSequence(commands, analysis);
+  let connection = args.connection || extractConnectionFromSequence(commands, analysis);
 
   // Validate connection requirement - fall back to a reason derived from the
   // sequence name so we can auto-launch Chrome instead of erroring out
   const needsConnection = sequenceNeedsConnection(commands);
-  if (!connectionReason && !analysis.createsBeforeUse && needsConnection) {
-    connectionReason = deriveConnectionReference(sequence.name);
+  if (!connection && !analysis.createsBeforeUse && needsConnection) {
+    connection = deriveConnectionReference(sequence.name);
   }
 
   // Handle variable extraction and prompting. A step whose recorded text
@@ -159,7 +159,7 @@ export async function handleRun(
     // "asked a question" from "executed and passed", or a suite goes green for
     // a sequence that ran zero steps.
     return {
-      content: [{ type: 'text', text: formatVariablePrompt(sequence.name, idParam, extractedVariables, connectionReason) }],
+      content: [{ type: 'text', text: formatVariablePrompt(sequence.name, idParam, extractedVariables, connection) }],
       _meta: { tool: 'replay', action: 'run', timestamp: Date.now(), replay: { success: false, prompted: true } }
     };
   }
@@ -233,7 +233,7 @@ export async function handleRun(
         message: `No step in "${sequence.name}" is recorded against ${unknown.map(u => `"${u}"`).join(', ')}. ` +
           (known.size > 0
             ? `Recorded references: ${[...known].join(', ')}. `
-            : `No step in this sequence names a connection at all, so there is nothing to rebind - use connectionReason to set the run connection. `) +
+            : `No step in this sequence names a connection at all, so there is nothing to rebind - use connection to set the run connection. `) +
           `Check replay({ action: 'get', name: '${sequence.name}', outputFormat: 'commands' }).`
       });
     }
@@ -260,13 +260,13 @@ export async function handleRun(
 
   // A step naming its own connection resolves through `connections` alone, so
   // where every connection-taking step names one reference, a run-level
-  // connectionReason reaches no step at all. The steps then drive the recorded
+  // connection reaches no step at all. The steps then drive the recorded
   // reference - live but stale in the same session - and fail as "element not
   // found" against the wrong window. Refused before any side effects, with the
   // mapping that retargets them. A `{{...}}` reference resolves only at run time
   // and is left to the per-step existence check.
-  if (args.connectionReason) {
-    const runRef = sanitizeReference(args.connectionReason);
+  if (args.connection) {
+    const runRef = sanitizeReference(args.connection);
     const recorded = analyzeRecordedStepConnections(commands);
     const unreached = recorded.uniform !== undefined &&
       !recorded.mixed &&
@@ -277,16 +277,16 @@ export async function handleRun(
       : undefined;
     if (unreached) {
       const steps = commands
-        .map((c, i) => sanitizeReference(String(c.params?.connectionReason ?? '')) === unreached ? i + 1 : 0)
+        .map((c, i) => sanitizeReference(addressedConnection(c) ?? '') === unreached ? i + 1 : 0)
         .filter(Boolean);
       return createErrorResponse('INVALID_PARAMETER', {
-        parameter: 'connectionReason',
-        value: args.connectionReason,
+        parameter: 'connection',
+        value: args.connection,
         message: `Step${steps.length > 1 ? 's' : ''} ${steps.join(', ')} of "${sequence.name}" name the connection "${unreached}", ` +
-          `and a run-level connectionReason does not reach a step that names its own connection - ` +
+          `and a run-level connection does not reach a step that names its own connection - ` +
           `those steps would drive "${unreached}" instead of "${runRef}". ` +
           `Retarget them with connections: { "${unreached}": "${runRef}" }, ` +
-          `or run with connectionReason: "${unreached}" to drive the recorded connection.`
+          `or run with connection: "${unreached}" to drive the recorded connection.`
       });
     }
   }
@@ -295,10 +295,10 @@ export async function handleRun(
   // launched name), in which case it is a recorded name and needs the
   // same rebinding as the steps - otherwise it points at a reference that does
   // not exist here, and the startUrl navigation and cursor injection silently
-  // no-op against it. An explicitly passed connectionReason is already a live
+  // no-op against it. An explicitly passed connection is already a live
   // reference and is left alone.
-  if (connectionMap && !args.connectionReason && connectionReason) {
-    connectionReason = connectionMap[sanitizeReference(connectionReason)] ?? connectionReason;
+  if (connectionMap && !args.connection && connection) {
+    connection = connectionMap[sanitizeReference(connection)] ?? connection;
   }
 
   // Bring up any browser the sequence declares before the first step.
@@ -327,7 +327,7 @@ export async function handleRun(
 
   const deps: PerformRunDeps = {
     args, recorder, executeToolCall, getPageForConnection, getConnectionPort,
-    sequence, analysis, connectionReason, needsConnection,
+    sequence, analysis, connection, needsConnection,
     launchedConnections: new Set<string>(),
     ...(connectionMap && { connectionMap }),
     ...(runEnv && { runEnv }),
@@ -336,8 +336,8 @@ export async function handleRun(
   // Connections a strict run watches: the run's own, plus every browser the
   // sequence declared.
   const watchedRefs = [...new Set([
-    ...(connectionReason ? [connectionReason] : []),
-    ...(sequence.requiredConnections || []).map(d => connectionMap?.[sanitizeReference(d.reference)] ?? sanitizeReference(d.reference)),
+    ...(connection ? [connection] : []),
+    ...(sequence.requiredConnections || []).map(d => connectionMap?.[sanitizeReference(d.connection)] ?? sanitizeReference(d.connection)),
   ])].filter(Boolean) as string[];
   // A sequence that declares the sockets its assertions ride on is checked
   // whether or not the caller asked - that is the point of declaring it.
@@ -354,7 +354,7 @@ export async function handleRun(
   // `assert` over a captured value takes a connection and loads nothing, and
   // counting it demands a socket on an idle browser.
   const stepRefs = analyzeRecordedStepConnections(commands);
-  const navigatedRefs = navigatedConnections(commands, connectionReason);
+  const navigatedRefs = navigatedConnections(commands, connection);
   const namedRefs = navigatedRefs.length > 0
     ? navigatedRefs.map(r => connectionMap?.[sanitizeReference(r)] ?? sanitizeReference(r))
     : stepRefs.references.length > 0 && !stepRefs.mixed
@@ -446,9 +446,9 @@ export async function handleRun(
   const killOwnedChrome = async (): Promise<string> => {
     if (!args.killChromeOnFinish) return '';
     let note = '';
-    if (connectionReason && getConnectionPort) {
-      const port = await getConnectionPort(connectionReason);
-      const sharers = port === null ? [] : await connectionsSharingPort(executeToolCall, port, connectionReason);
+    if (connection && getConnectionPort) {
+      const port = await getConnectionPort(connection);
+      const sharers = port === null ? [] : await connectionsSharingPort(executeToolCall, port, connection);
       if (sharers.length > 0) {
         note += `\n\n**Chrome left running** (port ${port} also serves ${sharers.join(', ')}, killChromeOnFinish)` +
           ` - killing it would take those connections with it.`;
@@ -459,13 +459,13 @@ export async function handleRun(
           port,
         }).catch((error: any) => ({ isError: true, error }));
         note += killResult?.isError
-          ? `\n\n**Chrome kill failed** (${connectionReason}, port ${port}, killChromeOnFinish)`
-          : `\n\n**Chrome killed** (${connectionReason}, port ${port}, killChromeOnFinish)`;
+          ? `\n\n**Chrome kill failed** (${connection}, port ${port}, killChromeOnFinish)`
+          : `\n\n**Chrome killed** (${connection}, port ${port}, killChromeOnFinish)`;
       }
     }
     // The run-level connection is handled above; everything else here is a
     // browser a step of this run opened and nobody else asked for.
-    const stepOwned = [...deps.launchedConnections].filter(ref => ref !== connectionReason);
+    const stepOwned = [...deps.launchedConnections].filter(ref => ref !== connection);
     note += await closeLaunchedConnections(
       stepOwned, executeToolCall, getConnectionPort, sequence.name, 'launched in a step'
     );
@@ -491,7 +491,7 @@ export async function handleRun(
     runId,
     sequenceId: sequence.id,
     sequenceName: sequence.name,
-    connectionReason,
+    connection,
     status: 'running',
     startedAt: Date.now(),
     totalSteps: commands.length,
@@ -569,7 +569,7 @@ export async function handleRun(
     runId,
     name: sequence.name,
     totalSteps: commands.length,
-    connectionReason: connectionReason || 'none',
+    connection: connection || 'none',
   });
   started._meta = {
     tool: 'replay', action: 'run', timestamp: Date.now(),
@@ -594,14 +594,14 @@ export async function performRun(
   onProgress?: (ev: { step: number; totalSteps: number; tool: string }) => void
 ): Promise<{ response: any; outcome: RunOutcome; results?: any[] }> {
   const { args, recorder, executeToolCall, getPageForConnection,
-    sequence, analysis, connectionReason, needsConnection, connectionMap,
+    sequence, analysis, connection, needsConnection, connectionMap,
     launchedConnections, runEnv } = deps;
 
   // Build execution context
   const ctx: ExecutionContext = {
     executeToolCall,
     commandRecorder: recorder,
-    connectionReason: connectionReason!,
+    connection: connection!,
     logPrefix: 'run',
     variableStore: {},
     launchedConnections,
@@ -639,8 +639,8 @@ export async function performRun(
   const navResult = await navigateToStartUrl(ctx, sequence, analysis);
   if (!navResult.success) {
     // Close the tab if we auto-launched it
-    if (didAutoLaunch && connectionReason) {
-      await executeToolCall('connection', { action: 'close', reason: `sequence "${sequence.name}" auto-launched it`, connectionReason }).catch(() => {});
+    if (didAutoLaunch && connection) {
+      await executeToolCall('connection', { action: 'close', reason: `sequence "${sequence.name}" auto-launched it`, connection }).catch(() => {});
     }
     return {
       outcome: 'failed',
@@ -653,8 +653,8 @@ export async function performRun(
 
   // Inject cursor if enabled in config
   let cursorPage: any = null;
-  if (configManager.getReplayConfig().showCursor && connectionReason) {
-    cursorPage = await getPageForConnection(connectionReason);
+  if (configManager.getReplayConfig().showCursor && connection) {
+    cursorPage = await getPageForConnection(connection);
     if (cursorPage) {
       await injectReplayCursor(cursorPage);
       setReplayCursorCallbacks({
@@ -670,8 +670,8 @@ export async function performRun(
 
   // Show replay overlay if requested (for issue verification)
   let cleanupReplayOverlay: (() => Promise<void>) | undefined;
-  if (args.showReplayOverlay && args.issueId && args.issueType && connectionReason) {
-    const overlayPage = cursorPage || await getPageForConnection(connectionReason);
+  if (args.showReplayOverlay && args.issueId && args.issueType && connection) {
+    const overlayPage = cursorPage || await getPageForConnection(connection);
     if (overlayPage) {
       cleanupReplayOverlay = await showReplayOverlay(
         overlayPage,
@@ -695,8 +695,8 @@ export async function performRun(
     if (cleanupReplayOverlay && !paused) {
       await cleanupReplayOverlay().catch(() => {});
     }
-    if (closeTab && didAutoLaunch && connectionReason) {
-      await executeToolCall('connection', { action: 'close', reason: `sequence "${sequence.name}" auto-launched it`, connectionReason }).catch(() => {});
+    if (closeTab && didAutoLaunch && connection) {
+      await executeToolCall('connection', { action: 'close', reason: `sequence "${sequence.name}" auto-launched it`, connection }).catch(() => {});
     }
   };
 
@@ -720,7 +720,7 @@ export async function performRun(
     stepTimeout: args.stepTimeout,
     totalTimeout: args.totalTimeout,
     stepTo: args.stepTo,
-    overrideConnectionReason: args.connectionReason,
+    overrideConnectionReason: args.connection,
     abortSignal,
     onProgress
   });
@@ -747,14 +747,14 @@ export async function performRun(
   }
 
   // Handle breakpoint hit
-  if (execResult.breakpointHit && connectionReason) {
+  if (execResult.breakpointHit && connection) {
     return { outcome: 'paused', results: execResult.results, response: { content: [{ type: 'text', text: formatBreakpointHit(
       sequence.name,
       execResult.results,
       execResult.totalCommands,
       execResult.durationMs,
       execResult.breakpointHit,
-      connectionReason
+      connection
     ) }],
       _meta: {
         tool: 'replay', action: 'run', timestamp: Date.now(),
@@ -764,7 +764,7 @@ export async function performRun(
   }
 
   // Handle click validation failure (pause for inspection/retry)
-  if (execResult.clickValidationFailure && connectionReason) {
+  if (execResult.clickValidationFailure && connection) {
     // Set active sequence state so user can retry/continue
     const activeState: ActiveSequenceState = {
       sequenceId: sequence.id,
@@ -773,7 +773,7 @@ export async function performRun(
       totalSteps: sequence.commands.length,
       pausedAt: Date.now(),
       historyIndexAtPause: recorder.getHistory().length,
-      connectionReason,
+      connection,
       runId,
       // step/finish must resolve per-step connections the way this run did
       ...(connectionMap && { connectionMap }),
@@ -786,7 +786,7 @@ export async function performRun(
       execResult.pausedAtStep!,
       execResult.durationMs,
       execResult.clickValidationFailure,
-      connectionReason
+      connection
     ) }],
       _meta: {
         tool: 'replay', action: 'run', timestamp: Date.now(),
@@ -849,10 +849,10 @@ export async function performRun(
 
   // Add debug state if successful
   const failed = execResult.results.filter(r => !r.success).length;
-  if (connectionReason && failed === 0) {
+  if (connection && failed === 0) {
     const debugState = await getDebugState(ctx);
     if (debugState) {
-      response += formatDebugState(debugState, connectionReason);
+      response += formatDebugState(debugState, connection);
     }
   }
 

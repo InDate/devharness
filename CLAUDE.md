@@ -12,7 +12,7 @@ Chrome instances listed under Hot reload in `CONTRIBUTING.md`:
 
 - The proxy registry (`src/proxy/registry.ts`). A proxy started by
   `connection({ action: 'launch', proxy: true })` is gone, and every event it captured with it.
-- Live connections, so a `connectionReason` resolves to nothing until a fresh
+- Live connections, so a `connection` resolves to nothing until a fresh
   `connection launch`.
 
 A drive that checks a change has to run after the rebuild that carries the

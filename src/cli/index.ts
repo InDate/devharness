@@ -6,7 +6,7 @@
  * decided by the shell's directory first: only sessions rooted at it or above
  * it are candidates, because every project-scoped path resolves against the
  * answering server's root. Process ancestry then picks among those, so
- * `! devharness call screenshot '{"connectionReason":"app"}'` reaches the
+ * `! devharness call screenshot '{"connection":"app"}'` reaches the
  * browser this session opened as `app`.
  *
  * Guards that the MCP request handler applies - a dead dev server port, a
@@ -133,7 +133,7 @@ export function buildCall(parsed: ParsedArgs): { tool: string; args: Record<stri
         tool: 'bench',
         args: {
           action: 'start',
-          connectionReason: reference,
+          connection: reference,
           ...(sequence ? { sequence } : {}),
           ...(url ? { url } : {}),
         },

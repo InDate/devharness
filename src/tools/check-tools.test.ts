@@ -33,26 +33,26 @@ function tool(pageAnswers: unknown[] = [true]) {
 
 describe('check called directly', () => {
   it('answers a failed check without erroring', async () => {
-    const res = await tool([false])({ selector: '#a', condition: 'present', connectionReason: 'tab', message: 'the banner never showed' });
+    const res = await tool([false])({ selector: '#a', condition: 'present', connection: 'tab', message: 'the banner never showed' });
     expect(res.isError).toBeFalsy();
     expect(res._meta.check).toMatchObject({ outcome: 'failed', subject: '#a present' });
     expect(res.content[0].text).toContain('the banner never showed');
   });
 
   it('answers a held check with what it found', async () => {
-    const res = await tool([true])({ selector: '#a', condition: 'present', connectionReason: 'tab' });
+    const res = await tool([true])({ selector: '#a', condition: 'present', connection: 'tab' });
     expect(res.isError).toBeFalsy();
     expect(res._meta.check).toMatchObject({ outcome: 'held', found: 'present' });
   });
 
   it('errors on a check that cannot be read', async () => {
-    const res = await tool()({ selector: '#a', condition: 'text', connectionReason: 'tab' });
+    const res = await tool()({ selector: '#a', condition: 'text', connection: 'tab' });
     expect(res.isError).toBe(true);
     expect(res._meta.check.outcome).toBe('error');
   });
 
   it('refuses a check that names two things to read', async () => {
-    const res = await tool()({ selector: '#a', url: '/app', connectionReason: 'tab' });
+    const res = await tool()({ selector: '#a', url: '/app', connection: 'tab' });
     expect(res.isError).toBe(true);
     expect(res.content[0].text).toContain('one thing');
   });
@@ -82,7 +82,7 @@ function run(answer: unknown, nested: CommandSequence[] = []) {
     getFreshSequence: async (id: string) => nested.find(one => one.id === id),
     listSequences: () => nested,
   } as any;
-  const ctx: ExecutionContext = { executeToolCall, commandRecorder, connectionReason: 'tab', logPrefix: 'test' };
+  const ctx: ExecutionContext = { executeToolCall, commandRecorder, connection: 'tab', logPrefix: 'test' };
   return {
     clicks,
     markedDuringCheck,

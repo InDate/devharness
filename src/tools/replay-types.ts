@@ -9,7 +9,7 @@ import type { ExecuteToolCall } from '../types.js';
 export interface ExecutionContext {
   executeToolCall: ExecuteToolCall;
   commandRecorder: CommandRecorder;
-  connectionReason: string;
+  connection: string;
   logPrefix?: string;
   /** How many sequences deep this run is, through checks' `{ run }` and forEach's `do`; bounds recursion. */
   nestingDepth?: number;
@@ -23,7 +23,7 @@ export interface ExecutionContext {
   /** {{timestamp}} value for this run, computed once and cached (not per-step). */
   runTimestamp?: number;
   /**
-   * Maps a per-step `connectionReason` as RECORDED onto a reference that exists
+   * Maps a per-step `connection` as RECORDED onto a reference that exists
    * in THIS session (`{ 'duo-member-two': 'my-second-browser' }`). Connection
    * references are per-session, so a multi-connection sequence recorded elsewhere
    * needs its references rebound before it can run here. Both sides are expected

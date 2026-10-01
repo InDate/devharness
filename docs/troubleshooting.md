@@ -43,7 +43,7 @@ running until you reboot.
 
 **Solutions:**
 - Use `browser({ action: 'kill', reason: "restart needed" })` to stop existing instance
-- Launch on different port: `connection({ action: 'launch', port: 9224, name: 'new debug session' })`
+- Launch on different port: `connection({ action: 'launch', port: 9224, connection: 'new debug session' })`
 - Check if another process is using the port: `lsof -i :9222`
 
 ### Chrome won't launch
@@ -122,7 +122,7 @@ running until you reboot.
 **Solutions:**
 - Check if Node process crashed (look at terminal output)
 - Verify Node didn't restart (e.g., from nodemon)
-- Reconnect with the same name: `connection({ action: 'attach', name: 'my api server', port: 9229 })`
+- Reconnect with the same connection: `connection({ action: 'attach', connection: 'my api server', port: 9229 })`
 
 ### "Reference already in use" but no connection exists
 
@@ -247,7 +247,7 @@ config({ action: 'setDebugLogging', enabled: true })
 connection({ action: 'list' })
 
 // Check specific connection
-connection({ action: 'status', connectionReason: 'my-debug-session' })
+connection({ action: 'status', connection: 'my-debug-session' })
 ```
 
 ### Check Chrome status
@@ -267,5 +267,5 @@ browser({ action: 'kill', reason: "full reset" })
 browser({ action: 'resetLauncher', reason: "stuck" })
 
 // Start fresh
-connection({ action: 'launch', name: 'fresh start session' })
+connection({ action: 'launch', connection: 'fresh start session' })
 ```

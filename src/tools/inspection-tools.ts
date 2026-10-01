@@ -267,7 +267,7 @@ function workerErrorResponse(error: unknown, target: string) {
 
 const inspectionToolSchema = z.object({
   action: z.enum(['getCallStack', 'getVariables', 'evaluateExpression', 'searchCode', 'searchFunctions', 'listTargets']),
-  connectionReason: z.string().describe('The connection, by the name connection launch or attach gave it'),
+  connection: z.string().describe('The connection, by the name connection launch or attach gave it'),
 
   // getVariables and evaluateExpression parameters
   callFrameId: z.string().optional().describe('Call frame ID (getVariables: required; evaluateExpression: the frame to evaluate in)'),
@@ -296,7 +296,7 @@ const inspectionToolSchema = z.object({
 
 export function createInspectionTools(
   sourceMapHandler: SourceMapHandler,
-  resolveConnectionFromReason: (connectionReason: string) => Promise<{
+  resolveConnectionByName: (connection: string) => Promise<{
     connection: any;
     cdpManager: CDPManager;
     puppeteerManager: any;
@@ -316,11 +316,11 @@ export function createInspectionTools(
       // reads check the cancel once on entry and run their CDP round-trips to
       // completion.
       async (args, abortSignal?: AbortSignal) => {
-        const { action, connectionReason } = args;
+        const { action, connection } = args;
 
         throwIfAborted(abortSignal);
 
-        const resolved = await resolveConnectionFromReason(connectionReason);
+        const resolved = await resolveConnectionByName(connection);
         if (!resolved) {
           return createErrorResponse('CONNECTION_NOT_FOUND');
         }
@@ -539,13 +539,13 @@ export function createInspectionTools(
               if (error instanceof EvaluateExpressionPendingPromiseError) {
                 return createErrorResponse('EVALUATE_PROMISE_PENDING_WHILE_PAUSED', {
                   expression: error.expression,
-                  connection: `, connectionReason: '${connectionReason}'`,
+                  connection: `, connection: '${connection}'`,
                 });
               }
               // The execution context did not answer within the timeout.
               if (error instanceof EvaluateExpressionTimeoutError) {
                 return createErrorResponse('EVALUATE_CONTEXT_UNRESPONSIVE', {
-                  connectionReason,
+                  connection,
                   expression: error.expression,
                   timeoutMs: error.timeoutMs,
                 });

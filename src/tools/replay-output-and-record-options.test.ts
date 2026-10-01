@@ -72,7 +72,7 @@ async function record(extraArgs: Record<string, any> = {}) {
   const tool = makeTool(recorder);
   const result = await tool.handler({
     action: 'recordInteraction',
-    connectionReason: `rec-${Math.random().toString(36).slice(2)}`,
+    connection: `rec-${Math.random().toString(36).slice(2)}`,
     ...extraArgs,
   } as any);
   return { result, recorder, options: eventsToCommandsSpy.mock.calls[0]?.[1] };
@@ -280,7 +280,7 @@ describe('recordInteraction under a name already taken', () => {
     const tool = makeTool(recorder);
 
     const result: any = await tool.handler({
-      action: 'recordInteraction', connectionReason: 'checkout-page-tab', name: 'checkout-flow-test',
+      action: 'recordInteraction', connection: 'checkout-page-tab', name: 'checkout-flow-test',
     } as any);
 
     expect(result.content[0].text).toContain('"checkout-flow-test" exists');
@@ -295,7 +295,7 @@ describe('recordInteraction under a name already taken', () => {
     const tool = makeTool(recorder);
 
     await tool.handler({
-      action: 'recordInteraction', connectionReason: 'checkout-page-tab', name: 'checkout-flow-test', overwrite: true,
+      action: 'recordInteraction', connection: 'checkout-page-tab', name: 'checkout-flow-test', overwrite: true,
     } as any);
 
     expect(startRecordingMock).toHaveBeenCalled();

@@ -52,14 +52,14 @@ export const checkSchema = z.object({
   message: z.string().optional().describe('What a failure means, reported in its place'),
   holds: checkOutcomeSchema.optional().describe('Sequence step, on hold: continue (default), stop, or { run, resumeAt }'),
   fails: checkOutcomeSchema.optional().describe('Sequence step, on failure: stop (default), continue, or { run, resumeAt }'),
-  connectionReason: z.string().optional().describe('Which browser it reads'),
+  connection: z.string().optional().describe('Which browser it reads'),
 }).strict();
 
 export type CheckArgs = z.infer<typeof checkSchema>;
 
 /** The engine's spec out of a check's arguments. */
 export function checkSpecOf(args: CheckArgs): CheckSpec {
-  const { holds: _holds, fails: _fails, message: _message, connectionReason: _connection, value, ...rest } = args;
+  const { holds: _holds, fails: _fails, message: _message, connection: _connection, value, ...rest } = args;
   return { ...rest, ...('value' in args ? { value, hasValue: true } : {}) };
 }
 
@@ -76,8 +76,8 @@ function paramsOf(spec: CheckSpec): Record<string, unknown> {
  * unchanged.
  */
 export function asCheckStep<C extends { tool: string; params: Record<string, any> }>(command: C): C {
-  const { message, connectionReason, saveAs: _unused, ...args } = command.params ?? {};
-  const kept = { ...(message ? { message } : {}), ...(connectionReason ? { connectionReason } : {}) };
+  const { message, connection, saveAs: _unused, ...args } = command.params ?? {};
+  const kept = { ...(message ? { message } : {}), ...(connection ? { connection } : {}) };
   if (command.tool === 'wait') return { ...command, tool: 'check', params: { ...paramsOf(waitAsCheck(args)), ...kept } };
   if (command.tool === 'assert') return { ...command, tool: 'check', params: { ...paramsOf(assertAsCheck(args as any)), ...kept } };
   return command;
@@ -90,7 +90,7 @@ function subjectsOf(args: CheckArgs): string[] {
 }
 
 export function createCheckTools(
-  resolveConnectionFromReason: (connectionReason: string) => Promise<any>,
+  resolveConnectionByName: (connection: string) => Promise<any>,
   executeToolCall: ExecuteToolCall,
 ) {
   return {
@@ -107,8 +107,8 @@ export function createCheckTools(
         }
         const spec = checkSpecOf(args);
         const reading = await runCheck(spec, {
-          connectionReason: args.connectionReason,
-          resolveConnection: resolveConnectionFromReason,
+          connection: args.connection,
+          resolveConnection: resolveConnectionByName,
           executeToolCall,
           abortSignal,
         });

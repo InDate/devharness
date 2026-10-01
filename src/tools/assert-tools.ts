@@ -25,13 +25,13 @@ const assertSchema = z.object({
     .describe('present | visible (non-zero box) | hittable (nothing covers its centre) | absent | text | attribute | count (these three with operator/right) | enabled'),
   attribute: z.string().optional().describe("condition 'attribute': which attribute to read"),
   timeoutMs: z.number().optional().describe('DOM form: polling limit ms (default 5000)'),
-  connectionReason: z.string().optional().describe('DOM form: which browser; a run supplies its own'),
+  connection: z.string().optional().describe('DOM form: which browser; a run supplies its own'),
 }).strict();
 
 type AssertArgs = z.infer<typeof assertSchema>;
 
 export function createAssertTools(
-  resolveConnectionFromReason?: (connectionReason: string) => Promise<any>
+  resolveConnectionByName?: (connection: string) => Promise<any>
 ) {
   return {
     assert: createTool(
@@ -45,14 +45,14 @@ export function createAssertTools(
             isError: true,
           };
         }
-        if (dom && !args.connectionReason) {
+        if (dom && !args.connection) {
           return {
-            content: [{ type: 'text', text: `## Error\n\nNo browser connection for a DOM assertion\n\n**Suggestion:** \`selector\` asserts about a page, so this needs a connection. In a sequence the run's connection is injected automatically; called directly, pass \`connectionReason\`.` }],
+            content: [{ type: 'text', text: `## Error\n\nNo browser connection for a DOM assertion\n\n**Suggestion:** \`selector\` asserts about a page, so this needs a connection. In a sequence the run's connection is injected automatically; called directly, pass \`connection\`.` }],
             isError: true,
           };
         }
         const reading = await runCheck(assertAsCheck(args), {
-          connectionReason: args.connectionReason, resolveConnection: resolveConnectionFromReason, abortSignal,
+          connection: args.connection, resolveConnection: resolveConnectionByName, abortSignal,
         });
         const passed = reading.outcome === 'held';
 

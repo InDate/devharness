@@ -445,7 +445,7 @@ The run stopped before its first step, so nothing has been executed yet.
 Invalid connection name: {{error}}
 
 **Requirements:**
-- A connection name is exactly 3 words, e.g. `user one join` or `user-one-join`
+- A connection name is exactly 3 words, e.g. `user one join` or `user-one-join`, or 3 words and `proxied` for a proxied connection made from one, e.g. `user-one-join-proxied`
 - Words are separated by spaces or hyphens
 
 ---

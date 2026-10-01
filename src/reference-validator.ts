@@ -6,6 +6,8 @@ import { createErrorResponse } from './messages.js';
 
 // Constants
 export const UNNAMED_CONNECTION = 'unnamed-connection-default';
+/** The one fourth word a connection name takes: the proxied connection made from a three-word one. */
+export const PROXIED_WORD = 'proxied';
 export const RESERVED_REFERENCES = [
   UNNAMED_CONNECTION,
   'no-reference-set',
@@ -56,11 +58,12 @@ export function validateReference(ref: string): { valid: boolean; sanitized?: st
     return { valid: false, error: `Connection name "${trimmed}" is reserved and cannot be used` };
   }
 
-  // Verify sanitized version has exactly 3 parts
-  // This works for both "test replay feature" and "test-replay-feature"
+  // Three words, spaces or hyphens alike; a fourth only as `proxied`, which
+  // names the proxied connection made from a three-word one.
   const sanitizedParts = sanitized.split('-');
-  if (sanitizedParts.length !== 3) {
-    return { valid: false, error: `Connection name "${trimmed}" must be exactly 3 words, got ${sanitizedParts.length}` };
+  const proxiedFourth = sanitizedParts.length === 4 && sanitizedParts[3] === PROXIED_WORD;
+  if (sanitizedParts.length !== 3 && !proxiedFourth) {
+    return { valid: false, error: `Connection name "${trimmed}" must be exactly 3 words, or 3 and "${PROXIED_WORD}", got ${sanitizedParts.length}` };
   }
 
   // Verify each part is non-empty (catches cases like "test--feature" or "test- -feature")

@@ -78,25 +78,32 @@ describe('validateReference', () => {
       const result = validateReference('oneword');
       expect(result.valid).toBe(false);
       expect(result.sanitized).toBeUndefined();
-      expect(result.error).toBe('Connection name "oneword" must be exactly 3 words, got 1');
+      expect(result.error).toBe('Connection name "oneword" must be exactly 3 words, or 3 and "proxied", got 1');
     });
 
     it('should reject 2 words', () => {
       const result = validateReference('two words');
       expect(result.valid).toBe(false);
-      expect(result.error).toBe('Connection name "two words" must be exactly 3 words, got 2');
+      expect(result.error).toBe('Connection name "two words" must be exactly 3 words, or 3 and "proxied", got 2');
     });
 
     it('should reject 4 words', () => {
       const result = validateReference('four words too many');
       expect(result.valid).toBe(false);
-      expect(result.error).toBe('Connection name "four words too many" must be exactly 3 words, got 4');
+      expect(result.error).toBe('Connection name "four words too many" must be exactly 3 words, or 3 and "proxied", got 4');
+    });
+
+    it('accepts a fourth word only when it is proxied', () => {
+      expect(validateReference('user one join proxied')).toEqual({ valid: true, sanitized: 'user-one-join-proxied' });
+      expect(validateReference('user-one-join-proxied').valid).toBe(true);
+      expect(validateReference('user-one-join-direct').valid).toBe(false);
+      expect(validateReference('proxied-user-one-join').valid).toBe(false);
     });
 
     it('should reject 5+ words', () => {
       const result = validateReference('this has way too many words here');
       expect(result.valid).toBe(false);
-      expect(result.error).toBe('Connection name "this has way too many words here" must be exactly 3 words, got 7');
+      expect(result.error).toBe('Connection name "this has way too many words here" must be exactly 3 words, or 3 and "proxied", got 7');
     });
   });
 
@@ -286,7 +293,7 @@ describe('validateReference', () => {
     it('should reject 2-part hyphenated references', () => {
       const result = validateReference('chrome-browser');
       expect(result.valid).toBe(false);
-      expect(result.error).toBe('Connection name "chrome-browser" must be exactly 3 words, got 2');
+      expect(result.error).toBe('Connection name "chrome-browser" must be exactly 3 words, or 3 and "proxied", got 2');
     });
   });
 });

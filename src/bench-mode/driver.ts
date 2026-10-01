@@ -1,5 +1,5 @@
 import type { Annotation, AnnotationTarget, StepTraffic } from '../annotation.js';
-import type { RuleCatalogueEntry, HistoryDetail, HistoryEntry, SequenceNote, ServerLog, ServerRow, ToolGroup, ToolRun, ToolValues, SequenceCard, SequenceOutline, SequenceStep, SequenceVariable } from '../bench/wire.js';
+import type { RuleCatalogueEntry, HistoryDetail, HistoryEntry, SequenceNote, ServerLog, ServerRow, ToolGroup, ToolRun, ToolValues, SequenceCard, SequenceOutline, SequenceStep, SequenceVariable, RunningView } from '../bench/wire.js';
 import type { ActivityMove, ExpectedValue, KindCount } from '../bench/kinds.js';
 
 /** What the bench needs from the replay side: read the session, drive the run. */
@@ -23,6 +23,8 @@ export interface SequenceDriver {
   servers: () => Promise<ServerRow[]>;
   /** The end of one server's stdout or stderr log. */
   serverLog: (id: string, stream: 'stdout' | 'stderr') => Promise<ServerLog>;
+  /** The event stream and its watch, the sequence directories watched, and the connections. */
+  running: () => Promise<RunningView>;
   /** Run one tool with `args`, as a call arriving from the bench. */
   callTool: (tool: string, args: Record<string, unknown>) => Promise<ToolRun>;
   /** The open step-through session, or null. */

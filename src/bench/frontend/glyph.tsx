@@ -67,6 +67,14 @@ export function Glyph({ of }: { of: string }) {
     eyeoff: <><path d="M1.5 8s2.4-4.2 6.5-4.2S14.5 8 14.5 8s-2.4 4.2-6.5 4.2S1.5 8 1.5 8z" /><path d="M2.5 13.5 13.5 2.5" /></>,
     new: <><path d="M8 3.2v9.6" /><path d="M3.2 8h9.6" /></>,
     capture: <><rect x="1.8" y="4" width="12.4" height="9" rx="1.5" /><circle cx="8" cy="8.5" r="2.6" /><path d="M5.8 4l1-1.5h2.4l1 1.5" /></>,
+    // Three steps joined in order, each with its line.
+    sequence: <><circle cx="3.4" cy="3.4" r="1.4" /><circle cx="3.4" cy="8" r="1.4" /><circle cx="3.4" cy="12.6" r="1.4" /><path d="M3.4 4.8v1.8M3.4 9.4v1.8" /><path d="M7 3.4h6.6M7 8h6.6M7 12.6h4.6" /></>,
+    // A clock face with its hand turned back: what has already run.
+    history: <><path d="M2.6 8a5.4 5.4 0 1 0 1.6-3.8" /><path d="M2.4 2.2v3h3" /><path d="M8 5.2V8l2 1.4" /></>,
+    // A wrench.
+    tools: <path d="M10.4 1.9a3.4 3.4 0 0 0-3.8 4.6l-4.3 4.3a1.4 1.4 0 0 0 2 2l4.3-4.3a3.4 3.4 0 0 0 4.6-3.8l-2.1 2.1-1.9-.4-.4-1.9z" />,
+    // A trace with a beat in it: something live.
+    pulse: <path d="M1.4 8.6h3l1.8-4.8 3.4 8.4 1.8-3.6h3.2" />,
     picker: <><path d="M8 1.5v3.5" /><path d="M8 11v3.5" /><path d="M1.5 8H5" /><path d="M11 8h3.5" /><circle cx="8" cy="8" r="2" /></>,
   };
   return (

@@ -1,5 +1,6 @@
 /** @jsxImportSource preact */
 import { Fragment, render } from 'preact';
+import type preact from 'preact';
 import { createPortal } from 'preact/compat';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { Traffic, Scope } from './boundary.js';
@@ -7,10 +8,11 @@ import { toggleVariables, useVariablesHidden } from './variables-shown.js';
 import { History } from './history.js';
 import { Tools, type ToolSeed } from './tools.js';
 import { Issues } from './issues.js';
-import { Servers } from './servers.js';
+import { Running } from './running.js';
 import { About } from './sequence.js';
 import { Editing } from './editing.js';
 import { Glyph } from './glyph.js';
+import { ToolGlyph } from './tool-glyph.js';
 import { onRevealResponse, setShowHidden, useShowHidden } from './focus.js';
 import { CaptureDialog } from './capture.js';
 import { HoldPanel } from './hold-panel.js';
@@ -797,10 +799,10 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
   );
 }
 
-type Tab = 'editing' | 'traffic' | 'history' | 'tools' | 'servers' | 'issues';
+type Tab = 'editing' | 'traffic' | 'history' | 'tools' | 'running' | 'issues';
 
-/** The tab's word in the address, and back. A word no tab has opens Sequence. */
-const TAB_WORDS: Record<Tab, string> = { editing: 'sequence', traffic: 'traffic', history: 'history', tools: 'tools', servers: 'servers', issues: 'issues' };
+/** The tab's word in the address, and back. A word no tab has opens Sequence; `servers`, the Running tab's earlier word, opens Running. */
+const TAB_WORDS: Record<Tab, string> = { editing: 'sequence', traffic: 'traffic', history: 'history', tools: 'tools', running: 'running', issues: 'issues' };
 
 /**
  * Where the bench stands, as the address holds it: the tab, the open
@@ -823,7 +825,7 @@ const TAB_START = { issue: null, tool: null, action: null } as const;
 function placeOf(): Place {
   const query = new URLSearchParams(location.search);
   const word = query.get('tab');
-  const tab = (Object.keys(TAB_WORDS) as Tab[]).find(key => TAB_WORDS[key] === word) ?? 'editing';
+  const tab = word === 'servers' ? 'running' : (Object.keys(TAB_WORDS) as Tab[]).find(key => TAB_WORDS[key] === word) ?? 'editing';
   const issue = Number(query.get('issue'));
   return {
     tab,
@@ -850,6 +852,50 @@ function samePlace(a: Place, b: Place): boolean {
     && a.tool === b.tool && a.action === b.action;
 }
 
+/** A count as the badge prints it: four digits and more print as 999+, so the badge holds its width. */
+function badgeOf(count: number): string {
+  return count > 999 ? '999+' : String(count);
+}
+
+/**
+ * One tab: its mark, a count badged on the mark's corner, and its word, which
+ * the narrow layout drops. The name and the count's detail sit in the title and
+ * the aria-label, so the button reads and announces the same at every width.
+ * A count of 0 draws no badge. A count above the last one this tab drew pulses
+ * the badge once: each rise remounts it under a new key, so the animation runs
+ * again on every new event, and the first reading after the bench opens draws
+ * still.
+ */
+function TabButton({ on, unproxied, word, mark, count, detail, onClick }: {
+  on: boolean;
+  unproxied?: boolean;
+  word: string;
+  mark: preact.JSX.Element;
+  count?: number;
+  detail?: string;
+  onClick: () => void;
+}) {
+  const named = detail ? `${word}: ${detail}` : word;
+  const drawn = useRef<number | undefined>(undefined);
+  const rises = useRef(0);
+  if (count !== undefined) {
+    if (drawn.current !== undefined && count > drawn.current) rises.current += 1;
+    drawn.current = count;
+  }
+  return (
+    <button class={[on ? 'on' : '', unproxied ? 'unproxied' : ''].filter(Boolean).join(' ')}
+      title={named} aria-label={named} onClick={onClick}>
+      <span class="tabmark">
+        {mark}
+        {count !== undefined && count > 0 && (
+          <span key={rises.current} class={rises.current > 0 ? 'tabbadge risen' : 'tabbadge'}>{badgeOf(count)}</span>
+        )}
+      </span>
+      <span class="tabword">{word}</span>
+    </button>
+  );
+}
+
 async function postTo(path: string, body?: Record<string, unknown>): Promise<void> {
   await fetch(`${BASE}${path}`, {
     method: 'POST',
@@ -871,18 +917,32 @@ function Bench() {
   // The call a History row's Go to opens the Tools tab on; the Tools tab
   // button clears it, so the tab opened from its button starts empty.
   const [toolSeed, setToolSeed] = useState<ToolSeed | null>(null);
-  // The counts on the Servers and Issues tabs: servers running, issues open.
-  const [counts, setCounts] = useState<{ servers?: number; issues?: number }>({});
+  // The counts on the tabs: what crossed the proxy and whether there is one,
+  // calls in history and how many failed, connections open and servers
+  // running, issues open.
+  const [counts, setCounts] = useState<{
+    traffic?: number; proxied?: boolean; history?: number; failed?: number; running?: number; issues?: number;
+  }>({});
   useEffect(() => {
     let live = true;
+    // Asked for after the last event read, so a poll carries the new events only; the totals cover them all.
+    let trafficSince = '';
     const read = async () => {
-      const [servers, issues] = await Promise.all([
+      const boundary = await fetch(`${BASE}/proxy/events?since=${encodeURIComponent(trafficSince)}`)
+        .then(res => (res.ok ? res.json() : null)).catch(() => null) as
+        { running: boolean; events: Array<{ id: string }>; totals: { events: number } | null } | null;
+      if (boundary?.events.length) trafficSince = boundary.events[boundary.events.length - 1].id;
+      const [history, servers, running, issues] = await Promise.all([
+        fetch(`${BASE}/history`).then(res => (res.ok ? res.json() : null)).catch(() => null),
         fetch(`${BASE}/servers`).then(res => (res.ok ? res.json() : null)).catch(() => null),
+        fetch(`${BASE}/running`).then(res => (res.ok ? res.json() : null)).catch(() => null),
         fetch(`${BASE}/issues`).then(res => (res.ok ? res.json() : null)).catch(() => null),
-      ]) as [Array<{ running: boolean }> | null, unknown[] | null];
+      ]) as [Array<{ failed?: boolean }> | null, Array<{ running: boolean }> | null, { connections: unknown[] } | null, unknown[] | null];
       if (!live) return;
       setCounts({
-        ...(servers && { servers: servers.filter(server => server.running).length }),
+        ...(boundary && { proxied: boundary.running, ...(boundary.totals && { traffic: boundary.totals.events }) }),
+        ...(history && { history: history.length, failed: history.filter(entry => entry.failed).length }),
+        ...(servers && running && { running: servers.filter(server => server.running).length + running.connections.length }),
         ...(issues && { issues: issues.length }),
       });
     };
@@ -961,26 +1021,29 @@ function Bench() {
           title={busy ? 'the run is going - stop it first' : 'the list of sequences'}
           onClick={home}>bench</h1>
         <nav>
-          <button class={tab === 'editing' ? 'on' : ''} onClick={() => goTab('editing')}>
-            Sequence
-          </button>
-          <button class={tab === 'traffic' ? 'on' : ''} onClick={() => goTab('traffic')}>
-            Traffic
-          </button>
-          <button class={tab === 'history' ? 'on' : ''} onClick={() => goTab('history')}>
-            History
-          </button>
-          <button class={tab === 'tools' ? 'on' : ''} onClick={() => { setToolSeed(null); goTab('tools'); }}>
-            Tools
-          </button>
-          <button class={tab === 'servers' ? 'on' : ''} onClick={() => goTab('servers')}
-            title={counts.servers === undefined ? undefined : `${counts.servers} running`}>
-            Servers{counts.servers !== undefined && <span class="tabcount">{counts.servers}</span>}
-          </button>
-          <button class={tab === 'issues' ? 'on' : ''} onClick={() => goTab('issues')}
-            title={counts.issues === undefined ? undefined : `${counts.issues} open`}>
-            Issues{counts.issues !== undefined && <span class="tabcount">{counts.issues}</span>}
-          </button>
+          <TabButton on={tab === 'editing'} word="Sequence" mark={<Glyph of="sequence" />}
+            onClick={() => goTab('editing')} />
+          <TabButton on={tab === 'traffic'} unproxied={counts.proxied === false} word="Traffic"
+            mark={<Glyph of="request" />}
+            count={counts.proxied === false ? undefined : counts.traffic}
+            detail={counts.proxied === false
+              ? 'this browser was launched without proxy: true, so no traffic is seen. Relaunch it with proxy: true.'
+              : counts.traffic === undefined ? undefined : `${counts.traffic} crossings at the proxy`}
+            onClick={() => goTab('traffic')} />
+          <TabButton on={tab === 'history'} word="History" mark={<Glyph of="history" />}
+            count={counts.history}
+            detail={counts.history === undefined ? undefined : `${counts.history} calls in this session's history, ${counts.failed} failed`}
+            onClick={() => goTab('history')} />
+          <TabButton on={tab === 'tools'} word="Tools" mark={<Glyph of="tools" />}
+            onClick={() => { setToolSeed(null); goTab('tools'); }} />
+          <TabButton on={tab === 'running'} word="Running" mark={<Glyph of="pulse" />}
+            count={counts.running}
+            detail={counts.running === undefined ? undefined : `${counts.running} connections and servers running`}
+            onClick={() => goTab('running')} />
+          <TabButton on={tab === 'issues'} word="Issues" mark={<ToolGlyph tool="issues" />}
+            count={counts.issues}
+            detail={counts.issues === undefined ? undefined : `${counts.issues} open`}
+            onClick={() => goTab('issues')} />
         </nav>
         {/* The state disc is drawn here by the footing, which reads the state,
             so it sits on the tabs' line at any width. */}
@@ -1004,7 +1067,7 @@ function Bench() {
           action: typeof seed.args.action === 'string' ? seed.args.action : null,
         });
       }} />}
-      {tab === 'servers' && <Servers base={BASE} />}
+      {tab === 'running' && <Running base={BASE} />}
       {tab === 'issues' && (
         <Issues base={BASE} issue={at.issue} onIssue={issue => goWithin({ issue })}
           onGoToNote={(sequence, step) => {

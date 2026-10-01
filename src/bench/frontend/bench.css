@@ -67,7 +67,7 @@ body {
    disc stay in reach through a long run. It spans the body's padding so rows
    pass under it rather than showing at its sides. */
 header {
-  display: flex; align-items: baseline; gap: 18px;
+  display: flex; align-items: center; gap: 18px;
   position: sticky; top: var(--holdbar, 0px); z-index: 20;
   margin: -18px -20px 14px; padding: 18px 20px 10px;
   background: var(--bg); border-bottom: 1px solid var(--line);
@@ -79,7 +79,8 @@ h1.home[aria-disabled] { cursor: default; }
 h1.home[aria-disabled]:hover { color: var(--muted); }
 nav { display: flex; gap: 2px; }
 nav button {
-  padding: 4px 10px; border: 0; border-radius: 6px; background: none; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 8px; border: 0; border-radius: 6px; background: none; cursor: pointer;
   color: var(--muted); font: 500 12px/1.4 inherit;
 }
 nav button:hover { color: var(--fg); }
@@ -628,12 +629,32 @@ textarea.notewords::placeholder { color: var(--muted); }
 .historyrow .whererun { color: var(--sequence); }
 .historyfacts { margin: 0; color: var(--muted); font: 11px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; }
 
-/* A tab's count: servers running, issues open. */
-.tabcount {
-  margin-left: 5px; padding: 0 6px; border-radius: 2em; background: var(--panel);
-  font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums;
+/* A tab's count, badged on the mark's top-right corner: it overlaps the mark by
+   5px and pushes the word along by the rest of its width. */
+.tabmark { display: inline-flex; align-items: flex-start; }
+.tabmark svg { display: block; }
+.tabbadge {
+  min-width: 12px; margin: -5px 0 0 -5px; padding: 0 3px; border-radius: 6px;
+  background: var(--muted); color: var(--bg); box-shadow: 0 0 0 1.5px var(--bg);
+  font: 600 9px/12px -apple-system, sans-serif; text-align: center; font-variant-numeric: tabular-nums;
 }
-nav button.on .tabcount { color: var(--fg); }
+nav button:hover .tabbadge, nav button.on .tabbadge { background: var(--fg); }
+/* A count that rose since the badge last drew: one pulse, so a new event shows. */
+.tabbadge.risen { animation: tabbadge-rise 900ms ease-out; }
+@keyframes tabbadge-rise {
+  0% { transform: scale(1); background: var(--fg); }
+  25% { transform: scale(1.45); background: var(--fg); }
+  100% { transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) { .tabbadge.risen { animation: none; } }
+nav button.on .tabbadge { box-shadow: 0 0 0 1.5px var(--panel); }
+/* A browser launched without a proxy: nothing reaches the Traffic tab. */
+nav button.unproxied { color: var(--alert); }
+/* Six tabs with words, marks and badges, beside the title and the state disc,
+   take about 700px; below 720px the words go and the marks and badges stay. */
+@media (max-width: 719px) {
+  .tabword { display: none; }
+}
 
 /* One managed dev server. Running and stopped read by the words at the right
    end and the weight of the row, not a hue: every hue already names a kind. */
@@ -646,6 +667,13 @@ nav button.on .tabcount { color: var(--fg); }
   color: var(--muted); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .servercmdfull { overflow-wrap: anywhere; }
+
+/* The Running tab: what devharness watches, the connections, the servers.
+   A watch, a watched path and a connection read as a server row does. */
+.runsection + .runsection { margin-top: 18px; }
+.crossed.runrow { border-left: 2px solid var(--line); }
+.crossed.runrow.running { border-left-color: var(--fg); }
+.runrow.stopped .rowhead .what { color: var(--muted); }
 .logstream {
   padding: 0 6px; border: 0; border-radius: 4px; background: none; cursor: pointer;
   font: inherit; color: var(--muted);

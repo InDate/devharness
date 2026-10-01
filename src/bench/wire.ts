@@ -288,7 +288,7 @@ export interface SequenceNote {
   screenshots?: string[];
 }
 
-/** A dev server devharness manages, as the Servers tab lists it. */
+/** A dev server devharness manages, as the Running tab's Servers section lists it. */
 export interface ServerRow {
   id: string;
   command: string;
@@ -300,6 +300,37 @@ export interface ServerRow {
   uptime: string;
   runnerType: string;
   autoRun: boolean;
+  /** Where a change restarts it, for a server started with `watch`. */
+  watchPaths?: string[];
+}
+
+/** One connection this session holds, as `connection list` reads it. */
+export interface ConnectionRow {
+  name: string;
+  type: string;
+  port: number;
+  active: boolean;
+  connected: boolean;
+  paused: boolean;
+  url?: string;
+  title?: string;
+}
+
+/**
+ * What runs alongside the bench besides its servers: this session's event
+ * stream and the watch reading it, the directories devharness reloads
+ * sequences from, and the connections.
+ */
+export interface RunningView {
+  stream: string;
+  /** Processes holding the stream open; absent where lsof gave no reading. */
+  readers?: number;
+  /** Events written past what a watch has read; absent before any watch has run. */
+  unread?: number;
+  /** The call that arms a watch, for when none reads the stream. */
+  watchCall: string;
+  sequenceDirs: string[];
+  connections: ConnectionRow[];
 }
 
 /**

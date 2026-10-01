@@ -51,6 +51,19 @@ export function watchCall(sessionName: string): string {
 }
 
 /**
+ * The events written past the point a watch has read to, or undefined before
+ * any watch has run, since a first watch starts at the end of the stream.
+ */
+export async function unreadEvents(sessionName: string): Promise<number | undefined> {
+  const stored = (await fs.readFile(getEventCursorPath(sessionName), 'utf8').catch(() => '')).trim();
+  const cursor = Number(stored);
+  if (!stored || !Number.isInteger(cursor) || cursor < 0) return undefined;
+  const stream = await fs.readFile(getEventStreamPath(sessionName)).catch(() => undefined);
+  if (!stream || cursor >= stream.length) return 0;
+  return stream.subarray(cursor).toString('utf8').split('\n').filter(Boolean).length;
+}
+
+/**
  * The number of processes holding the stream open, read with lsof.
  *
  * `devharness watch`, plain or under a Monitor, holds the file open for as long as it runs,

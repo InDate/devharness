@@ -28,7 +28,7 @@ import { readCapture } from './capture-file.js';
 import { deletePayload, listPayloads, readPayload } from './saved-payloads.js';
 import { decodePng, encodePng } from './png.js';
 import { diffPixels, sideBySide } from './pixel-diff.js';
-import type { BenchView, BoundaryState, CaptureKind, CaptureRect, FactKind, RuleCatalogueEntry, SequenceOutline, HistoryEntry, HistoryDetail, ToolGroup, ToolRun, ToolValues, IssueRow, SequenceNote, ToolFavourite, ServerRow, ServerLog } from './bench/wire.js';
+import type { BenchView, BoundaryState, CaptureKind, CaptureRect, FactKind, RuleCatalogueEntry, SequenceOutline, HistoryEntry, HistoryDetail, ToolGroup, ToolRun, ToolValues, IssueRow, SequenceNote, ToolFavourite, ServerRow, ServerLog, RunningView } from './bench/wire.js';
 import type { RunsView } from './bench/wire.js';
 import type { ActivityMove, ExpectedValue, KindCount } from './bench/kinds.js';
 
@@ -89,6 +89,7 @@ export interface BenchHandlers {
   issues: (includeCompleted: boolean) => Promise<IssueRow[]>;
   servers: () => Promise<ServerRow[]>;
   serverLog: (id: string, stream: 'stdout' | 'stderr') => Promise<ServerLog>;
+  running: () => Promise<RunningView>;
   favourites: () => Promise<ToolFavourite[]>;
   addFavourite: (call: { tool: string; label: string; args: Record<string, unknown> }) => Promise<ToolFavourite[]>;
   removeFavourite: (id: string) => Promise<ToolFavourite[]>;
@@ -365,6 +366,9 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
           const query = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams;
           const stream = query.get('stream') === 'stderr' ? 'stderr' : 'stdout';
           return send(res, 200, JSON.stringify(await handlers.serverLog(query.get('id') ?? '', stream)), 'application/json');
+        }
+        if (req.method === 'GET' && route === '/running') {
+          return send(res, 200, JSON.stringify(await handlers.running()), 'application/json');
         }
         if (req.method === 'GET' && route === '/servers') {
           return send(res, 200, JSON.stringify(await handlers.servers()), 'application/json');

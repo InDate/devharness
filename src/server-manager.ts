@@ -111,6 +111,8 @@ export interface ServerStatus {
   runnerType: RunnerType;
   global: boolean;
   watch: boolean;
+  /** Where a change restarts it, for a server started with `watch`. */
+  watchPaths?: string[];
 }
 
 export interface StartServerOptions {
@@ -1893,6 +1895,7 @@ export class ServerManager {
         runnerType: managed.runner.type,
         global: managed.global ?? false,
         watch: managed.watch ?? false,
+        ...(managed.watch && { watchPaths: managed.watchPaths?.length ? managed.watchPaths : [this.getRunnerCwd(managed.runner)] }),
       };
     };
 

@@ -700,7 +700,7 @@ async function toolValues(): Promise<ToolValues> {
   };
 }
 
-/** The managed dev servers, for the bench's Servers tab. */
+/** The managed dev servers, for the Servers section of the bench's Running tab. */
 async function serverRows(): Promise<ServerRow[]> {
   return (await serverManager.getStatus().catch(() => [])).map(server => ({
     id: server.id,
@@ -712,6 +712,7 @@ async function serverRows(): Promise<ServerRow[]> {
     uptime: server.uptime,
     runnerType: server.runnerType,
     autoRun: server.autoRun,
+    ...(server.watchPaths && { watchPaths: server.watchPaths }),
   }));
 }
 

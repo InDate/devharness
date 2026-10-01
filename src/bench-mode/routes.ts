@@ -203,6 +203,11 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
     servers: async () => (await sessions.get(connection)?.sequences?.servers()) ?? [],
     serverLog: async (id: string, stream: 'stdout' | 'stderr') =>
       (await sessions.get(connection)?.sequences?.serverLog(id, stream)) ?? { unavailable: 'no bench session' },
+    running: async () => {
+      const sequences = sessions.get(connection)?.sequences;
+      if (!sequences) throw new Error('This bench holds no replay side to read from');
+      return sequences.running();
+    },
     favourites: () => readFavourites(),
     addFavourite: (call: { tool: string; label: string; args: Record<string, unknown> }) => addFavourite(call),
     removeFavourite: (id: string) => removeFavourite(id),

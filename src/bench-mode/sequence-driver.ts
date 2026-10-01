@@ -16,7 +16,7 @@ import type { CommandRecorder } from '../command-recorder.js';
 import { debugLog } from '../debug-logger.js';
 import { resolveSessionName } from '../session-identity.js';
 import { getSessionInfo } from '../tools/dashboard-tools.js';
-import { appendEvent, currentOrigin, runAs } from '../session-events.js';
+import { appendEvent, currentOrigin, getEventStreamPath, runAs, streamReaders, unreadEvents, watchCall } from '../session-events.js';
 import { announceSequenceSaved } from '../sequence-events.js';
 import { activityPathFor, readActivity, readSiteActivity, renumberSteps, siteActivityPath, stepMap, writeSiteActivity } from '../sequence-activity.js';
 import type { ActivityMove, ExpectedValue, KindCount } from '../bench/kinds.js';
@@ -543,6 +543,26 @@ export function createSequenceDriver(
     servers,
 
     serverLog,
+
+    // `connection list` runs outside History, since the tab reads it every few seconds.
+    running: async () => {
+      const session = resolveSessionName(getSessionInfo()?.shortId);
+      const listed: any = await unlisted(() => executeToolCall('connection', { action: 'list' })).catch(() => null);
+      const [readers, unread] = await Promise.all([streamReaders(session), unreadEvents(session)]);
+      return {
+        stream: getEventStreamPath(session),
+        ...(readers !== undefined && { readers }),
+        ...(unread !== undefined && { unread }),
+        watchCall: watchCall(session),
+        sequenceDirs: commandRecorder.getWatchedDirs(),
+        connections: (listed?._meta?.connections ?? []).map((meta: any) => ({
+          name: meta.reference, type: meta.type, port: meta.port, active: meta.active,
+          connected: meta.connected, paused: meta.paused,
+          ...(meta.url !== undefined && { url: meta.url }),
+          ...(meta.title !== undefined && { title: meta.title }),
+        })),
+      };
+    },
 
     callTool: async (tool: string, args: Record<string, unknown>) => {
       try {

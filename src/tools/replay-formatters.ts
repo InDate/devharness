@@ -274,10 +274,10 @@ export function formatBreakpointHit(
     response += `${r.step}. **${r.tool}** ✓\n`;
   });
 
-  response += `\n---\n\n**Debug Actions**\n`;
+  response += `\n---\n\n**The run is held at step ${results.length}.** \`replay({ action: 'finish' })\` resumes the page and runs the remaining steps; \`replay({ action: 'step' })\` resumes it and runs one; \`replay({ action: 'cancel' })\` ends the run.\n`;
+  response += `\n**Debug Actions**\n`;
   response += `- Inspect call stack: \`inspect({ action: 'getCallStack', connection: '${connection}' })\`\n`;
   response += `- Get variables: \`inspect({ action: 'getVariables', connection: '${connection}', callFrameId: '<from call stack>' })\`\n`;
-  response += `- Resume execution: \`execution({ action: 'resume', connection: '${connection}' })\`\n`;
   response += `- Step over: \`execution({ action: 'stepOver', connection: '${connection}' })\`\n`;
 
   return response;

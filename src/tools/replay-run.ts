@@ -795,6 +795,18 @@ export async function performRun(
 
   // Handle breakpoint hit
   if (execResult.breakpointHit && connection) {
+    recorder.setActiveSequence({
+      sequenceId: sequence.id,
+      sequenceName: sequence.name,
+      currentStep: execResult.results.at(-1)?.step ?? 0,
+      totalSteps: sequence.commands.length,
+      pausedAt: Date.now(),
+      historyIndexAtPause: recorder.getHistory().length,
+      connection,
+      runId,
+      ...(connectionMap && { connectionMap }),
+      breakpointHit: { url: execResult.breakpointHit.url, lineNumber: execResult.breakpointHit.lineNumber },
+    });
     return { outcome: 'paused', results: execResult.results, response: { content: [{ type: 'text', text: formatBreakpointHit(
       sequence.name,
       execResult.results,

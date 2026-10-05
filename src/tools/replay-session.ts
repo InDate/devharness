@@ -2,7 +2,7 @@
  * A run after it starts: its status, cancelling it, stepping and finishing a
  * paused session, and its line in the run log when it ends.
  */
-import type { CommandRecorder } from '../command-recorder.js';
+import type { ActiveSequenceState, CommandRecorder } from '../command-recorder.js';
 import type { ExecuteToolCall } from '../types.js';
 import { createSuccessResponse, createErrorResponse } from '../messages.js';
 import { runRegistry, type RunRecord } from './replay-run-registry.js';
@@ -13,6 +13,7 @@ import { executeSteps, type ExecutionContext } from './replay-executor.js';
 import { formatExecutionResults, formatActiveStatus, formatStepResults } from './replay-formatters.js';
 import { drainDeclaredCleanup } from './replay-run-owned.js';
 import { type ReplayArgs } from './replay-schema.js';
+import { release } from '../hold.js';
 
 /**
  * How a check, assert or wait step read, from the run's own result: a check's
@@ -230,6 +231,17 @@ export async function handleCancel(args: ReplayArgs, recorder: CommandRecorder) 
   return { content: [{ type: 'text', text: '**No active sequence to cancel.**' }] };
 }
 
+/**
+ * Resume a page a breakpoint stopped the run at. The run's next step expects a
+ * running page, and the code layer's release resumes it whichever surface
+ * holds the pause, the logpoint limit's included.
+ */
+async function resumeBreakpointHold(activeSeq: ActiveSequenceState): Promise<void> {
+  if (!activeSeq.breakpointHit) return;
+  await release(activeSeq.connection, { layers: ['code'] });
+  delete activeSeq.breakpointHit;
+}
+
 export async function handleStep(
   args: ReplayArgs,
   recorder: CommandRecorder,
@@ -264,6 +276,8 @@ export async function handleStep(
     const closedNote = await drainDeclaredCleanup(activeSeq.runId, activeSeq.sequenceId);
     return { content: [{ type: 'text', text: `**Sequence complete.** All ${commands.length} steps executed.${closedNote}` }] };
   }
+
+  await resumeBreakpointHold(activeSeq);
 
   const ctx: ExecutionContext = {
     executeToolCall,
@@ -303,6 +317,11 @@ export async function handleStep(
     // one whose input may never have reached the page.
     const lastDone = [...execResult.results].reverse().find(r => r.success)?.step;
     recorder.updateActiveSequenceStep(lastDone ?? startStep);
+  } else if (!failed && execResult.breakpointHit && lastExecuted < commands.length) {
+    recorder.updateActiveSequenceStep(lastExecuted);
+    activeSeq.breakpointHit = { url: execResult.breakpointHit.url, lineNumber: execResult.breakpointHit.lineNumber };
+    return { content: [{ type: 'text', text: formatStepResults(sequence.name, execResult.results, startStep, commands.length, failed)
+      + `\n\n**Held at step ${lastExecuted}:** a breakpoint the sequence did not set stopped the page at \`${execResult.breakpointHit.url}:${execResult.breakpointHit.lineNumber}\`. \`replay({ action: 'step' })\` or \`finish\` resumes it and carries on.` }] };
   } else if (failed || lastExecuted >= commands.length) {
     recorder.setActiveSequence(null);
     endPausedRun(activeSeq.runId, failed ? 'failed' : 'completed');
@@ -344,6 +363,8 @@ export async function handleFinish(
     const alreadyDone = await drainDeclaredCleanup(activeSeq.runId, activeSeq.sequenceId);
     return { content: [{ type: 'text', text: `**Sequence already complete.** All ${commands.length} steps executed.${alreadyDone}` }] };
   }
+
+  await resumeBreakpointHold(activeSeq);
 
   const ctx: ExecutionContext = {
     executeToolCall,

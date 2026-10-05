@@ -621,6 +621,9 @@ const BREAKPOINT_ALLOWED_TOOL_ACTIONS: Record<string, Set<string>> = {
   // Read the connections without launching, attaching or closing any; `status`
   // is where a requested pause shows as taken.
   connection: new Set(['list', 'status', 'browsers']),
+  // A run that reached a page pause holds at that step, and these move or end
+  // it; each step the run takes still passes this guard on its own.
+  replay: new Set(['status', 'step', 'finish', 'cancel']),
 };
 
 /**

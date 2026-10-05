@@ -31,3 +31,15 @@ describe('the pause guard and the connection tool', () => {
     }
   });
 });
+
+describe('the pause guard and a held replay run', () => {
+  it('lets the actions that carry on or end a held run through', () => {
+    for (const action of ['status', 'step', 'finish', 'cancel']) {
+      expect(checkBreakpointPause(pausedConnections(), 'replay', undefined, action).blocked, action).toBe(false);
+    }
+  });
+
+  it('blocks starting another run while the page is paused', () => {
+    expect(checkBreakpointPause(pausedConnections(), 'replay', undefined, 'run').blocked).toBe(true);
+  });
+});

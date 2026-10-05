@@ -292,6 +292,8 @@ export interface ActiveSequenceState {
   connectionMap?: Record<string, string>;
   /** What the paused step can be repaired to, where it paused on clicking another element. */
   repair?: ElementRepair;
+  /** Where the page stopped at a breakpoint the sequence did not set; step and finish resume it before the next step. */
+  breakpointHit?: { url: string; lineNumber: number };
 }
 
 export class CommandRecorder {

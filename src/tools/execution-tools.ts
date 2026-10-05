@@ -10,6 +10,8 @@ import { createSuccessResponse, createErrorResponse, formatCodeBlock } from '../
 import type { ConnectionManager } from '../connection-manager.js';
 import { hold, isHeld, release } from '../hold.js';
 
+const LOGPOINT_LOGS_SHOWN = 5;
+
 const executionSchema = z.object({
   action: z.enum(['pause', 'resume', 'stepOver', 'stepInto', 'stepOut', 'acknowledge']).describe('Execution control action to perform'),
   connection: z.string().optional().describe('The connection, by the name connection launch or attach gave it; acknowledge without one covers every paused connection'),
@@ -98,7 +100,10 @@ export function createExecutionTools(
             const logpointLimit = targetCdpManager.getLogpointLimitExceeded();
 
             if (logpointLimit) {
-              const logsFormatted = formatCodeBlock(logpointLimit.logs);
+              // Each log carries args and a full stack trace, so only the text of the last few is returned.
+              const shown = logpointLimit.logs.slice(-LOGPOINT_LOGS_SHOWN);
+              const omitted = logpointLimit.logs.length - shown.length;
+              const lines = shown.map(log => log.text).join('\n');
 
               return createErrorResponse('LOGPOINT_LIMIT_EXCEEDED', {
                 url: logpointLimit.url,
@@ -106,7 +111,8 @@ export function createExecutionTools(
                 executionCount: logpointLimit.executionCount,
                 maxExecutions: logpointLimit.maxExecutions,
                 breakpointId: logpointLimit.breakpointId,
-                logs: logsFormatted,
+                logs: formatCodeBlock(lines, 'text') + (omitted > 0 ? `\n(${omitted} earlier logs omitted)` : ''),
+                reference: connection,
               });
             }
 

@@ -626,8 +626,8 @@ Captured logs:
 {{logs}}
 
 Options:
-- Use resetLogpointCounter('{{breakpointId}}') to continue logging
-- Use removeBreakpoint('{{breakpointId}}') to remove the logpoint
+- `breakpoint({ action: 'resetCounter', connection: '{{reference}}', breakpointId: '{{breakpointId}}' })` to continue logging, then resume
+- `breakpoint({ action: 'remove', connection: '{{reference}}', breakpointId: '{{breakpointId}}' })` to remove the logpoint, then resume
 - Review the captured logs above
 
 ---

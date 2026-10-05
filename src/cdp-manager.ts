@@ -584,6 +584,10 @@ export class CDPManager {
     const { Debugger } = this.client;
     await Debugger.removeBreakpoint({ breakpointId });
     this.state.breakpoints.delete(breakpointId);
+    // The limit refuses resume, and resetCounter cannot clear it once the logpoint is unregistered.
+    if (this.logpointLimitExceeded?.breakpointId === breakpointId) {
+      this.logpointLimitExceeded = null;
+    }
   }
 
   /**

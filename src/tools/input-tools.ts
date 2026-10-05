@@ -200,6 +200,34 @@ async function readFocusedField(page: any): Promise<{ tag: string; value: string
   });
 }
 
+/** The actions that dispatch mouse or touch events, which Chrome hit-tests against a rendered frame. */
+const POINTER_ACTIONS = new Set(['click', 'hover', 'drag', 'scroll', 'mousemove', 'tap', 'swipe', 'pinch']);
+
+/** How long a tab brought to the front has to report itself visible. */
+const FRONT_WAIT_MS = 1000;
+
+async function visibilityOf(page: any): Promise<unknown> {
+  return page.evaluate(() => (globalThis as any).document.visibilityState).catch(() => undefined);
+}
+
+/**
+ * Brings a background tab to the front, and returns whether the page is
+ * visible. A background tab produces no frames, so Chrome drops a mouse or
+ * touch event dispatched to it while `Input.dispatchMouseEvent` still returns.
+ * The tab stays in front afterwards: CDP reports no record of which tab was
+ * in front before, so there is none to restore.
+ */
+async function bringHiddenPageToFront(page: any): Promise<boolean> {
+  if (await visibilityOf(page) !== 'hidden') return true;
+  await page.bringToFront().catch(() => {});
+  const deadline = Date.now() + FRONT_WAIT_MS;
+  while (Date.now() < deadline) {
+    if (await visibilityOf(page) !== 'hidden') return true;
+    await abortableSleep(50);
+  }
+  return false;
+}
+
 export function createInputTools(
   resolveConnectionByName: (connection: string) => Promise<any>
 ) {
@@ -237,6 +265,10 @@ export function createInputTools(
         }
 
         const page = targetPuppeteerManager.getPage();
+
+        if (POINTER_ACTIONS.has(action) && !await bringHiddenPageToFront(page)) {
+          return createErrorResponse('INPUT_PAGE_HIDDEN', { action, connection });
+        }
 
         // Determine if change detection is enabled
         const changeConfig = configManager.getChangeDetectionConfig();

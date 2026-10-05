@@ -984,6 +984,19 @@ No element has focus, so typed text has nowhere to go.
 
 ---
 
+## INPUT_PAGE_HIDDEN
+
+**Type:** error
+**Code:** INPUT_PAGE_HIDDEN
+
+{{action}} was not sent: the page on "{{connection}}" is a background tab and stayed hidden after it was brought to the front. Chrome drops mouse and touch input to a background tab while the call reports it sent.
+
+**Suggestions:**
+- A minimised window keeps its tabs hidden; restore the app's window
+- Drag the app's tab into Chrome's split view beside the tab in front
+
+---
+
 ## ELEMENT_CLICK_SUCCESS
 
 **Type:** success

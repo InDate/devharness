@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-10-05
+
+### Fixed
+
+- **`input type` with no `selector` types into the focused element**, followed
+  through open shadow roots. The recorder writes that step for a keystroke
+  inside a shadow root, and the handler refused it, so the recording failed on
+  replay. Nothing focused answers `TYPE_NO_FOCUSED_ELEMENT`.
+- **`input press` takes a chord** such as `Meta+a`. It threw
+  `Unknown key` on the form the recorder writes. On macOS, ⌘ with a, c, x, v or
+  z also carries its editing command, which Chrome runs from no key event.
+- **The bench plays a sequence holding a typed-text step.** Play ended at step
+  0 with no failure line; the run had returned a prompt for replacement text.
+
+### Changed
+
+- **`BENCH_ALREADY_OPEN` names the call that opens another sequence in the
+  open bench**, in place of stopping and restarting it.
+
+### Added
+
+- **socket-app: a field two shadow roots deep**, sent as `GET /search`, and the
+  `shadow-field-typing` sequence over it.
+
 ## [0.12.0] - 2026-10-01
 
 ### Changed

@@ -10,7 +10,8 @@ import { appendRun } from '../run-log.js';
 import type { StepResult } from './replay-executor.js';
 import type { StepCheck } from '../bench/wire.js';
 import { executeSteps, type ExecutionContext } from './replay-executor.js';
-import { formatExecutionResults, formatActiveStatus, formatStepResults } from './replay-formatters.js';
+import { formatExecutionResults, formatActiveStatus, formatStepResults, formatClickValidationFailure } from './replay-formatters.js';
+import type { ExecutionResult } from './replay-types.js';
 import { drainDeclaredCleanup } from './replay-run-owned.js';
 import { type ReplayArgs } from './replay-schema.js';
 import { release } from '../hold.js';
@@ -242,6 +243,38 @@ async function resumeBreakpointHold(activeSeq: ActiveSequenceState): Promise<voi
   delete activeSeq.breakpointHit;
 }
 
+/**
+ * A step that paused on its click - a click validation failure, or an input
+ * refused for reaching another element - keeps the session standing on that
+ * step, as a run that paused there does: the step can be repaired or run
+ * again. Ended instead, a refusal reached through `step` could be repaired
+ * nowhere.
+ */
+function holdAtClickPause(
+  recorder: CommandRecorder,
+  activeSeq: ActiveSequenceState,
+  sequence: { name: string; commands: unknown[] } & Record<string, any>,
+  execResult: ExecutionResult,
+  action: 'step' | 'finish',
+) {
+  const failure = execResult.clickValidationFailure!;
+  recorder.updateActiveSequenceStep(execResult.pausedAtStep! - 1);
+  if (failure.repair) activeSeq.repair = failure.repair;
+  else delete activeSeq.repair;
+  return {
+    content: [{ type: 'text', text: formatClickValidationFailure(
+      sequence as any, execResult.results, execResult.pausedAtStep!, execResult.durationMs, failure, activeSeq.connection,
+    ) }],
+    _meta: {
+      tool: 'replay', action, timestamp: Date.now(),
+      replay: {
+        success: false, paused: true, pausedAtStep: execResult.pausedAtStep,
+        refused: failure.errors[0], ...(failure.repair ? { repair: failure.repair } : {}),
+      },
+    },
+  };
+}
+
 export async function handleStep(
   args: ReplayArgs,
   recorder: CommandRecorder,
@@ -297,6 +330,10 @@ export async function handleStep(
     ctx,
     ...(abortSignal ? { abortSignal } : {})
   });
+
+  if (execResult.clickValidationFailure && !abortSignal?.aborted) {
+    return holdAtClickPause(recorder, activeSeq, sequence, execResult, 'step');
+  }
 
   const lastExecuted = execResult.results.length > 0 ? execResult.results[execResult.results.length - 1].step : startStep;
   const failed = execResult.results.some(r => !r.success);
@@ -381,6 +418,10 @@ export async function handleFinish(
     startStep,
     ctx
   });
+
+  if (execResult.clickValidationFailure) {
+    return holdAtClickPause(recorder, activeSeq, sequence, execResult, 'finish');
+  }
 
   recorder.setActiveSequence(null);
   endPausedRun(activeSeq.runId, execResult.results.some(r => !r.success) ? 'failed' : 'completed');

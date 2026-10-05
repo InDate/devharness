@@ -850,7 +850,11 @@ export async function performRun(
     ) }],
       _meta: {
         tool: 'replay', action: 'run', timestamp: Date.now(),
-        replay: { success: false, totalSteps: sequence.commands.length, failedSteps: execResult.results.filter(r => !r.success).length, paused: true }
+        replay: {
+          success: false, totalSteps: sequence.commands.length, failedSteps: execResult.results.filter(r => !r.success).length, paused: true,
+          pausedAtStep: execResult.pausedAtStep, refused: execResult.clickValidationFailure.errors[0],
+          ...(execResult.clickValidationFailure.repair ? { repair: execResult.clickValidationFailure.repair } : {}),
+        }
       }
     } };
   }
@@ -898,7 +902,7 @@ export async function performRun(
             .map(k => `${k} ${d.shapes!.recorded[k] ?? 0} → ${d.shapes!.observed[k] ?? 0}`)
         : [];
       const parts = [moved, ...shapes].filter(Boolean).join(', ');
-      response += `\n- step ${d.step} \`${d.label}\`: ${parts}`;
+      response += `\n- step ${d.path ?? d.step} \`${d.label}\`: ${parts}`;
       // The hold times sit beside the difference rather than under it: a step
       // held far longer while recording collected traffic that arrives on the
       // app's own schedule, and that reads as drift before anything changed.

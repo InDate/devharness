@@ -134,8 +134,9 @@ indices to `create`.
 History holds calls from every channel - MCP, the bench, the CLI - and each
 step a sequence run makes, listed as `in run \`<name>\``; a step made by a
 sequence that a check's `run` started is listed under that sequence's name.
-The `replay` call itself is not listed. A run started from the bench is read
-from here: which sequence ran, and each step, repeatable by its index.
+A `replay` call that acts (`run`, `runAll`, `create`, `split` …) is listed
+with who started it; reads and `repeat` are not. A run started from the bench
+is read from here: the call, then each step, repeatable by its index.
 
 ## Managing them
 
@@ -600,6 +601,58 @@ step again on a page the refused click never touched. A sequence recorded
 before fingerprints carries none, and its clicks go uncompared until it is
 recorded again. The repair's search covers the light DOM; an element inside a
 shadow root reads as not on the page.
+
+## Reusing the steps that reach a place
+
+A change lands on one element, and the steps that reach it already sit inside
+saved sequences. `replay({ action: 'search', element, connection })` finds
+them: it resolves the selector on the live page and compares the element with
+the fingerprint each click step stored, so a step that reached it by
+`nth-child`, by text or by a point is found beside one that named its test id.
+`query` matches a string literally instead. A new sequence that tests the change starts from one of them,
+cut after step N, rather than re-recording steps 1 to N. The cut takes one of
+two forms, and the choice between them is yours:
+
+- `replay({ action: 'copy', name, throughStep, newName })` - the new sequence
+  owns a copy of steps 1 to N. An edit to either reaches only that one.
+- `replay({ action: 'split', name, throughStep, sharedName, newName? })` -
+  steps 1 to N move into `sharedName`; the original runs it in their place,
+  and so does `newName`. An edit to the path goes to the shared sequence and
+  reaches every caller.
+
+**The choice follows how a future edit to steps 1 to N travels.** Take a
+plausible edit to that path - a login form changes, a menu gains a level, a
+panel moves behind another button.
+
+- Every sequence walking the path needs that edit: split. The path crosses app
+  surface that changes, and one shared sequence takes the fix once. Two copies
+  take it twice, and the copy that misses it fails at a step unrelated to what
+  its tail tests.
+- One sequence needs it alone: copy. The new sequence needs a different state
+  at step N - another user, another fixture, one step varied - or it is a
+  probe to be deleted. An edit to a shared path made for one caller changes the
+  other's setup and fails a test far from the edit.
+
+Before splitting, `list` for a sequence that already holds the path, such as a
+login helper. Where one does, `replay({ action: 'adopt', name, throughStep,
+sharedName })` replaces the new sequence's own steps 1 to N with a run of it,
+rather than splitting a second copy out. The same action takes an older copy of
+the path into a shared sequence split since: it compares the copy with the
+shared steps and refuses where they differ, naming the first difference, unless
+`overwrite: true`.
+
+**Where to cut.** Step N leaves the page settled: the shared sequence ends on a
+check or wait confirming the state its callers start from. One ending
+mid-transition passes for the caller whose next step happened to land late,
+and races for the other.
+
+**What a split commits the callers to.** A `saveAs` capture in steps 1 to N
+reaches each tail through the variable store, so the tail's `{{var:name}}`
+depends on the shared sequence's capture names; `split` names the ones read.
+The `variables` keys of the original's tail move with its step numbers, and
+`split` lists them, and flags a step N that is no check or wait. A drift in
+the shared steps reports as `step 1.3`: the caller's step, then the shared
+sequence's.
 
 ## `forEach` steps
 

@@ -7,7 +7,7 @@ export const replaySchema = z.object({
   action: z.enum([
     'history', 'create', 'list', 'get', 'delete',
     'export', 'load', 'listSaved', 'deleteSaved',
-    'run', 'runAll', 'step', 'finish', 'insert', 'addCheck', 'declare', 'repair', 'status', 'cancel',
+    'run', 'runAll', 'step', 'finish', 'insert', 'addCheck', 'declare', 'repair', 'copy', 'split', 'adopt', 'search', 'status', 'cancel',
     'repeat', 'runFromLog',
     'recordInteraction'
   ]),
@@ -54,6 +54,10 @@ export const replaySchema = z.object({
   check: z.record(z.any()).optional().describe("addCheck: the check step's parameters as the check tool takes them, holds/fails included"),
   comment: z.string().optional().describe('addCheck: note stored on the step'),
   overwrite: z.boolean().optional(),
+  query: z.string().optional().describe('search: a string matched literally in every saved step'),
+  element: z.string().optional().describe('search: a selector resolved on the live page; the steps that reached that element'),
+  throughStep: z.number().optional().describe('copy/split/adopt: the last step taken, 1-indexed'),
+  sharedName: z.string().optional().describe('split: the shared sequence the steps move into. adopt: the shared sequence that replaces them'),
   accept: z.enum(['selector', 'element']).optional().describe("repair: 'selector' takes the recorded element's new selector, 'element' keeps the selector and records the element it hit"),
   newName: z.string().optional(),
   showOverlay: z.boolean().optional(),

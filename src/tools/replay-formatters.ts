@@ -195,7 +195,7 @@ export function formatClickValidationFailure(
   const successful = results.filter(r => r.success).length;
   const remaining = commands.length - pausedAtStep;
 
-  let response = `**Click Validation Failed**\n`;
+  let response = failure.repair ? `**Reached Another Element**\n` : `**Click Validation Failed**\n`;
   response += `${sequence.name}: Paused at step ${pausedAtStep} of ${commands.length}, ${remaining} remaining\n\n`;
 
   response += `**Executed:** ${successful} commands in ${(durationMs / 1000).toFixed(1)}s\n\n`;

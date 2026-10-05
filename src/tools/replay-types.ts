@@ -74,6 +74,11 @@ export interface ExecutionContext {
    * down to this run. Absent on a top-level run, whose steps stamp their own.
    */
   stampUnder?: { step: number; within: number[] };
+  /**
+   * Set on a forEach body. Every iteration stamps its traffic at the same
+   * position, so a comparison read there counts the earlier iterations' too.
+   */
+  trafficUncompared?: boolean;
 }
 
 export interface StepResult {
@@ -146,6 +151,8 @@ export interface ExecutionResult {
    */
   behaviourDrift?: Array<{
     step: number;
+    /** A nested sequence's step, as the caller's step and the path down to it: `1.3`. */
+    path?: string;
     label: string;
     recorded: { requests: number; failed: number; opened: number; writes: number };
     observed: { requests: number; failed: number; opened: number; writes: number };

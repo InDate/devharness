@@ -140,6 +140,8 @@ export interface NestedRunResult {
   ranCommands?: RecordedCommand[];
   error?: string;
   durationMs?: number;
+  /** Where the nested sequence's steps differed from their own recording, labelled by path. */
+  behaviourDrift?: ExecutionResult['behaviourDrift'];
 }
 
 /**
@@ -284,7 +286,8 @@ export async function runBranch(
       substeps: execResult.results,
       ranCommands: filteredCommands,
       error,
-      durationMs: execResult.durationMs
+      durationMs: execResult.durationMs,
+      ...(execResult.behaviourDrift ? { behaviourDrift: execResult.behaviourDrift } : {}),
     };
   }
 
@@ -295,7 +298,8 @@ export async function runBranch(
     sequenceName,
     substeps: execResult.results,
     ranCommands: filteredCommands,
-    durationMs: execResult.durationMs
+    durationMs: execResult.durationMs,
+    ...(execResult.behaviourDrift ? { behaviourDrift: execResult.behaviourDrift } : {}),
   };
 }
 
@@ -566,6 +570,7 @@ export async function executeForEachFlow(
         ...(nestedConnection ? { connection: nestedConnection } : {}),
         nestingDepth: currentDepth + 1,
         nestingCallStack: [...callStack, sequenceName],
+        trafficUncompared: true,
       },
       ...(budget?.stepTimeout !== undefined ? { stepTimeout: budget.stepTimeout } : {}),
       ...(budget?.totalTimeout !== undefined
@@ -944,8 +949,10 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
 
   // When each step began, for windowing the traffic it caused against the
   // baseline the recording stored on it. Only filled when there is a baseline.
-  const comparesBehaviour = !ctx.stampUnder && commands.some(c => (c as any).traffic);
+  const comparesBehaviour = !ctx.trafficUncompared && commands.some(c => (c as any).traffic);
   const stepStartedAt = new Map<number, number>();
+  // What the sequences this run's checks ran found, reported with this run's own.
+  const nestedDrift: NonNullable<ExecutionResult['behaviourDrift']> = [];
   // When each step's boundary was released, which closes that step's span the
   // same way a recorded command's return closes its own. Without it a replayed
   // step runs to the next step's start while its recording ran to a release,
@@ -1079,7 +1086,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
       // The click is compared with the recorded element before it is sent:
       // compared after, a click on the wrong element has already changed the
       // app, and every step after a repair runs on what it changed.
-      if (cmd.tool === 'input' && params.action === 'click' && cmd.fingerprint) {
+      if (cmd.tool === 'input' && ['click', 'type', 'hover'].includes(params.action) && cmd.fingerprint) {
         params.expect = cmd.fingerprint;
       }
 
@@ -1287,6 +1294,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
           action.run, { ...stepCtx, variableStore, stampUnder: nestedUnder(i) }, commandRecorder,
           { stepTimeout, totalTimeout: Math.max(0, totalTimeout - (Date.now() - startTime)) }, abortSignal);
         await markNextCommand(cursorAt(boundaryStep ?? i));
+        if (branch.behaviourDrift) nestedDrift.push(...branch.behaviourDrift);
         outcomeFor({
           ran: action.run, steps: branch.substeps?.length ?? 0,
           ranSteps: ranStepsOf(branch.substeps ?? [], branch.ranCommands),
@@ -1448,8 +1456,8 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
           });
           break;
         }
-        if (execResult.errorId === 'CLICK_ELEMENT_MISMATCH') {
-          const refused = execResult.response?._meta?.click;
+        if (execResult.errorId === 'INPUT_ELEMENT_MISMATCH') {
+          const refused = execResult.response?._meta?.element;
           results.push({ step: i + 1, tool: cmd.tool, success: false, error: execResult.error });
           return {
             results,
@@ -1459,9 +1467,9 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
             clickValidationFailure: {
               step: i + 1,
               selector: params.selector || (params.x !== undefined ? `${params.x}, ${params.y}` : 'unknown'),
-              errors: [execResult.error ?? 'clicked another element'],
+              errors: [execResult.error ?? 'reached another element'],
               warnings: [],
-              info: ['not clicked: the element was compared before the click was sent'],
+              info: ['nothing sent: the element was compared before the input was'],
               ...(refused?.repair ? { repair: refused.repair } : {}),
             },
           };
@@ -1724,12 +1732,13 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
   if (boundaryStep !== undefined) await releaseStep(boundaryStep);
   await boundarySettled();
 
-  const behaviourDrift = comparesBehaviour
+  const ownDrift = comparesBehaviour
     ? await compareBehaviour(
         commands, stepStartedAt, stepReleasedAt, ctx, proxyRun,
         overrideConnectionReason ?? ctx.connection,
         (sequence as any).shapeRules)
     : undefined;
+  const behaviourDrift = [...(ownDrift ?? []), ...nestedDrift];
 
   return {
     results,
@@ -1796,7 +1805,10 @@ async function compareBehaviour(
     const proxy = getProxy(reference);
     const recordedShapes = commands[index].traffic?.shapes;
     const recordedSeen = commands[index].traffic?.seen;
-    const tally = proxy ? tallyShapes(proxy.eventsForStep(proxyRun, index), rules) : undefined;
+    const under = ctx.stampUnder;
+    const tally = proxy
+      ? tallyShapes(under ? proxy.eventsForStep(proxyRun, under.step, [...under.within, index]) : proxy.eventsForStep(proxyRun, index), rules)
+      : undefined;
     const observedShapes = tally?.weight;
     const shapesDiffer = recordedShapes !== undefined && observedShapes !== undefined
       && [...new Set([...Object.keys(recordedShapes), ...Object.keys(observedShapes)])]
@@ -1819,6 +1831,7 @@ async function compareBehaviour(
     if (differs || shapesDiffer || countDiffer) {
       drift.push({
         step: index + 1,
+        ...(under ? { path: [under.step, ...under.within, index].map(n => n + 1).join('.') } : {}),
         label: `${commands[index].tool}.${commands[index].params?.action ?? ''}`.replace(/\.$/, ''),
         recorded: before,
         observed,

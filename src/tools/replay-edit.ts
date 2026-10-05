@@ -3,7 +3,7 @@
  * step, and setting what the sequence declares.
  */
 import { renumberSteps } from '../sequence-activity.js';
-import type { CommandRecorder, RecordedCommand } from '../command-recorder.js';
+import type { CommandRecorder, CommandSequence, RecordedCommand } from '../command-recorder.js';
 import { createErrorResponse } from '../messages.js';
 import { sanitizeReference, validateReference } from '../reference-validator.js';
 import { normalizeProfileName } from '../chrome-launcher.js';
@@ -14,7 +14,7 @@ import { subjectOf as subjectOfCheck } from './check-engine.js';
 import { rehydrateStepConnections, formatConnectionNote } from './replay-library.js';
 import { type ReplayArgs } from './replay-schema.js';
 import { handleLoadSequenceError, normalizeTags, declaredProfileConflict } from './replay-validation.js';
-import { addressedConnection } from './connection-steps.js';
+import { addressedConnection, isLaunchStep } from './connection-steps.js';
 import { describeFingerprint } from '../element-fingerprint.js';
 
 /**
@@ -325,6 +325,310 @@ export async function handleAddCheck(args: ReplayArgs, recorder: CommandRecorder
   };
 }
 
+/** The sequence to cut and the step to cut it after, or the refusal for either. */
+async function sequenceToCut(args: ReplayArgs, recorder: CommandRecorder, action: string) {
+  const loadResult = await loadSequence({ name: args.name, sequenceId: args.sequenceId }, recorder);
+  if (!loadResult.success) return { refused: handleLoadSequenceError(loadResult, action) };
+  const sequence = loadResult.sequence;
+  const through = args.throughStep;
+  if (through === undefined || !Number.isInteger(through) || through < 1 || through >= sequence.commands.length) {
+    return { refused: createErrorResponse('INVALID_PARAMETER', {
+      parameter: 'throughStep',
+      value: String(through),
+      message: `throughStep is the last step taken, from 1 to ${sequence.commands.length - 1}: "${sequence.name}" has ${sequence.commands.length} steps, and a cut after the last takes the whole sequence.`,
+    }) };
+  }
+  return { sequence, through };
+}
+
+/** Whether a sequence of this name already exists, in memory or on disk. */
+async function nameTaken(recorder: CommandRecorder, name: string): Promise<boolean> {
+  if (recorder.listSequences().some(one => one.name === name)) return true;
+  return (await recorder.listSavedSequencesOnDisk()).some(one => one.name === name);
+}
+
+/** Writes a sequence to the same root as `beside`, where `beside` is on disk; undefined leaves it in memory. */
+async function saveBeside(recorder: CommandRecorder, sequenceId: string, beside: string): Promise<string | { error: string } | undefined> {
+  const besideFile = (await recorder.listSavedSequencesOnDisk()).find(one => one.name === beside);
+  if (!besideFile) return undefined;
+  const saved = await recorder.saveSequenceToDisk(sequenceId, besideFile.location === 'global', true);
+  if (!saved) return { error: 'the sequence was not in memory to write' };
+  return saved.success ? saved.filepath : { error: saved.error };
+}
+
+/** The declarations a sequence carries beside its steps, which a sequence built from it takes too. */
+function declarationsOf(sequence: CommandSequence): Partial<CommandSequence> {
+  const source = sequence as any;
+  const kept: Record<string, unknown> = {};
+  for (const key of ['requiredConnections', 'requiredSockets', 'proxy', 'tags', 'recordedConnection', 'shapeRules', 'boundaryRefuse']) {
+    if (source[key] !== undefined) kept[key] = JSON.parse(JSON.stringify(source[key]));
+  }
+  return kept as Partial<CommandSequence>;
+}
+
+/** The step-indexed fields of `sequence`, cloned and renumbered by `map`. */
+function stepFieldsOf(sequence: CommandSequence, map: (old: number) => number | undefined): Partial<CommandSequence> {
+  const source = sequence as any;
+  const fields: any = {};
+  for (const key of ['boundaryRulesOn', 'boundaryNames', 'boundaryPlacements']) {
+    if (source[key] !== undefined) fields[key] = JSON.parse(JSON.stringify(source[key]));
+  }
+  renumberSteps(fields, map);
+  return fields;
+}
+
+/** The 1-based steps up to `through` that the recording holds no boundary evidence for. */
+function unmeasuredWithin(sequence: CommandSequence, through: number): number[] {
+  return ((sequence as any).shapesUnmeasured as number[] | undefined ?? []).filter(step => step <= through);
+}
+
+/** A step that confirms the page's state before the next one acts. */
+function confirmsState(step: RecordedCommand | undefined): boolean {
+  return step?.tool === 'check' || step?.tool === 'wait' || step?.tool === 'assert';
+}
+
+/**
+ * A new sequence owning a copy of steps 1 to `throughStep`, with their stored
+ * traffic and fingerprints, and the declarations of the one copied. It stands
+ * on its own afterwards: an edit to either reaches only that one. Teardown is
+ * not copied: it cleans up after the whole of the original's flow.
+ */
+export async function handleCopy(args: ReplayArgs, recorder: CommandRecorder) {
+  const cut = await sequenceToCut(args, recorder, 'copy');
+  if ('refused' in cut) return cut.refused;
+  const { sequence, through } = cut;
+  if (!args.newName) {
+    return createErrorResponse('MISSING_PARAMETER', { action: 'copy', missing: 'newName', message: 'The "copy" action needs "newName", the name of the new sequence.' });
+  }
+  if (!args.overwrite && await nameTaken(recorder, args.newName)) {
+    return createErrorResponse('INVALID_PARAMETER', {
+      parameter: 'newName', value: args.newName, message: `A sequence named "${args.newName}" exists. Pass overwrite: true to replace it, or choose another name.`,
+    });
+  }
+
+  const steps: RecordedCommand[] = JSON.parse(JSON.stringify(sequence.commands.slice(0, through)));
+  const copy = await recorder.createSequenceFromCommands(args.newName, steps, {
+    description: `Steps 1-${through} of ${sequence.name}`,
+    startUrl: sequence.startUrl,
+  });
+  Object.assign(copy, declarationsOf(sequence), stepFieldsOf(sequence, old => (old < through ? old : undefined)));
+  const unmeasured = unmeasuredWithin(sequence, through);
+  if (unmeasured.length) (copy as any).shapesUnmeasured = unmeasured;
+
+  const written = await saveBeside(recorder, copy.id, sequence.name);
+  if (typeof written === 'object') {
+    return { content: [{ type: 'text', text: `## Error\n\n"${copy.name}" was made in memory, but writing the file failed: ${written.error}` }], isError: true };
+  }
+  return {
+    content: [{
+      type: 'text',
+      text: `**Copied** steps 1-${through} of "${sequence.name}" into "${copy.name}" (${steps.length} steps).\n`
+        + (written ? `Written to \`${written}\`.\n` : `In memory; \`export\` writes it to a file.\n`)
+        + (sequence.teardown?.length ? `Its ${sequence.teardown.length} teardown step(s) are not copied: they clean up after the whole of "${sequence.name}", and steps it no longer runs.\n` : '')
+        + `\nThe two stand apart: an edit to one reaches only that one. Continue it from where step ${through} leaves the page, then \`insert\` the new steps into "${copy.name}".`,
+    }],
+  };
+}
+
+/**
+ * The refusal for a cut whose first `through` steps cannot run inside another
+ * sequence, or undefined. A launch inside a nested sequence is skipped where
+ * its browser exists and run where it does not, which splits the run across
+ * two browsers; a check resuming past the cut would resume past the nested
+ * sequence's end.
+ */
+function refuseCut(sequence: CommandSequence, through: number) {
+  const launchAt = sequence.commands.slice(0, through).findIndex(isLaunchStep);
+  if (launchAt >= 0) {
+    return createErrorResponse('INVALID_PARAMETER', {
+      parameter: 'throughStep', value: String(through),
+      message: launchAt === 0
+        ? `Step 1 launches a browser. Inside a shared sequence it is skipped where that browser exists and run where it does not, which splits the run across two browsers, and every cut takes step 1.`
+        : `Step ${launchAt + 1} launches a browser. Inside a shared sequence it is skipped where that browser exists and run where it does not, which splits the run across two browsers. throughStep ${launchAt} or less leaves it in the caller.`,
+    });
+  }
+  const leaping = sequence.commands.slice(0, through).findIndex(step => step.tool === 'check'
+    && (['holds', 'fails'] as const).some(answer => typeof step.params?.[answer]?.resumeAt === 'number' && step.params[answer].resumeAt >= through));
+  if (leaping >= 0) {
+    return createErrorResponse('INVALID_PARAMETER', {
+      parameter: 'throughStep', value: String(through),
+      message: `Step ${leaping + 1} is a check that resumes past step ${through}. Inside the shared sequence it would resume past that sequence's end. Cut at or after the step it resumes at.`,
+    });
+  }
+  return undefined;
+}
+
+/** A check that always holds and runs `sharedName`: the nesting that shares the caller's variables, connection and time budget. */
+function runOf(sharedName: string, through: number): RecordedCommand {
+  return { tool: 'check', params: { afterMs: 0, holds: { run: sharedName } }, comment: `steps 1-${through}, shared as ${sharedName}` };
+}
+
+/**
+ * Replace steps 1 to `through` of `sequence` with a run of `sharedName`, and
+ * move what names its steps by number with them. Returns the `variables` keys
+ * whose step numbers moved, the captures of the shared steps the tail reads,
+ * and how many steps the tail holds.
+ */
+function replacePathWithRun(sequence: CommandSequence, through: number, sharedName: string, captureNames: string[]) {
+  const tail = sequence.commands.slice(through);
+  const keyOf = (index: number, step: RecordedCommand) =>
+    `var_${index}_${step.params?.selector?.replace(/[^a-zA-Z0-9]/g, '_') || 'text'}`;
+  const movedKeys = tail
+    .map((step, at) => ({ step, from: through + at, to: 1 + at }))
+    .filter(({ step }) => step.tool === 'input' && step.params?.action === 'type')
+    .map(({ step, from, to }) => `\`${keyOf(from, step)}\` → \`${keyOf(to, step)}\``);
+  const read = captureNames.filter(name => JSON.stringify(tail).includes(`{{var:${name}`));
+
+  renumberSteps(sequence as any, old => (old < through ? undefined : old - through + 1));
+  (sequence as any).commands = [runOf(sharedName, through), ...tail];
+  const tailUnmeasured = ((sequence as any).shapesUnmeasured as number[] | undefined ?? [])
+    .filter(step => step > through).map(step => step - through + 1);
+  if (tailUnmeasured.length) (sequence as any).shapesUnmeasured = tailUnmeasured;
+  else delete (sequence as any).shapesUnmeasured;
+  return { movedKeys, read, tailLength: tail.length };
+}
+
+/** What a step does, as compared between two sequences: its tool and params, without the browser it ran in. */
+function stepIdentity(step: RecordedCommand): string {
+  const { connection: _connection, expect: _expect, ...params } = step.params ?? {};
+  return JSON.stringify({ tool: step.tool, params });
+}
+
+/**
+ * Steps 1 to `throughStep` of a sequence replaced with a run of an existing
+ * shared sequence: the sequence that carried its own copy of a path takes the
+ * shared one, and later edits to the path reach it.
+ *
+ * The replaced steps are compared with the shared sequence's first steps
+ * first. Where they differ - the shared path was edited since, or it is
+ * another path - the reply names the first difference and nothing is
+ * written; `overwrite: true` replaces them regardless.
+ */
+export async function handleAdopt(args: ReplayArgs, recorder: CommandRecorder) {
+  const cut = await sequenceToCut(args, recorder, 'adopt');
+  if ('refused' in cut) return cut.refused;
+  const { sequence, through } = cut;
+  if (!args.sharedName) {
+    return createErrorResponse('MISSING_PARAMETER', { action: 'adopt', missing: 'sharedName', message: 'The "adopt" action needs "sharedName", the shared sequence that replaces steps 1 to throughStep.' });
+  }
+  if (args.sharedName === sequence.name) {
+    return createErrorResponse('INVALID_PARAMETER', { parameter: 'sharedName', value: args.sharedName, message: 'A sequence cannot run itself in place of its own steps.' });
+  }
+  const sharedLoad = await loadSequence({ name: args.sharedName }, recorder);
+  if (!sharedLoad.success) return handleLoadSequenceError(sharedLoad, 'adopt');
+  const shared = sharedLoad.sequence;
+  const refusal = refuseCut(sequence, through);
+  if (refusal) return refusal;
+
+  const own = sequence.commands.slice(0, through);
+  const theirs = shared.commands;
+  const differsAt = Array.from({ length: Math.max(own.length, theirs.length) }, (_, i) => i)
+    .find(i => !own[i] || !theirs[i] || stepIdentity(own[i]) !== stepIdentity(theirs[i]));
+  if (differsAt !== undefined && !args.overwrite) {
+    const describe = (step: RecordedCommand | undefined) => step
+      ? `${step.tool}${step.params?.action ? ` ${step.params.action}` : ''}${step.params?.selector ? ` \`${step.params.selector}\`` : ''}`
+      : 'nothing';
+    return createErrorResponse('INVALID_PARAMETER', {
+      parameter: 'sharedName', value: args.sharedName,
+      message: `Steps 1-${through} of "${sequence.name}" differ from "${shared.name}" at step ${differsAt + 1}: `
+        + `"${sequence.name}" has ${describe(own[differsAt])}, "${shared.name}" has ${describe(theirs[differsAt])}. `
+        + `Nothing was written. Where "${shared.name}" holds the path as it now is, overwrite: true replaces steps 1-${through} with it.`,
+    });
+  }
+
+  const captureNames = theirs.map(step => step.params?.saveAs).filter((name): name is string => typeof name === 'string');
+  const { movedKeys, read, tailLength } = replacePathWithRun(sequence, through, shared.name, captureNames);
+  const written = await saveBeside(recorder, sequence.id, sequence.name);
+  if (typeof written === 'object') {
+    return { content: [{ type: 'text', text: `## Error\n\n"${sequence.name}" now runs "${shared.name}" in memory, but writing the file failed: ${written.error}` }], isError: true };
+  }
+
+  const lines = [
+    `**Adopted** "${shared.name}" in place of steps 1-${through} of "${sequence.name}".`,
+    `- "${sequence.name}": runs "${shared.name}", then its old steps ${through + 1}-${through + tailLength} (${1 + tailLength} steps)`,
+    ...(differsAt !== undefined ? [`- Its own steps differed from "${shared.name}" at step ${differsAt + 1}, and were replaced as overwrite asked`] : []),
+    `- An edit to the path goes to "${shared.name}" and reaches "${sequence.name}" too`,
+    ...(movedKeys.length ? [`- \`variables\` keys for "${sequence.name}" moved: ${movedKeys.join(', ')}`] : []),
+    ...(read.length ? [`- The tail reads ${read.map(n => `\`{{var:${n}}}\``).join(', ')} from "${shared.name}": renaming that capture there breaks every caller`] : []),
+    `- Written: ${written ? `\`${written}\`` : `"${sequence.name}" in memory`}`,
+  ];
+  return { content: [{ type: 'text', text: lines.join('\n') }] };
+}
+
+/**
+ * Steps 1 to `throughStep` moved into a shared sequence, which the original
+ * then runs in their place, and so does `newName` where given. An edit to the
+ * path goes to the shared sequence and reaches every caller; an edit to a
+ * tail reaches that caller alone.
+ *
+ * The run step is a check that always holds and runs the shared sequence, the
+ * one nesting that shares the caller's variables, connection and time budget.
+ * Teardown and declarations stay on the callers: a nested sequence's
+ * teardown runs between it and the caller's tail, and its declarations are
+ * never launched. A launch step inside the cut is refused: inside a nested
+ * sequence it is skipped where its browser exists and run where it does not,
+ * which splits the run across two browsers.
+ */
+export async function handleSplit(args: ReplayArgs, recorder: CommandRecorder) {
+  const cut = await sequenceToCut(args, recorder, 'split');
+  if ('refused' in cut) return cut.refused;
+  const { sequence, through } = cut;
+  if (!args.sharedName) {
+    return createErrorResponse('MISSING_PARAMETER', { action: 'split', missing: 'sharedName', message: 'The "split" action needs "sharedName", the name of the shared sequence steps 1 to throughStep move into.' });
+  }
+  for (const name of [args.sharedName, args.newName].filter((n): n is string => Boolean(n))) {
+    if (await nameTaken(recorder, name)) {
+      return createErrorResponse('INVALID_PARAMETER', {
+        parameter: name === args.sharedName ? 'sharedName' : 'newName',
+        value: name,
+        message: `A sequence named "${name}" exists.${name === args.sharedName ? ` Where it already holds this path, adopt it in place of steps 1-${through}: replay({ action: 'adopt', name: '${sequence.name}', throughStep: ${through}, sharedName: '${name}' }).` : ''}`,
+      });
+    }
+  }
+  const refusal = refuseCut(sequence, through);
+  if (refusal) return refusal;
+
+  const sharedSteps: RecordedCommand[] = JSON.parse(JSON.stringify(sequence.commands.slice(0, through)));
+  const shared = await recorder.createSequenceFromCommands(args.sharedName, sharedSteps, {
+    description: `Steps 1-${through} of ${sequence.name}, run by each sequence that walks this path`,
+    startUrl: sequence.startUrl,
+  });
+  Object.assign(shared, declarationsOf(sequence), stepFieldsOf(sequence, old => (old < through ? old : undefined)));
+  for (const key of ['requiredConnections', 'requiredSockets', 'tags']) delete (shared as any)[key];
+  const sharedUnmeasured = unmeasuredWithin(sequence, through);
+  if (sharedUnmeasured.length) (shared as any).shapesUnmeasured = sharedUnmeasured;
+
+  const captureNames = sharedSteps.map(step => step.params?.saveAs).filter((name): name is string => typeof name === 'string');
+  const { movedKeys, read, tailLength } = replacePathWithRun(sequence, through, args.sharedName, captureNames);
+
+  let caller: CommandSequence | undefined;
+  if (args.newName) {
+    caller = await recorder.createSequenceFromCommands(args.newName, [runOf(args.sharedName, through)], { startUrl: sequence.startUrl });
+    Object.assign(caller, declarationsOf(sequence));
+  }
+
+  const failures: string[] = [];
+  const places: string[] = [];
+  for (const one of [shared, sequence, caller].filter((s): s is CommandSequence => Boolean(s))) {
+    const written = await saveBeside(recorder, one.id, sequence.name);
+    if (typeof written === 'object') failures.push(`"${one.name}": ${written.error}`);
+    else places.push(written ? `\`${written}\`` : `"${one.name}" in memory`);
+  }
+
+  const lines = [
+    `**Split** steps 1-${through} of "${sequence.name}" into "${shared.name}".`,
+    `- "${sequence.name}": runs "${shared.name}", then its old steps ${through + 1}-${through + tailLength} (${1 + tailLength} steps)`,
+    ...(caller ? [`- "${caller.name}": runs "${shared.name}"; continue it from where step ${through} leaves the page, then \`insert\` the new steps`] : []),
+    `- An edit to the path goes to "${shared.name}" and reaches every caller; an edit to a tail reaches that caller alone`,
+    ...(confirmsState(sharedSteps[through - 1]) ? [] : [`- **Step ${through} is ${sharedSteps[through - 1].tool}${sharedSteps[through - 1].params?.action ? ` ${sharedSteps[through - 1].params.action}` : ''}, not a check or wait:** "${shared.name}" ends without confirming the state its callers start from, so a caller's next step can act before it settles. \`addCheck\` with \`name: '${shared.name}'\` appends one`]),
+    ...(movedKeys.length ? [`- \`variables\` keys for "${sequence.name}" moved: ${movedKeys.join(', ')}`] : []),
+    ...(read.length ? [`- The tail reads ${read.map(n => `\`{{var:${n}}}\``).join(', ')} from "${shared.name}": renaming that capture there breaks every caller`] : []),
+    `- Written: ${places.join(', ')}`,
+    ...(failures.length ? [`\n**Not written:** ${failures.join('; ')}`] : []),
+  ];
+  return { content: [{ type: 'text', text: lines.join('\n') }], ...(failures.length ? { isError: true } : {}) };
+}
+
 /**
  * Repair the step a run paused on after it clicked another element than the
  * one recorded.
@@ -372,9 +676,14 @@ export async function handleRepair(args: ReplayArgs, recorder: CommandRecorder) 
     });
   }
 
-  const before = step.params.selector;
-  if (args.accept === 'selector') step.params = { ...step.params, selector: repair.selector };
-  else step.fingerprint = repair.hit;
+  const before = step.params.selector ?? (step.params.x !== undefined ? `(${step.params.x}, ${step.params.y})` : undefined);
+  if (args.accept === 'selector') {
+    // A point the selector replaces would be read first, and miss again.
+    const { x: _x, y: _y, ...rest } = step.params;
+    step.params = { ...rest, selector: repair.selector };
+  } else {
+    step.fingerprint = repair.hit;
+  }
   recorder.setActiveSequence({ ...paused, repair: undefined });
 
   const onDisk = await recorder.listSavedSequencesOnDisk();

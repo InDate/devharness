@@ -1309,10 +1309,13 @@ export class InterceptProxy {
   }
 
   /** What crossed under one step of one replay pass, oldest first. */
-  eventsForStep(runId: string, step: number): ProxyEvent[] {
+  eventsForStep(runId: string, step: number, within?: number[]): ProxyEvent[] {
     return this.events.filter(e => {
       const owner = causeOf(e);
-      return owner?.kind === 'replay' && owner.runId === runId && owner.step === step;
+      if (owner?.kind !== 'replay' || owner.runId !== runId || owner.step !== step) return false;
+      // A nested sequence's step is the parent step plus its own path; given
+      // a path, only the events stamped at exactly that position are its own.
+      return within === undefined || (owner.within ?? []).join('.') === within.join('.');
     });
   }
 

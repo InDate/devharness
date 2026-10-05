@@ -971,6 +971,19 @@ Element not found: `{{selector}}`
 
 ---
 
+## TYPE_NO_FOCUSED_ELEMENT
+
+**Type:** error
+**Code:** TYPE_NO_FOCUSED_ELEMENT
+
+No element has focus, so typed text has nowhere to go.
+
+**Suggestions:**
+- A `type` with no `selector` sends keys to the focused element; click the field first (`input({ action: 'click', x, y })`)
+- Pass `selector` to type into a named element
+
+---
+
 ## ELEMENT_CLICK_SUCCESS
 
 **Type:** success

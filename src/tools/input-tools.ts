@@ -155,12 +155,57 @@ function stoppedResponse(result: ActionResult, action: string, target: string): 
   return actionFailureResponse(result, action, target);
 }
 
+const MODIFIER_ALIASES: Record<string, string> = {
+  control: 'Control', ctrl: 'Control',
+  alt: 'Alt', option: 'Alt',
+  shift: 'Shift',
+  meta: 'Meta', cmd: 'Meta', command: 'Meta',
+};
+
+/**
+ * Chrome on macOS runs editing shortcuts from its menu, which CDP key events
+ * never reach, so ⌘A arrives as a bare keydown and selects nothing. The
+ * editing command travels with the key instead.
+ */
+const MAC_EDITING_COMMANDS: Record<string, string> = {
+  a: 'SelectAll', c: 'Copy', x: 'Cut', v: 'Paste', z: 'Undo', 'Shift+z': 'Redo',
+};
+
+/** `Meta+Shift+a` as the modifiers held and the key pressed; a lone key holds none. */
+function splitKeyCombo(combo: string): { modifiers: string[]; key: string } {
+  if (combo === '+' || !combo.includes('+')) return { modifiers: [], key: combo };
+  const parts = combo.endsWith('++') ? [...combo.slice(0, -2).split('+'), '+'] : combo.split('+');
+  const key = parts.pop() as string;
+  const modifiers = parts.map(part => MODIFIER_ALIASES[part.toLowerCase()]);
+  if (modifiers.some(m => !m)) return { modifiers: [], key: combo };
+  return { modifiers, key };
+}
+
+function macEditingCommand(modifiers: string[], key: string): string | undefined {
+  if (process.platform !== 'darwin' || !modifiers.includes('Meta')) return undefined;
+  const rest = modifiers.filter(m => m !== 'Meta');
+  if (rest.some(m => m !== 'Shift')) return undefined;
+  return MAC_EDITING_COMMANDS[`${rest.length ? 'Shift+' : ''}${key.toLowerCase()}`];
+}
+
+/** The focused element, followed down through open shadow roots; null when only the body holds focus. */
+async function readFocusedField(page: any): Promise<{ tag: string; value: string } | null> {
+  return page.evaluate(() => {
+    const doc = (globalThis as any).document;
+    let el = doc.activeElement;
+    while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement;
+    if (!el || el === doc.body || el === doc.documentElement) return null;
+    const value = 'value' in el && el.value !== undefined ? String(el.value) : (el.textContent || '');
+    return { tag: el.tagName.toLowerCase(), value };
+  });
+}
+
 export function createInputTools(
   resolveConnectionByName: (connection: string) => Promise<any>
 ) {
   return {
     input: createTool(
-      'Browser input. Actions: click, type, press (a key), hover, focus, focusNext/focusPrevious (Tab/Shift+Tab), drag (from/to), scroll (wheel at x/y), mousemove, pinch (zoom gesture), tap (real touch, selector or x/y), swipe (real touch drag, selector + direction or from/to, for gestures a mouse cannot drive)',
+      'Browser input. Actions: click, type (selector, or the focused element), press (a key or combo, e.g. Meta+a), hover, focus, focusNext/focusPrevious (Tab/Shift+Tab), drag (from/to), scroll (wheel at x/y), mousemove, pinch (zoom gesture), tap (real touch, selector or x/y), swipe (real touch drag, selector + direction or from/to, for gestures a mouse cannot drive)',
       inputToolSchema,
       // abortSignal (#110): input events cannot be recalled once dispatched -
       // Input.dispatchMouseEvent on the wire WILL be processed by Chrome. What
@@ -576,18 +621,6 @@ export function createInputTools(
             case 'type': {
               const { selector: rawSelector, text, delay = 0, handleModals = false, dismissStrategy = 'auto', append = false } = args;
 
-              if (!rawSelector) {
-                return {
-                  content: [
-                    {
-                      type: 'text',
-                      text: `## Error\n\nMissing required parameter: \`selector\`\n\n**Action:** type\n\n**Suggestion:** Provide a CSS selector for the input element.`,
-                    },
-                  ],
-                  isError: true,
-                };
-              }
-
               if (!text) {
                 return {
                   content: [
@@ -597,6 +630,48 @@ export function createInputTools(
                     },
                   ],
                   isError: true,
+                };
+              }
+
+              // Keys typed with no selector go where a person's keys went: to
+              // the focused element at its caret, which a selector cannot reach
+              // inside a shadow root.
+              if (!rawSelector) {
+                await checkAborted();
+                const focusedResult = await executeWithPauseDetection(
+                  targetCdpManager,
+                  async () => {
+                    const before = await readFocusedField(page);
+                    if (!before) return { noFocus: true };
+                    await withReplayBypass(page, () => page.keyboard.type(text, { delay }));
+                    return { focused: await readFocusedField(page) ?? before };
+                  },
+                  'typeText'
+                );
+                if (focusedResult.pausedAtBreakpoint) {
+                  if (shouldDetectChanges) domChangeMonitor.drop(connection);
+                  return createSuccessResponse('ACTION_PAUSED_AT_BREAKPOINT', {
+                    action: 'type',
+                    selector: 'focused element',
+                    ...focusedResult.pauseInfo,
+                  });
+                }
+                let changesText = '';
+                if (shouldDetectChanges) {
+                  const changes = await domChangeMonitor.stopObserving(connection, { settleTimeout, signal: abortSignal });
+                  changesText = formatDOMChanges(changes);
+                }
+                const failed = actionFailureResponse(focusedResult, 'type', 'focused element');
+                if (failed) return failed;
+                const focused = focusedResult.result?.focused;
+                if (!focused) return createErrorResponse('TYPE_NO_FOCUSED_ELEMENT');
+                return {
+                  content: [
+                    {
+                      type: 'text',
+                      text: `Text typed into focused \`${focused.tag}\`: "${text}"${changesText}\n\nCurrent value: ${focused.value}`,
+                    },
+                  ],
                 };
               }
 
@@ -781,7 +856,17 @@ export function createInputTools(
               const result = await withReplayBypass(page, () =>
                 executeWithPauseDetection(
                   targetCdpManager,
-                  async () => { await page.keyboard.press(key as any); return true; },
+                  async () => {
+                    const { modifiers, key: pressed } = splitKeyCombo(key);
+                    const command = macEditingCommand(modifiers, pressed);
+                    for (const modifier of modifiers) await page.keyboard.down(modifier as any);
+                    try {
+                      await page.keyboard.press(pressed as any, command ? { commands: [command] } : undefined);
+                    } finally {
+                      for (const modifier of [...modifiers].reverse()) await page.keyboard.up(modifier as any);
+                    }
+                    return true;
+                  },
                   'pressKey'
                 )
               );

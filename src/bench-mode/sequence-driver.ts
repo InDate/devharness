@@ -169,6 +169,12 @@ function renderValue(value: unknown): { value: string; fields?: Array<{ key: str
 }
 
 /**
+ * The bench plays the file as recorded. A run given no `variables` stops on a
+ * prompt for every typed-text step, which the bench has nowhere to answer.
+ */
+const recordedText = (): Record<string, string> => ({});
+
+/**
  * The bench drives replay through its own tool rather than re-implementing the
  * executor: `run` with stepTo opens the step-through session replay already
  * has, and step/finish/cancel move it. Reading the session comes off the same
@@ -206,7 +212,9 @@ export function createSequenceDriver(
   ): Promise<string | undefined> => {
     let text: string;
     try {
-      text = textOf(await executeToolCall('replay', args, signal));
+      const response = await executeToolCall('replay', args, signal);
+      if (response?._meta?.replay?.prompted) return 'the run asked for replacement text and ran no step';
+      text = textOf(response);
     } catch (error) {
       // executeToolCall raises an isError response as a ToolError carrying it.
       text = textOf(error);
@@ -694,7 +702,7 @@ export function createSequenceDriver(
       }
       if (selected) {
         return replay({
-          action: 'run', name: selected, stepTo: 1, wait: true, connection: selectedConnection,
+          action: 'run', name: selected, stepTo: 1, wait: true, connection: selectedConnection, variables: recordedText(),
           ...(rebindOnto(selected, selectedConnection) ? { connections: rebindOnto(selected, selectedConnection) } : {}),
           ...(baseUrl ? { baseUrl } : {}),
         }, signal);
@@ -710,7 +718,7 @@ export function createSequenceDriver(
       }
       if (selected) {
         const failure = await replay({
-          action: 'run', name: selected, wait: true, connection: selectedConnection,
+          action: 'run', name: selected, wait: true, connection: selectedConnection, variables: recordedText(),
           ...(rebindOnto(selected, selectedConnection) ? { connections: rebindOnto(selected, selectedConnection) } : {}),
           ...(baseUrl ? { baseUrl } : {}),
         });
@@ -740,7 +748,7 @@ export function createSequenceDriver(
       if (ourRun()) await replay({ action: 'cancel' });
       selected = name;
       return replay({
-        action: 'run', name, stepTo: step + 1, wait: true, connection: selectedConnection,
+        action: 'run', name, stepTo: step + 1, wait: true, connection: selectedConnection, variables: recordedText(),
         ...(rebindOnto(name, selectedConnection) ? { connections: rebindOnto(name, selectedConnection) } : {}),
         ...(baseUrl ? { baseUrl } : {}),
       });

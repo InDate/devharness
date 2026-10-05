@@ -64,6 +64,15 @@
 </fieldset>
 
 <fieldset>
+  <legend>a field inside shadow roots - no selector reaches it</legend>
+  <div class="state">searched: <strong data-testid="search-state">nothing</strong></div>
+  <!-- Two open shadow roots, as a component library nests a field. The hosts
+       carry no id, test attribute or class, so a recorded keystroke resolves
+       to no selector and its type step replays on whatever holds focus. -->
+  <search-shell></search-shell>
+</fieldset>
+
+<fieldset>
   <legend>payload shapes</legend>
   <button data-testid="open-small" data-path="/small">small text, 2/s</button>
   <button data-testid="open-big" data-path="/big?chars=200000">200KB text frames</button>
@@ -325,6 +334,29 @@ $('[data-testid=upload-clear]').addEventListener('click', () => {
   $('[data-testid=upload-state]').textContent = 'nothing';
   $('[data-testid=upload-clear]').disabled = true;
   log('upload forgotten');
+});
+
+// Enter sends the textarea's text as GET /search, so each typed query crosses
+// the boundary and a select-all that failed shows as two queries run together.
+customElements.define('search-field', class extends HTMLElement {
+  connectedCallback() {
+    const root = this.attachShadow({ mode: 'open' });
+    root.innerHTML = `<textarea rows="1" placeholder="search" style="font: inherit; width: 320px; resize: none"></textarea>`;
+    const box = root.querySelector('textarea');
+    box.addEventListener('keydown', async (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      const res = await fetch(`/search?q=${encodeURIComponent(box.value)}`);
+      const body = await res.json();
+      $('[data-testid=search-state]').textContent = body.q;
+      log(`GET /search -> ${res.status} ${body.q}`);
+    });
+  }
+});
+customElements.define('search-shell', class extends HTMLElement {
+  connectedCallback() {
+    this.attachShadow({ mode: 'open' }).innerHTML = '<search-field></search-field>';
+  }
 });
 
 let sse = null;

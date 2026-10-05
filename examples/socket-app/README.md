@@ -119,6 +119,18 @@ upload crosses as `POST /upload`:
   (`localStorage` `socket-app:seen-whats-new`). A fresh profile meets it and the
   run after does not, which is the state a guard step exists for.
 
+## A field no selector reaches
+
+`a field inside shadow roots` nests a `<textarea>` two open shadow roots deep,
+as a component library nests a field, with hosts that carry nothing a selector
+can name.
+Enter sends its text as `GET /search?q=`, and `searched:` shows what arrived.
+
+- A keystroke recorded into it resolves to no selector, so its `input type`
+  step carries text alone and types into whatever holds focus.
+- `press Meta+a` then `type` replaces the text. A select-all that did not run
+  arrives as both queries run together.
+
 ## Sequences
 
 `sequences/` holds three that exercise every kind of check a sequence carries,
@@ -152,5 +164,9 @@ Copy them, with `activity/`, into the project's `.devharness/` to run them.
 - **native-dialogs-by-hand** - the same three with no recorded answers. Run
   from the bench, each dialog opens on screen and the run waits for the
   person to answer it there or with the bench's OK and Cancel.
+- **shadow-field-typing** - clicks the shadow-DOM search field, types with no
+  selector, selects all with `Meta+a`, types a replacement and presses Enter;
+  `searched:` reads `prompt cache`. The click is at fixed coordinates under
+  the what's-new banner, so it runs on a profile that still shows it.
 
 The first run in a browser runs `dismiss-whats-new`; the second skips it.

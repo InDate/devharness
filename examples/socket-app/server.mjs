@@ -64,6 +64,16 @@ const http = createServer((req, res) => {
     return;
   }
 
+  // The query a shadow-DOM search field sends, echoed so the page shows what
+  // arrived rather than what it typed.
+  if (path === '/search') {
+    const q = url.searchParams.get('q') ?? '';
+    console.log(`GET /search ${q}`);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ q }));
+    return;
+  }
+
   // A session token the draft endpoint requires, so one request depends on
   // another having happened first. A sequence replayed out of order gets a 401
   // rather than silently passing.

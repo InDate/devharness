@@ -1,0 +1,61 @@
+{
+  "_comment": "devharness replay sequence. Load with: replay({ action: \"load\", filename: \"<this-file>\" }), then run with: replay({ action: \"run\", name: \"<this-file>\" }). What the app did under each step, and the responses that answer it on replay, are in the file of the same name under activity/.",
+  "id": "seq-1791169740504-1",
+  "name": "shadow-field-typing",
+  "description": "Types into a textarea two open shadow roots deep with no selector, replaces it with Meta+a, and sends it as GET /search",
+  "expectedOutcome": "searched: prompt cache",
+  "startUrl": "http://localhost:7788/",
+  "commands": [
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "x": 202,
+        "y": 583
+      },
+      "recordedAt": 4
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "type",
+        "text": "cache"
+      },
+      "recordedAt": 5
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "press",
+        "key": "Meta+a"
+      },
+      "recordedAt": 6
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "type",
+        "text": "prompt cache"
+      },
+      "recordedAt": 7
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "press",
+        "key": "Enter"
+      },
+      "recordedAt": 8
+    },
+    {
+      "tool": "inspect",
+      "params": {
+        "action": "evaluateExpression",
+        "expression": "document.querySelector('[data-testid=search-state]').textContent"
+      },
+      "recordedAt": 9
+    }
+  ],
+  "createdAt": 1791169740504,
+  "recordedConnection": "socket-shadow-field"
+}

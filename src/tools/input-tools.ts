@@ -15,6 +15,7 @@ import { domChangeMonitor, formatDOMChanges, DOMChanges } from '../dom-change-mo
 import type { ToolResponseMeta, ClickActionMeta } from '../tool-response.js';
 import { abortErrorFor, abortableSleep, isAbortError, throwIfAborted } from '../utils/abort.js';
 import { clickElement } from '../utils/click-element.js';
+import { readFingerprint, refuseOtherElement, type ElementFingerprint } from '../element-fingerprint.js';
 
 // Coordinate schema for mouse actions
 const coordinateSchema = z.object({
@@ -34,6 +35,7 @@ const inputToolSchema = z.object({
 
   // click
   clickCount: z.number().optional(),
+  expect: z.record(z.any()).optional().describe('click: the element meant, as a fingerprint; another element is not clicked'),
 
   // type
   text: z.string().optional(),
@@ -303,13 +305,40 @@ export function createInputTools(
 
               // Coordinate-based click (for canvas/3D apps)
               if (typeof x === 'number' && typeof y === 'number') {
+                const preClickUrl = page.url();
+                const fingerprint = await readFingerprint(page, { x, y });
+                const refused = await refuseOtherElement(page, args.expect as ElementFingerprint | undefined, fingerprint);
+                if (refused) {
+                  return {
+                    ...createErrorResponse('CLICK_ELEMENT_MISMATCH', { target: `(${x}, ${y})`, line: refused.line }),
+                    _meta: {
+                      tool: 'input', action: 'click', timestamp: Date.now(),
+                      click: { point: { x, y }, preClickUrl, postClickUrl: preClickUrl, navigationOccurred: false, hasClickHandler: false, domChanges: null, fingerprint, repair: refused.repair },
+                    } satisfies ToolResponseMeta,
+                  };
+                }
                 await checkAborted(); // last exit before the click goes on the wire
                 await withReplayBypass(page, () => page.mouse.click(x, y, { clickCount }));
+                const postClickUrl = page.url();
                 return {
                   content: [{
                     type: 'text',
                     text: `Clicked at coordinates (${x}, ${y})`
-                  }]
+                  }],
+                  _meta: {
+                    tool: 'input',
+                    action: 'click',
+                    timestamp: Date.now(),
+                    click: {
+                      point: { x, y },
+                      preClickUrl,
+                      postClickUrl,
+                      navigationOccurred: preClickUrl !== postClickUrl,
+                      hasClickHandler: false,
+                      domChanges: null,
+                      ...(fingerprint ? { fingerprint } : {}),
+                    },
+                  } satisfies ToolResponseMeta,
                 };
               }
 
@@ -400,6 +429,10 @@ export function createInputTools(
                       };
                     }
                   }
+
+                  const fingerprint = await readFingerprint(page, { selector });
+                  const refused = await refuseOtherElement(page, args.expect as ElementFingerprint | undefined, fingerprint);
+                  if (refused) return { selector, fingerprint, refused };
 
                   // Check if element has click handlers
                   const hasClickHandler = await page.evaluate((sel: string) => {
@@ -521,6 +554,7 @@ export function createInputTools(
                     selector,
                     clickCount,
                     hasClickHandler,
+                    fingerprint,
                     postClickState,
                     warning: !hasClickHandler ? 'Element may not have a click handler attached. Click was performed but may not trigger any action.' : undefined,
                   };
@@ -561,6 +595,20 @@ export function createInputTools(
 
               // Clean up temporary selector attribute
               await cleanupResolvedSelector(page, selector);
+
+              if (result.result?.refused) {
+                return {
+                  ...createErrorResponse('CLICK_ELEMENT_MISMATCH', { target: `\`${rawSelector}\``, line: result.result.refused.line }),
+                  _meta: {
+                    tool: 'input', action: 'click', timestamp: Date.now(),
+                    click: {
+                      selector: rawSelector, preClickUrl, postClickUrl: preClickUrl, navigationOccurred: false,
+                      hasClickHandler: false, domChanges: null,
+                      fingerprint: result.result.fingerprint, repair: result.result.refused.repair,
+                    },
+                  } satisfies ToolResponseMeta,
+                };
+              }
 
               // Check if element was not found
               if (!result.result || result.result.error) {
@@ -613,6 +661,7 @@ export function createInputTools(
                   postClickUrl,
                   navigationOccurred: preClickUrl !== postClickUrl,
                   hasClickHandler: result.result.hasClickHandler ?? false,
+                  ...(result.result.fingerprint ? { fingerprint: result.result.fingerprint } : {}),
                   domChanges: changes ? {
                     mutationCount: changes.mutationCount,
                     added: changes.added?.length || 0,

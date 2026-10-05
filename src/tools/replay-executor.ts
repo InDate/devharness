@@ -1076,6 +1076,13 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
         params.wait = true;
       }
 
+      // The click is compared with the recorded element before it is sent:
+      // compared after, a click on the wrong element has already changed the
+      // app, and every step after a repair runs on what it changed.
+      if (cmd.tool === 'input' && params.action === 'click' && cmd.fingerprint) {
+        params.expect = cmd.fingerprint;
+      }
+
       // A per-step connection is a reference from the RECORDING session, so
       // rebind it onto this one before anything uses it, then require that it
       // actually exists here. There is deliberately no fallback to the run-level
@@ -1441,6 +1448,24 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
           });
           break;
         }
+        if (execResult.errorId === 'CLICK_ELEMENT_MISMATCH') {
+          const refused = execResult.response?._meta?.click;
+          results.push({ step: i + 1, tool: cmd.tool, success: false, error: execResult.error });
+          return {
+            results,
+            totalCommands: commands.length,
+            durationMs: Date.now() - startTime,
+            pausedAtStep: i + 1,
+            clickValidationFailure: {
+              step: i + 1,
+              selector: params.selector || (params.x !== undefined ? `${params.x}, ${params.y}` : 'unknown'),
+              errors: [execResult.error ?? 'clicked another element'],
+              warnings: [],
+              info: ['not clicked: the element was compared before the click was sent'],
+              ...(refused?.repair ? { repair: refused.repair } : {}),
+            },
+          };
+        }
         if (execResult.errorId === 'DIALOG_OPENED' && nextAnswers) {
           const dialog = execResult.response?._meta?.dialog;
           results.push({ step: i + 1, tool: cmd.tool, success: true, ...(dialog ? { dialog } : {}) });
@@ -1545,7 +1570,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
       // Click validation (after successful execution)
       if (cmd.tool === 'input' && params.action === 'click' && stepConnection && preClickState && clickConfig.enabled) {
         const clickValidation = await validateClickAction(
-          stepCtx, preClickState, execResult.result, clickConfig, (cmd as { traffic?: StepTraffic }).traffic);
+          stepCtx, preClickState, execResult.result, clickConfig, (cmd as { traffic?: StepTraffic }).traffic, cmd.fingerprint);
 
         // Log info messages (console activity)
         for (const infoMsg of clickValidation.info) {
@@ -1580,6 +1605,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
               errors: clickValidation.errors,
               warnings: clickValidation.warnings,
               info: clickValidation.info,
+              ...(clickValidation.repair ? { repair: clickValidation.repair } : {}),
             }
           };
         }

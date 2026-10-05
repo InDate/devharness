@@ -15,6 +15,7 @@ import { rehydrateStepConnections, formatConnectionNote } from './replay-library
 import { type ReplayArgs } from './replay-schema.js';
 import { handleLoadSequenceError, normalizeTags, declaredProfileConflict } from './replay-validation.js';
 import { addressedConnection } from './connection-steps.js';
+import { describeFingerprint } from '../element-fingerprint.js';
 
 /**
  * Put commands from the history into a named sequence after one of its steps,
@@ -321,6 +322,85 @@ export async function handleAddCheck(args: ReplayArgs, recorder: CommandRecorder
         persistedTo: persisted
       })
     }]
+  };
+}
+
+/**
+ * Repair the step a run paused on after it clicked another element than the
+ * one recorded.
+ *
+ * `selector` points the step at where the recorded element is now, which the
+ * pause found by its fingerprint: the element moved. `element` keeps the
+ * selector and records the element it hit as the step's fingerprint: the
+ * element changed on purpose. The sequence file is rewritten, and `step` runs
+ * the repaired step again.
+ */
+export async function handleRepair(args: ReplayArgs, recorder: CommandRecorder) {
+  const paused = recorder.getActiveSequence();
+  const repair = paused?.repair;
+  if (!paused || !repair) {
+    return createErrorResponse('INVALID_PARAMETER', {
+      parameter: 'action',
+      value: 'repair',
+      message: 'No paused run is waiting on a repair: repair applies to a run paused on a click that hit another element than the one recorded.',
+    });
+  }
+  if (args.accept !== 'selector' && args.accept !== 'element') {
+    return createErrorResponse('MISSING_PARAMETER', {
+      action: 'repair',
+      missing: 'accept',
+      message: `"accept" is 'selector' (the element moved${repair.selector ? `, to \`${repair.selector}\`` : ''}) or 'element' (it changed on purpose: keep the selector, record what it hit).`,
+    });
+  }
+  if (args.accept === 'selector' && !repair.selector) {
+    return createErrorResponse('INVALID_PARAMETER', {
+      parameter: 'accept',
+      value: 'selector',
+      message: repair.matches > 1
+        ? `${repair.matches} elements carry the recorded element's identity, so there is no one selector to take. Accept 'element', or edit the step.`
+        : `The recorded element is not on the page, so there is no selector to take. Accept 'element', or edit the step.`,
+    });
+  }
+
+  const loadResult = await loadSequence({ sequenceId: paused.sequenceId }, recorder);
+  if (!loadResult.success) return handleLoadSequenceError(loadResult, 'repair');
+  const sequence = loadResult.sequence;
+  const step = sequence.commands[paused.currentStep];
+  if (!step) {
+    return createErrorResponse('INVALID_PARAMETER', {
+      parameter: 'action', value: 'repair', message: `"${sequence.name}" has no step ${paused.currentStep + 1}.`,
+    });
+  }
+
+  const before = step.params.selector;
+  if (args.accept === 'selector') step.params = { ...step.params, selector: repair.selector };
+  else step.fingerprint = repair.hit;
+  recorder.setActiveSequence({ ...paused, repair: undefined });
+
+  const onDisk = await recorder.listSavedSequencesOnDisk();
+  const existingFile = onDisk.find(one => one.name === sequence.name);
+  let persisted: string | undefined;
+  if (existingFile) {
+    const saved = await recorder.saveSequenceToDisk(sequence.id, existingFile.location === 'global', true);
+    if (saved && !saved.success) {
+      return {
+        content: [{ type: 'text', text: `## Error\n\nStep ${paused.currentStep + 1} of "${sequence.name}" was repaired in memory, but writing the file failed: ${saved.error}` }],
+        isError: true,
+      };
+    }
+    if (saved?.success) persisted = saved.filepath;
+  }
+
+  const what = args.accept === 'selector'
+    ? `selector \`${before}\` → \`${repair.selector}\``
+    : `recorded element → ${describeFingerprint(repair.hit)}`;
+  return {
+    content: [{
+      type: 'text',
+      text: `**Repaired step ${paused.currentStep + 1}** of "${sequence.name}": ${what}\n`
+        + (persisted ? `Written to \`${persisted}\`.\n` : `In memory; \`export\` writes it to a file.\n`)
+        + `\nRun it again: \`replay({ action: 'step' })\``,
+    }],
   };
 }
 

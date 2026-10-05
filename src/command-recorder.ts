@@ -22,6 +22,7 @@ import { translateSequence } from './tools/legacy-steps.js';
 import type { Annotation, StepTraffic } from './annotation.js';
 import { substituteCapturedValues, type CaptureEntry } from './tools/interpolation-reverse.js';
 import type { CallChannel } from './call-origin.js';
+import type { ElementFingerprint, ElementRepair } from './element-fingerprint.js';
 
 /** JSON round-trip clone, tolerant of a result that isn't JSON-safe (drops it rather than throwing). */
 function safeClone(value: any): any {
@@ -59,6 +60,8 @@ export interface RecordedCommand {
    * other way than from history.
    */
   recordedAt?: number;
+  /** The element this click acted on when it was recorded, which a replay of it is compared against. */
+  fingerprint?: ElementFingerprint;
 }
 
 export interface CommandSequence {
@@ -287,6 +290,8 @@ export interface ActiveSequenceState {
    *  paused state so `step`/`finish` resolve per-step connections exactly the
    *  way the original `run` did instead of reverting to raw recorded names. */
   connectionMap?: Record<string, string>;
+  /** What the paused step can be repaired to, where it paused on clicking another element. */
+  repair?: ElementRepair;
 }
 
 export class CommandRecorder {
@@ -628,14 +633,19 @@ export class CommandRecorder {
       // uniform connection off the steps, rebasing URLs), and sharing the
       // object with the history entry made those edits silently rewrite history.
       const paramsClone = JSON.parse(JSON.stringify(cmd.params));
+      // A run's click carries its recorded element as `expect`; the step keeps
+      // it as its own fingerprint instead.
+      delete paramsClone.expect;
       // Written as the check it is: assert and wait are faces of it.
       const step = asCheckStep({ tool: cmd.tool, params: paramsClone });
+      const fingerprint: ElementFingerprint | undefined = cmd.result?._meta?.click?.fingerprint;
       commands.push({
         tool: step.tool,
         params: substituteCapturedValues(step.params, captures),
         ...(cmd.delay !== undefined && { delay: cmd.delay }),
         ...(cmd.comment && { comment: cmd.comment }),
         recordedAt: idx,
+        ...(fingerprint && { fingerprint }),
       });
 
       if (cmd.params.saveAs && cmd.result !== undefined) {

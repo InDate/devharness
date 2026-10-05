@@ -15,6 +15,7 @@ import type { SessionMessage } from './session-messages.js';
 import type { DialogAnswer, OpenDialog } from './dialog-monitor.js';
 import type { Annotation, BenchReport, TickResult } from './bench-mode.js';
 import type { CaptureRecord, CaptureVersion } from './bench/wire.js';
+import type { ElementFingerprint, ElementRepair } from './element-fingerprint.js';
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -48,7 +49,10 @@ export interface ContentItem {
  * Click action metadata
  */
 export interface ClickActionMeta {
-  selector: string;
+  /** The selector clicked; absent on a click at a point. */
+  selector?: string;
+  /** The point clicked; absent on a click by selector. */
+  point?: { x: number; y: number };
   preClickUrl: string;
   postClickUrl: string;
   navigationOccurred: boolean;
@@ -60,6 +64,10 @@ export interface ClickActionMeta {
     shown: number;
     hidden: number;
   } | null;
+  /** The element the click acted on, read just before it was sent. */
+  fingerprint?: ElementFingerprint;
+  /** On a click refused for reaching another element than `expect`: where that element is now. */
+  repair?: ElementRepair;
 }
 
 /**

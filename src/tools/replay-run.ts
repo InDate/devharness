@@ -824,6 +824,7 @@ export async function performRun(
       runId,
       // step/finish must resolve per-step connections the way this run did
       ...(connectionMap && { connectionMap }),
+      ...(execResult.clickValidationFailure.repair && { repair: execResult.clickValidationFailure.repair }),
     };
     recorder.setActiveSequence(activeState);
 

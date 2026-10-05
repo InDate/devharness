@@ -219,6 +219,20 @@ export function formatClickValidationFailure(
     response += `${r.step}. **${r.tool}** ✓\n`;
   });
 
+  const repair = failure.repair;
+  if (repair) {
+    response += `\n**Repair**\n`;
+    if (repair.selector) {
+      response += `- The recorded element is at \`${repair.selector}\`. It moved: \`replay({ action: 'repair', accept: 'selector' })\` rewrites step ${failure.step}'s selector to it\n`;
+    } else if (repair.matches > 1) {
+      response += `- ${repair.matches} elements carry the recorded element's identity, so no selector is offered\n`;
+    } else {
+      response += `- The recorded element is not on the page\n`;
+    }
+    response += `- It changed on purpose: \`replay({ action: 'repair', accept: 'element' })\` keeps the selector and records the element it hit\n`;
+    response += `- Either one writes the sequence file; \`replay({ action: 'step' })\` then runs the step again\n`;
+  }
+
   response += `\n---\n\n**Actions**\n`;
   response += `- Inspect error: \`console({ action: 'list', type: 'error', connection: '${connection}' })\`\n`;
   response += `- Retry the step: \`replay({ action: 'step' })\`\n`;

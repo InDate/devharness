@@ -1,9 +1,9 @@
 {
   "_comment": "devharness replay sequence. Load with: replay({ action: \"load\", filename: \"<this-file>\" }), then run with: replay({ action: \"run\", name: \"<this-file>\" }). What the app did under each step, and the responses that answer it on replay, are in the file of the same name under activity/.",
-  "id": "seq-1791174197195-2",
+  "id": "seq-1791175272382-1",
   "name": "prefs-by-position",
   "description": "The same path, turning Dark on by its row position in the preferences list",
-  "expectedOutcome": "on: reads \"dark\"; on LAYOUT=2 the third row is Compact, so the click succeeds on the wrong toggle",
+  "expectedOutcome": "on: reads \"dark\"; on LAYOUT=2 the third row is Compact, and the run pauses at step 6 naming the element it recorded and the one it hit",
   "startUrl": "http://localhost:7788/",
   "commands": [
     {
@@ -12,7 +12,7 @@
         "action": "goto",
         "url": "http://localhost:7788/"
       },
-      "recordedAt": 11
+      "recordedAt": 2
     },
     {
       "tool": "check",
@@ -24,7 +24,7 @@
         },
         "fails": "continue"
       },
-      "recordedAt": 12
+      "recordedAt": 3
     },
     {
       "tool": "input",
@@ -32,7 +32,16 @@
         "action": "click",
         "selector": "button[data-testid=\"open-settings\"]"
       },
-      "recordedAt": 13
+      "recordedAt": 4,
+      "fingerprint": {
+        "tag": "button",
+        "path": [
+          "fieldset#prefs"
+        ],
+        "testid": "open-settings",
+        "role": "button",
+        "text": "open settings"
+      }
     },
     {
       "tool": "input",
@@ -40,7 +49,17 @@
         "action": "click",
         "selector": "#prefs .accounts li:nth-child(2) button"
       },
-      "recordedAt": 14
+      "recordedAt": 5,
+      "fingerprint": {
+        "tag": "button",
+        "path": [
+          "li",
+          "ul",
+          "fieldset#prefs"
+        ],
+        "role": "button",
+        "text": "account two"
+      }
     },
     {
       "tool": "input",
@@ -48,7 +67,17 @@
         "action": "click",
         "selector": "button[data-testid=\"open-prefs\"]"
       },
-      "recordedAt": 15
+      "recordedAt": 6,
+      "fingerprint": {
+        "tag": "button",
+        "path": [
+          "div",
+          "fieldset#prefs"
+        ],
+        "testid": "open-prefs",
+        "role": "button",
+        "text": "preferences"
+      }
     },
     {
       "tool": "input",
@@ -56,7 +85,19 @@
         "action": "click",
         "selector": "#prefs .prefs li:nth-child(3) button"
       },
-      "recordedAt": 16
+      "recordedAt": 7,
+      "fingerprint": {
+        "tag": "button",
+        "path": [
+          "li",
+          "ul",
+          "div",
+          "fieldset#prefs"
+        ],
+        "testid": "dark-toggle",
+        "role": "button",
+        "text": "Dark mode: off"
+      }
     },
     {
       "tool": "check",
@@ -67,10 +108,10 @@
         "right": "dark",
         "withinMs": 2000
       },
-      "recordedAt": 17
+      "recordedAt": 8
     }
   ],
-  "createdAt": 1791174197195,
+  "createdAt": 1791175272382,
   "recordedConnection": "prefs-path-browser",
   "proxy": true
 }

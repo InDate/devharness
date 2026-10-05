@@ -6,7 +6,7 @@ import type { CommandRecorder } from '../command-recorder.js';
 import type { ExecuteToolCall } from '../types.js';
 import { createTool } from '../validation-helpers.js';
 import { createErrorResponse, responseWithOnce } from '../messages.js';
-import { handleInsert, handleAddCheck, handleDeclare } from './replay-edit.js';
+import { handleInsert, handleAddCheck, handleDeclare, handleRepair } from './replay-edit.js';
 import { handleHistory, handleRepeat, handleRunFromLog } from './replay-history.js';
 import { handleCreate, handleList, handleGet, handleDelete, handleExport, handleLoad, handleListSaved, handleDeleteSaved } from './replay-library.js';
 import { handleRecordInteraction } from './replay-record.js';
@@ -32,7 +32,7 @@ export function createReplayTools(
 ) {
   return {
     replay: createTool(
-      'Record and replay tool-call sequences. Actions: history, repeat (re-run history indices), create (sequence from history indices), insert, addCheck, declare (the browsers, sockets and tags a sequence carries), list (memory and disk), get, delete (from memory), export (to disk as sequence/playwright/puppeteer), load, listSaved, deleteSaved, run (in the background, returning a runId; wait: true blocks), runAll (every sequence in a folder, or carrying a tag, one pass/fail line each), status, cancel, step/finish (a paused run), runFromLog (log line numbers), recordInteraction (a person\'s mouse, keyboard and navigation through a browser overlay; blocks until that person finishes)',
+      'Record and replay tool-call sequences. Actions: history, repeat (re-run history indices), create (sequence from history indices), insert, addCheck, declare (the browsers, sockets and tags a sequence carries), repair (the step a run paused on after clicking another element), list (memory and disk), get, delete (from memory), export (to disk as sequence/playwright/puppeteer), load, listSaved, deleteSaved, run (in the background, returning a runId; wait: true blocks), runAll (every sequence in a folder, or carrying a tag, one pass/fail line each), status, cancel, step/finish (a paused run), runFromLog (log line numbers), recordInteraction (a person\'s mouse, keyboard and navigation through a browser overlay; blocks until that person finishes)',
       replaySchema,
       async (args, abortSignal) => {
         switch (args.action) {
@@ -73,6 +73,8 @@ export function createReplayTools(
             return responseWithOnce(await handleAddCheck(args, commandRecorder), 'REPLAY_ADD_CHECK_REPLY');
           case 'declare':
             return responseWithOnce(await handleDeclare(args, commandRecorder), 'REPLAY_DECLARE_REPLY');
+          case 'repair':
+            return handleRepair(args, commandRecorder);
           case 'cancel':
             return handleCancel(args, commandRecorder);
           case 'repeat':

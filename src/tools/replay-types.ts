@@ -6,6 +6,7 @@
 import type { CommandRecorder, RecordedCommand, ActiveSequenceState } from '../command-recorder.js';
 import type { ExecuteToolCall } from '../types.js';
 import type { DialogAnswer, OpenDialog } from '../dialog-monitor.js';
+import type { ElementRepair } from '../element-fingerprint.js';
 
 export interface ExecutionContext {
   executeToolCall: ExecuteToolCall;
@@ -114,6 +115,8 @@ export interface ClickValidationFailure {
   errors: string[];
   warnings: string[];
   info: string[];
+  /** Present where the click hit another element than the one recorded. */
+  repair?: ElementRepair;
 }
 
 export interface ExecutionResult {

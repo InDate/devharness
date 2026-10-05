@@ -566,6 +566,41 @@ by `replay.maxRegexLength` (default 500), both in `.cdp-tools/config.json`.
 Oscillating chains (A->B->A) are allowed up to the depth cap. Full detail:
 `docs/replay.md`.
 
+## When a click reaches another element
+
+A selector names where to look, not what is there: after a release,
+`li:nth-child(3)` clicks whatever row now sits third, and an `x,y` click hits
+whatever is under the point at the window size it runs at. Both still click,
+and the run fails steps later, somewhere unrelated to the change.
+
+`create` stores, on each click step, a **fingerprint** of the element the click
+reached: tag, test id, `id`, `name`, role, accessible name, text and a short
+ancestor path, read through open shadow roots. A run compares the element a
+click is about to reach with it **before the click is sent**. Tag, test id,
+`id`, `name`, role and accessible name must match where recorded; text and path
+are advisory, since a toggle's text carries its state.
+
+A mismatch sends nothing and pauses the run at that step, naming both elements:
+
+```
+Not clicked: `#prefs .prefs li:nth-child(3) button` reaches another element -
+recorded button [dark-toggle] "Dark mode: off", found button "Compact: off" (testid differ)
+```
+
+The pause offers a repair:
+
+- `replay({ action: 'repair', accept: 'selector' })` - the element moved: the
+  step takes the selector the pause found it at. Offered only when exactly one
+  element on the page carries its identity.
+- `replay({ action: 'repair', accept: 'element' })` - it changed on purpose:
+  the selector stays and the element it reached becomes the fingerprint.
+
+Either rewrites the sequence file; `replay({ action: 'step' })` then runs the
+step again on a page the refused click never touched. A sequence recorded
+before fingerprints carries none, and its clicks go uncompared until it is
+recorded again. The repair's search covers the light DOM; an element inside a
+shadow root reads as not on the page.
+
 ## `forEach` steps
 
 A check reads ONE thing, so a guard can express

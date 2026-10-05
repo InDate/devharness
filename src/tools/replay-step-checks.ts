@@ -10,6 +10,8 @@ import type { CommandSequence } from '../command-recorder.js';
 import type { ExecuteToolCall } from '../types.js';
 import type { ClickValidationConfig } from '../config.js';
 import type { ClickActionMeta, DebuggerStatusMeta } from '../tool-response.js';
+import { compareFingerprints, describeFingerprint, locateFingerprint, type ElementFingerprint, type ElementRepair } from '../element-fingerprint.js';
+import { unlisted } from '../call-origin.js';
 import { debugLog } from '../debug-logger.js';
 import { requireValidReference } from '../reference-validator.js';
 import { checkUrlPort } from '../utils/port-check.js';
@@ -422,6 +424,8 @@ export interface ClickValidationResult {
   errors: string[];
   warnings: string[];
   info: string[];
+  /** Present where the click hit another element than the one recorded. */
+  repair?: ElementRepair;
 }
 
 /**
@@ -486,6 +490,8 @@ export async function validateClickAction(
   config: ClickValidationConfig,
   /** What this step did when it was recorded, where the sequence kept it. */
   recorded?: StepTraffic,
+  /** The element this step acted on when it was recorded. */
+  expectedElement?: ElementFingerprint,
 ): Promise<ClickValidationResult> {
   const { executeToolCall, connection, logPrefix = 'executor' } = ctx;
   const errors: string[] = [];
@@ -494,6 +500,21 @@ export async function validateClickAction(
 
   // Get structured data from _meta
   const clickMeta: ClickActionMeta | undefined = clickResult?._meta?.click;
+
+  // A selector or point that now reaches another element still clicks, and
+  // the step reads as passed while the run fails later at a step unrelated to
+  // the change. Compared before anything else, so the pause names the cause.
+  let repair: ElementRepair | undefined;
+  if (expectedElement && clickMeta?.fingerprint) {
+    const compared = compareFingerprints(expectedElement, clickMeta.fingerprint);
+    if (!compared.same) {
+      errors.push(`clicked another element: recorded ${describeFingerprint(expectedElement)}, hit ${describeFingerprint(clickMeta.fingerprint)} (${compared.differ.join(', ')} differ)`);
+      const located = connection ? await unlisted(() => locateFingerprint(executeToolCall, connection, expectedElement)) : undefined;
+      repair = { matches: located?.count ?? 0, ...(located?.selector ? { selector: located.selector } : {}), hit: clickMeta.fingerprint };
+    } else if (compared.advisory.length > 0) {
+      info.push(`same element, its ${compared.advisory.join(' and ')} changed: ${describeFingerprint(clickMeta.fingerprint)}`);
+    }
+  }
 
   // Small delay before validation
   if (config.postClickDelayMs > 0) {
@@ -613,7 +634,8 @@ export async function validateClickAction(
     valid: errors.length === 0,
     errors,
     warnings,
-    info
+    info,
+    ...(repair ? { repair } : {}),
   };
 }
 

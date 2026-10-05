@@ -195,11 +195,11 @@ Copy them, with `activity/`, into the project's `.devharness/` to run them.
 
 - **prefs-by-testid**, **prefs-by-position**, **prefs-by-text** - the path
   to preferences, then the Dark toggle by test id, by row position and by
-  label. Recorded on layout 1. On `LAYOUT=2` by-testid passes, by-position
-  clicks Compact and passes the click, failing only at the closing check that
-  reads `compact`, and by-text fails at the click with element not found. The
-  boundary comparison reports nothing for by-position: `POST /prefs` crosses in
-  both runs, and the body that names the toggle is not compared.
+  label. Recorded on layout 1. On `LAYOUT=2` by-testid passes, by-text fails
+  at the click with element not found, and by-position pauses at its click:
+  the step's stored fingerprint names `dark-toggle` and the click hit Compact.
+  The boundary comparison alone reports nothing for by-position: `POST /prefs`
+  crosses in both runs, and the body that names the toggle is not compared.
 - **prefs-autoplay** - a copy of the same path turning Autoplay on. On
   `LAYOUT=3` it and prefs-by-testid fail at the hidden **preferences** button,
   each copy of the path needing the same fix of its own.

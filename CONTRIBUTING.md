@@ -110,6 +110,7 @@ npm run build:verify  # starts the server, checks the shipped docs match the too
 | `src/supervisor/`, `src/server-claims.ts` | `npm run stress:suspend` |
 | the `Target.attachedToTarget` handler in `src/network-monitor.ts` | `npm run check:targets` |
 | `src/worker-targets.ts`, or `target` on `inspect`/`console` | `npm run check:workers` |
+| replay, `input` element handling, `examples/socket-app` | `npm run check:sequences` |
 | `plugin/hooks/` | start a new session and read what the hook printed |
 | a tool's name, actions or responses | the doc-sync list at the end of this section |
 
@@ -148,6 +149,10 @@ evaluates inside `ServiceWorkerGlobalScope`, its console output is recorded,
 and a reference matching nothing is refused. Needs a build first, outside
 `npm test` for the same reason. Run it whenever `src/worker-targets.ts` or the
 `target` parameter on `inspect`/`console` changes.
+
+`npm run check:sequences` runs the socket-app's `prefs-*` sequences in headless
+Chrome on `LAYOUT=1`, `2` and `3`, each held to its entry in the script's
+`EXPECTED` table. Needs a build.
 
 When you add, rename, or change a tool, update `docs/instructions.md`,
 `docs/mcp-instructions.md` (if it affects the quick-start),

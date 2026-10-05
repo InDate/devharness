@@ -25,6 +25,7 @@
     "stress:suspend": "node scripts/stress-suspend.mjs",
     "check:targets": "node scripts/check-target-resume.mjs",
     "check:workers": "node scripts/check-worker-eval.mjs",
+    "check:sequences": "node scripts/check-sequences.mjs",
     "prepublishOnly": "npm run test:run && npm run build:verify",
     "version": "node scripts/sync-skill-version.mjs",
     "postversion": "git push && git push --tags"

@@ -1101,7 +1101,7 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
 async function runCliSequence(argv: string[]): Promise<void> {
   const sequenceName = argv[0];
   if (!sequenceName || sequenceName.startsWith('--')) {
-    console.error('Usage: devharness run <sequenceName> [--connection=X] [--headed] [--keep-chrome]');
+    console.error('Usage: devharness run <sequenceName> [--connection=X] [--base-url=URL] [--headed] [--keep-chrome]');
     process.exit(1);
   }
 
@@ -1159,6 +1159,7 @@ async function runCliSequence(argv: string[]): Promise<void> {
       name: sequenceName,
       connection,
       killChromeOnFinish: !keepChrome,
+      ...(kv['base-url'] ? { baseUrl: kv['base-url'] } : {}),
       // A CLI run has nobody to answer a prompt, so a parameterised sequence
       // keeps its recorded values. Left undefined, every such sequence would
       // exit 1 having executed nothing - the run asking a question into a

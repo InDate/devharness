@@ -44,7 +44,7 @@ Not ignored → **ask** before adding it to `.gitignore`. Already tracked → sa
 
 ## Repeat instead of retyping
 
-Every response footer carries its own history index, `Replay: 58`, which `replay({ action: 'repeat', indices: [58] })` takes. History holds every call from every channel - yours, the bench's, the CLI's - and each step a sequence run makes, listed as `in run \`<name>\``. Only the `replay` call itself is left out, so a run someone else started is read and repeated step by step from `replay({ action: 'history' })`.
+Every response footer carries its own history index, `Replay: 58`, which `replay({ action: 'repeat', indices: [58] })` takes. History holds every call from every channel - yours, the bench's, the CLI's - and each step a sequence run makes, listed as `in run \`<name>\``. `replay` calls that act - `run`, `runAll`, `create`, `split` and the like - are listed too; reads (`history`, `list`, `status`) and `repeat` are not, so looking does not move indices. `create` leaves a listed `replay` call out: it does not become a step.
 
 - `indices` takes a list: `[58, 59, 60, 61]` re-runs four steps in order
 - Use it for anything you already did — relaunch, re-login, refilling a form, getting back to the bug. Retyped arguments drift from what actually ran

@@ -38,6 +38,14 @@ export async function handleCreate(
     });
   }
 
+  const replayEntries = args.indices.filter(index => recorder.getCommand(index)?.tool === 'replay');
+  if (replayEntries.length === args.indices.length) {
+    return createErrorResponse('INVALID_PARAMETER', {
+      parameter: 'indices', value: args.indices.join(', '),
+      message: 'Every index names a replay call, and a replay call does not become a step. A sequence that runs another one gets it through addCheck or split.',
+    });
+  }
+
   // Reject unknown tool names up front rather than failing mid-run (bug-010).
   // The check runs inside createSequence, on the candidate, BEFORE it replaces any
   // same-named sequence in memory - otherwise a bad create would delete the user's
@@ -121,7 +129,10 @@ export async function handleCreate(
   const note = dropped
     ? `\n\nStep(s) ${dropped.join(', ')} carry no boundary evidence: the proxy had already dropped their events, or the network log for their window could not be read. Those steps are left out of the traffic comparison rather than compared against nothing.`
     : '';
-  return { content: [{ type: 'text', text: formatSequenceCreated(sequence) + formatConnectionNote(normalized) + note }] };
+  const skippedNote = replayEntries.length
+    ? `\n\nIndex ${replayEntries.join(', ')} ${replayEntries.length === 1 ? 'is a replay call' : 'are replay calls'}, left out: a replay call does not become a step. A sequence that runs another one gets it through addCheck or split.`
+    : '';
+  return { content: [{ type: 'text', text: formatSequenceCreated(sequence) + formatConnectionNote(normalized) + note + skippedNote }] };
 }
 
 /**

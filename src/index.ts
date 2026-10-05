@@ -106,6 +106,23 @@ function observes(toolName: string, args: Record<string, unknown> | undefined): 
   return OBSERVING_TOOLS.has(toolName)
     || (OBSERVING_ACTIONS[toolName]?.has(String(args?.action)) ?? false);
 }
+
+/**
+ * The `replay` actions history holds: the ones that run, write or change a
+ * sequence. Reads stay out, so looking at history does not move the indices
+ * just read, and so does `repeat`, so a repeat of history never replays a
+ * repeat.
+ */
+const RECORDED_REPLAY_ACTIONS = new Set([
+  'run', 'runAll', 'step', 'finish', 'cancel', 'recordInteraction', 'runFromLog',
+  'create', 'insert', 'addCheck', 'declare', 'repair', 'copy', 'split', 'adopt',
+  'export', 'load', 'delete', 'deleteSaved',
+]);
+
+/** Whether history holds this call. */
+function recordedInHistory(toolName: string, args: Record<string, unknown> | undefined): boolean {
+  return toolName !== 'replay' || RECORDED_REPLAY_ACTIONS.has(String(args?.action));
+}
 import { checkPortFailures, checkBreakpointPause, checkBugBlocking, checkPendingStartups, checkDuplicateSession, prependToResponse, appendToResponse, buildStatusSuffix, type StatusLineItem } from './tool-response.js';
 import { recordBlockEvent, clearBlockEvents } from './block-events.js';
 import { createStartupGate } from './startup-gate.js';
@@ -544,7 +561,7 @@ async function executeToolCall(calledName: string, calledParams: Record<string, 
   // A call from the CLI, the bench or a run's step is a command as much as
   // one over MCP, so history holds it with where it came in. A call the schema
   // refused is held too, so a repeat can replace the fields it named.
-  const place = toolName === 'replay' ? undefined : historyPlace();
+  const place = recordedInHistory(toolName, params) ? historyPlace() : undefined;
 
   if (!validation.success) {
     const refused = validationFailure(toolName, validation.error);
@@ -566,9 +583,12 @@ async function executeToolCall(calledName: string, calledParams: Record<string, 
   // path does: without the mark, a repeated or CLI call's traffic lands under
   // no entry and `create` stores nothing for it. A run's step is marked by
   // the run with its own position instead.
-  const marksBoundary = index !== null && !place?.run && !observes(toolName, validation.data);
+  const marksBoundary = index !== null && toolName !== 'replay' && !place?.run && !observes(toolName, validation.data);
   if (marksBoundary) await markNextCommand({ kind: 'command', index: index! });
 
+  // A recorded call's own tool calls are made on its behalf and stay out; a
+  // run's steps list themselves (withinRun), so a run reads as its call and
+  // then its steps.
   const run = () => underDialogs(dialogTargetOf(validation.data), toolName, validation.data, abortSignal, signal => index === null
     ? tool.handler(validation.data, signal)
     : unlisted(() => tool.handler(validation.data, signal)));
@@ -834,7 +854,7 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
 
     if (!validation.success) {
       const refused = validationFailure(toolName, validation.error);
-      if (toolName !== 'replay') {
+      if (recordedInHistory(toolName, request.params.arguments)) {
         await commandRecorder.recordCommand(toolName, request.params.arguments || {});
         const index = commandRecorder.getCurrentHistoryIndex();
         commandRecorder.attachResult(index, refused);
@@ -846,7 +866,7 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
     // Record command if recording is active (but don't record replay tool calls)
     // Capture the command index for the repeat hint
     let commandIndex: number | null = null;
-    if (toolName !== 'replay') {
+    if (recordedInHistory(toolName, validation.data)) {
       await commandRecorder.recordCommand(toolName, validation.data);
       commandIndex = commandRecorder.getCurrentHistoryIndex();
       noteCallStart();
@@ -906,7 +926,9 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
     // Marked here rather than beside recordCommand above: a command a guard
     // refused never reaches the app, and stamping its index would hand later
     // traffic to a command that did nothing.
-    const marksBoundary = commandIndex !== null && !observes(toolName, validation.data as Record<string, unknown>);
+    // A replay run marks the proxy with its own steps; a mark here would be
+    // released under the run's first step.
+    const marksBoundary = commandIndex !== null && toolName !== 'replay' && !observes(toolName, validation.data as Record<string, unknown>);
     if (marksBoundary) {
       // Queued behind the previous command's release, so this command claims
       // nothing that command is still being credited with.

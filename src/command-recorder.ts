@@ -630,6 +630,9 @@ export class CommandRecorder {
     for (const idx of commandIndices) {
       const cmd = this.getCommand(idx);
       if (!cmd) return null;
+      // A replay call is history, not a step: as a step it would run another
+      // sequence in a pass of its own, sharing none of the caller's variables.
+      if (cmd.tool === 'replay') continue;
 
       // params is DEEP-CLONED: the sequence is edited after creation (hoisting a
       // uniform connection off the steps, rebasing URLs), and sharing the
@@ -640,7 +643,7 @@ export class CommandRecorder {
       delete paramsClone.expect;
       // Written as the check it is: assert and wait are faces of it.
       const step = asCheckStep({ tool: cmd.tool, params: paramsClone });
-      const fingerprint: ElementFingerprint | undefined = cmd.result?._meta?.click?.fingerprint;
+      const fingerprint: ElementFingerprint | undefined = cmd.result?._meta?.click?.fingerprint ?? cmd.result?._meta?.element?.fingerprint;
       commands.push({
         tool: step.tool,
         params: substituteCapturedValues(step.params, captures),

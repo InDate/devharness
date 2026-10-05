@@ -35,6 +35,7 @@ function makeRecorder(sequence: CommandSequence | null) {
     }),
     deleteSequence: vi.fn(() => true),
     recordCommand: vi.fn(),
+    getCommand: vi.fn(() => undefined),
   } as any;
 }
 

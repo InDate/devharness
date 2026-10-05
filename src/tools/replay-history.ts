@@ -2,7 +2,6 @@
  * Calls replayed from the session history (`repeat`) and from history.log
  * (`runFromLog`), and the history view itself.
  */
-import { markOnProxies } from '../proxy/registry.js';
 import type { CommandRecorder } from '../command-recorder.js';
 import type { ExecuteToolCall } from '../types.js';
 import { createErrorResponse, historyFooter } from '../messages.js';
@@ -13,9 +12,6 @@ import { addressedConnection, createdName } from './connection-steps.js';
 import { formatHistory } from './replay-formatters.js';
 import { readHistoryLines, getHistoryFilePath } from '../debug-logger.js';
 import { type ReplayArgs } from './replay-schema.js';
-
-/** Bumped per repeat, so two in the same millisecond keep separate ids. */
-let repeatSeq = 0;
 
 export async function handleHistory(args: ReplayArgs, recorder: CommandRecorder) {
   const limit = args.limit || 50;
@@ -145,11 +141,7 @@ export async function handleRepeat(
   const results: Array<{ index: number; tool: string; success: boolean; error?: string }> = [];
   const startTime = Date.now();
 
-  const proxyRun = `repeat-${Date.now().toString(36)}-${(repeatSeq += 1)}`;
-  let position = 0;
-
   for (const cmd of commands) {
-    markOnProxies({ kind: 'replay', runId: proxyRun, step: position++ });
     try {
       // Fill in a batch-level connection where the command has none, and replace
       // the recorded one only when the caller explicitly asked to retarget a
@@ -222,7 +214,6 @@ async function repeatOne(
   }
 
   const before = recorder.getCurrentHistoryIndex();
-  markOnProxies({ kind: 'replay', runId: `repeat-${Date.now().toString(36)}-${(repeatSeq += 1)}`, step: 0 });
   let response: any;
   try {
     response = await executeToolCall(cmd.tool, params);

@@ -559,7 +559,15 @@ async function executeToolCall(calledName: string, calledParams: Record<string, 
   if (place) {
     await commandRecorder.recordCommand(toolName, validation.data, place);
     index = commandRecorder.getCurrentHistoryIndex();
+    noteCallStart();
   }
+
+  // The proxy credits what crosses to the entry just recorded, as the MCP
+  // path does: without the mark, a repeated or CLI call's traffic lands under
+  // no entry and `create` stores nothing for it. A run's step is marked by
+  // the run with its own position instead.
+  const marksBoundary = index !== null && !place?.run && !observes(toolName, validation.data);
+  if (marksBoundary) await markNextCommand({ kind: 'command', index: index! });
 
   const run = () => underDialogs(dialogTargetOf(validation.data), toolName, validation.data, abortSignal, signal => index === null
     ? tool.handler(validation.data, signal)
@@ -574,6 +582,16 @@ async function executeToolCall(calledName: string, calledParams: Record<string, 
         : { content: [{ type: 'text', text: error instanceof Error ? error.message : `${error}` }], isError: true });
     }
     throw error;
+  } finally {
+    if (marksBoundary) {
+      const settle = configManager.getReplayConfig();
+      const reference = typeof validation.data?.connection === 'string'
+        ? sanitizeReference(validation.data.connection)
+        : undefined;
+      void releaseCommand(settle.stepSettleMs, settle.stepSettleCapMs, reference)
+        .then(at => commandRecorder.attachRelease(index!, at))
+        .catch(() => { /* a boundary that failed to settle still clears */ });
+    }
   }
   if (index !== null) commandRecorder.attachResult(index, result);
 

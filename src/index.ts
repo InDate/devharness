@@ -931,9 +931,17 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
         }
       }
 
-      // Prepend breakpoint pause prefix if any (for allowed tools when paused)
+      // Re-read after the handler: a resume or step changes the pause the banner reports.
       if (breakpointCheck.prefix) {
-        prependToResponse(result, breakpointCheck.prefix);
+        const afterCheck = checkBreakpointPause(
+          connectionManager.getAllConnections(),
+          toolName,
+          (port) => serverManager.getPendingRestartByInspectorPort(port),
+          (validation.data as Record<string, unknown>)?.action as string | undefined
+        );
+        if (!afterCheck.blocked && afterCheck.prefix) {
+          prependToResponse(result, afterCheck.prefix);
+        }
       }
 
       // Collect status lines to append to response

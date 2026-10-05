@@ -2277,6 +2277,9 @@ button.statedisc:hover { box-shadow: 0 0 0 3px color-mix(in srgb, var(--frost) 3
 .mark.switch.runfold:not(.open) { border-top: var(--run-rule); border-bottom: var(--run-rule); }
 .mark.switch.runfold.runstart { border-top: var(--run-rule); }
 .mark.switch.runfold.runend { border-bottom: var(--run-rule); }
+/* In History a run sits between two lists of calls rather than heading one, so
+   its markers keep the same space either side. */
+.historylist > .mark.switch.runfold { margin: 14px 0; }
 .crossed.checkrow.removing .rowactions .tool { color: var(--alert); }
 .crossed.checkrow.here { opacity: 1; }
 /* A hidden kind: muted, as what it keeps out of the list is. */

@@ -1,3 +1,5 @@
+import type { ElementFingerprint } from '../element-fingerprint.js';
+import type { SequenceRepair } from '../bench/wire.js';
 import type { Annotation, AnnotationTarget, StepTraffic } from '../annotation.js';
 import type { RuleCatalogueEntry, HistoryDetail, HistoryEntry, SequenceNote, ServerLog, ServerRow, ToolGroup, ToolRun, ToolValues, SequenceCard, SequenceOutline, SequenceStep, SequenceVariable, RunningView } from '../bench/wire.js';
 import type { ActivityMove, ExpectedValue, KindCount } from '../bench/kinds.js';
@@ -54,6 +56,8 @@ export interface SequenceDriver {
     failedStep?: number;
     /** Where a breakpoint the sequence did not set stopped the page, holding the run. */
     heldAt?: string;
+    /** Where the run stands on a step that reached another element than the one recorded, and what repairs it. */
+    repair?: SequenceRepair;
     /** A replay session stands for this sequence, so a pause in it can be carried on. */
     live?: boolean;
   } | null;
@@ -211,7 +215,15 @@ export interface SequenceDriver {
    * this it goes when the session does, and a note keeps its own text while
    * losing the evidence it was written about.
    */
-  saveStepTraffic: (entries: Array<{ index: number; traffic: StepTraffic }>) => Promise<string | undefined>;
+  /** Repair the step the run stands on: 'selector' takes where the recorded element is now, 'element' records the one reached. */
+  repair: (accept: 'selector' | 'element') => Promise<string | undefined>;
+  saveStepTraffic: (entries: Array<{ index: number; traffic: StepTraffic; fingerprint?: ElementFingerprint }>) => Promise<string | undefined>;
+  /**
+   * The element each step of a play clicked, read off the history entries
+   * that play's own run left between one step's start and the next. A step
+   * that clicked nothing, or ran inside a nested sequence, has none.
+   */
+  clickFingerprints: (sequence: string, starts: number[], end: number) => Array<ElementFingerprint | undefined>;
   /** Mark, or with none unmark, what one kind on one step has to carry on replay. */
   saveExpected: (index: number, kind: string, expected: ExpectedValue | undefined) => Promise<string | undefined>;
   /** Replace, or with none remove, what one kind on one step was recorded as. */

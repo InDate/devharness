@@ -172,7 +172,13 @@ export async function baselineSequence(connection: string): Promise<SequenceStat
     };
     return { index, traffic };
   });
-  session.sequenceFailure = await session.sequences.saveStepTraffic(entries).catch(error => String(error));
+  const sequenceName = played.name ?? session.sequences.active()?.name;
+  const fingerprints = sequenceName && session.playStepStarts
+    ? session.sequences.clickFingerprints(sequenceName, Array.from({ length: played.total }, (_, i) => session.playStepStarts?.[i] ?? at), Date.now())
+    : [];
+  session.sequenceFailure = await session.sequences.saveStepTraffic(entries.map((entry, index) => ({
+    ...entry, ...(fingerprints[index] ? { fingerprint: fingerprints[index] } : {}),
+  }))).catch(error => String(error));
   return getSequenceState(connection);
 }
 

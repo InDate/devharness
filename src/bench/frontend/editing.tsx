@@ -504,7 +504,29 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
         </Notice>
       )}
 
-      {sequence?.failure && (
+      {/* A step that reached another element: the run stands on it, and a
+          repair either points it at the recorded element or records the new one. */}
+      {sequence?.repair && (
+        <Notice kind="error">
+          <span class="grow">
+            Step {sequence.repair.step + 1} reached {sequence.repair.found}
+            {sequence.repair.recorded && <>, recorded on {sequence.repair.recorded}</>}.
+            {' '}{sequence.repair.selector
+              ? <>The recorded element is at <code>{sequence.repair.selector}</code>.</>
+              : sequence.repair.matches > 1
+                ? `${sequence.repair.matches} elements carry the recorded one's identity.`
+                : 'The recorded element is not on the page.'}
+          </span>
+          {sequence.repair.selector && (
+            <button class="chip-toggle" title="the element moved: point the step at where it is now"
+              onClick={() => void post('/sequence/repair', { accept: 'selector' })}>Take the new selector</button>
+          )}
+          <button class="chip-toggle" title="the element changed on purpose: keep the selector and record the element it reached"
+            onClick={() => void post('/sequence/repair', { accept: 'element' })}>Keep the selector</button>
+        </Notice>
+      )}
+
+      {sequence?.failure && !sequence.repair && (
         <Notice kind="error">
           <span class="grow">{sequence.failure}</span>
           <button class="chip-toggle" onClick={() => void post('/sequence/failure/dismiss')}>
@@ -875,12 +897,16 @@ function VariableRow({ name, step, variable, stores, onSave, onRemove, usedBy = 
 }
 
 /** A marker a run puts into the list: a switch to or from a sequence, or a step it ran. */
-function RunMark({ classes, title, onClick, children }: {
-  classes: string; title?: string; onClick?: () => void; children: preact.ComponentChildren;
+export function RunMark({ classes, title, onClick, tools, children }: {
+  classes: string; title?: string; onClick?: () => void;
+  /** Buttons that take the marker's text's place on pointing, as a step marker's do. */
+  tools?: preact.ComponentChildren;
+  children: preact.ComponentChildren;
 }) {
   return (
     <div class={classes} title={title} onClick={onClick}>
       <span class="marktext">{children}</span>
+      {tools && <span class="marktools">{tools}</span>}
     </div>
   );
 }

@@ -1,6 +1,9 @@
 /** @jsxImportSource preact */
+import { Fragment } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import { Row } from './row.js';
+import { RunMark } from './editing.js';
+import { Glyph } from './glyph.js';
 import type { HistoryDetail, HistoryEntry, ToolFavourite } from '../wire.js';
 import type { ToolSeed } from './tools.js';
 
@@ -27,6 +30,7 @@ const WHERE: Record<HistoryEntry['from'], string> = {
 export function History({ base, onGoTo }: { base: string; onGoTo: (seed: ToolSeed) => void }) {
   const [entries, setEntries] = useState<HistoryEntry[] | null>(null);
   const [reading, setReading] = useState<number | null>(null);
+  const [openRuns, setOpenRuns] = useState<Set<string>>(new Set());
   const [favourites, setFavourites] = useState<ToolFavourite[]>([]);
 
   useEffect(() => {
@@ -82,39 +86,157 @@ export function History({ base, onGoTo }: { base: string; onGoTo: (seed: ToolSee
   if (!entries) return <div class="hint">reading the history…</div>;
   if (entries.length === 0) return <p class="hint nothing">no tool calls since devharness started</p>;
 
-  return (
-    <ol class="activitycards">
-      {entries.map(entry => (
-        <Row key={entry.index}
-          classes={['historyrow', entry.failed ? 'failed' : entry.failed === undefined ? 'running' : '']}
-          source={entry.tool}
-          label={<span class="what">{entry.label}</span>}
-          title={[`#${entry.index}`, entry.connection, entry.said].filter(Boolean).join(' · ')}
-          reading={<>
-            <span class="where" title={entry.run
-              ? `a step of ${entry.run}, run from ${WHERE[entry.from]}`
-              : `came in through ${WHERE[entry.from]}`}>
-              {entry.run && <span class="whererun">{entry.run} · </span>}{entry.from}
-            </span>
-            {entry.failed && <span class="meta bad">failed</span>}
-            {entry.failed === undefined && <span class="meta">running</span>}
-            <span class="meta">{new Date(entry.at).toLocaleTimeString()}</span>
-          </>}
-          slots={{ here: () => void rerun(entry), open: () => void goTo(entry), star: () => void star(entry) }}
-          titles={{
-            here: 'run this call again with what it was given',
-            open: 'open this call in Tools, filled with what it was given',
-            star: starred(entry) ? 'kept under Favourites on the Tools tab' : 'keep this call under Favourites on the Tools tab',
-          }}
-          glyphs={starred(entry) ? { star: 'starred' } : undefined}
-          columns={['here', 'open', 'star']}
-          open={reading === entry.index}
-          onOpen={() => setReading(reading === entry.index ? null : entry.index)}>
-          <CallDetail base={base} entry={entry} />
-        </Row>
-      ))}
-    </ol>
+  const callRow = (entry: HistoryEntry) => (
+    <Row key={entry.index}
+      classes={['historyrow', entry.failed ? 'failed' : entry.failed === undefined ? 'running' : '']}
+      source={entry.tool}
+      label={<span class="what">{entry.label}</span>}
+      title={[`#${entry.index}`, entry.connection, entry.said].filter(Boolean).join(' · ')}
+      reading={<>
+        <span class="where" title={entry.run
+          ? `a step of ${entry.run}, run from ${WHERE[entry.from]}`
+          : `came in through ${WHERE[entry.from]}`}>
+          {entry.run && <span class="whererun">{entry.run} · </span>}{entry.from}
+        </span>
+        {entry.failed && <span class="meta bad">failed</span>}
+        {entry.failed === undefined && <span class="meta">running</span>}
+        <span class="meta">{new Date(entry.at).toLocaleTimeString()}</span>
+      </>}
+      slots={{ here: () => void rerun(entry), open: () => void goTo(entry), star: () => void star(entry) }}
+      titles={{
+        here: 'run this call again with what it was given',
+        open: 'open this call in Tools, filled with what it was given',
+        star: starred(entry) ? 'kept under Favourites on the Tools tab' : 'keep this call under Favourites on the Tools tab',
+      }}
+      glyphs={starred(entry) ? { star: 'starred' } : undefined}
+      columns={['here', 'open', 'star']}
+      open={reading === entry.index}
+      onOpen={() => setReading(reading === entry.index ? null : entry.index)}>
+      <CallDetail base={base} entry={entry} />
+    </Row>
   );
+
+  // A run's calls in the order they ran - the replay calls that walked it,
+  // then its steps - between the markers the sequence view draws a nested run
+  // with: folded to one, or opened from where it moved in to where it ended.
+  const runRows = (group: RunGroup) => {
+    const key = `run-${group.steps[group.steps.length - 1].index}`;
+    const open = openRuns.has(key);
+    const toggle = () => setOpenRuns(now => {
+      const next = new Set(now);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+    const failed = group.steps.some(step => step.failed) || group.calls.some(call => call.failed);
+    const running = group.steps.some(step => step.failed === undefined) || group.calls.some(call => call.failed === undefined);
+    const from = (group.calls[group.calls.length - 1] ?? group.steps[group.steps.length - 1]).from;
+    const at = new Date(group.steps[0].at).toLocaleTimeString();
+    const span = group.steps.length === 1 ? 'step 1' : `steps 1–${group.steps.length}`;
+    // Played again whole, on the browser its steps drove: a bench play walked
+    // it a step per call, and the first of those calls runs step 1 alone.
+    const connection = group.steps.find(step => step.connection)?.connection;
+    const playArgs = { action: 'run', name: group.name, wait: true, ...(connection ? { connection } : {}) };
+    const started = group.calls[group.calls.length - 1];
+    const tools = (
+      <>
+        <button class="marknote" title={`play ${group.name} again`} aria-label="play again"
+          onClick={(e: Event) => {
+            e.stopPropagation();
+            void fetch(`${base}/tools/call`, {
+              method: 'POST', headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ tool: 'replay', args: playArgs }),
+            }).catch(() => {});
+          }}><Glyph of="play" /></button>
+        <button class="marknote" title={started ? 'open the replay call that started this run in Tools' : `open a run of ${group.name} in Tools`}
+          aria-label="go to the tool call"
+          onClick={(e: Event) => {
+            e.stopPropagation();
+            if (!started) { onGoTo({ tool: 'replay', args: playArgs }); return; }
+            void paramsOf(started.index).then(args => onGoTo({ tool: 'replay', args: args ?? playArgs }));
+          }}><Glyph of="arrow" /></button>
+      </>
+    );
+    if (!open) {
+      return (
+        <RunMark key={key} classes={['mark', 'switch', 'runfold', failed ? 'failed' : '', running ? 'running' : ''].filter(Boolean).join(' ')}
+          title="open the calls it ran" onClick={toggle} tools={tools}>
+          ran {span} from <span class="seqname">{group.name}</span>{failed ? ' · failed' : running ? ' · running' : ''} · {from} · {at}
+        </RunMark>
+      );
+    }
+    return (
+      <Fragment key={key}>
+        <RunMark classes="mark switch runfold open runstart" title="fold the calls it ran" onClick={toggle} tools={tools}>
+          {from} · moved to: <span class="seqname">{group.name}</span>
+        </RunMark>
+        <ol class="activitycards">{[...group.calls].reverse().concat([...group.steps].reverse()).map(callRow)}</ol>
+        <RunMark classes={failed ? 'mark switch runfold open runend failed' : 'mark switch runfold open runend'}
+          title="fold the calls it ran" onClick={toggle}>
+          {failed ? 'failed' : running ? 'running' : 'completed'} · <span class="seqname">{group.name}</span>
+        </RunMark>
+      </Fragment>
+    );
+  };
+
+  // Calls between runs share one list; each run stands between its markers.
+  const blocks: preact.ComponentChildren[] = [];
+  let calls: HistoryEntry[] = [];
+  const flush = () => {
+    if (calls.length) blocks.push(<ol key={`calls-${calls[0].index}`} class="activitycards">{calls.map(callRow)}</ol>);
+    calls = [];
+  };
+  for (const item of grouped(entries)) {
+    if (item.kind === 'call') { calls.push(item.entry); continue; }
+    flush();
+    blocks.push(runRows(item));
+  }
+  flush();
+  return <div class="historylist">{blocks}</div>;
+}
+
+/** A sequence run's steps, newest first, with the replay calls that walked it. */
+interface RunGroup { kind: 'run'; name: string; steps: HistoryEntry[]; calls: HistoryEntry[] }
+type HistoryItem = { kind: 'call'; entry: HistoryEntry } | RunGroup;
+
+/**
+ * History, newest first, with each run's steps folded under the replay call
+ * that started them. A run's steps are contiguous, a nested sequence's among
+ * them; the replay call that started them sits just below, being older. A
+ * `step` or `finish` call carries on the run below it, so a bench play - a run
+ * to step 1, then a step at a time - reads as one run, not one per step.
+ */
+function grouped(entries: HistoryEntry[]): HistoryItem[] {
+  const items: HistoryItem[] = [];
+  for (const entry of entries) {
+    const last = items[items.length - 1];
+    if (entry.run) {
+      if (last?.kind === 'run' && last.calls.length === 0) last.steps.push(entry);
+      else items.push({ kind: 'run', name: entry.run, steps: [entry], calls: [] });
+      continue;
+    }
+    if (entry.replay && last?.kind === 'run' && last.calls.length === 0) {
+      last.calls.push(entry);
+      if (entry.replay.name) last.name = entry.replay.name;
+      // A step or finish call continues the run whose group comes next, being older.
+      continue;
+    }
+    items.push({ kind: 'call', entry });
+  }
+  // Fold a group started by a step or finish into the older group of the same
+  // sequence it continues.
+  const folded: HistoryItem[] = [];
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i];
+    const older = folded[folded.length - 1];
+    const continues = item.kind === 'run' && item.calls.every(call => call.replay?.action === 'step' || call.replay?.action === 'finish');
+    if (continues && older?.kind === 'run' && older.name === (item as RunGroup).steps[(item as RunGroup).steps.length - 1].run) {
+      older.steps = [...(item as RunGroup).steps, ...older.steps];
+      older.calls = [...(item as RunGroup).calls, ...older.calls];
+      continue;
+    }
+    folded.push(item);
+  }
+  return folded.reverse();
 }
 
 /** An opened call: its parameters and its response, read when the row opens and again once a running call ends. */

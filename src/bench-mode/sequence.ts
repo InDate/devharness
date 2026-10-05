@@ -117,6 +117,7 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
     ...(session.sequencePlaying ? { playing: true } : {}),
     ...(session.sequencePaused ? { paused: true } : {}),
     ...(active.heldAt ? { heldAt: active.heldAt } : {}),
+    ...(active.repair ? { repair: active.repair } : {}),
     ...(session.recordingSequence ? { recording: true } : {}),
     variables: active.variables,
     ...(active.placements ? { placements: active.placements } : {}),
@@ -251,18 +252,17 @@ async function withAppInFront<T>(session: BenchSession, drive: () => Promise<T>)
     session.appInFront = (session.appInFront ?? 0) + 1;
     try { return await drive(); } finally { session.appInFront = (session.appInFront ?? 1) - 1; }
   }
-  // Chrome raises a tab that opens a JavaScript dialog, and the stopped page
-  // answers no evaluation until its 3s bound.
-  const visible = stoppedByDialog(session) || await request(session.client, 'Runtime.evaluate', {
-    expression: 'document.visibilityState', returnByValue: true,
-  }).then(r => r?.result?.value !== 'hidden').catch(() => true);
   session.appInFront = 1;
-  if (!visible) await session.page.bringToFront().catch(() => {});
+  // Raised on every play, hidden or not: the bench has a window of its own,
+  // and the app's window behind it keeps rendering and reads visible while
+  // the person watching the play sees only the bench.
+  await session.page.bringToFront().catch(() => {});
   try {
     return await drive();
   } finally {
     session.appInFront = 0;
-    if (!visible) await session.benchPage?.bringToFront().catch(() => {});
+    // The bench comes back in front when the play ends, where its results are.
+    await session.benchPage?.bringToFront().catch(() => {});
   }
 }
 
@@ -352,6 +352,19 @@ export const selectSequence = async (connection: string, name: string) => {
 };
 
 /** Clear the failure line, which otherwise stands until something else fails. */
+/**
+ * Repair the step the run stands on after it reached another element, and
+ * clear the failure line that reported it. The run stays on the step, so the
+ * next step or play runs the repaired step first.
+ */
+export async function repairSequenceStep(connection: string, accept: 'selector' | 'element'): Promise<SequenceState | undefined> {
+  const session = sessions.get(connection);
+  if (!session?.sequences) return undefined;
+  const failure = await session.sequences.repair(accept);
+  session.sequenceFailure = failure;
+  return getSequenceState(connection);
+}
+
 export async function dismissSequenceFailure(connection: string): Promise<SequenceState | undefined> {
   const session = sessions.get(connection);
   if (!session) return undefined;

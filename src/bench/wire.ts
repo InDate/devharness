@@ -217,6 +217,8 @@ export interface HistoryEntry {
   from: 'mcp' | 'cli' | 'bench';
   /** The sequence whose run executed this call as a step. */
   run?: string;
+  /** On a `replay` call: its action, and the sequence it names where it names one. */
+  replay?: { action: string; name?: string };
   /** Absent while the call is still running. */
   failed?: boolean;
   /** The first line the call returned. */
@@ -415,6 +417,15 @@ export interface HeldStep {
   options?: Array<{ selector: string; note: string }>;
 }
 
+/** A step that reached another element: the elements in words, and where the recorded one is now, when one element carries it. */
+export interface SequenceRepair {
+  step: number;
+  recorded?: string;
+  found: string;
+  selector?: string;
+  matches: number;
+}
+
 export interface SequenceState {
   /** Names that can be selected - saved on disk, plus anything in memory. */
   available: string[];
@@ -451,6 +462,8 @@ export interface SequenceState {
   paused?: boolean;
   /** Where a breakpoint the sequence did not set stopped the page, holding the run at `currentStep`. */
   heldAt?: string;
+  /** The run stands on a step that reached another element than the one recorded: what was found, and what repairs it. */
+  repair?: SequenceRepair;
   /** What the sequence describes itself as doing. */
   description?: string;
   /** What it should end up having done, in the recorder's own words. */

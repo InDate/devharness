@@ -27,6 +27,7 @@ import type { Annotation, AnnotationTarget } from '../annotation.js';
 import { NO_TOOL_VALUES, type BoundaryRule, type HiddenKind, type RuleCatalogueEntry, type SequenceNote, type ServerLog, type ServerRow, type ToolGroup, type ToolValues } from '../bench/wire.js';
 import { unlisted } from '../call-origin.js';
 import { countStepTraffic } from '../step-traffic.js';
+import { describeFingerprint, type ElementFingerprint } from '../element-fingerprint.js';
 import { CANCELLED } from './session.js';
 
 /**
@@ -216,6 +217,10 @@ export function createSequenceDriver(
     try {
       const response = await executeToolCall('replay', args, signal);
       if (response?._meta?.replay?.prompted) return 'the run asked for replacement text and ran no step';
+      // A paused click - reaching another element, or failing validation -
+      // leaves the run standing on the step, and its reply reads as no error.
+      const refused = response?._meta?.replay?.refused;
+      if (typeof refused === 'string') return refused.replace(/^Error:\s*/, '').slice(0, 200);
       text = textOf(response);
     } catch (error) {
       // executeToolCall raises an isError response as a ToolError carrying it.
@@ -504,6 +509,10 @@ export function createSequenceDriver(
         ...(typeof connection === 'string' ? { connection } : {}),
         from: command.from,
         ...(command.run !== undefined ? { run: command.run } : {}),
+        ...(command.tool === 'replay' ? { replay: {
+          action: String(command.params?.action),
+          ...(typeof command.params?.name === 'string' ? { name: command.params.name } : {}),
+        } } : {}),
         ...(command.result !== undefined ? { failed: command.result?.isError === true } : {}),
         ...(text ? { said: text.split('\n').find(line => line.trim())?.slice(0, 160) } : {}),
       };
@@ -649,6 +658,13 @@ export function createSequenceDriver(
         failedStep: ended === 'failed' ? failedStep ?? undefined : undefined,
         ...(state ? { live: true } : {}),
         ...(state?.breakpointHit ? { heldAt: `${state.breakpointHit.url}:${state.breakpointHit.lineNumber}` } : {}),
+        ...(state?.repair ? { repair: {
+          step: state.currentStep,
+          ...(commands[state.currentStep]?.fingerprint ? { recorded: describeFingerprint(commands[state.currentStep].fingerprint!) } : {}),
+          found: describeFingerprint(state.repair.hit),
+          ...(state.repair.selector ? { selector: state.repair.selector } : {}),
+          matches: state.repair.matches,
+        } } : {}),
         steps: commands.map(command => {
           const resolved = resolvedFor(command, store);
           return {
@@ -1135,17 +1151,32 @@ export function createSequenceDriver(
         : `${kind} taken out of step ${index + 1}'s recording`);
     },
 
-    saveStepTraffic: async (entries: Array<{ index: number; traffic: any }>) => {
+    repair: async (accept: 'selector' | 'element') => replay({ action: 'repair', accept }),
+
+    saveStepTraffic: async (entries: Array<{ index: number; traffic: any; fingerprint?: ElementFingerprint }>) => {
       const sequence = openSequence();
       if (!sequence) return 'no sequence is open';
       const commands = sequence.commands ?? [];
-      for (const { index, traffic } of entries) {
+      for (const { index, traffic, fingerprint } of entries) {
         if (index < 0 || index >= commands.length) continue;
         commands[index].traffic = traffic;
+        // The baseline is the run a person takes as the recording, so the
+        // element each click reached in it is the one later runs are held to.
+        if (fingerprint) commands[index].fingerprint = fingerprint;
         // A baseline takes the step in, so it no longer reads as new.
         delete commands[index].addedAt;
       }
       return persist(sequence, `traffic recorded for ${entries.length} step${entries.length === 1 ? '' : 's'}`);
+    },
+
+    clickFingerprints: (sequence: string, starts: number[], end: number) => {
+      const history = commandRecorder.getHistory(Number.MAX_SAFE_INTEGER);
+      return starts.map((from, index) => {
+        const to = starts[index + 1] ?? end;
+        const click = history.find(entry => entry.run === sequence && entry.tool === 'input'
+          && entry.params?.action === 'click' && entry.timestamp >= from && entry.timestamp < to);
+        return click?.result?._meta?.click?.fingerprint;
+      });
     },
 
     trafficIn: async (connection: string, from: number, to: number) =>

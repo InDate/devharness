@@ -183,6 +183,7 @@ function createFakePage(client: any) {
       return client;
     },
     url: () => 'http://localhost:5173/orders',
+    bringToFront: async () => {},
   } as any;
 }
 
@@ -948,6 +949,8 @@ describe('a step and the rest of devharness', () => {
         record: async () => undefined,
         trafficIn: async () => ({ requests: 0, failed: 0, opened: 0, writes: 0, lines: [] }),
         saveStepTraffic: async () => undefined,
+        clickFingerprints: () => [],
+        repair: async () => undefined,
         saveExpected: async () => undefined,
         saveRecorded: async () => undefined,
         saveMove: async () => undefined,
@@ -1032,6 +1035,8 @@ describe('stepping a sequence', () => {
       record: async () => undefined,
       trafficIn: async () => ({ requests: 0, failed: 0, opened: 0, writes: 0, lines: [] }),
         saveStepTraffic: async () => undefined,
+        clickFingerprints: () => [],
+        repair: async () => undefined,
         saveExpected: async () => undefined,
         saveRecorded: async () => undefined,
         saveMove: async () => undefined,

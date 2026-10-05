@@ -1,0 +1,76 @@
+{
+  "_comment": "devharness replay sequence. Load with: replay({ action: \"load\", filename: \"<this-file>\" }), then run with: replay({ action: \"run\", name: \"<this-file>\" }). What the app did under each step, and the responses that answer it on replay, are in the file of the same name under activity/.",
+  "id": "seq-1791174468368-1",
+  "name": "prefs-by-text",
+  "description": "The same path, turning Dark on by its label text",
+  "expectedOutcome": "on: reads \"dark\"; on LAYOUT=2 the label reads Dark theme, so the click finds nothing",
+  "startUrl": "http://localhost:7788/",
+  "commands": [
+    {
+      "tool": "navigate",
+      "params": {
+        "action": "goto",
+        "url": "http://localhost:7788/"
+      },
+      "recordedAt": 8
+    },
+    {
+      "tool": "check",
+      "params": {
+        "selector": "[data-testid=\"whats-new\"]",
+        "condition": "present",
+        "holds": {
+          "run": "dismiss-whats-new"
+        },
+        "fails": "continue"
+      },
+      "recordedAt": 9
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"open-settings\"]"
+      },
+      "recordedAt": 10
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "#prefs .accounts li:nth-child(2) button"
+      },
+      "recordedAt": 11
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"open-prefs\"]"
+      },
+      "recordedAt": 12
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "#prefs button:has-text(\"Dark mode\")"
+      },
+      "recordedAt": 13
+    },
+    {
+      "tool": "check",
+      "params": {
+        "selector": "[data-testid=\"prefs-state\"]",
+        "condition": "text",
+        "operator": "equals",
+        "right": "dark",
+        "withinMs": 2000
+      },
+      "recordedAt": 14
+    }
+  ],
+  "createdAt": 1791174468368,
+  "recordedConnection": "prefs-path-browser",
+  "proxy": true
+}

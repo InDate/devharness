@@ -131,6 +131,30 @@ Enter sends its text as `GET /search?q=`, and `searched:` shows what arrived.
 - `press Meta+a` then `type` replaces the text. A select-all that did not run
   arrives as both queries run together.
 
+## A setting reached through several steps
+
+`preferences` sits behind three clicks: **open settings**, a row of the
+accounts list (rows carry no test id), then **preferences**. Its toggles each
+send `POST /prefs` with the key they changed, and `on:` lists the keys set.
+Only the Dark toggle carries a test id (`dark-toggle`), so a recording reaches
+it by test id, by position (`.prefs li:nth-child(3) button`) or by text
+(`Dark mode`), depending on what the recorder or the person picked.
+
+`LAYOUT=2` serves the toggles as a release changes them:
+
+- a **Compact** toggle is inserted above Dark, so the third row is now Compact;
+- **Dark mode** is renamed **Dark theme**.
+
+`LAYOUT=3` does both and moves **preferences** behind an **advanced** button,
+so the path gains a step. The two are kept apart because a path that breaks
+first stops every sequence before the toggle it was recorded to reach.
+
+A sequence recorded on layout 1 meets layout 2 according to how it reached the
+toggle: by position it clicks Compact and the click succeeds, by text it finds
+nothing, by test id it still works. On layout 3 every sequence walking the old
+path fails at the hidden **preferences** button, each copy of the path on its
+own.
+
 ## Sequences
 
 `sequences/` holds three that exercise every kind of check a sequence carries,
@@ -168,5 +192,18 @@ Copy them, with `activity/`, into the project's `.devharness/` to run them.
   selector, selects all with `Meta+a`, types a replacement and presses Enter;
   `searched:` reads `prompt cache`. The click is at fixed coordinates under
   the what's-new banner, so it runs on a profile that still shows it.
+
+- **prefs-by-testid**, **prefs-by-position**, **prefs-by-text** - the path
+  to preferences, then the Dark toggle by test id, by row position and by
+  label. Recorded on layout 1. On `LAYOUT=2` by-testid passes, by-position
+  clicks Compact and passes the click, failing only at the closing check that
+  reads `compact`, and by-text fails at the click with element not found. The
+  boundary comparison reports nothing for by-position: `POST /prefs` crosses in
+  both runs, and the body that names the toggle is not compared.
+- **prefs-autoplay** - a copy of the same path turning Autoplay on. On
+  `LAYOUT=3` it and prefs-by-testid fail at the hidden **preferences** button,
+  each copy of the path needing the same fix of its own.
+- **hidden-tab-click-lands** - puts a second tab in front of the app's tab and
+  clicks the app: the click brings the app's tab to the front and lands.
 
 The first run in a browser runs `dismiss-whats-new`; the second skips it.

@@ -15,6 +15,7 @@ import { WebSocketServer } from 'ws';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 7788);
+const LAYOUT = ['2', '3'].includes(process.env.LAYOUT) ? process.env.LAYOUT : '1';
 
 /** Tokens handed out by POST /session, which POST /draft requires. */
 const sessions = new Set();
@@ -124,6 +125,19 @@ const http = createServer((req, res) => {
     return;
   }
 
+  // A preference the page changed, so a toggle clicked shows at the boundary
+  // as the key it changed, and a click on the wrong toggle as the wrong key.
+  if (path === '/prefs' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      console.log(`POST /prefs ${body}`);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(body);
+    });
+    return;
+  }
+
   const entry = files[path];
   if (!entry) {
     res.writeHead(404, { 'content-type': 'text/plain' });
@@ -131,7 +145,11 @@ const http = createServer((req, res) => {
     return;
   }
   res.writeHead(200, { 'content-type': entry[1] });
-  res.end(readFileSync(join(here, 'public', entry[0])));
+  const content = readFileSync(join(here, 'public', entry[0]));
+  // LAYOUT=2 and 3 serve the preferences panel as a release would change it.
+  res.end(entry[0] === 'index.html'
+    ? String(content).replace('<meta name="layout" content="1">', `<meta name="layout" content="${LAYOUT}">`)
+    : content);
 });
 
 const wss = new WebSocketServer({ server: http });
@@ -236,5 +254,6 @@ http.listen(PORT, () => {
   console.log(`socket-app on http://localhost:${PORT}`);
   console.log('lifecycle: /live (connect, push, die, bye), POST /session then POST /draft');
   console.log('capture:   /small /big /binary /burst /ping /heartbeat /quiet /serverclose /badframe');
-  console.log('http:    /sse (text/event-stream), POST /draft, POST /upload');
+  console.log('http:    /sse (text/event-stream), POST /draft, POST /upload, POST /prefs');
+  console.log(`layout:  ${LAYOUT} (LAYOUT=2 changes the toggles, LAYOUT=3 the path to them too)`);
 });

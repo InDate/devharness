@@ -1,0 +1,69 @@
+{
+  "_comment": "devharness replay sequence. Load with: replay({ action: \"load\", filename: \"<this-file>\" }), then run with: replay({ action: \"run\", name: \"<this-file>\" }). What the app did under each step, and the responses that answer it on replay, are in the file of the same name under activity/.",
+  "id": "seq-1791173598598-1",
+  "name": "hidden-tab-click-lands",
+  "description": "Puts a second tab in front of the app tab in its window, then clicks the app: the input tool brings the app tab to the front and the click lands",
+  "expectedOutcome": "Step 4 reads visibility \"hidden\" and accountsHidden true; after the click in step 5, step 6 reads visibility \"visible\" and accountsHidden false",
+  "startUrl": "http://localhost:7788/",
+  "commands": [
+    {
+      "tool": "connection",
+      "params": {
+        "action": "launch",
+        "connection": "prefs-path-browser",
+        "url": "http://localhost:7788/",
+        "width": 1280,
+        "height": 900,
+        "proxy": true
+      },
+      "recordedAt": 0
+    },
+    {
+      "tool": "connection",
+      "params": {
+        "action": "launch",
+        "connection": "covering-tab-browser",
+        "url": "http://localhost:7788/second.html",
+        "port": 9225
+      },
+      "recordedAt": 2
+    },
+    {
+      "tool": "connection",
+      "params": {
+        "action": "switch",
+        "connection": "covering-tab-browser",
+        "bringToFront": true
+      },
+      "recordedAt": 3
+    },
+    {
+      "tool": "inspect",
+      "params": {
+        "action": "evaluateExpression",
+        "connection": "prefs-path-browser",
+        "expression": "({ visibility: document.visibilityState, accountsHidden: document.querySelector('#prefs .accounts').hidden })"
+      },
+      "recordedAt": 4
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "connection": "prefs-path-browser",
+        "selector": "button[data-testid=\"open-settings\"]"
+      },
+      "recordedAt": 5
+    },
+    {
+      "tool": "inspect",
+      "params": {
+        "action": "evaluateExpression",
+        "connection": "prefs-path-browser",
+        "expression": "({ visibility: document.visibilityState, accountsHidden: document.querySelector('#prefs .accounts').hidden })"
+      },
+      "recordedAt": 6
+    }
+  ],
+  "createdAt": 1791173598598
+}

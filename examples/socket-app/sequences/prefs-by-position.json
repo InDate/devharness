@@ -1,0 +1,76 @@
+{
+  "_comment": "devharness replay sequence. Load with: replay({ action: \"load\", filename: \"<this-file>\" }), then run with: replay({ action: \"run\", name: \"<this-file>\" }). What the app did under each step, and the responses that answer it on replay, are in the file of the same name under activity/.",
+  "id": "seq-1791174197195-2",
+  "name": "prefs-by-position",
+  "description": "The same path, turning Dark on by its row position in the preferences list",
+  "expectedOutcome": "on: reads \"dark\"; on LAYOUT=2 the third row is Compact, so the click succeeds on the wrong toggle",
+  "startUrl": "http://localhost:7788/",
+  "commands": [
+    {
+      "tool": "navigate",
+      "params": {
+        "action": "goto",
+        "url": "http://localhost:7788/"
+      },
+      "recordedAt": 11
+    },
+    {
+      "tool": "check",
+      "params": {
+        "selector": "[data-testid=\"whats-new\"]",
+        "condition": "present",
+        "holds": {
+          "run": "dismiss-whats-new"
+        },
+        "fails": "continue"
+      },
+      "recordedAt": 12
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"open-settings\"]"
+      },
+      "recordedAt": 13
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "#prefs .accounts li:nth-child(2) button"
+      },
+      "recordedAt": 14
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "button[data-testid=\"open-prefs\"]"
+      },
+      "recordedAt": 15
+    },
+    {
+      "tool": "input",
+      "params": {
+        "action": "click",
+        "selector": "#prefs .prefs li:nth-child(3) button"
+      },
+      "recordedAt": 16
+    },
+    {
+      "tool": "check",
+      "params": {
+        "selector": "[data-testid=\"prefs-state\"]",
+        "condition": "text",
+        "operator": "equals",
+        "right": "dark",
+        "withinMs": 2000
+      },
+      "recordedAt": 17
+    }
+  ],
+  "createdAt": 1791174197195,
+  "recordedConnection": "prefs-path-browser",
+  "proxy": true
+}

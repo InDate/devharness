@@ -1,6 +1,8 @@
 <!doctype html>
 <meta charset="utf-8">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<!-- The server writes LAYOUT into this, so one page serves both layouts. -->
+<meta name="layout" content="1">
 <title>socket-app</title>
 <style>
   body { font: 14px -apple-system, system-ui, sans-serif; margin: 24px; max-width: 900px; }
@@ -20,6 +22,8 @@
   #whatsNew { display: flex; align-items: center; gap: 12px; margin: 0 0 14px; padding: 10px 14px;
               border: 1px solid #1a73e8; border-radius: 8px; background: #eef4fd; }
   #whatsNew span { flex: 1; }
+  #prefs ul { list-style: none; margin: 6px 0 8px; padding: 0; }
+  #prefs li { margin: 0 0 4px; }
 </style>
 
 <h1>socket-app</h1>
@@ -123,6 +127,29 @@
   <button data-testid="open-worker-boot">worker that beats from boot</button>
   <button data-testid="navigate-away">navigate with sockets open</button>
   <button data-testid="close-all">close all</button>
+</fieldset>
+
+<!-- A setting reached only after several steps, so a sequence that tests it
+     carries a path to it. LAYOUT=2 changes the page the way a release does:
+     a toggle inserted above it and the label renamed; LAYOUT=3 adds a step to
+     the path as well. A sequence that reached the toggle by position, by text
+     or by the old path meets each change differently. Placed last so nothing
+     above it moves. -->
+<fieldset id="prefs">
+  <legend>preferences - reached through several steps</legend>
+  <div class="state">on: <strong data-testid="prefs-state">none</strong></div>
+  <button data-testid="open-settings">open settings</button>
+  <ul class="accounts" hidden>
+    <li><button>account one</button></li>
+    <li><button>account two</button></li>
+    <li><button>account three</button></li>
+  </ul>
+  <div class="account-panel" hidden>
+    <div class="state">account: <strong data-testid="account-state">none</strong></div>
+    <button data-testid="open-advanced" hidden>advanced</button>
+    <button data-testid="open-prefs">preferences</button>
+    <ul class="prefs" hidden></ul>
+  </div>
 </fieldset>
 
 <p>open sockets: <span id="count" data-testid="socket-count">0</span></p>
@@ -516,4 +543,50 @@ $('[data-testid=close-all]').addEventListener('click', () => {
   log('closed all');
   refresh();
 });
+
+const LAYOUT = document.querySelector('meta[name=layout]').content;
+const TOGGLES = LAYOUT !== '1'
+  ? [['notifications', 'Notifications'], ['autoplay', 'Autoplay'], ['compact', 'Compact'], ['dark', 'Dark theme']]
+  : [['notifications', 'Notifications'], ['autoplay', 'Autoplay'], ['dark', 'Dark mode']];
+const prefsOn = new Set();
+
+// Only Dark carries a test id: the others are reachable by position or text
+// alone, which is how a recording against an app without test ids reads.
+for (const [key, label] of TOGGLES) {
+  const row = document.createElement('li');
+  const button = document.createElement('button');
+  if (key === 'dark') button.dataset.testid = 'dark-toggle';
+  const draw = () => { button.textContent = `${label}: ${prefsOn.has(key) ? 'on' : 'off'}`; };
+  draw();
+  button.addEventListener('click', async () => {
+    if (prefsOn.has(key)) prefsOn.delete(key); else prefsOn.add(key);
+    draw();
+    $('[data-testid=prefs-state]').textContent = [...prefsOn].join(' ') || 'none';
+    const res = await fetch('/prefs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ [key]: prefsOn.has(key) }),
+    });
+    log(`POST /prefs -> ${res.status} ${key}=${prefsOn.has(key) ? 'on' : 'off'}`);
+  });
+  row.append(button);
+  $('#prefs .prefs').append(row);
+}
+
+$('[data-testid=open-settings]').addEventListener('click', () => { $('#prefs .accounts').hidden = false; });
+for (const button of document.querySelectorAll('#prefs .accounts button')) {
+  button.addEventListener('click', () => {
+    $('[data-testid=account-state]').textContent = button.textContent;
+    $('#prefs .account-panel').hidden = false;
+  });
+}
+// Layout 3 also puts preferences behind advanced, so the old path gains a
+// step. Kept apart from layout 2, where a path that breaks first would stop
+// every sequence before the toggle it was recorded to reach.
+if (LAYOUT === '3') {
+  $('[data-testid=open-advanced]').hidden = false;
+  $('[data-testid=open-prefs]').hidden = true;
+  $('[data-testid=open-advanced]').addEventListener('click', () => { $('[data-testid=open-prefs]').hidden = false; });
+}
+$('[data-testid=open-prefs]').addEventListener('click', () => { $('#prefs .prefs').hidden = false; });
 </script>

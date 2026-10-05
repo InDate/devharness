@@ -1,0 +1,103 @@
+{
+  "_comment": "What the app did under each step of the sequence of the same name, and what answers it on replay. Read and written with that sequence.",
+  "sequence": "seq-1791174468368-1",
+  "name": "prefs-by-text",
+  "steps": {
+    "0": {
+      "traffic": {
+        "requests": 1,
+        "failed": 0,
+        "opened": 0,
+        "writes": 0,
+        "lines": [
+          "GET / 200"
+        ],
+        "shapes": {
+          "http:GET /": 0.3
+        },
+        "seen": {
+          "http:GET /": 1
+        },
+        "windowMs": 28
+      }
+    },
+    "1": {
+      "traffic": {
+        "requests": 0,
+        "failed": 0,
+        "opened": 0,
+        "writes": 0,
+        "lines": [],
+        "shapes": {},
+        "seen": {},
+        "windowMs": 1
+      }
+    },
+    "2": {
+      "traffic": {
+        "requests": 0,
+        "failed": 0,
+        "opened": 0,
+        "writes": 0,
+        "lines": [],
+        "shapes": {},
+        "seen": {},
+        "windowMs": 323
+      }
+    },
+    "3": {
+      "traffic": {
+        "requests": 0,
+        "failed": 0,
+        "opened": 0,
+        "writes": 0,
+        "lines": [],
+        "shapes": {},
+        "seen": {},
+        "windowMs": 323
+      }
+    },
+    "4": {
+      "traffic": {
+        "requests": 0,
+        "failed": 0,
+        "opened": 0,
+        "writes": 0,
+        "lines": [],
+        "shapes": {},
+        "seen": {},
+        "windowMs": 324
+      }
+    },
+    "5": {
+      "traffic": {
+        "requests": 1,
+        "failed": 0,
+        "opened": 0,
+        "writes": 0,
+        "lines": [
+          "POST /prefs 200"
+        ],
+        "shapes": {
+          "http:POST /prefs": 0.7
+        },
+        "seen": {
+          "http:POST /prefs": 1
+        },
+        "windowMs": 321
+      }
+    },
+    "6": {
+      "traffic": {
+        "requests": 0,
+        "failed": 0,
+        "opened": 0,
+        "writes": 0,
+        "lines": [],
+        "shapes": {},
+        "seen": {},
+        "windowMs": 4630
+      }
+    }
+  }
+}

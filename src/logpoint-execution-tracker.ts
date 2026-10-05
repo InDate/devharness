@@ -20,7 +20,7 @@ export interface LogpointMetadata {
   logs: StoredConsoleMessage[];
 }
 
-/** The debugger a logpoint was set on, which pauses when the logpoint reaches its limit. */
+/** The debugger a logpoint was set on, which holds the limit that refuses resume until the counter is reset or the logpoint removed. */
 export interface LogpointOwner {
   handleLogpointLimitExceeded(metadata: LogpointMetadata): Promise<void>;
 }

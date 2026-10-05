@@ -629,8 +629,10 @@ export function createBreakpointTools(
             const logpointKey = `${targetUrl}:${targetLine}`;
             const escapedKey = logpointKey.replace(/'/g, "\\'");
 
-            // Computes the formatted log message; always returns a string so the
-            // outer console.log() call fires exactly once per (allowed) hit.
+            // Computes the formatted log message and a JSON string of each
+            // expression's value, as the two arguments after the location: the
+            // message is read, and the values are compared field by field when
+            // a recorded step's logpoint lines are matched on replay.
             const messageExpression = `(function() {
               try {
                 const values = {};
@@ -673,7 +675,15 @@ export function createBreakpointTools(
                   message += '\\n  [Logpoint] Execution limit reached (${maxExecutions}/${maxExecutions}). Further hits will not be logged.';
                 }
 
-                return message;
+                let fields;
+                try {
+                  fields = JSON.stringify(values, (key, value) =>
+                    value === undefined ? null : typeof value === 'function' ? '[function]' : value);
+                } catch (e) {
+                  fields = JSON.stringify(Object.fromEntries(Object.entries(values).map(([key, value]) => [key, safeStringify(value)])));
+                }
+
+                return [message, fields];
               } catch (e) {
                 if (typeof globalThis.__llmCdpLogpointErrors === 'undefined') {
                   globalThis.__llmCdpLogpointErrors = [];
@@ -689,17 +699,16 @@ export function createBreakpointTools(
                 if (globalThis.__llmCdpLogpointErrors.length > 50) {
                   globalThis.__llmCdpLogpointErrors.shift();
                 }
-                return '[Logpoint Error] ' + e.message;
+                return ['[Logpoint Error] ' + e.message];
               }
             })()`;
 
             // The count and cap sit in a guard before the console.log call, so
-            // logging stops at maxExecutions. The condition's value is always
-            // falsy - console.log returns undefined - so the breakpoint never
-            // pauses, matching native logpoints. The pause at the limit comes
-            // from LogpointExecutionTracker (logpoint-execution-tracker.ts),
-            // which counts the logged messages and pauses this connection at
-            // the maxExecutions-th.
+            // logging stops at maxExecutions. The condition is falsy on every
+            // hit below the limit, so the breakpoint logs without pausing, as a
+            // native logpoint does, and true on the maxExecutions-th, so the
+            // page pauses on this line in the app's own frame. A pause asked for
+            // after the log arrives lands on whatever code runs next instead.
             let logExpression = `(function() {
               if (typeof globalThis.__llmCdpLogpointCounters === 'undefined') {
                 globalThis.__llmCdpLogpointCounters = {};
@@ -707,7 +716,7 @@ export function createBreakpointTools(
               const key = '${escapedKey}';
               globalThis.__llmCdpLogpointCounters[key] = (globalThis.__llmCdpLogpointCounters[key] || 0) + 1;
               return globalThis.__llmCdpLogpointCounters[key] <= ${maxExecutions};
-            })() && (/** DEVTOOLS_LOGPOINT */ console.log('[Logpoint] ${targetUrl}:${targetLine}:${targetColumn || 'auto'}:', ${messageExpression}))
+            })() && (/** DEVTOOLS_LOGPOINT */ console.log('[Logpoint] ${targetUrl}:${targetLine}:${targetColumn || 'auto'}:', ...${messageExpression}), globalThis.__llmCdpLogpointCounters['${escapedKey}'] === ${maxExecutions})
 
 //# sourceURL=debugger://logpoint`;
 

@@ -16,6 +16,10 @@
  * have no change event at all, so they are compared on a timer and as each
  * step ends: a cookie or a file written and removed inside one comparison is
  * not seen.
+ *
+ * A logpoint's line is held beside them, keyed by its file and line with its
+ * expressions' values as the value: it records what code ran under a step,
+ * and a replay compares it with the recording as it compares a write.
  */
 
 import type { CDPSession, Page, Target, WebWorker } from 'puppeteer-core';
@@ -26,9 +30,9 @@ import { movesPerRun } from './bench/kinds.js';
 
 export type WriteStore =
   | 'localStorage' | 'sessionStorage' | 'cookie' | 'indexedDB'
-  | 'cacheStorage' | 'fileSystem' | 'socket' | 'worker';
+  | 'cacheStorage' | 'fileSystem' | 'socket' | 'worker' | 'logpoint';
 
-export type WriteOperation = 'set' | 'changed' | 'removed' | 'cleared' | 'written' | 'started' | 'stopped' | 'closed';
+export type WriteOperation = 'set' | 'changed' | 'removed' | 'cleared' | 'written' | 'started' | 'stopped' | 'closed' | 'logged';
 
 export interface PageWrite {
   id: string;
@@ -186,6 +190,15 @@ export class WriteWatch {
       if (url) this.push({ store: 'socket', operation: 'closed', key: pathOf(url, this.origin) });
     });
     await call(this.client, 'Network.enable').catch(() => {});
+
+    // Runtime replays console calls made before it was enabled; those belong to no step of this watch.
+    const watchedFrom = Date.now();
+    this.client.on('Runtime.consoleAPICalled' as any, (e: any) => {
+      if (typeof e?.timestamp === 'number' && e.timestamp < watchedFrom) return;
+      const line = logpointLine(e?.args ?? []);
+      if (line) this.push({ store: 'logpoint', operation: 'logged', key: line.key, value: line.value });
+    });
+    await call(this.client, 'Runtime.enable').catch(() => {});
 
     this.watchWorkers();
     this.client.on('ServiceWorker.workerRegistrationUpdated' as any, (e: any) => this.registrationsUpdated(e.registrations ?? []));
@@ -488,6 +501,28 @@ export class WriteWatch {
 }
 
 /** One write in a line: `localStorage set draft = {"body":…}`. */
+/**
+ * A logpoint's console call as a key and a value: the file's path and line,
+ * without the query a dev server adds on each rebuild, and the JSON of its
+ * expressions' values, or its message where it logged no values.
+ */
+export function logpointLine(args: Array<{ value?: unknown }>): { key: string; value: string } | undefined {
+  const head = args[0]?.value;
+  if (typeof head !== 'string') return undefined;
+  const at = head.match(/^\[Logpoint\]\s+(.+?):(\d+)(?::(?:auto|\d+))?:$/);
+  if (!at) return undefined;
+  let path = at[1];
+  try {
+    path = new URL(at[1]).pathname;
+  } catch {
+    path = at[1].split('?')[0];
+  }
+  const fields = args[2]?.value;
+  const message = args[1]?.value;
+  const value = typeof fields === 'string' ? fields : typeof message === 'string' ? message : '';
+  return { key: `${path}:${at[2]}`, value };
+}
+
 export function writeLine(write: PageWrite): string {
   const value = write.value !== undefined ? ` = ${write.value.slice(0, 80)}` : '';
   return `${write.store} ${write.operation}${write.key ? ` ${write.key}` : ''}${value}`;

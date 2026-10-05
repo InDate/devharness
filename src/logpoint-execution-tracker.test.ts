@@ -42,7 +42,7 @@ async function logpointOnSecond(maxExecutions: number) {
 }
 
 describe('a logpoint on a named connection', () => {
-  it('reaching its limit pauses that connection, not the active one', async () => {
+  it('reaching its limit records the limit on that connection, not the active one', async () => {
     const { active, named, tracker } = await logpointOnSecond(1);
 
     tracker.handleConsoleMessage(hit(1), named);

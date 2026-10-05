@@ -730,11 +730,8 @@ export class CDPManager {
     maxExecutions: number;
     logs: any[];
   }): Promise<void> {
-    // Store the metadata
+    // The logpoint's own condition pauses the page on its line at this hit.
     this.logpointLimitExceeded = metadata;
-
-    // Pause execution
-    await this.pause();
   }
 
   /**

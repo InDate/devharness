@@ -205,7 +205,8 @@ kills in-flight runs), the id returns `REPLAY_RUN_NOT_FOUND`. Nested sequences
 separate runs. Pass `wait: true` to block until completion and get the full
 result in one call (the pre-0.7 behaviour). `bench: true` plays it instead in
 the bench open on `connection`, from step 1, so its rows, badges and
-check outcomes show there; `replay status` does not track that play.
+check outcomes show there; `replay status` does not track that play. It
+replaces the sequence showing; no `stop`.
 
 Useful `run` parameters:
 

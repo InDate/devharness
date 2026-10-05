@@ -4467,7 +4467,7 @@ Read the whole sequence against the page and tell the person what will not survi
 **Type:** success
 **Summary:** Bench already open on {{connection}}
 
-Bench: `{{benchUrl}}` - the page is {{held}} and the picker is {{pickerState}}; neither was changed.{{#unapplied}} Not applied from this call: {{unapplied}}. Open it in the bench, or stop the bench and start it again with it.{{/unapplied}}
+Bench: `{{benchUrl}}` - the page is {{held}} and the picker is {{pickerState}}; neither was changed.{{#unapplied}} Not applied: {{unapplied}}. Another sequence: `replay({ action: 'run', name, connection: '{{connection}}', bench: true })`, no `stop`.{{/unapplied}}
 
 `bench({ action: 'picker', connection: '{{connection}}', armed: true })` arms the picker; `armed: false` disarms it.
 

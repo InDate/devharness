@@ -14,6 +14,10 @@ tab beside the app — Chrome's split view has no API, so the person splits it.
 Launch the browser with `proxy: true` or the boundary records nothing; a
 running browser cannot gain one.
 
+`start` on an open bench applies nothing. Switch sequence with
+`replay({ action: 'run', name, connection, bench: true })` or the pane's list;
+no `stop`.
+
 ## Nothing is injected into the app
 
 The pane is served from `127.0.0.1` while apps sit on `localhost` — a different

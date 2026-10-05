@@ -15,7 +15,7 @@ import { domChangeMonitor, formatDOMChanges, DOMChanges } from '../dom-change-mo
 import type { ToolResponseMeta, ClickActionMeta } from '../tool-response.js';
 import { abortErrorFor, abortableSleep, isAbortError, throwIfAborted } from '../utils/abort.js';
 import { clickElement } from '../utils/click-element.js';
-import { readFingerprint, refuseOtherElement, type ElementFingerprint } from '../element-fingerprint.js';
+import { readFingerprint, refuseOtherElement, type ElementFingerprint, type ElementRepair } from '../element-fingerprint.js';
 
 // Coordinate schema for mouse actions
 const coordinateSchema = z.object({
@@ -35,7 +35,7 @@ const inputToolSchema = z.object({
 
   // click
   clickCount: z.number().optional(),
-  expect: z.record(z.any()).optional().describe('click: the element meant, as a fingerprint; another element is not clicked'),
+  expect: z.record(z.any()).optional().describe('click/type/hover: the element meant, as a fingerprint; another element is not acted on'),
 
   // type
   text: z.string().optional(),
@@ -165,12 +165,27 @@ const MODIFIER_ALIASES: Record<string, string> = {
 };
 
 /**
- * Chrome on macOS runs editing shortcuts from its menu, which CDP key events
- * never reach, so ⌘A arrives as a bare keydown and selects nothing. The
- * editing command travels with the key instead.
+ * Chrome on macOS runs editing and caret shortcuts as native editing
+ * commands, which CDP key events never reach, so ⌘A arrives as a bare keydown
+ * and selects nothing and ⌘↑ leaves the caret where it was. The editing
+ * command travels with the key instead, keyed by the modifiers held (in
+ * Meta, Alt, Shift order) and the key.
  */
 const MAC_EDITING_COMMANDS: Record<string, string> = {
-  a: 'SelectAll', c: 'Copy', x: 'Cut', v: 'Paste', z: 'Undo', 'Shift+z': 'Redo',
+  'Meta+a': 'SelectAll', 'Meta+c': 'Copy', 'Meta+x': 'Cut', 'Meta+v': 'Paste',
+  'Meta+z': 'Undo', 'Meta+Shift+z': 'Redo',
+  'Meta+ArrowUp': 'MoveToBeginningOfDocument', 'Meta+ArrowDown': 'MoveToEndOfDocument',
+  'Meta+ArrowLeft': 'MoveToBeginningOfLine', 'Meta+ArrowRight': 'MoveToEndOfLine',
+  'Meta+Shift+ArrowUp': 'MoveToBeginningOfDocumentAndModifySelection',
+  'Meta+Shift+ArrowDown': 'MoveToEndOfDocumentAndModifySelection',
+  'Meta+Shift+ArrowLeft': 'MoveToBeginningOfLineAndModifySelection',
+  'Meta+Shift+ArrowRight': 'MoveToEndOfLineAndModifySelection',
+  'Alt+ArrowLeft': 'MoveWordLeft', 'Alt+ArrowRight': 'MoveWordRight',
+  'Alt+ArrowUp': 'MoveToBeginningOfParagraph', 'Alt+ArrowDown': 'MoveToEndOfParagraph',
+  'Alt+Shift+ArrowLeft': 'MoveWordLeftAndModifySelection',
+  'Alt+Shift+ArrowRight': 'MoveWordRightAndModifySelection',
+  'Alt+Backspace': 'DeleteWordBackward', 'Alt+Delete': 'DeleteWordForward',
+  'Meta+Backspace': 'DeleteToBeginningOfLine',
 };
 
 /** `Meta+Shift+a` as the modifiers held and the key pressed; a lone key holds none. */
@@ -184,10 +199,11 @@ function splitKeyCombo(combo: string): { modifiers: string[]; key: string } {
 }
 
 function macEditingCommand(modifiers: string[], key: string): string | undefined {
-  if (process.platform !== 'darwin' || !modifiers.includes('Meta')) return undefined;
-  const rest = modifiers.filter(m => m !== 'Meta');
-  if (rest.some(m => m !== 'Shift')) return undefined;
-  return MAC_EDITING_COMMANDS[`${rest.length ? 'Shift+' : ''}${key.toLowerCase()}`];
+  if (process.platform !== 'darwin' || modifiers.length === 0) return undefined;
+  const held = ['Meta', 'Alt', 'Shift'].filter(m => modifiers.includes(m));
+  if (held.length !== modifiers.length) return undefined;
+  const named = key.length === 1 ? key.toLowerCase() : key;
+  return MAC_EDITING_COMMANDS[[...held, named].join('+')];
 }
 
 /** The focused element, followed down through open shadow roots; null when only the body holds focus. */
@@ -228,6 +244,21 @@ async function bringHiddenPageToFront(page: any): Promise<boolean> {
     await abortableSleep(50);
   }
   return false;
+}
+
+/**
+ * The answer to an input refused for reaching another element than `expect`:
+ * nothing was sent, and `_meta.element` carries the element found and where
+ * the expected one is now.
+ */
+function elementMismatch(action: string, target: string, refused: { line: string; repair: ElementRepair }, fingerprint: ElementFingerprint | undefined) {
+  return {
+    ...createErrorResponse('INPUT_ELEMENT_MISMATCH', { action, target, line: refused.line }),
+    _meta: {
+      tool: 'input', action, timestamp: Date.now(),
+      element: { ...(fingerprint ? { fingerprint } : {}), repair: refused.repair },
+    } satisfies ToolResponseMeta,
+  };
 }
 
 export function createInputTools(
@@ -308,15 +339,7 @@ export function createInputTools(
                 const preClickUrl = page.url();
                 const fingerprint = await readFingerprint(page, { x, y });
                 const refused = await refuseOtherElement(page, args.expect as ElementFingerprint | undefined, fingerprint);
-                if (refused) {
-                  return {
-                    ...createErrorResponse('CLICK_ELEMENT_MISMATCH', { target: `(${x}, ${y})`, line: refused.line }),
-                    _meta: {
-                      tool: 'input', action: 'click', timestamp: Date.now(),
-                      click: { point: { x, y }, preClickUrl, postClickUrl: preClickUrl, navigationOccurred: false, hasClickHandler: false, domChanges: null, fingerprint, repair: refused.repair },
-                    } satisfies ToolResponseMeta,
-                  };
-                }
+                if (refused) return elementMismatch('click', `(${x}, ${y})`, refused, fingerprint);
                 await checkAborted(); // last exit before the click goes on the wire
                 await withReplayBypass(page, () => page.mouse.click(x, y, { clickCount }));
                 const postClickUrl = page.url();
@@ -389,7 +412,7 @@ export function createInputTools(
                   }
 
                   // Check if element is blocked by modal
-                  const blockingCheck = await isElementBlocked(page, selector);
+                  const blockingCheck = await isElementBlocked(page, selector, element);
 
                   if (blockingCheck.blocked && blockingCheck.blockingModal) {
                     if (handleModals) {
@@ -413,7 +436,7 @@ export function createInputTools(
                       }
 
                       // Re-check if element is still blocked
-                      const recheckBlocking = await isElementBlocked(page, selector);
+                      const recheckBlocking = await isElementBlocked(page, selector, element);
                       if (recheckBlocking.blocked) {
                         return {
                           error: `Element still blocked after dismissing modal`,
@@ -430,13 +453,12 @@ export function createInputTools(
                     }
                   }
 
-                  const fingerprint = await readFingerprint(page, { selector });
+                  const fingerprint = await readFingerprint(page, { handle: element });
                   const refused = await refuseOtherElement(page, args.expect as ElementFingerprint | undefined, fingerprint);
                   if (refused) return { selector, fingerprint, refused };
 
                   // Check if element has click handlers
-                  const hasClickHandler = await page.evaluate((sel: string) => {
-                    const el = (globalThis as any).document.querySelector(sel);
+                  const hasClickHandler = await element.evaluate((el: any) => {
                     if (!el) return false;
 
                     // Check for onclick attribute
@@ -462,7 +484,7 @@ export function createInputTools(
                     }
 
                     return false;
-                  }, selector);
+                  });
 
                   // Perform the click - use wrapper to bypass replay blocker overlay
                   await checkAborted(); // last exit before the click goes on the wire
@@ -597,17 +619,7 @@ export function createInputTools(
               await cleanupResolvedSelector(page, selector);
 
               if (result.result?.refused) {
-                return {
-                  ...createErrorResponse('CLICK_ELEMENT_MISMATCH', { target: `\`${rawSelector}\``, line: result.result.refused.line }),
-                  _meta: {
-                    tool: 'input', action: 'click', timestamp: Date.now(),
-                    click: {
-                      selector: rawSelector, preClickUrl, postClickUrl: preClickUrl, navigationOccurred: false,
-                      hasClickHandler: false, domChanges: null,
-                      fingerprint: result.result.fingerprint, repair: result.result.refused.repair,
-                    },
-                  } satisfies ToolResponseMeta,
-                };
+                return elementMismatch('click', `\`${rawSelector}\``, result.result.refused, result.result.fingerprint);
               }
 
               // Check if element was not found
@@ -785,8 +797,12 @@ export function createInputTools(
                     return { error: `Element not found: ${selector}` };
                   }
 
+                  const fingerprint = await readFingerprint(page, { handle: element });
+                  const refused = await refuseOtherElement(page, args.expect as ElementFingerprint | undefined, fingerprint);
+                  if (refused) return { selector, fingerprint, refused };
+
                   // Check if element is blocked by modal
-                  const blockingCheck = await isElementBlocked(page, selector);
+                  const blockingCheck = await isElementBlocked(page, selector, element);
 
                   if (blockingCheck.blocked && blockingCheck.blockingModal) {
                     if (handleModals) {
@@ -810,7 +826,7 @@ export function createInputTools(
                       }
 
                       // Re-check if element is still blocked
-                      const recheckBlocking = await isElementBlocked(page, selector);
+                      const recheckBlocking = await isElementBlocked(page, selector, element);
                       if (recheckBlocking.blocked) {
                         return {
                           error: `Element still blocked after dismissing modal`,
@@ -850,7 +866,7 @@ export function createInputTools(
                     return element.textContent || '';
                   });
 
-                  return { selector, text, currentValue };
+                  return { selector, text, currentValue, fingerprint };
                 },
                 'typeText'
               );
@@ -876,6 +892,10 @@ export function createInputTools(
 
               // Clean up temporary selector attribute
               await cleanupResolvedSelector(page, selector);
+
+              if (result.result?.refused) {
+                return elementMismatch('type', `\`${rawSelector}\``, result.result.refused, result.result.fingerprint);
+              }
 
               // A failed dispatch, an absent element or a blocking modal
               if (!result.result || result.result.error) {
@@ -904,6 +924,7 @@ export function createInputTools(
                       text: `Typed into element \`${rawSelector}\`${changesText}\n\nCurrent value: ${result.result?.currentValue}\n\n**Warning:** ${selectorWarning}`,
                     },
                   ],
+                  _meta: { tool: 'input', action: 'type', timestamp: Date.now(), ...(result.result?.fingerprint ? { element: { fingerprint: result.result.fingerprint } } : {}) },
                 };
               }
 
@@ -915,6 +936,7 @@ export function createInputTools(
                     text: `Text typed into \`${rawSelector}\`: "${text}"${changesText}`,
                   },
                 ],
+                _meta: { tool: 'input', action: 'type', timestamp: Date.now(), ...(result.result?.fingerprint ? { element: { fingerprint: result.result.fingerprint } } : {}) },
               };
             }
 
@@ -1005,8 +1027,12 @@ export function createInputTools(
                     return { error: `Element not found: ${selector}` };
                   }
 
+                  const fingerprint = await readFingerprint(page, { handle: element });
+                  const refused = await refuseOtherElement(page, args.expect as ElementFingerprint | undefined, fingerprint);
+                  if (refused) return { selector, fingerprint, refused };
+
                   // Check if element is blocked by modal
-                  const blockingCheck = await isElementBlocked(page, selector);
+                  const blockingCheck = await isElementBlocked(page, selector, element);
 
                   if (blockingCheck.blocked && blockingCheck.blockingModal) {
                     if (handleModals) {
@@ -1030,7 +1056,7 @@ export function createInputTools(
                       }
 
                       // Re-check if element is still blocked
-                      const recheckBlocking = await isElementBlocked(page, selector);
+                      const recheckBlocking = await isElementBlocked(page, selector, element);
                       if (recheckBlocking.blocked) {
                         return {
                           error: `Element still blocked after dismissing modal`,
@@ -1049,7 +1075,7 @@ export function createInputTools(
 
                   await checkAborted(); // last exit before the hover goes on the wire
                   await withReplayBypass(page, () => hoverSelector(page, selector));
-                  return { selector };
+                  return { selector, fingerprint };
                 },
                 'hoverElement'
               );
@@ -1075,6 +1101,10 @@ export function createInputTools(
 
               // Clean up temporary selector attribute
               await cleanupResolvedSelector(page, selector);
+
+              if (result.result?.refused) {
+                return elementMismatch('hover', `\`${rawSelector}\``, result.result.refused, result.result.fingerprint);
+              }
 
               // A failed dispatch, an absent element or a blocking modal
               if (!result.result || result.result.error) {
@@ -1103,6 +1133,7 @@ export function createInputTools(
                       text: `Hovered over element \`${rawSelector}\`${changesText}\n\n**Warning:** ${selectorWarning}`,
                     },
                   ],
+                  _meta: { tool: 'input', action: 'hover', timestamp: Date.now(), ...(result.result?.fingerprint ? { element: { fingerprint: result.result.fingerprint } } : {}) },
                 };
               }
 
@@ -1114,6 +1145,7 @@ export function createInputTools(
                     text: `Hovered over element: \`${rawSelector}\`${changesText}`,
                   },
                 ],
+                _meta: { tool: 'input', action: 'hover', timestamp: Date.now(), ...(result.result?.fingerprint ? { element: { fingerprint: result.result.fingerprint } } : {}) },
               };
             }
 

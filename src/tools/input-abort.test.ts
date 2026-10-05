@@ -49,6 +49,7 @@ function makePage(opts: { onDispatch?: (d: Dispatch) => void; elementExists?: bo
     $: vi.fn(async () => (opts.elementExists === false ? null : {
       scrollIntoView: vi.fn(async () => {}),
       clickablePoint: vi.fn(async () => ({ x: 10, y: 20 })),
+      evaluate: vi.fn(async () => true),
       dispose: vi.fn(async () => {}),
     })),
     click: vi.fn(async (...a: any[]) => record('page.click', ...a)),

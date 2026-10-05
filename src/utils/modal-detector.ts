@@ -276,13 +276,15 @@ export async function detectModals(
  */
 export async function isElementBlocked(
   page: Page,
-  selector: string
+  selector: string,
+  /** The element itself, where the caller holds it: a selector piercing shadow roots does not resolve in querySelector. */
+  handle?: unknown
 ): Promise<{ blocked: boolean; blockingModal?: DetectedModal }> {
   await debugLog('ModalDetector', `Checking if element ${selector} is blocked`);
 
-  const result = await page.evaluate((sel: string) => {
+  const result = await page.evaluate((sel: string, given: any) => {
     const global: any = globalThis;
-    const element = global.document.querySelector(sel);
+    const element = given ?? global.document.querySelector(sel);
     if (!element) {
       return { blocked: false, error: 'Element not found' };
     }
@@ -291,8 +293,15 @@ export async function isElementBlocked(
     const centerX = rect.left + rect.width / 2;
     const centerY = rect.top + rect.height / 2;
 
-    // Check what element is at the target's center point
-    const topElement = global.document.elementFromPoint(centerX, centerY);
+    // Check what element is at the target's center point. The document
+    // answers with a shadow host for anything inside its shadow root, so the
+    // point is followed down through open roots to what is really there.
+    let topElement = global.document.elementFromPoint(centerX, centerY);
+    while (topElement?.shadowRoot) {
+      const inner = topElement.shadowRoot.elementFromPoint(centerX, centerY);
+      if (!inner || inner === topElement) break;
+      topElement = inner;
+    }
 
     if (!topElement) {
       return { blocked: false };
@@ -343,7 +352,7 @@ export async function isElementBlocked(
     }
 
     return { blocked: true, blockingElement: null };
-  }, selector);
+  }, selector, handle ?? null);
 
   if (!result.blocked) {
     await debugLog('ModalDetector', `Element ${selector} is not blocked`);

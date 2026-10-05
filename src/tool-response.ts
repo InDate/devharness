@@ -66,8 +66,6 @@ export interface ClickActionMeta {
   } | null;
   /** The element the click acted on, read just before it was sent. */
   fingerprint?: ElementFingerprint;
-  /** On a click refused for reaching another element than `expect`: where that element is now. */
-  repair?: ElementRepair;
 }
 
 /**
@@ -326,6 +324,8 @@ export interface ToolResponseMeta {
   workerTargets?: WorkerTargetMeta[];
   // Action-specific structured data
   click?: ClickActionMeta;
+  /** The element a type or hover acted on, or, on an input refused for reaching another element, the one found and where the expected one is now. */
+  element?: { fingerprint?: ElementFingerprint; repair?: ElementRepair };
   type?: TypeActionMeta;
   navigate?: NavigateActionMeta;
   debugger?: DebuggerStatusMeta;

@@ -984,15 +984,15 @@ No element has focus, so typed text has nowhere to go.
 
 ---
 
-## CLICK_ELEMENT_MISMATCH
+## INPUT_ELEMENT_MISMATCH
 
 **Type:** error
-**Code:** CLICK_ELEMENT_MISMATCH
+**Code:** INPUT_ELEMENT_MISMATCH
 
-Not clicked: {{target}} reaches another element than the one expected - {{line}}. Nothing was sent.
+Not sent: {{action}} on {{target}} reaches another element than the one expected - {{line}}. Nothing was sent.
 
 **Suggestions:**
-- `_meta.click.repair.selector`, where present, is where the expected element is now
+- `_meta.element.repair.selector`, where present, is where the expected element is now
 - In a run, the run pauses here and `replay({ action: 'repair', accept })` repairs the step
 
 ---

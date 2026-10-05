@@ -24,7 +24,7 @@ export interface ElementFingerprint {
   path: string[];
 }
 
-export type FingerprintTarget = { selector: string } | { x: number; y: number };
+export type FingerprintTarget = { selector: string } | { x: number; y: number } | { handle: unknown };
 
 /**
  * What a step that hit another element can be repaired to. `selector` is
@@ -60,38 +60,77 @@ export function compareFingerprints(
 }
 
 /**
- * The page-side search for a fingerprint: every element carrying its strict
- * fields, and a selector built from the strongest of them where exactly one
- * does. Serialised into an expression, so it reads nothing outside itself.
- * Light DOM only: a selector into a shadow root needs a piercing step this
- * search does not build.
+ * The page-side search for a fingerprint: every element, in the document and
+ * in every open shadow root, whose own fingerprint carries the same strict
+ * fields, and a selector that resolves to it where exactly one does. A selector
+ * into a shadow root is a chain of `host >>> inner` steps, one per root, each
+ * step unique in its scope; the chain is kept only when it resolves back to
+ * the element. `fingerprintOf` is `fingerprintInPage`, passed in because both
+ * are serialised into the page.
  */
-function locateInPage(fp: ElementFingerprint): { count: number; selector?: string } {
+function locateInPage(fp: ElementFingerprint, fingerprintOf: (t: any, given?: any) => any): { count: number; selector?: string } {
   const doc = (globalThis as any).document;
   const TEST_ATTRS = ['data-testid', 'data-test-id', 'data-test', 'data-cy', 'data-qa'];
+  const STRICT = ['tag', 'testid', 'id', 'name', 'role', 'label'];
   const esc = (v: string) => (globalThis as any).CSS.escape(v);
-  const squash = (s: string | null | undefined) => (s ?? '').replace(/\s+/g, ' ').trim();
-  let candidates: any[];
-  let selector: string | undefined;
-  if (fp.testid) {
-    const attr = TEST_ATTRS.find(a => doc.querySelector(`[${a}="${esc(fp.testid!)}"]`));
-    selector = attr ? `[${attr}="${fp.testid}"]` : undefined;
-    candidates = attr ? [...doc.querySelectorAll(`[${attr}="${esc(fp.testid)}"]`)] : [];
-  } else if (fp.id) {
-    selector = `#${esc(fp.id)}`;
-    candidates = [...doc.querySelectorAll(selector)];
-  } else if (fp.name) {
-    selector = `${fp.tag}[name="${fp.name}"]`;
-    candidates = [...doc.querySelectorAll(`${fp.tag}[name="${esc(fp.name)}"]`)];
-  } else {
-    const words = fp.label ?? fp.text;
-    candidates = [...doc.querySelectorAll(fp.tag)].filter((el: any) =>
-      words !== undefined && (squash(el.getAttribute('aria-label')) === words || squash(el.textContent).slice(0, 80) === words));
-    selector = words !== undefined ? `${fp.tag}:has-text(${JSON.stringify(words)})` : undefined;
+
+  const all: any[] = [];
+  const walk = (root: any) => {
+    for (const el of root.querySelectorAll('*')) {
+      all.push(el);
+      if (el.shadowRoot) walk(el.shadowRoot);
+    }
+  };
+  walk(doc);
+  const candidates = all.filter(el => {
+    if (el.tagName.toLowerCase() !== fp.tag) return false;
+    const seen = fingerprintOf({}, el);
+    return STRICT.every(field => (fp as any)[field] === undefined || (fp as any)[field] === seen?.[field]);
+  });
+  if (candidates.length !== 1) return { count: candidates.length };
+  const target = candidates[0];
+
+  // One simple selector for an element, unique in the scope it sits in.
+  const stepFor = (el: any, scope: any): string | undefined => {
+    const tag = el.tagName.toLowerCase();
+    const attr = TEST_ATTRS.find(a => el.getAttribute(a));
+    const options = [
+      attr ? `[${attr}="${esc(el.getAttribute(attr))}"]` : undefined,
+      el.id ? `#${esc(el.id)}` : undefined,
+      el.getAttribute('name') ? `${tag}[name="${esc(el.getAttribute('name'))}"]` : undefined,
+      tag,
+    ].filter(Boolean) as string[];
+    return options.find(option => scope.querySelectorAll(option).length === 1 && scope.querySelector(option) === el);
+  };
+
+  const chain: any[] = [target];
+  let root = target.getRootNode();
+  while (root && root !== doc && root.host) {
+    chain.unshift(root.host);
+    root = root.host.getRootNode();
   }
-  candidates = candidates.filter((el: any) => el.tagName.toLowerCase() === fp.tag
-    && (fp.name === undefined || el.getAttribute('name') === fp.name));
-  return candidates.length === 1 && selector ? { count: 1, selector } : { count: candidates.length };
+  const steps: string[] = [];
+  for (let i = 0; i < chain.length; i++) {
+    const scope = i === 0 ? doc : chain[i - 1].shadowRoot;
+    const step = stepFor(chain[i], scope);
+    if (!step) {
+      // A light-DOM element with nothing unique on it is named by its words,
+      // which devharness resolves; inside a shadow root nothing resolves those.
+      const words = fp.label ?? fp.text;
+      return chain.length === 1 && words !== undefined
+        ? { count: 1, selector: `${fp.tag}:has-text(${JSON.stringify(words)})` }
+        : { count: 1 };
+    }
+    steps.push(step);
+  }
+  let resolved: any = doc.querySelector(steps[0]);
+  for (let i = 1; i < steps.length; i++) resolved = resolved?.shadowRoot?.querySelector(steps[i]) ?? null;
+  return resolved === target ? { count: 1, selector: steps.join(' >>> ') } : { count: 1 };
+}
+
+/** The expression that runs `locateInPage` for `fingerprint`. */
+function locateExpression(fingerprint: ElementFingerprint): string {
+  return `(${locateInPage.toString()})(${JSON.stringify(fingerprint)}, ${fingerprintInPage.toString()})`;
 }
 
 /**
@@ -104,15 +143,14 @@ export async function locateFingerprint(
   connection: string,
   fingerprint: ElementFingerprint
 ): Promise<{ count: number; selector?: string } | undefined> {
-  const expression = `(${locateInPage.toString()})(${JSON.stringify(fingerprint)})`;
-  const result = await executeToolCall('inspect', { action: 'evaluateExpression', connection, expression }).catch(() => null);
+  const result = await executeToolCall('inspect', { action: 'evaluateExpression', connection, expression: locateExpression(fingerprint) }).catch(() => null);
   const value = result?._meta?.inspect?.value;
   return value && typeof value.count === 'number' ? value : undefined;
 }
 
 /** `locateFingerprint` on a page held directly, as the input tool holds it. */
 export async function locateFingerprintOnPage(page: any, fingerprint: ElementFingerprint): Promise<{ count: number; selector?: string } | undefined> {
-  return page.evaluate(locateInPage, fingerprint).catch(() => undefined);
+  return page.evaluate(locateExpression(fingerprint)).catch(() => undefined);
 }
 
 /**
@@ -149,7 +187,25 @@ export function describeFingerprint(fingerprint: ElementFingerprint): string {
  * ancestor so a click on a button's inner span reads as the button.
  */
 export async function readFingerprint(page: any, target: FingerprintTarget): Promise<ElementFingerprint | undefined> {
-  return page.evaluate((t: any) => {
+  if ('handle' in target) return page.evaluate(fingerprintInPage, { handle: true }, target.handle).catch(() => undefined);
+  return page.evaluate(fingerprintInPage, target).catch(() => undefined);
+}
+
+/** `readFingerprint` through a tool call, for code that holds no page. */
+export async function readFingerprintVia(
+  executeToolCall: (tool: string, params: Record<string, any>) => Promise<any>,
+  connection: string,
+  target: FingerprintTarget
+): Promise<ElementFingerprint | undefined> {
+  const expression = `(${fingerprintInPage.toString()})(${JSON.stringify(target)})`;
+  const result = await executeToolCall('inspect', { action: 'evaluateExpression', connection, expression }).catch(() => null);
+  const value = result?._meta?.inspect?.value;
+  return value && typeof value.tag === 'string' ? value : undefined;
+}
+
+/** The page-side read behind `readFingerprint`. Serialised into the page, so it reads nothing outside itself. */
+function fingerprintInPage(t: any, given?: any): ElementFingerprint | undefined {
+  {
     const doc = (globalThis as any).document;
     const TEST_ATTRS = ['data-testid', 'data-test-id', 'data-test', 'data-cy', 'data-qa'];
     const INTERACTIVE = 'a[href],button,input,select,textarea,summary,label,[role],[onclick],[contenteditable=""],[contenteditable=true],[tabindex]';
@@ -160,7 +216,9 @@ export async function readFingerprint(page: any, target: FingerprintTarget): Pro
     const parentOf = (el: any) => el.parentElement ?? (el.parentNode?.host ?? null);
 
     let el: any = null;
-    if ('selector' in t) {
+    if (given) {
+      el = given;
+    } else if ('selector' in t) {
       el = doc.querySelector(t.selector);
     } else {
       el = doc.elementFromPoint(t.x, t.y);
@@ -214,6 +272,6 @@ export async function readFingerprint(page: any, target: FingerprintTarget): Pro
     if (role) fingerprint.role = role;
     if (label) fingerprint.label = label;
     if (text) fingerprint.text = text;
-    return fingerprint;
-  }, target).catch(() => undefined);
+    return fingerprint as unknown as ElementFingerprint;
+  }
 }

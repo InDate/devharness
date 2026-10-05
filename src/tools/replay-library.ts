@@ -4,6 +4,8 @@
  */
 import { getProxy } from '../proxy/registry.js';
 import { tallyShapes } from '../proxy/intercept-proxy.js';
+import { countStepTraffic } from '../step-traffic.js';
+import type { ExecuteToolCall } from '../types.js';
 import { announceSequenceSaved } from '../sequence-events.js';
 import type { CommandRecorder, CommandSequence, RecordedCommand } from '../command-recorder.js';
 import { createSuccessResponse, createErrorResponse } from '../messages.js';
@@ -14,7 +16,12 @@ import { generatePuppeteerCode, generatePlaywrightCode } from './replay-codegen.
 import { type ReplayArgs } from './replay-schema.js';
 import { validateSequenceToolNames, handleLoadSequenceError } from './replay-validation.js';
 
-export async function handleCreate(args: ReplayArgs, recorder: CommandRecorder, getKnownToolNames?: () => string[]) {
+export async function handleCreate(
+  args: ReplayArgs,
+  recorder: CommandRecorder,
+  executeToolCall: ExecuteToolCall,
+  getKnownToolNames?: () => string[]
+) {
   if (!args.name) {
     return createErrorResponse('MISSING_PARAMETER', {
       action: 'create',
@@ -80,10 +87,6 @@ export async function handleCreate(args: ReplayArgs, recorder: CommandRecorder, 
         unmeasured.push(position + 1);
         continue;
       }
-      const tally = tallyShapes(recordingProxy.eventsForCommand(command.recordedAt), rules);
-      const traffic = (command.traffic ??= { requests: 0, failed: 0, opened: 0, writes: 0, lines: [] });
-      traffic.shapes = tally.weight;
-      traffic.seen = tally.seen;
       // Held from this command until its boundary was released, which is the
       // span it owns. The next command's timestamp stands in for a command
       // whose release has not been recorded - one still settling, or one from
@@ -93,7 +96,21 @@ export async function handleCreate(args: ReplayArgs, recorder: CommandRecorder, 
       const began = entry?.timestamp;
       const nextAt = recorder.getCommand(command.recordedAt + 1)?.timestamp;
       const ended = entry?.releasedAt ?? nextAt ?? Date.now();
-      if (began) traffic.windowMs = ended - began;
+      const counted = began
+        ? await countStepTraffic(executeToolCall, normalized.hoisted!, began, ended)
+        : undefined;
+      if (!counted) {
+        unmeasured.push(position + 1);
+        continue;
+      }
+      const tally = tallyShapes(recordingProxy.eventsForCommand(command.recordedAt), rules);
+      command.traffic = {
+        ...command.traffic,
+        ...counted,
+        shapes: tally.weight,
+        seen: tally.seen,
+        windowMs: ended - began!,
+      };
     }
     if (unmeasured.length > 0) {
       (sequence as any).shapesUnmeasured = unmeasured;
@@ -102,7 +119,7 @@ export async function handleCreate(args: ReplayArgs, recorder: CommandRecorder, 
 
   const dropped = (sequence as any).shapesUnmeasured as number[] | undefined;
   const note = dropped
-    ? `\n\nStep(s) ${dropped.join(', ')} carry no boundary evidence: the proxy had already dropped their events. Those steps are left out of the traffic comparison rather than compared against nothing.`
+    ? `\n\nStep(s) ${dropped.join(', ')} carry no boundary evidence: the proxy had already dropped their events, or the network log for their window could not be read. Those steps are left out of the traffic comparison rather than compared against nothing.`
     : '';
   return { content: [{ type: 'text', text: formatSequenceCreated(sequence) + formatConnectionNote(normalized) + note }] };
 }

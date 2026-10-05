@@ -39,7 +39,7 @@ export function createReplayTools(
           case 'history':
             return handleHistory(args, commandRecorder);
           case 'create':
-            return handleCreate(args, commandRecorder, getKnownToolNames);
+            return handleCreate(args, commandRecorder, executeToolCall, getKnownToolNames);
           case 'list':
             return handleList(args, commandRecorder);
           case 'get':

@@ -25,6 +25,7 @@ import { getBenchSession } from './session.js';
 import type { Annotation, AnnotationTarget } from '../annotation.js';
 import { NO_TOOL_VALUES, type BoundaryRule, type HiddenKind, type RuleCatalogueEntry, type SequenceNote, type ServerLog, type ServerRow, type ToolGroup, type ToolValues } from '../bench/wire.js';
 import { unlisted } from '../call-origin.js';
+import { countStepTraffic } from '../step-traffic.js';
 import { CANCELLED } from './session.js';
 
 /**
@@ -1133,47 +1134,9 @@ export function createSequenceDriver(
       return persist(sequence, `traffic recorded for ${entries.length} step${entries.length === 1 ? '' : 's'}`);
     },
 
-    trafficIn: (connection: string, from: number, to: number) => unlisted(async () => {
-      const empty = { requests: 0, failed: 0, opened: 0, writes: 0, lines: [] as string[] };
-      const http = await executeToolCall('network', {
-        action: 'list', connection, since: from, until: to, limit: 50,
-      }).catch(() => null);
-      const rows = http?._meta?.network?.requests ?? [];
-      // A transport counts against the action that OPENED it, by its open
-      // clock. What it later carries does not: a socket opened by one action
-      // can be sent on by another, and what comes back belongs where it
-      // arrived, not to whoever opened the pipe.
-      const inWindow = (t: any) => t.openedAt >= from && t.openedAt < to;
-      const sockets = await executeToolCall('network', {
-        action: 'sockets', connection,
-      }).catch(() => null);
-      const streams = await executeToolCall('network', {
-        action: 'streams', connection,
-      }).catch(() => null);
-      const transports = [
-        ...(sockets?._meta?.socketList ?? []).filter(inWindow),
-        ...(streams?._meta?.streamList ?? []).filter(inWindow),
-      ];
-      const stored = await executeToolCall('storage', {
-        action: 'writes', connection, since: from, until: to,
-      }).catch(() => null);
-      const written = (stored?._meta?.storage?.writes ?? []) as any[];
-      if (rows.length === 0 && transports.length === 0 && written.length === 0) return empty;
-      return {
-        requests: rows.length,
-        failed: rows.filter((r: any) => r.failed || (r.status ?? 0) >= 400).length,
-        opened: transports.length,
-        writes: written.length,
-        lines: [
-          ...rows.slice(0, 8).map((r: any) => {
-            const path = (() => { try { return new URL(r.url).pathname; } catch { return r.url; } })();
-            return `${r.method} ${path} ${r.failed ? 'failed' : (r.status ?? 'pending')}`;
-          }),
-          ...transports.slice(0, 4).map((t: any) => `opened ${t.url}`),
-          ...written.slice(0, 4).map((w: any) => `${w.area}Storage ${w.operation} ${w.key ?? ''}`.trim()),
-        ],
-      };
-    }),
+    trafficIn: async (connection: string, from: number, to: number) =>
+      (await countStepTraffic(executeToolCall, connection, from, to))
+        ?? { requests: 0, failed: 0, opened: 0, writes: 0, lines: [] },
 
     recordedSoFar: (eventsJson: string, startUrl: string, edits?: Map<number, Record<string, unknown>>) => {
       let events: any[] = [];

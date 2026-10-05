@@ -875,7 +875,7 @@ export async function performRun(
     // one.
     response += `\n\n**Boundary behaviour differs from the recording**`;
     for (const d of execResult.behaviourDrift) {
-      const moved = (['requests', 'failed', 'events', 'writes'] as const)
+      const moved = (['requests', 'failed', 'opened', 'writes'] as const)
         .filter(f => d.recorded[f] !== d.observed[f])
         .map(f => `${f} ${d.recorded[f]} → ${d.observed[f]}`)
         .join(', ');

@@ -33,6 +33,7 @@ export * from './replay-connections.js';
 export * from './replay-conditions.js';
 export * from './replay-step-checks.js';
 import type { ExecutionContext, StepResult, BreakpointHitInfo, ExecutionResult } from './replay-types.js';
+import { countStepTraffic } from '../step-traffic.js';
 import {
   TOOLS_ACCEPTING_CONNECTION, actsWithoutConnection, analyzeSequenceConnections, extractConnectionFromSequence,
   analyzeRecordedStepConnections, probeLiveConnectionReferences, formatMissingStepConnection,
@@ -1750,30 +1751,17 @@ async function compareBehaviour(
       ?? stepStartedAt.get(indices[position + 1])
       ?? Date.now();
 
-    const http = await executeToolCall('network', {
-      action: 'list', connection, since: from, until: to, limit: 100000,
-    }).catch(() => null);
-    const rows = http?._meta?.network?.requests ?? [];
-    const streams = await executeToolCall('network', {
-      action: 'streams', connection, since: from, until: to,
-    }).catch(() => null);
-    const events = (streams?._meta?.streamList ?? []).reduce(
-      (total: number, s: any) => total + (s.events ?? 0), 0);
-    const stored = await executeToolCall('storage', {
-      action: 'writes', connection, since: from, until: to,
-    }).catch(() => null);
-    const writes = (stored?._meta?.storage?.writes ?? []).length;
-
+    const counted = await countStepTraffic(executeToolCall, connection!, from, to);
     const observed = {
-      requests: rows.length,
-      failed: rows.filter((r: any) => r.failed || (r.status ?? 0) >= 400).length,
-      events,
-      writes,
+      requests: counted?.requests ?? 0,
+      failed: counted?.failed ?? 0,
+      opened: counted?.opened ?? 0,
+      writes: counted?.writes ?? 0,
     };
     const before = {
       requests: recorded.requests ?? 0,
       failed: recorded.failed ?? 0,
-      events: recorded.events ?? 0,
+      opened: recorded.opened ?? 0,
       writes: recorded.writes ?? 0,
     };
     // Read off the stamps rather than a clock window: a consequence arriving
@@ -1799,7 +1787,8 @@ async function compareBehaviour(
     const heldFor = to - from;
     const recordedWindow = commands[index].traffic?.windowMs;
 
-    const differs = (['requests', 'failed', 'events', 'writes'] as const)
+    // A replay whose network log could not be read has no counts to compare.
+    const differs = counted !== undefined && (['requests', 'failed', 'opened', 'writes'] as const)
       .some(field => before[field] !== observed[field]);
     if (differs || shapesDiffer || countDiffer) {
       drift.push({

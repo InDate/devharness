@@ -144,8 +144,8 @@ export interface ExecutionResult {
   behaviourDrift?: Array<{
     step: number;
     label: string;
-    recorded: { requests: number; failed: number; events: number; writes: number };
-    observed: { requests: number; failed: number; events: number; writes: number };
+    recorded: { requests: number; failed: number; opened: number; writes: number };
+    observed: { requests: number; failed: number; opened: number; writes: number };
     /**
      * What crossed the boundary, per payload shape, weighted by how much of
      * each event this step owns. Present where the recording and the replay

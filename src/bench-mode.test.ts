@@ -1238,6 +1238,63 @@ describe('stepping a sequence', () => {
     expect(after!.name).toBeUndefined();
   });
 
+  /** A run that a breakpoint the sequence did not set stops at step `at`, until a later step moves it on. */
+  function heldAt(sequences: ReturnType<typeof fakeSequences>, at: number) {
+    const open = sequences.active;
+    let ended = false;
+    sequences.active = () => {
+      const active = open();
+      if (!active) return null;
+      if (ended) return { ...active, currentStep: active.total };
+      return { ...active, live: true, ...(active.currentStep === at ? { heldAt: 'http://localhost:3101/client.js:180' } : {}) };
+    };
+    return { endElsewhere: () => { ended = true; } };
+  }
+
+  it('stops a play on the step a breakpoint holds, reading paused there', async () => {
+    const client = createFakeClient();
+    const sequences = fakeSequences();
+    heldAt(sequences, 2);
+    await startWithSequences(client, sequences);
+    await selectSequence(CONNECTION, 'checkout-flow');
+
+    const state = await playSequence(CONNECTION);
+
+    expect(state).toMatchObject({ currentStep: 2, paused: true, heldAt: 'http://localhost:3101/client.js:180' });
+    expect(state!.failure).toBeUndefined();
+    expect(sequences.calls.filter(c => c === 'step')).toHaveLength(2);
+  });
+
+  it('carries a play through the hold where it runs unattended', async () => {
+    const client = createFakeClient();
+    const sequences = fakeSequences();
+    heldAt(sequences, 2);
+    await startWithSequences(client, sequences);
+    await selectSequence(CONNECTION, 'checkout-flow');
+
+    const state = await playSequence(CONNECTION, { throughHolds: true });
+
+    expect(state).toMatchObject({ currentStep: 3 });
+    expect(state!.paused).toBeUndefined();
+    expect(sequences.calls.filter(c => c === 'step')).toHaveLength(3);
+  });
+
+  it('stops reading paused once the held run is ended outside the bench', async () => {
+    const client = createFakeClient();
+    const sequences = fakeSequences();
+    const run = heldAt(sequences, 2);
+    await startWithSequences(client, sequences);
+    await selectSequence(CONNECTION, 'checkout-flow');
+    await playSequence(CONNECTION);
+
+    run.endElsewhere();
+    const state = await getSequenceState(CONNECTION);
+
+    expect(state).toMatchObject({ currentStep: 3, total: 3 });
+    expect(state!.paused).toBeUndefined();
+    expect(state!.heldAt).toBeUndefined();
+  });
+
   it('shows why a step stopped, since replay reports a failure rather than throwing', async () => {
     const client = createFakeClient();
     const sequences = fakeSequences();

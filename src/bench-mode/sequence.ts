@@ -92,6 +92,9 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
 
   const issue = await session.sequences.issue().catch(() => undefined);
 
+  // A run ended outside the bench, by a tool's finish or step, leaves nothing to carry on from.
+  if (session.sequencePaused && !active.live && !session.sequencePlaying) session.sequencePaused = false;
+
   return {
     available,
     catalogue,
@@ -113,6 +116,7 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
     })(),
     ...(session.sequencePlaying ? { playing: true } : {}),
     ...(session.sequencePaused ? { paused: true } : {}),
+    ...(active.heldAt ? { heldAt: active.heldAt } : {}),
     ...(session.recordingSequence ? { recording: true } : {}),
     variables: active.variables,
     ...(active.placements ? { placements: active.placements } : {}),
@@ -439,7 +443,11 @@ function holdRecordingNote(session: BenchSession, index: number, comment: string
  * the rest of the run with it. Stepping gives each action its own release and
  * its own settle, which is the path that demonstrably works.
  */
-export async function playSequence(connection: string): Promise<SequenceState | undefined> {
+/**
+ * `throughHolds` carries a play past a breakpoint the sequence did not set, for
+ * a pass that runs unattended: the next step resumes the page.
+ */
+export async function playSequence(connection: string, options: { throughHolds?: boolean } = {}): Promise<SequenceState | undefined> {
   const session = sessions.get(connection);
   if (!session?.sequences) return undefined;
 
@@ -475,6 +483,10 @@ export async function playSequence(connection: string): Promise<SequenceState | 
           break;
         }
         if (!state || state.failure) break;
+        if (state.heldAt && !options.throughHolds) {
+          session.sequencePaused = true;
+          break;
+        }
         if (state.currentStep >= state.total) break;
         if (state.currentStep === before) break;
       }

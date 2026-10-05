@@ -9,6 +9,7 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import { createSequenceDriver } from '../bench-mode/sequence-driver.js';
+import { runRegistry } from './replay-run-registry.js';
 
 /** A recorder holding two sequences, with one of them mid-run. */
 function recorderWith(runningName: string | null) {
@@ -61,5 +62,59 @@ describe('whose run a bench reads', () => {
 
     expect(driver.active()?.name).toBe('socket-live-lifecycle');
     expect(driver.active()?.currentStep).toBe(1);
+  });
+});
+
+describe('a run the bench follows', () => {
+  function recorderRunning(state: any) {
+    const sequence = { id: 'b', name: 'socket-live-lifecycle', commands: [
+      { tool: 'navigate', params: { url: 'http://localhost:7788/' } },
+      { tool: 'input', params: { action: 'click', selector: 'button' } },
+      { tool: 'input', params: { action: 'click', selector: 'button' } },
+    ] };
+    let running: any = { sequenceId: 'b', sequenceName: sequence.name, totalSteps: 3, ...state };
+    return {
+      end: () => { running = null; },
+      recorder: {
+        getActiveSequence: () => running,
+        getSequence: () => sequence,
+        listSequences: () => [sequence],
+        listSavedSequencesOnDisk: async () => [],
+      } as any,
+    };
+  }
+
+  it('reads where a breakpoint holds the run', () => {
+    const { recorder } = recorderRunning({ currentStep: 2, breakpointHit: { url: 'http://localhost:3101/client.js', lineNumber: 180 } });
+    const driver = createSequenceDriver(recorder, async () => ({ content: [{ type: 'text', text: 'ok' }] }), () => []);
+
+    expect(driver.active()).toMatchObject({ currentStep: 2, live: true, heldAt: 'http://localhost:3101/client.js:180' });
+  });
+
+  it('reads a run finished from the tool side as at its end', async () => {
+    const { recorder, end } = recorderRunning({ currentStep: 2, runId: 'run-finished' });
+    runRegistry.clear();
+    runRegistry.register({ runId: 'run-finished', sequenceName: 'socket-live-lifecycle', status: 'completed', currentStep: 3, totalSteps: 3 } as any);
+    const driver = createSequenceDriver(recorder, async () => ({ content: [{ type: 'text', text: 'ok' }] }), () => []);
+    await driver.start('socket-live-lifecycle', 'app');
+    driver.active();
+
+    end();
+
+    expect(driver.active()).toMatchObject({ currentStep: 3 });
+    expect(driver.active()!.live).toBeUndefined();
+  });
+
+  it('reads a run that failed from the tool side at the step its record reached', async () => {
+    const { recorder, end } = recorderRunning({ currentStep: 1, runId: 'run-failed' });
+    runRegistry.clear();
+    runRegistry.register({ runId: 'run-failed', sequenceName: 'socket-live-lifecycle', status: 'failed', currentStep: 2, totalSteps: 3 } as any);
+    const driver = createSequenceDriver(recorder, async () => ({ content: [{ type: 'text', text: 'ok' }] }), () => []);
+    await driver.start('socket-live-lifecycle', 'app');
+    driver.active();
+
+    end();
+
+    expect(driver.active()).toMatchObject({ currentStep: 2 });
   });
 });

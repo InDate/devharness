@@ -122,20 +122,28 @@ function SequenceRow({ sequence, stepAt, post, onGo }: {
   onGo: () => void;
 }) {
   const playing = sequence.playing === true || (sequence.busy && !sequence.recording);
-  const status = sequence.recording ? 'recording' : playing ? 'playing' : sequence.paused ? 'paused' : 'stopped';
+  // The same reading as the Sequence tab's header: a run standing still past its last step finished.
+  const still = !playing && !sequence.recording;
+  const failed = still && !!sequence.failure;
+  const finished = still && !failed && !sequence.paused && sequence.total > 0 && sequence.currentStep >= sequence.total;
+  const status = sequence.recording ? 'recording' : playing ? 'playing' : sequence.paused ? 'paused'
+    : failed ? 'failed' : finished ? 'finished' : 'stopped';
   const active = playing || sequence.paused === true || sequence.recording === true;
   const current = sequence.steps[Math.min(sequence.currentStep, sequence.steps.length - 1)];
-  const said = `${sequence.name}${current ? ` · ${current.label}` : ''}`;
+  const said = finished ? `${sequence.name} · the run reached the end`
+    : failed ? `${sequence.name} · ${sequence.failure}`
+    : `${sequence.name}${current ? ` · ${current.label}` : ''}`;
+  const reading = finished ? (sequence.total === 1 ? '1 step' : `all ${sequence.total} steps`) : stepAt;
   const idle = !playing && !sequence.recording;
   const atEnd = sequence.currentStep >= sequence.total;
   return (
     <div class={`holdrow ${sequence.recording ? 'row-recording' : 'row-sequence'}${active ? ' layer-held' : ''}`}>
       <b class="layername">Sequence</b>
       <span class="holdbadges">
-        <span class={`badge ${active ? 'holder' : 'running'}`}>{status}</span>
+        <span class={`badge ${active ? 'holder' : failed ? 'failed' : 'running'}`}>{status}</span>
       </span>
       <span class="layerstate" title={said}>{said}</span>
-      <span class="holdreading"><span class="n-step">{stepAt}</span></span>
+      <span class="holdreading"><span class="n-step">{reading}</span></span>
       <span class="holdslots">
         <button class={idle && !atEnd ? 'tool' : 'tool off'}
           title={!idle ? 'Steps once the run has stopped' : atEnd ? 'The run is at its last step' : 'Run the next step, then hold again'}

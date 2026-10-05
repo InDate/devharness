@@ -13,6 +13,7 @@ import { createdName, isLaunchStep } from '../tools/connection-steps.js';
 import { stopRecording, cancelRecording, eventsToCommands } from '../interaction-recorder.js';
 import { translateSequence } from '../tools/legacy-steps.js';
 import type { CommandRecorder } from '../command-recorder.js';
+import { runRegistry } from '../tools/replay-run-registry.js';
 import { debugLog } from '../debug-logger.js';
 import { resolveSessionName } from '../session-identity.js';
 import { getSessionInfo } from '../tools/dashboard-tools.js';
@@ -246,6 +247,8 @@ export function createSequenceDriver(
   // what the last step did.
   let reached = 0;
   let ended: 'complete' | 'failed' | null = null;
+  /** The run this bench last read as its own, cleared wherever the bench itself moves or ends a run. */
+  let followed: ReturnType<typeof ourRun>;
   /** Origin override for the run: a sequence recorded against one port can be
    *  pointed at another without editing the file. */
   let baseUrl = '';
@@ -607,6 +610,15 @@ export function createSequenceDriver(
       if (state) {
         reached = state.currentStep;
         ended = null;
+        followed = state;
+      } else if (followed) {
+        // Ended by a call outside the bench, a tool's finish or step: the run
+        // record holds how it ended, and a run with no record had no failure
+        // to keep it from reaching the end.
+        const record = followed.runId ? runRegistry.get(followed.runId) : undefined;
+        ended = record?.status === 'failed' ? 'failed' : 'complete';
+        reached = ended === 'complete' ? followed.totalSteps : record?.currentStep ?? reached;
+        followed = undefined;
       }
       const sequence = state
         ? commandRecorder.getSequence(state.sequenceId)
@@ -635,6 +647,8 @@ export function createSequenceDriver(
         currentStep: state?.currentStep ?? (ended === 'complete' ? commands.length : reached),
         total: state?.totalSteps ?? commands.length,
         failedStep: ended === 'failed' ? failedStep ?? undefined : undefined,
+        ...(state ? { live: true } : {}),
+        ...(state?.breakpointHit ? { heldAt: `${state.breakpointHit.url}:${state.breakpointHit.lineNumber}` } : {}),
         steps: commands.map(command => {
           const resolved = resolvedFor(command, store);
           return {
@@ -675,7 +689,7 @@ export function createSequenceDriver(
       selected = name;
       selectedConnection = connection;
       reached = 0;
-      ended = null;
+      followed = undefined; ended = null;
       failedStep = null;
       variableStore = {};
       const failure = await replay({ action: 'load', filename: `${name}.json` });
@@ -697,7 +711,7 @@ export function createSequenceDriver(
         else {
           // The session is gone: either the last step ran, or one failed.
           reached = failure ? (failedStep ?? before) : reached;
-          ended = failure ? 'failed' : 'complete';
+          followed = undefined; ended = failure ? 'failed' : 'complete';
         }
         return failure;
       }
@@ -714,7 +728,7 @@ export function createSequenceDriver(
     finish: async () => {
       if (ourRun()) {
         const failure = await replay({ action: 'finish' });
-        ended = failure ? 'failed' : 'complete';
+        followed = undefined; ended = failure ? 'failed' : 'complete';
         return failure;
       }
       if (selected) {
@@ -729,9 +743,9 @@ export function createSequenceDriver(
         const after = ourRun();
         if (after) {
           reached = after.currentStep;
-          ended = null;
+          followed = undefined; ended = null;
         } else {
-          ended = failure ? 'failed' : 'complete';
+          followed = undefined; ended = failure ? 'failed' : 'complete';
           if (failure) reached = failedStep ?? reached;
           else reached = loadedByName(selected)?.commands.length ?? reached;
         }
@@ -766,14 +780,14 @@ export function createSequenceDriver(
       // command, taking every earlier step a second time.
       const at = ourRun()?.currentStep;
       if (typeof at === 'number') reached = at;
-      ended = null;
+      followed = undefined; ended = null;
     },
 
     cancel: async () => {
       if (ourRun()) await replay({ action: 'cancel' });
       selected = null;
       reached = 0;
-      ended = null;
+      followed = undefined; ended = null;
       variableStore = {};
     },
 
@@ -782,7 +796,7 @@ export function createSequenceDriver(
         if (ourRun()) await replay({ action: 'cancel' });
         selected = null;
         reached = 0;
-        ended = null;
+        followed = undefined; ended = null;
         variableStore = {};
       }
       const onDisk = (await commandRecorder.listSavedSequencesOnDisk().catch(() => [] as any[]))
@@ -878,7 +892,7 @@ export function createSequenceDriver(
       selected = name || null;
       selectedConnection = connection;
       reached = 0;
-      ended = null;
+      followed = undefined; ended = null;
       variableStore = {};
 
       // Recording leaves the sequence in memory; without this it is gone when

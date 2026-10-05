@@ -382,8 +382,9 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
             }
             return (
               <span class={sequence.playing ? 'at running' : sequence.paused ? 'at paused' : failed ? 'at runfail' : 'at'}
-                title={failed ? sequence.failure : undefined}>
+                title={failed ? sequence.failure : sequence.heldAt ? `breakpoint at ${sequence.heldAt}` : undefined}>
                 {sequence.playing ? 'running · '
+                  : sequence.paused && sequence.heldAt ? 'paused at breakpoint · '
                   : sequence.paused ? (frozen ? 'paused · held · ' : 'paused · ')
                   : failed ? 'failed · '
                   : ''}

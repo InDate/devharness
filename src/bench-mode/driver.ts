@@ -52,6 +52,10 @@ export interface SequenceDriver {
     variables: SequenceVariable[];
     /** 0-based index of the step that failed, when one did. */
     failedStep?: number;
+    /** Where a breakpoint the sequence did not set stopped the page, holding the run. */
+    heldAt?: string;
+    /** A replay session stands for this sequence, so a pause in it can be carried on. */
+    live?: boolean;
   } | null;
   /**
    * Every host this sequence reaches: its start url, the url of any step that

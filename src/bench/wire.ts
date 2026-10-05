@@ -449,6 +449,8 @@ export interface SequenceState {
    * neither, and the only sign a pause landed is a control disappearing.
    */
   paused?: boolean;
+  /** Where a breakpoint the sequence did not set stopped the page, holding the run at `currentStep`. */
+  heldAt?: string;
   /** What the sequence describes itself as doing. */
   description?: string;
   /** What it should end up having done, in the recorder's own words. */

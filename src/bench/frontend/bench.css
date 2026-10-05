@@ -2066,6 +2066,7 @@ button.statedisc:hover { box-shadow: 0 0 0 3px color-mix(in srgb, var(--frost) 3
 }
 .holdbadges .badge.holder { color: var(--hold-tone); }
 .holdbadges .badge.running { color: var(--muted); }
+.holdbadges .badge.failed { color: var(--alert); }
 .holdbadges .badge.absent { color: var(--muted); border-style: dashed; }
 /* The counts at the right end, as a sequence row puts its notes. */
 .holdreading { flex: none; display: flex; gap: 8px; font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }

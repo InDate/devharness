@@ -139,7 +139,7 @@ export async function baselineSequence(connection: string): Promise<SequenceStat
   const passesBefore = new Set([...proxy.eventsIn(), ...writeEvents(connection)].map(event => event.runId));
   await letGoForRun(session);
   await gotoSequenceStep(connection, 0);
-  const played = await playSequence(connection);
+  const played = await playSequence(connection, { throughHolds: true });
   if (!played || played.failure || played.currentStep < played.total) {
     const why = played?.failure ?? `the run stopped at step ${(played?.currentStep ?? 0) + 1} of ${played?.total ?? 0}`;
     session.sequenceFailure = `baseline not taken, and the one before it stands: ${why}`;

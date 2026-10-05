@@ -407,10 +407,13 @@ export function createBenchTools(
               sessionName,
               sourceMapHandler,
               sequences: createSequenceDriver(commandRecorder, executeToolCall, catalogue, values, servers, serverLog),
-              // A tab in the same browser, so it can be dragged into Chrome's
-              // split view beside the frozen app.
+              // A window of its own in the same browser. A tab beside the app
+              // hides it, and Chrome drops input sent to a hidden tab; a window
+              // covering the app's keeps it rendering, under the launch flags
+              // that stop occluded windows backgrounding. It can still be
+              // dragged into Chrome's split view beside the app.
               openBench: args.openTab === false ? undefined : async (url: string) => {
-                const tab = await openBackgroundPage(page.browser());
+                const tab = await openBackgroundPage(page.browser(), { newWindow: true });
                 await tab.goto(url);
                 await tab.bringToFront();
                 return tab;

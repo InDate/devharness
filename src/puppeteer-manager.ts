@@ -9,11 +9,15 @@ import puppeteer, { Browser, Page } from 'puppeteer-core';
  * Browser.newPage() creates the tab in the foreground, which on macOS
  * activates Chrome and moves keyboard focus off the app the user is typing in.
  * Target.createTarget with `background: true` adds the tab without activating.
+ * `newWindow` opens it in a window of its own, so the tab it would have joined
+ * stays the visible tab of its window.
  */
-export async function openBackgroundPage(browser: Browser): Promise<Page> {
+export async function openBackgroundPage(browser: Browser, options: { newWindow?: boolean } = {}): Promise<Page> {
   const session = await browser.target().createCDPSession();
   try {
-    const { targetId } = await session.send('Target.createTarget', { url: 'about:blank', background: true });
+    const { targetId } = await session.send('Target.createTarget', {
+      url: 'about:blank', background: true, ...(options.newWindow ? { newWindow: true } : {}),
+    });
     const target = await browser.waitForTarget((t) => (t as any)._targetId === targetId);
     const page = await target.page();
     if (!page) throw new Error(`Target ${targetId} has no page`);

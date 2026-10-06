@@ -8,6 +8,7 @@
  * or run another sequence and resume.
  */
 
+import { guardElement } from './check-element.js';
 import { z } from 'zod';
 import { createTool } from '../validation-helpers.js';
 import { responseWithOnce } from '../messages.js';
@@ -26,6 +27,7 @@ export const checkOutcomeSchema = z.union([
 export type CheckOutcome = z.infer<typeof checkOutcomeSchema>;
 
 export const checkSchema = z.object({
+  expect: z.record(z.any()).optional().describe('selector: the element meant, as a fingerprint; another element is refused with a repair'),
   selector: z.string().optional().describe('An element to check, with `condition`. Supports :has-text("x")'),
   condition: z.enum([...ELEMENT_CONDITIONS, ...SOCKET_CONDITIONS]).optional().describe('selector: present | visible | hittable (nothing covers its centre) | absent | text | attribute | count | enabled. cookie/localStorage/indexedDB: present (default) or absent. socket: open (default) or closed'),
   attribute: z.string().optional().describe("condition 'attribute': which attribute to read"),
@@ -122,6 +124,12 @@ export function createCheckTools(
             elapsedMs: reading.elapsedMs, polls: reading.polls,
           },
         };
+        // A held element read is compared with the element it was recorded on.
+        if (reading.outcome === 'held' && reading.form === 'element') {
+          const guarded = await guardElement(args, resolveConnectionByName);
+          if (guarded.refused) return guarded.refused;
+          if (guarded.fingerprint) meta.element = { fingerprint: guarded.fingerprint };
+        }
         if (reading.outcome === 'error') {
           return {
             content: [{ type: 'text', text: `## Error\n\nThe check \`${reading.subject}\` could not be read: ${reading.detail ?? 'unknown'}` }],

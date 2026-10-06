@@ -35,6 +35,23 @@ interface CacheEntry {
  * Simple in-memory cache for clickable elements
  * Keys are normalized URL stubs (pathname + search, no protocol/host/hash)
  */
+const pageIds = new WeakMap<object, number>();
+let nextPageId = 0;
+
+/**
+ * The key a page's elements are cached under: the page itself, then its URL.
+ * Keyed by URL alone, two connections on one URL - a bench opened twice -
+ * shared an entry, and one was handed the other's selectors.
+ */
+export function pageKey(page: object, url: string): string {
+  let id = pageIds.get(page);
+  if (id === undefined) {
+    id = ++nextPageId;
+    pageIds.set(page, id);
+  }
+  return `${id}|${url}`;
+}
+
 export class ClickableCache {
   private cache = new Map<string, CacheEntry>();
   private maxAge = 5 * 60 * 1000; // 5 minutes default TTL

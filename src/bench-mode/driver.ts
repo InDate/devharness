@@ -82,11 +82,11 @@ export interface SequenceDriver {
    */
   step: (signal?: AbortSignal) => Promise<string | undefined>;
   /** Re-run from the start up to and including `step` (0-based). */
-  goto: (step: number) => Promise<string | undefined>;
+  goto: (step: number, signal?: AbortSignal) => Promise<string | undefined>;
   /** Swap the origin every absolute URL in the run uses. '' clears it. */
   setBaseUrl: (baseUrl: string) => void;
   baseUrl: () => string | undefined;
-  finish: () => Promise<string | undefined>;
+  finish: (signal?: AbortSignal) => Promise<string | undefined>;
   /**
    * Stop the run where it stands, holding the step it reached.
    *

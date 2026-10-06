@@ -1620,9 +1620,6 @@ export class ServerManager {
       throw new Error(`Server "${serverId}" not found. Use list action to see servers.`);
     }
 
-    // Once stopped, its log fds are closed - nothing left to block a relocation.
-    unregisterRootBound(rootBoundServerName(serverId));
-
     // Clean up pending startup state
     this.removePendingStartup(serverId);
 
@@ -1633,6 +1630,7 @@ export class ServerManager {
 
     const isRunning = await managed.runner.isRunning();
     if (!isRunning) {
+      unregisterRootBound(rootBoundServerName(serverId));
       await this.stopMonitoringForServer(serverId);
       await this.saveState();
       return;
@@ -1641,6 +1639,10 @@ export class ServerManager {
     await debugLog('ServerManager', `Stopping server ${serverId}`);
     await this.stopMonitoringForServer(serverId);
     await managed.runner.stop();
+    // The veto comes off once the child has exited and closed its log fds; a
+    // relocation landing before that moves the root under fds still open.
+    // A stop that throws leaves it on, since the child may still be running.
+    unregisterRootBound(rootBoundServerName(serverId));
     this.claims.release(serverId, managed.global ?? false);
     await this.saveState();
     await debugLog('ServerManager', `Server ${serverId} stopped`);

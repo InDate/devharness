@@ -25,6 +25,12 @@ export interface ServerFileWatcherOptions {
   paths: string[];
   excludeDirNames?: string[];
   debounceMs?: number;
+  /**
+   * How often the watched files' modification times are compared with the
+   * last comparison (default 2000; 0 turns it off). fs.watch does not
+   * guarantee delivery, and an event it drops is a change no restart follows.
+   */
+  pollMs?: number;
   onChange: () => void;
 }
 
@@ -35,6 +41,11 @@ export class ServerFileWatcher {
   private readonly debounceMs: number;
   private readonly onChange: () => void;
   private stopped = false;
+  private poll: ReturnType<typeof setInterval> | null = null;
+  /** Each watched file's modification time at the last poll. */
+  private seen = new Map<string, number>();
+  /** Whether fs.watch delivered an event since the last poll, which leaves that poll nothing to add. */
+  private delivered = false;
 
   constructor(private readonly options: ServerFileWatcherOptions) {
     this.excludeDirNames = new Set(options.excludeDirNames ?? DEFAULT_EXCLUDE_DIR_NAMES);
@@ -46,6 +57,38 @@ export class ServerFileWatcher {
     for (const root of this.options.paths) {
       this.watchDir(root);
     }
+    const pollMs = this.options.pollMs ?? 2000;
+    if (pollMs > 0) {
+      this.seen = this.snapshot();
+      this.poll = setInterval(() => this.compare(), pollMs);
+      this.poll.unref?.();
+    }
+  }
+
+  /** Every file in the watched directories with its modification time. */
+  private snapshot(): Map<string, number> {
+    const files = new Map<string, number>();
+    for (const dir of this.watchers.keys()) {
+      let entries: fs.Dirent[];
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+      for (const entry of entries) {
+        if (!entry.isFile()) continue;
+        const full = path.join(dir, entry.name);
+        try { files.set(full, fs.statSync(full).mtimeMs); } catch { /* removed between the read and the stat */ }
+      }
+    }
+    return files;
+  }
+
+  private compare(): void {
+    if (this.stopped) return;
+    const now = this.snapshot();
+    const changed = now.size !== this.seen.size
+      || [...now].some(([file, mtime]) => this.seen.get(file) !== mtime);
+    this.seen = now;
+    const missed = changed && !this.delivered;
+    this.delivered = false;
+    if (missed) this.handleEvent('', null);
   }
 
   private watchDir(dir: string): void {
@@ -78,6 +121,7 @@ export class ServerFileWatcher {
     if (this.stopped) {
       return;
     }
+    if (dir) this.delivered = true;
 
     // A new subdirectory may have just appeared - start watching it too, so
     // future changes inside it aren't missed.
@@ -105,6 +149,10 @@ export class ServerFileWatcher {
 
   stop(): void {
     this.stopped = true;
+    if (this.poll) {
+      clearInterval(this.poll);
+      this.poll = null;
+    }
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
       this.debounceTimer = null;

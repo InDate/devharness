@@ -6,6 +6,7 @@
  * executor's abort-on-failure path treats as a hard stop.
  */
 
+import { guardElement } from './check-element.js';
 import { z } from 'zod';
 import { createTool } from '../validation-helpers.js';
 import { getErrorMessage, getFormattedResponse, responseWithOnce } from '../messages.js';
@@ -13,6 +14,7 @@ import type { ToolResponseMeta } from '../tool-response.js';
 import { CHECK_OPERATORS, ELEMENT_CONDITIONS, assertAsCheck, runCheck } from './check-engine.js';
 
 const assertSchema = z.object({
+  expect: z.record(z.any()).optional().describe('selector: the element meant, as a fingerprint; another element is refused with a repair'),
   left: z.any().optional().describe('Value form: the value to check, typically a {{var:name.path}} template'),
   operator: z.enum(CHECK_OPERATORS).optional().describe('Comparison; value form, and the text/attribute/count conditions'),
   right: z.any().optional().describe('What it is compared with; unused by exists/notExists'),
@@ -55,6 +57,8 @@ export function createAssertTools(
           connection: args.connection, resolveConnection: resolveConnectionByName, abortSignal,
         });
         const passed = reading.outcome === 'held';
+        const guarded = dom && passed && resolveConnectionByName ? await guardElement(args, resolveConnectionByName) : {};
+        if (guarded.refused) return guarded.refused;
 
         if (!dom) {
           const { left, operator, right, message } = args;
@@ -90,6 +94,7 @@ export function createAssertTools(
         const assertMeta: ToolResponseMeta = {
           tool: 'assert', action: `${condition}`, timestamp: Date.now(),
           assert: { left: selector, operator: condition!, right, passed },
+          ...(guarded.fingerprint ? { element: { fingerprint: guarded.fingerprint } } : {}),
         };
         if (reading.outcome === 'error') {
           return {

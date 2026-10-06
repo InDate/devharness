@@ -25,9 +25,6 @@
  * this file. Override with MCP_SUPERVISOR_CHILD_SCRIPT for testing; every
  * other argv is passed straight through to the child.
  *
- * See /Users/joshua/.claude/plans/zesty-coalescing-tome.md for the full
- * design and its rationale.
- *
  * Usage: node build/mcp-supervisor.js [...extraChildArgs]
  */
 import * as path from 'path';

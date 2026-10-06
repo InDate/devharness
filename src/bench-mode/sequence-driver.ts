@@ -3,6 +3,7 @@
  * its own tool, and the step labels the bench and the `bench` tool both show.
  */
 
+import { sweepCaptures } from './capture-sweep.js';
 import { assertAsCheck, formOf, subjectOf as subjectOfCheck } from '../tools/check-engine.js';
 import { checkSpecOf } from '../tools/check-tools.js';
 import { promises as fs } from 'fs';
@@ -770,9 +771,9 @@ export function createSequenceDriver(
       return undefined;
     },
 
-    finish: async () => {
+    finish: async (signal?: AbortSignal) => {
       if (ourRun()) {
-        const failure = await replay({ action: 'finish' });
+        const failure = await replay({ action: 'finish' }, signal);
         followed = undefined; ended = failure ? 'failed' : 'complete';
         return failure;
       }
@@ -781,7 +782,7 @@ export function createSequenceDriver(
           action: 'run', name: selected, wait: true, connection: selectedConnection, variables: recordedText(),
           ...(rebindOnto(selected, selectedConnection) ? { connections: rebindOnto(selected, selectedConnection) } : {}),
           ...(baseUrl ? { baseUrl } : {}),
-        });
+        }, signal);
         // A whole run leaves no session behind, so nothing else records where it
         // got to - and without that the cursor sits at 0 with the first step
         // marked current, however far the run actually went.
@@ -799,7 +800,7 @@ export function createSequenceDriver(
       return undefined;
     },
 
-    goto: async (step: number) => {
+    goto: async (step: number, signal?: AbortSignal) => {
       // This bench's own selection first: a session belonging to another one
       // would send this browser to a page its sequence never names.
       const name = selected ?? ourRun()?.sequenceName;
@@ -811,7 +812,7 @@ export function createSequenceDriver(
         action: 'run', name, stepTo: step + 1, wait: true, connection: selectedConnection, variables: recordedText(),
         ...(rebindOnto(name, selectedConnection) ? { connections: rebindOnto(name, selectedConnection) } : {}),
         ...(baseUrl ? { baseUrl } : {}),
-      });
+      }, signal);
     },
 
     halt: async () => {
@@ -908,16 +909,22 @@ export function createSequenceDriver(
       const sequence = openSequence();
       if (!sequence) return 'no sequence is open';
       let found = false;
+      const shots: string[] = [];
       for (const command of sequence.commands ?? []) {
         const kept = (command.annotations ?? []).filter(note => note.id !== id);
         if (kept.length !== (command.annotations ?? []).length) {
           found = true;
+          for (const note of command.annotations ?? []) if (note.id === id) shots.push(...(note.screenshots ?? []));
           if (kept.length) command.annotations = kept;
           else delete command.annotations;
         }
       }
       if (!found) return 'that note is not in the open sequence';
-      return persist(sequence, 'note removed');
+      const failure = await persist(sequence, 'note removed');
+      // Its pictures go with it once the file no longer cites them, unless
+      // another sequence's note still does.
+      if (!failure && shots.length) await sweepCaptures(true, shots).catch(() => undefined);
+      return failure;
     },
 
     record: async (name: string, connection: string, startUrl: string) => {

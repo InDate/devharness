@@ -495,6 +495,27 @@ function stepIdentity(step: RecordedCommand): string {
 }
 
 /**
+ * Steps with each step that always runs another sequence - a check reading
+ * only time, whose pass runs it - replaced by that sequence's own steps. A
+ * caller whose step runs an older copy of a path then compares as the path it
+ * runs, rather than as one check step against the path's first. A check that
+ * reads anything else may not run its sequence, and stays as it is.
+ */
+async function unfoldRuns(commands: RecordedCommand[], recorder: CommandRecorder, depth = 0): Promise<RecordedCommand[]> {
+  const unfolded: RecordedCommand[] = [];
+  for (const command of commands) {
+    const params = command.params ?? {};
+    const runs = command.tool === 'check' && typeof params.holds === 'object' && params.holds?.run
+      && Object.keys(params).every(key => ['afterMs', 'holds', 'fails', 'connection'].includes(key))
+      ? String(params.holds.run) : undefined;
+    const loaded = runs && depth < 5 ? await loadSequence({ name: runs }, recorder) : undefined;
+    if (loaded?.success) unfolded.push(...await unfoldRuns(loaded.sequence.commands, recorder, depth + 1));
+    else unfolded.push(command);
+  }
+  return unfolded;
+}
+
+/**
  * Steps 1 to `throughStep` of a sequence replaced with a run of an existing
  * shared sequence: the sequence that carried its own copy of a path takes the
  * shared one, and later edits to the path reach it.
@@ -520,8 +541,8 @@ export async function handleAdopt(args: ReplayArgs, recorder: CommandRecorder) {
   const refusal = refuseCut(sequence, through);
   if (refusal) return refusal;
 
-  const own = sequence.commands.slice(0, through);
-  const theirs = shared.commands;
+  const own = await unfoldRuns(sequence.commands.slice(0, through), recorder);
+  const theirs = await unfoldRuns(shared.commands, recorder);
   const differsAt = Array.from({ length: Math.max(own.length, theirs.length) }, (_, i) => i)
     .find(i => !own[i] || !theirs[i] || stepIdentity(own[i]) !== stepIdentity(theirs[i]));
   if (differsAt !== undefined && !args.overwrite) {

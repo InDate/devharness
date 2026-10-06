@@ -394,7 +394,7 @@ export const stepSequence = (connection: string) =>
  * is the only thing that reconstructs the state a step produced.
  */
 export const gotoSequenceStep = (connection: string, step: number) =>
-  driveSequence(connection, (driver) => driver.goto(step));
+  driveSequence(connection, (driver, signal) => driver.goto(step, signal));
 
 /** State what the open sequence is for and what it should do. */
 export async function describeSequence(

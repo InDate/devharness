@@ -12,7 +12,6 @@ import { z } from 'zod';
 import { promises as fs } from 'fs';
 import { basename, join, resolve } from 'path';
 import { getOutputPath } from '../helpers/paths.js';
-import { getProxy } from '../proxy/registry.js';
 import { autoLaunchChrome } from './replay-executor.js';
 import { openBackgroundPage } from '../puppeteer-manager.js';
 import { translateSequence } from './legacy-steps.js';
@@ -25,7 +24,8 @@ import { resolveSessionName } from '../session-identity.js';
 import { getSessionInfo } from './dashboard-tools.js';
 import { getEventStreamPath, streamReaders, watchCall } from '../session-events.js';
 import type { ToolResponseMeta, BenchToolMeta } from '../tool-response.js';
-import { readCapture, readRecord, versionsOf, forget } from '../capture-file.js';
+import { readCapture, versionsOf } from '../capture-file.js';
+import { sweepCaptures } from '../bench-mode/capture-sweep.js';
 import { startBench, stopBench, tickBench, setHeld, setPicker, getBenchSession, getSequenceState, pageHeldElsewhere, runningBench, selectSequence, gotoSequenceStep, keepRecordedStep, dropRecordedStep, flagRecordedStep, type Annotation, type SequenceState, capturesInFlight, retakeCapture } from '../bench-mode.js';
 import { NO_TOOL_VALUES, type ServerLog, type ServerRow, type ToolGroup, type ToolValues } from '../bench/wire.js';
 import { createSequenceDriver, getSequencesRoot, labelFor } from '../bench-mode/sequence-driver.js';
@@ -72,85 +72,6 @@ const benchSchema = z.object({
 type BenchArgs = z.infer<typeof benchSchema>;
 
 const DEFAULT_LIST_LIMIT = 20;
-
-/**
- * The note captures no sequence refers to any more.
- *
- * A note is erased by removing it from the sequence, which leaves the picture
- * it cited on disk with nothing pointing at it. Every sequence store is read,
- * not only the open one: a capture cited by another sequence is in use, and
- * deleting it would empty a note somewhere else.
- *
- * Only the bench's own note captures are considered. The `screenshot` tool
- * writes to the same directories and no annotation ever cites those, so a rule
- * of "unreferenced" alone would take every one of them.
- */
-async function sweepCaptures(remove: boolean): Promise<NonNullable<BenchToolMeta['swept']>> {
-  const cited = new Set<string>();
-  let sequencesRead = 0;
-  for (const store of [getOutputPath('sequences'), getOutputPath('sequences', { global: true })]) {
-    const files = await fs.readdir(store).catch(() => [] as string[]);
-    for (const file of files) {
-      if (!file.endsWith('.json')) continue;
-      const raw = await fs.readFile(join(store, file), 'utf8').catch(() => null);
-      if (raw === null) continue;
-      sequencesRead += 1;
-      let parsed: { commands?: Array<{ annotations?: Annotation[] }> };
-      try { parsed = JSON.parse(raw) as typeof parsed; } catch { continue; }
-      for (const command of parsed.commands ?? []) {
-        for (const note of command.annotations ?? []) {
-          for (const shot of note.screenshots ?? []) cited.add(resolve(shot));
-        }
-      }
-    }
-  }
-  // A capture taken and not yet saved is cited by nothing on disk.
-  const inFlight = capturesInFlight();
-  for (const shot of inFlight) cited.add(resolve(shot));
-  // A note cites version 1, whose file name is the series; every later version
-  // of that series is in use with it.
-  const citedSeries = new Set([...cited].map(path => basename(path, '.png')));
-
-  const root = getOutputPath('screenshots');
-  const orphans: Array<{ path: string; bytes: number }> = [];
-  const days = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
-  for (const day of days) {
-    if (!day.isDirectory()) continue;
-    const dir = join(root, day.name);
-    for (const name of await fs.readdir(dir).catch(() => [] as string[])) {
-      // Written by the screenshot tool, which no note ever cites.
-      if (name.startsWith('screenshot-')) continue;
-      const full = join(dir, name);
-      if (cited.has(resolve(full))) continue;
-      if (name.endsWith('.png')) {
-        const record = await readRecord(full).catch(() => undefined);
-        if (record && citedSeries.has(record.series)) continue;
-      }
-      const stat = await fs.stat(full).catch(() => null);
-      if (!stat?.isFile()) continue;
-      orphans.push({ path: full, bytes: stat.size });
-    }
-  }
-
-  let removed = 0;
-  if (remove) {
-    const deleted: string[] = [];
-    for (const orphan of orphans) {
-      const gone = await fs.unlink(orphan.path).then(() => true).catch(() => false);
-      if (gone) { removed += 1; deleted.push(orphan.path); }
-    }
-    forget(deleted);
-  }
-  return {
-    root,
-    orphans,
-    bytes: orphans.reduce((sum, one) => sum + one.bytes, 0),
-    removed,
-    sequencesRead,
-    referenced: cited.size,
-    inFlight: inFlight.length,
-  };
-}
 
 function buildMeta(action: BenchArgs['action'], extra: Partial<BenchToolMeta>): ToolResponseMeta {
   return {
@@ -282,10 +203,10 @@ export function createBenchTools(
 
         let resolved = await resolveConnectionByName(named);
         if (!resolved && action === 'start') {
-          // A reference whose proxy is still recording was launched through it,
-          // and a browser launched outside it leaves every crossing unseen.
-          const launched = await autoLaunchChrome(
-            executeToolCall, named, 'bench.start', false, getProxy(named) !== undefined);
+          // Launched through a proxy: the bench reads what crosses one, and a
+          // running browser cannot gain one, so launched outside it the bench
+          // would show an empty boundary until a relaunch.
+          const launched = await autoLaunchChrome(executeToolCall, named, 'bench.start', false, true);
           if (!launched.success) {
             return createErrorResponse(launched.errorType, {
               reference: named,

@@ -2,6 +2,7 @@
  * Input Automation Tools
  */
 
+import { bringHiddenPageToFront } from '../utils/front-tab.js';
 import { z } from 'zod';
 import { executeWithPauseDetection, actionFailureResponse, type ActionResult } from '../debugger-aware-wrapper.js';
 import { checkBrowserAutomation } from '../error-helpers.js';
@@ -75,32 +76,61 @@ const inputToolSchema = z.object({
   settleTimeout: z.number().optional().describe('DOM settle timeout ms'),
 }).strict();
 
+/**
+ * Why an element the page holds has no point a pointer can reach: the
+ * `hidden` attribute, on it or an ancestor, `display: none`, `visibility:
+ * hidden`, or no size. Undefined where none of these holds.
+ */
+async function hiddenReason(handle: any): Promise<string | undefined> {
+  return handle.evaluate((el: any) => {
+    const styleOf = (node: any) => (globalThis as any).getComputedStyle(node);
+    const name = (node: any) => `<${node.tagName.toLowerCase()}${node.id ? `#${node.id}` : ''}>`;
+    for (let node: any = el; node; node = node.parentElement) {
+      const where = node === el ? 'it' : `its ancestor ${name(node)}`;
+      if (node.hasAttribute('hidden')) return `${where} has the hidden attribute`;
+      if (styleOf(node).display === 'none') return `${where} has display: none`;
+    }
+    if (styleOf(el).visibility === 'hidden') return 'it has visibility: hidden';
+    const box = el.getBoundingClientRect();
+    if (box.width === 0 || box.height === 0) return 'it has no size';
+    return undefined;
+  }).catch(() => undefined);
+}
+
+/**
+ * Run a pointer action on a selector's element. Puppeteer reports an element
+ * with no reachable point as "not clickable or not an Element", which names
+ * no cause; the element is read for one and the error states it.
+ */
+async function onElement(page: any, selector: string, action: (handle: any) => Promise<void>): Promise<void> {
+  const handle = await page.$(selector);
+  if (!handle) throw new Error(`Element not found: ${selector}`);
+  try {
+    await action(handle);
+  } catch (error: any) {
+    const reason = await hiddenReason(handle);
+    throw reason ? new Error(`${selector} is hidden: ${reason}, so no pointer can reach it`) : error;
+  } finally {
+    await handle.dispose().catch(() => {});
+  }
+}
+
 /** Click a selector through `clickElement`, which a tab that is not in front can take. */
 async function clickSelector(
   page: any,
   selector: string,
   options: { clickCount?: number } = {}
 ): Promise<void> {
-  const handle = await page.$(selector);
-  if (!handle) throw new Error(`Element not found: ${selector}`);
-  try {
-    await clickElement(page, handle, options);
-  } finally {
-    await handle.dispose().catch(() => {});
-  }
+  await onElement(page, selector, handle => clickElement(page, handle, options));
 }
 
 /** Hover without the lifecycle wait - see clickSelector. */
 async function hoverSelector(page: any, selector: string): Promise<void> {
-  const handle = await page.$(selector);
-  if (!handle) throw new Error(`Element not found: ${selector}`);
-  try {
+  await onElement(page, selector, async handle => {
     await handle.scrollIntoView();
     const { x, y } = await handle.clickablePoint();
     await page.mouse.move(x, y);
-  } finally {
-    await handle.dispose().catch(() => {});
-  }
+  });
 }
 
 /**
@@ -245,31 +275,6 @@ async function readFocusedField(page: any): Promise<{ tag: string; value: string
 /** The actions that dispatch mouse or touch events, which Chrome hit-tests against a rendered frame. */
 const POINTER_ACTIONS = new Set(['click', 'hover', 'drag', 'scroll', 'mousemove', 'tap', 'swipe', 'pinch']);
 
-/** How long a tab brought to the front has to report itself visible. */
-const FRONT_WAIT_MS = 1000;
-
-async function visibilityOf(page: any): Promise<unknown> {
-  return page.evaluate(() => (globalThis as any).document.visibilityState).catch(() => undefined);
-}
-
-/**
- * Brings a background tab to the front, and returns whether the page is
- * visible. A background tab produces no frames, so Chrome drops a mouse or
- * touch event dispatched to it while `Input.dispatchMouseEvent` still returns.
- * The tab stays in front afterwards: CDP reports no record of which tab was
- * in front before, so there is none to restore.
- */
-async function bringHiddenPageToFront(page: any): Promise<boolean> {
-  if (await visibilityOf(page) !== 'hidden') return true;
-  await page.bringToFront().catch(() => {});
-  const deadline = Date.now() + FRONT_WAIT_MS;
-  while (Date.now() < deadline) {
-    if (await visibilityOf(page) !== 'hidden') return true;
-    await abortableSleep(50);
-  }
-  return false;
-}
-
 /**
  * The answer to an input refused for reaching another element than `expect`:
  * nothing was sent, and `_meta.element` carries the element found and where
@@ -323,7 +328,7 @@ export function createInputTools(
 
         const page = targetPuppeteerManager.getPage();
 
-        if (POINTER_ACTIONS.has(action) && !await bringHiddenPageToFront(page)) {
+        if (POINTER_ACTIONS.has(action) && !await bringHiddenPageToFront(page, abortableSleep)) {
           return createErrorResponse('INPUT_PAGE_HIDDEN', { action, connection });
         }
 

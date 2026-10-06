@@ -23,6 +23,7 @@
  *   debugger is paused (nothing can change while the event loop is stopped).
  */
 
+import { guardElement } from './check-element.js';
 import { z } from 'zod';
 import { createTool } from '../validation-helpers.js';
 import { createErrorResponse, createSuccessResponse } from '../messages.js';
@@ -30,6 +31,7 @@ import type { ToolResponseMeta } from '../tool-response.js';
 import { WAIT_TIMEOUT_MS, presenceExpression, runCheck, waitAsCheck } from './check-engine.js';
 
 const waitSchema = z.object({
+  expect: z.record(z.any()).optional().describe('selector: the element meant, as a fingerprint; another element is refused with a repair'),
   selector: z.string().optional().describe('Until an element matches this CSS selector; :has-text("x") partial, :text("x") exact'),
   selectorGone: z.string().optional().describe('Until NO element matches this selector (spinner removed, modal closed)'),
   expression: z.string().optional().describe('Until this SYNCHRONOUS JavaScript expression is truthy; no await'),
@@ -103,6 +105,11 @@ export function createWaitTools(
           : form === 'selectorGone' ? `element "${selectorGone}" to disappear`
           : `expression to be truthy: ${expression}`;
 
+        if (reading.outcome === 'held' && form === 'selector') {
+          const guarded = await guardElement({ ...args, connection }, resolveConnectionByName);
+          if (guarded.refused) return guarded.refused;
+          if (guarded.fingerprint) meta.element = { fingerprint: guarded.fingerprint };
+        }
         if (reading.outcome === 'held') {
           const response = form === 'ms'
             ? createSuccessResponse('WAIT_SLEEP_COMPLETE', { ms: ms! })

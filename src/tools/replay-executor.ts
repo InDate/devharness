@@ -850,6 +850,8 @@ export interface ExecuteStepsOptions {
    * waits for its quiet under its cursor, then closes it before the next step marks.
    */
   openStep?: { step: number; markedAt: number };
+  /** Carries on a paused session (`step`, `finish`), whose abort leaves it paused rather than ended. */
+  resumesSession?: boolean;
 }
 
 /**
@@ -1180,7 +1182,8 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
       // The click is compared with the recorded element before it is sent:
       // compared after, a click on the wrong element has already changed the
       // app, and every step after a repair runs on what it changed.
-      if (cmd.tool === 'input' && ['click', 'type', 'hover'].includes(params.action) && cmd.fingerprint) {
+      if (cmd.fingerprint && ((cmd.tool === 'input' && ['click', 'type', 'hover'].includes(params.action))
+        || (['check', 'assert', 'wait'].includes(cmd.tool) && params.selector))) {
         params.expect = cmd.fingerprint;
       }
 
@@ -1808,7 +1811,12 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
   // recorded as a failure, so without this the run would tear down the
   // sequence - running its declared teardown commands - in the middle of a
   // session somebody stopped to look at.
-  const isPaused = (stoppedShortOfEnd && (!anyFailed || abortSignal?.aborted === true)) || pausedForPerson !== undefined;
+  // A paused session carried on by `step` or `finish` and cut short is a pause
+  // wherever it stops: the session stays open on the step it cut short, where
+  // a fresh run cancelled is over and runs its teardown.
+  const isPaused = (stoppedShortOfEnd && (!anyFailed || abortSignal?.aborted === true))
+    || (options.resumesSession === true && abortSignal?.aborted === true)
+    || pausedForPerson !== undefined;
 
   const teardownOutcome = isPaused
     ? undefined

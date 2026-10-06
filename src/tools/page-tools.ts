@@ -10,7 +10,7 @@ import { checkBrowserAutomation } from '../error-helpers.js';
 import { createTool } from '../validation-helpers.js';
 import { createSuccessResponse, createErrorResponse } from '../messages.js';
 import { autoLaunchChrome } from './replay-executor.js';
-import type { ClickableCache } from '../clickable-cache.js';
+import { type ClickableCache, pageKey } from '../clickable-cache.js';
 import { collectInteractiveElements } from '../element-collector.js';
 import type { ExecuteToolCall } from '../types.js';
 import { raceAbort, throwIfAborted } from '../utils/abort.js';
@@ -55,7 +55,7 @@ export async function gatherPageContext(
 
   // Get clickable elements stats
   const result = await collectInteractiveElements(page);
-  clickableCache.set(url, result.elements, result.viewportHeight, result.viewportWidth);
+  clickableCache.set(pageKey(page, url), result.elements, result.viewportHeight, result.viewportWidth);
   const inViewportCount = result.elements.filter((el) => el.inViewport).length;
 
   // Get console stats

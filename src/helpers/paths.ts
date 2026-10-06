@@ -285,7 +285,17 @@ export function unregisterRootBound(name: string): void {
  * old one. With no veto, the root updates, then every resource's `rebind`
  * runs in registration order with the new root.
  */
-export async function relocateRoot(dir: string): Promise<void> {
+export function relocateRoot(dir: string): Promise<void> {
+  // One at a time: two interleaved would set the root under each other's
+  // rebind loop, leaving resources split across both roots.
+  const mine = relocating.then(() => relocateNow(dir));
+  relocating = mine.catch(() => {});
+  return mine;
+}
+
+let relocating: Promise<void> = Promise.resolve();
+
+async function relocateNow(dir: string): Promise<void> {
   for (const resource of rootBoundRegistry.values()) {
     const reason = resource.veto?.();
     if (reason) {
@@ -293,11 +303,26 @@ export async function relocateRoot(dir: string): Promise<void> {
     }
   }
 
+  if (!pathConfig) initializePaths();
+  const before = pathConfig!.workingDirBase;
+  const oldRoot = getOutputPath();
   setWorkingDirOverride(dir);
   const root = getOutputPath();
 
-  for (const resource of rootBoundRegistry.values()) {
-    await resource.rebind(root);
+  const rebound: RootBoundResource[] = [];
+  try {
+    for (const resource of rootBoundRegistry.values()) {
+      await resource.rebind(root);
+      rebound.push(resource);
+    }
+  } catch (error) {
+    // A rebind that throws part-way puts the root and every resource already
+    // moved back where they were, so none is left on the new root alone.
+    pathConfig!.workingDirBase = before;
+    for (const resource of rebound.reverse()) {
+      try { await resource.rebind(oldRoot); } catch { /* the error that stopped the relocation is the one reported */ }
+    }
+    throw error;
   }
 }
 

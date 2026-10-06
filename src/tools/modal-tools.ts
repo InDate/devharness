@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { bringHiddenPageToFront } from '../utils/front-tab.js';
 import type { Page } from 'puppeteer-core';
 import {
   detectModals as detectModalsUtil,
@@ -347,6 +348,12 @@ async function dismissModalImpl(
         'strategy_not_available',
         `Strategy "${strategy}" not available for this modal. Available strategies: ${targetModal.dismissStrategies.join(', ')}`
       );
+    }
+
+    // A dismissal by click on a background tab is dropped by Chrome while the
+    // click reports success; `remove` takes the modal out of the page and sends no input.
+    if (effectiveStrategy !== 'remove' && !await bringHiddenPageToFront(page)) {
+      return formatToolError('page_hidden', `The tab of "${connection}" is in the background and did not come to the front, so a click dismissing the modal would be dropped. Bring the window to the front, or use strategy "remove".`);
     }
 
     // Execute dismissal

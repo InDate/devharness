@@ -9,7 +9,7 @@ import { createTool } from '../validation-helpers.js';
 import { createErrorResponse } from '../messages.js';
 import { promises as fs } from 'fs';
 import path from 'path';
-import type { ClickableCache, ClickableElement } from '../clickable-cache.js';
+import { pageKey, type ClickableCache, type ClickableElement } from '../clickable-cache.js';
 import { getOutputPath } from '../helpers/paths.js';
 import { listParsers, loadParser } from '../helpers/parser-plugins.js';
 import { collectInteractiveElements } from '../element-collector.js';
@@ -410,7 +410,7 @@ export function createContentTools(resolveConnectionByName: (connection: string)
             const title = await page.title();
 
             // Try to get cached elements first
-            const cached = clickableCache.get(url);
+            const cached = clickableCache.get(pageKey(page, url));
             let elements: ClickableElement[];
             let wasFromCache = false;
 

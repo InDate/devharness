@@ -364,6 +364,7 @@ export async function handleStep(
     ctx,
     ...(abortSignal ? { abortSignal } : {}),
     ...(openStep ? { openStep } : {}),
+    resumesSession: true,
   });
   const rules = rulesForRun(activeSeq.connection);
   const pauses = pausesIn(activeSeq.connection);
@@ -425,7 +426,9 @@ export async function handleStep(
 export async function handleFinish(
   args: ReplayArgs,
   recorder: CommandRecorder,
-  executeToolCall: ExecuteToolCall
+  executeToolCall: ExecuteToolCall,
+  /** Stops the run part-way, as it stops a step: the session stays open at the last step that finished. */
+  abortSignal?: AbortSignal
 ) {
   const since = recorder.getCurrentHistoryIndex();
   const activeSeq = recorder.getActiveSequence();
@@ -472,7 +475,9 @@ export async function handleFinish(
     sequence,
     startStep,
     ctx,
+    ...(abortSignal ? { abortSignal } : {}),
     ...(openStep ? { openStep } : {}),
+    resumesSession: true,
   });
   const rules = rulesForRun(activeSeq.connection);
   const pauses = pausesIn(activeSeq.connection);
@@ -483,6 +488,19 @@ export async function handleFinish(
 
   // A person's input landed on the page: the run stays held before the next
   // step, as `pause` sets, for a later step or finish.
+  // Stopped part-way, as `step` stops: the session stays at the last step
+  // that finished, so carrying on runs the interrupted one again.
+  if (abortSignal?.aborted) {
+    const lastDone = [...execResult.results].reverse().find(r => r.success)?.step;
+    recorder.updateActiveSequenceStep(lastDone ?? startStep);
+    return {
+      content: [{ type: 'text', text: formatRunReply(recorder, {
+        name: sequence.name, total: commands.length, since: activeSeq.runSince ?? since, paused: true,
+        ...(args.steps ? { steps: args.steps } : {}), failures: failuresOf(execResult.results), rules, pauses,
+      }) }],
+    };
+  }
+
   if (execResult.personInput?.pausedBefore !== undefined) {
     recorder.updateActiveSequenceStep(execResult.personInput.pausedBefore);
     if (execResult.personInput.held) activeSeq.personHeld = execResult.personInput.held;

@@ -83,3 +83,19 @@ describe('a step cut short by its caller', () => {
     expect(ran).toEqual(['#a', '#b', '#b', '#c', '#teardown']);
   });
 });
+
+describe('a finish cut short by its caller', () => {
+  it('stops as a step does: at the last step that finished, with no teardown', async () => {
+    const cutShort: { at?: string; controller?: AbortController } = { at: '#c', controller: new AbortController() };
+    const { replay, recorder, ran } = makeReplay(cutShort);
+
+    await replay.handler({ action: 'run', sequenceId: 'seq-abort', connection: CONNECTION, wait: true, stepTo: 1 });
+    await replay.handler({ action: 'finish' }, cutShort.controller!.signal);
+
+    expect(ran).toEqual(['#a', '#b', '#c']);
+    expect(recorder.getActiveSequence()).toMatchObject({ currentStep: 2 });
+
+    await replay.handler({ action: 'finish' });
+    expect(ran).toEqual(['#a', '#b', '#c', '#c', '#teardown']);
+  });
+});

@@ -8,6 +8,9 @@ import type { BreakpointInfo, CallFrame, DebuggerState, RuntimeType, CDPConsoleM
 import type { SourceMapHandler } from './sourcemap-handler.js';
 import { debugLog } from './debug-logger.js';
 
+/** Scripts devharness itself runs in a page, which Puppeteer names pptr:…. */
+const OWN_SCRIPTS = /^pptr:/;
+
 /**
  * Thrown by evaluateExpression() when the evaluated code itself threw
  * (CDP reports this via `exceptionDetails` on an otherwise-successful
@@ -304,6 +307,18 @@ export class CDPManager {
       });
 
       Debugger.paused((params: any) => {
+        // A pause devharness asked for on an idle page stops at the next script
+        // the page runs, and devharness's own reads of the page - Puppeteer's,
+        // named pptr:… - are page scripts too. Stopped in one, the read hangs
+        // until the hold is released. Stepping out runs the read to its end
+        // and stops at the next script after it, which is the app's.
+        const top = params.callFrames?.[0];
+        const where = top?.url || (top?.location?.scriptId ? this.scriptIdToUrl.get(top.location.scriptId) : '') || '';
+        if (this.pauseArmed && OWN_SCRIPTS.test(where)) {
+          debugLog('cdp-manager', `the armed pause landed in ${where}; stepping out of it`);
+          void Debugger.stepOut().catch(() => {});
+          return;
+        }
         debugLog('cdp-manager', `Debugger.paused event received, resolvers count: ${this.pauseResolvers.length}`);
         this.state.paused = true;
         this.pauseArmed = false;

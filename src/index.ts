@@ -604,9 +604,18 @@ async function executeToolCall(calledName: string, calledParams: Record<string, 
   } else if (historyPlace()?.run !== undefined && DRIVING_TOOLS.has(toolName)) {
     // A run's own step: the bench's guard against a second driver beside a run
     // it plays would refuse the step that run is taking. Only a hold that
-    // stops the page refuses it.
+    // stops the page refuses it. The refused step is recorded first, so the
+    // run lists the step it failed on rather than ending with no row for it.
     const held = heldPage(params.connection, false);
-    if (held) throw new ToolError(createErrorResponse('PAGE_HELD', { ...held, toolName }));
+    if (held) {
+      const refused = createErrorResponse('PAGE_HELD', { ...held, toolName });
+      const stepPlace = historyPlace();
+      if (stepPlace) {
+        await commandRecorder.recordCommand(toolName, params, stepPlace);
+        commandRecorder.attachResult(commandRecorder.getCurrentHistoryIndex(), refused);
+      }
+      throw new ToolError(refused);
+    }
   }
 
   const validation = validateParams(params, (tool as any).zodSchema, toolName);

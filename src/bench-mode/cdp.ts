@@ -71,7 +71,17 @@ export async function request(client: CDPSession, method: string, params?: any, 
   ]);
 }
 
-/** Resolve on the next Debugger.paused, or on timeout. */
+/**
+ * Whether a pause stopped in one of devharness's own scripts - a read of the
+ * page Puppeteer runs, named pptr:… - rather than in the app. A pause asked
+ * for on an idle page stops at whatever script runs next, ours included; the
+ * bench steps out of ours, and the pause it asked for lands in the app.
+ */
+export function inOwnScript(event: any): boolean {
+  return /^pptr:/.test(event?.callFrames?.[0]?.url ?? '');
+}
+
+/** Resolve on the next Debugger.paused in the app's own code, or on timeout. */
 export function nextPause(client: CDPSession, timeoutMs: number): Promise<any | null> {
   return new Promise((resolve) => {
     const done = (event: any | null) => {
@@ -79,7 +89,7 @@ export function nextPause(client: CDPSession, timeoutMs: number): Promise<any | 
       client.off('Debugger.paused', handler);
       resolve(event);
     };
-    const handler = (event: any) => done(event);
+    const handler = (event: any) => { if (!inOwnScript(event)) done(event); };
     const timer = setTimeout(() => done(null), timeoutMs);
     client.on('Debugger.paused', handler);
   });

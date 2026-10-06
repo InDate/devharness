@@ -1887,9 +1887,13 @@ export class InterceptProxy {
       // A compressed stream is passed through as bytes: its messages cannot be read to be answered.
       const events = contentType === 'text/event-stream' && !answer.headers['content-encoding'];
       let pending = '';
-      const takeMessages = (chunk: string): string => {
+      // A message is recorded as it reaches the page, not as it arrives from
+      // the server: held at the proxy it has crossed nothing yet, and listed
+      // on arrival it read as traffic the held page had received.
+      const takeMessages = (chunk: string): { out: string; crossed: Array<() => void> } => {
         pending += chunk;
         let out = '';
+        const crossed: Array<() => void> = [];
         let cut = pending.search(MESSAGE_END);
         while (cut !== -1) {
           const end = pending.slice(cut).match(MESSAGE_END)![0];
@@ -1904,13 +1908,13 @@ export class InterceptProxy {
           if (answer) answer.hits += 1;
           if (data) this.countFrame(url, 'received', data);
           if (data) {
-            this.record({
+            crossed.push(() => this.record({
               at: Date.now(), kind: 'frame', direction: 'in', url,
               size: Buffer.byteLength(data),
               evidence: { shape: payloadShape(data, false, Buffer.byteLength(data)) },
               preview: data.slice(0, PREVIEW_CHARS),
               ...(answer ? { answeredAs: answer.replaceWith === undefined ? 'dropped' as const : 'replaced' as const, answeredBy: answer.id } : {}),
-            }, data);
+            }, data));
           }
           if (!answer) {
             out += block + end;
@@ -1929,7 +1933,7 @@ export class InterceptProxy {
           out += pending;
           pending = '';
         }
-        return out;
+        return { out, crossed };
       };
 
       answer.on('data', (chunk: Buffer) => {
@@ -1943,8 +1947,11 @@ export class InterceptProxy {
           opened.size = size;
           opened.durationMs = Date.now() - startedAt;
           if (events) {
-            const out = takeMessages(chunk.toString('utf8'));
-            if (out && (quiet || !this.queue.offer({ kind: 'frame', url, direction: 'received', preview: out.slice(0, PREVIEW_CHARS), deliver: () => res.write(out) }))) {
+            const { out, crossed } = takeMessages(chunk.toString('utf8'));
+            const cross = () => { for (const record of crossed) record(); };
+            if (!out) cross();
+            else if (quiet || !this.queue.offer({ kind: 'frame', url, direction: 'received', preview: out.slice(0, PREVIEW_CHARS), deliver: () => { cross(); res.write(out); } })) {
+              cross();
               res.write(out);
             }
           }

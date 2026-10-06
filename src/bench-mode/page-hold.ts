@@ -108,7 +108,9 @@ export function describePause(session: BenchSession, event: any, at: number): Ca
   const frame = event?.callFrames?.[0];
   const raw = typeof event?.data?.eventName === 'string' ? event.data.eventName : undefined;
   const kind = raw?.replace(/^instrumentation:/, '').replace(/\.callback$/, '');
-  const url = frame?.location?.scriptId ? session.scripts.get(frame.location.scriptId) : undefined;
+  // A script parsed before the bench attached - an inline script of the page -
+  // is not in the bench's own list; the paused frame carries its URL itself.
+  const url = (frame?.location?.scriptId ? session.scripts.get(frame.location.scriptId) : undefined) || frame?.url || undefined;
   return {
     index: session.totalSteps + 1,
     at: Math.round(at),

@@ -68,6 +68,10 @@ export interface RanStep {
 /** A sequence step as the bench shows it. */
 export interface SequenceStep {
   index: number;
+  /** A pause point saved before this step: a run stops and holds the page here. */
+  pauseBefore?: true;
+  /** What that pause point holds; every layer when absent. */
+  pauseHolds?: Array<'code' | 'ui' | 'network'>;
   /** The call itself - `input.click [data-testid=order-{{var:id}}] button`. */
   label: string;
   /** What the step is for, which is what someone actually tracks. */
@@ -449,6 +453,8 @@ export interface SequenceState {
   placements?: Record<string, number>;
   currentStep: number;
   total: number;
+  /** The page layers the run's own pause holds: code, ui, network. */
+  runHeld?: Array<'code' | 'ui' | 'network'>;
   /** Set while a step or a play is mid-flight, so the page can disable itself. */
   busy: boolean;
   /**
@@ -935,6 +941,8 @@ export interface HiddenKind {
 
 /** What `GET /proxy/events` answers with. */
 export interface BoundaryState {
+  /** What was done while a run stood paused - a person's inputs, hold steps - listed in that pause beside its traffic. */
+  pauseActions?: Array<{ runId: string; step: number; at: number; kind: 'input' | 'hold' | 'callback'; line: string; index?: number }>;
   /** Every hidden kind held for the site, each marked as the open sequence uses it. */
   hidden?: HiddenKind[];
   running: boolean;

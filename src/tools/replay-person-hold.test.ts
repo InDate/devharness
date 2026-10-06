@@ -84,7 +84,7 @@ describe("a run a person's input lands on", () => {
     expect(result.content[0].text).toContain("the run is held before step 2, with the page's code held");
     expect(holdReading(CONNECTION).held).toEqual([expect.objectContaining({ layer: 'code', source: 'sequence' })]);
     expect(isRunning()).toBe(false);
-    expect(recorder.getActiveSequence().personHeld).toEqual(['code']);
+    expect(recorder.getActiveSequence().pauseHeld).toEqual(['code']);
   });
 
   it('releases what the run held before finish drives the next step', async () => {

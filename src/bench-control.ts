@@ -52,6 +52,8 @@ export interface BenchHandlers {
   selectSequence: (name: string) => Promise<void>;
   describeSequence: (description: string, expectedOutcome: string) => Promise<void>;
   commentSequenceStep: (index: number, words: string) => Promise<void>;
+  /** Add, remove or set what the pause point before a step holds. */
+  setPausePoint: (index: number, change: { on?: boolean; holds?: Array<'code' | 'ui' | 'network'> }) => Promise<void>;
   gotoSequenceStep: (step: number) => Promise<void>;
   stepSequence: () => Promise<void>;
   playSequence: () => Promise<void>;
@@ -556,6 +558,14 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
             case '/sequence/describe':
               await handlers.describeSequence(
                 String(body.description ?? ''), String(body.expectedOutcome ?? ''));
+              break;
+            case '/sequence/step/pause':
+              await handlers.setPausePoint(Math.max(0, Number(body.step) || 0), {
+                ...(typeof body.on === 'boolean' ? { on: body.on } : {}),
+                ...(Array.isArray(body.holds)
+                  ? { holds: body.holds.filter((layer: unknown): layer is 'code' | 'ui' | 'network' => layer === 'code' || layer === 'ui' || layer === 'network') }
+                  : {}),
+              });
               break;
             case '/sequence/step/comment':
               await handlers.commentSequenceStep(

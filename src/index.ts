@@ -598,9 +598,15 @@ async function executeToolCall(calledName: string, calledParams: Record<string, 
   // A run's step meets the same refusal, so a step on a held page fails naming
   // the hold rather than waiting out its step timeout.
   const cliEntry = entryChannel() === 'cli';
-  if (cliEntry || historyPlace()?.run !== undefined) {
+  if (cliEntry) {
     const held = pageHeldRefusal(toolName, params);
     if (held) throw new ToolError(held);
+  } else if (historyPlace()?.run !== undefined && DRIVING_TOOLS.has(toolName)) {
+    // A run's own step: the bench's guard against a second driver beside a run
+    // it plays would refuse the step that run is taking. Only a hold that
+    // stops the page refuses it.
+    const held = heldPage(params.connection, false);
+    if (held) throw new ToolError(createErrorResponse('PAGE_HELD', { ...held, toolName }));
   }
 
   const validation = validateParams(params, (tool as any).zodSchema, toolName);

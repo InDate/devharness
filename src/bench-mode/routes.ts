@@ -1,4 +1,6 @@
 import type { Page } from 'puppeteer-core';
+import { pauseActionsFor, recordPauseAction } from '../pause-actions.js';
+import { recordBenchCall } from '../person-watch.js';
 import { isWatchingPersonInput } from '../person-watch.js';
 import { appendEvent } from '../session-events.js';
 import { holdableLayers, holdReading } from '../hold.js';
@@ -20,7 +22,7 @@ import { stepTraffic, tickBench } from './page-hold.js';
 import { addRecordingTimer, addRecordingVariable, cancelRecordingSequence, chooseStepSelector, dropRecordedStep, editRecordingVariable, flagRecordedStep, keepRecordedStep, recordSequence, stopRecordingSequence } from './recording.js';
 import { clearBoundaryRule, hiddenOf, hideKind, nameTarget, namesOf, persistRules, ruleFrom, rulesOf, savePayloadFor, setBoundaryName, setBoundaryRule, setHiddenMode, setHiddenUse, setResponseMode, setResponseUse, unhideKind, useFrom } from './rules.js';
 import { baselineSequence, playHere, playToStep, renameFromHome, runFromHome, runsView, stopRun } from './runs.js';
-import { answerBenchDialog, cancelSequence, commentSequenceStep, describeSequence, dismissSequenceFailure, repairSequenceStep, editSequenceStep, getSequenceState, gotoSequenceStep, insertSequenceCheck, insertSequenceTimer, moveSequenceStep, playSequence, removeSequence, removeSequenceStep, removeSequenceVariable, selectSequence, setSequenceBaseUrl, setSequenceVariable, stepSequence } from './sequence.js';
+import { answerBenchDialog, cancelSequence, commentSequenceStep, describeSequence, dismissSequenceFailure, repairSequenceStep, editSequenceStep, getSequenceState, gotoSequenceStep, insertSequenceCheck, insertSequenceTimer, moveSequenceStep, playSequence, removeSequence, removeSequenceStep, removeSequenceVariable, selectSequence, setSequenceBaseUrl, setSequenceVariable, stepSequence, setPausePoint } from './sequence.js';
 import { type BenchSession, sessions } from './session.js';
 import { openSequence, openSteps, recordedStepOf, summariseBoundary, writeEvents } from './traffic.js';
 import { openerEntryOf } from '../activity-index.js';
@@ -102,11 +104,29 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
     },
     save: async (comment: string) => { await saveAnnotation(connection, comment); },
     discard: async () => { await discardPick(connection); },
-    tick: async (request: { steps?: number; budgetMs?: number }) => { await tickBench(connection, request); },
+    tick: async (request: { steps?: number; budgetMs?: number }) => {
+      const ticked = await tickBench(connection, request);
+      if (!ticked) return;
+      // Each callback the tick ran is a row of the pause: what ran, what
+      // scheduled it, where it is, and when in page time.
+      const now = Date.now();
+      ticked.ran.forEach((callback, k) => recordPauseAction(connection, {
+        at: now + k * 0.001, kind: 'callback',
+        line: `${callback.fn ?? '(anonymous)'}${callback.kind ? ` · ${callback.kind}` : ''}${callback.url ? ` · ${callback.url}${callback.line !== undefined ? `:${callback.line}` : ''}` : ''} · ${callback.at}ms`,
+      }));
+      // The callbacks it ran are the record of a tick; one that ran none changed nothing, and History alone keeps it.
+      const line = `stepped the screen ${ticked.steps} callback${ticked.steps === 1 ? '' : 's'}${ticked.quiet ? ', nothing was scheduled' : ''}`;
+      await recordBenchCall(connection, 'hold', { action: 'step', layers: ['ui'], ...request }, line);
+    },
     stepTraffic: async () => { await stepTraffic(connection); },
     releaseWaiting: async (id: number) => { getProxy(connection)?.queue.releaseOne(id); },
     openDevtools: async () => openDevtools(connection),
-    changeHold: async (action, layers) => { await changeHold(connection, action, layers); },
+    changeHold: async (action, layers) => {
+      await changeHold(connection, action, layers);
+      const named = layers?.length ? layers.map(layer => layer === 'ui' ? 'screen' : layer).join(' and ') : 'page';
+      await recordBenchCall(connection, 'hold', { action, ...(layers ? { layers } : {}) },
+        action === 'step' ? `stepped the ${named}` : `${action === 'hold' ? 'held' : 'released'} the ${named}`);
+    },
     setPicker: async (armed: boolean) => { await setPicker(connection, armed); },
     setPersonInput: async (on: boolean) => { await setPersonInput(connection, on); },
     setHeld: async (held: boolean, resume?: boolean) => {
@@ -116,6 +136,13 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
     selectSequence: async (name: string) => { await selectSequence(connection, name); },
     describeSequence: async (description: string, expectedOutcome: string) => {
       await describeSequence(connection, description, expectedOutcome);
+    },
+    setPausePoint: async (index, change) => {
+      const state = await setPausePoint(connection, index, change);
+      const point = state?.steps[index];
+      const line = !point?.pauseBefore ? `removed the pause point before step ${index + 1}`
+        : `pause point before step ${index + 1} holds ${point.pauseHolds ? point.pauseHolds.join(', ') || 'nothing' : 'everything'}`;
+      await recordBenchCall(connection, 'bench', { action: 'pausePoint', sequence: state?.name, step: index, ...change }, line);
     },
     commentSequenceStep: async (index: number, words: string) => {
       await commentSequenceStep(connection, index, words);
@@ -302,6 +329,7 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
           refusesWrites: false, refusedWrites: 0,
           rules: rulesOf(connection), names: namesOf(connection),
           checkOutcomes: checkOutcomesFor(connection),
+          pauseActions: pauseActionsFor(connection),
           events: writeEvents(connection), totals: null, steps: openSteps(connection),
           ...(sessions.get(connection)?.site ? { site: sessions.get(connection)!.site } : {}),
           hidden: hiddenOf(connection),
@@ -323,6 +351,7 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
         rules: rulesOf(connection),
         ...(sessions.get(connection)?.site ? { site: sessions.get(connection)!.site } : {}),
         checkOutcomes: checkOutcomesFor(connection),
+        pauseActions: pauseActionsFor(connection),
         hidden: hiddenOf(connection),
         names: namesOf(connection),
         // The level and whether any step owns it are read here rather than

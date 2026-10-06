@@ -792,6 +792,8 @@ export async function performRun(
     stepTimeout: args.stepTimeout,
     totalTimeout: args.totalTimeout,
     stepTo: args.stepTo,
+    ...(args.hold ? { holdWhilePaused: args.hold } : {}),
+    ...(args.playing ? { standsPaused: false } : {}),
     overrideConnectionReason: args.connection,
     abortSignal,
     onProgress
@@ -900,7 +902,8 @@ export async function performRun(
   if (execResult.pausedAtStep && execResult.activeSequenceState) {
     recorder.setActiveSequence({
       ...execResult.activeSequenceState, runId, runSince: since,
-      ...(execResult.personInput?.held ? { personHeld: execResult.personInput.held } : {}),
+      ...(execResult.pauseHeld ? { pauseHeld: execResult.pauseHeld } : {}),
+      ...(args.hold ? { holdWhilePaused: args.hold } : {}),
     });
     keepArmed();
     const heldForPerson = execResult.personInput?.pausedBefore !== undefined;
@@ -910,7 +913,8 @@ export async function performRun(
         ...(args.steps ? { steps: args.steps } : {}), failures: failuresOf(execResult.results), person: execResult.personInput,
         ...(ctx.connection ? { rules: rulesForRun(ctx.connection) } : {}),
       })
-      : formatPausedResponse(sequence, execResult.results, execResult.pausedAtStep, execResult.durationMs);
+      : formatPausedResponse(sequence, execResult.results, execResult.pausedAtStep, execResult.durationMs)
+        + (execResult.pauseHeld?.length ? `\n\n**Held while paused:** the page's ${execResult.pauseHeld.join(', ')}; \`step\`, \`finish\` or \`cancel\` releases it.` : '');
     return { outcome: 'paused', results: execResult.results, response: { content: [{ type: 'text', text }],
       _meta: {
         tool: 'replay', action: 'run', timestamp: Date.now(),
@@ -951,7 +955,10 @@ export async function performRun(
   return {
     outcome: failed === 0 ? 'completed' : 'failed',
     results: execResult.results,
-    response: { content: [{ type: 'text', text: response }],
+    // A failed run is an error to whoever reads it: the bench's driver and
+    // History's row both read this flag, and without it a run that failed at
+    // step 1 read as complete.
+    response: { content: [{ type: 'text', text: response }], ...(failed > 0 ? { isError: true } : {}),
       _meta: {
         tool: 'replay', action: 'run', timestamp: Date.now(),
         replay: { success: failed === 0, totalSteps: execResult.totalCommands, failedSteps: failed, paused: false }

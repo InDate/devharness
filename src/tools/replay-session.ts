@@ -212,7 +212,7 @@ export async function handleCancel(args: ReplayArgs, recorder: CommandRecorder) 
   // behaviour - `cancel` always meant "drop the paused session").
   const activeSeq = recorder.getActiveSequence();
   if (activeSeq) {
-    await releasePersonHold(activeSeq);
+    await releasePauseHold(activeSeq);
     await standPausedRun(undefined);
     endPausedRun(activeSeq.runId, 'cancelled');
     const name = activeSeq.sequenceName;
@@ -258,14 +258,14 @@ function takeOpenStep(activeSeq: ActiveSequenceState): ActiveSequenceState['open
 }
 
 /**
- * Release the layers a person's input held the run's page on. Only the layers
+ * Release the layers a pause held the run's page on. Only the layers
  * the run itself still holds go: a hold the person or the bench placed since
  * stays, and the next step drives a page that still runs only where it was released.
  */
-async function releasePersonHold(activeSeq: ActiveSequenceState): Promise<void> {
-  const layers = activeSeq.personHeld;
+async function releasePauseHold(activeSeq: ActiveSequenceState): Promise<void> {
+  const layers = activeSeq.pauseHeld;
   if (!layers) return;
-  delete activeSeq.personHeld;
+  delete activeSeq.pauseHeld;
   const stillOurs = holdReading(activeSeq.connection).held
     .filter(held => held.source === 'sequence' && layers.includes(held.layer))
     .map(held => held.layer);
@@ -343,7 +343,7 @@ export async function handleStep(
   }
 
   await resumeBreakpointHold(activeSeq);
-  await releasePersonHold(activeSeq);
+  await releasePauseHold(activeSeq);
 
   const ctx: ExecutionContext = {
     executeToolCall,
@@ -365,6 +365,8 @@ export async function handleStep(
     ...(abortSignal ? { abortSignal } : {}),
     ...(openStep ? { openStep } : {}),
     resumesSession: true,
+    ...(args.playing ? { standsPaused: false } : {}),
+    ...(args.hold ?? activeSeq.holdWhilePaused ? { holdWhilePaused: args.hold ?? activeSeq.holdWhilePaused } : {}),
   });
   const rules = rulesForRun(activeSeq.connection);
   const pauses = pausesIn(activeSeq.connection);
@@ -375,7 +377,7 @@ export async function handleStep(
 
   const lastExecuted = execResult.results.length > 0 ? execResult.results[execResult.results.length - 1].step : startStep;
   const failed = execResult.results.some(r => !r.success);
-  if (execResult.personInput?.held) activeSeq.personHeld = execResult.personInput.held;
+  if (execResult.pauseHeld) activeSeq.pauseHeld = execResult.pauseHeld;
 
   // Update active sequence state
   let closedNote = '';
@@ -458,7 +460,7 @@ export async function handleFinish(
   }
 
   await resumeBreakpointHold(activeSeq);
-  await releasePersonHold(activeSeq);
+  await releasePauseHold(activeSeq);
 
   const ctx: ExecutionContext = {
     executeToolCall,
@@ -501,9 +503,20 @@ export async function handleFinish(
     };
   }
 
+  if (execResult.pausedAtMark !== undefined) {
+    recorder.updateActiveSequenceStep(execResult.pausedAtMark);
+    if (execResult.pauseHeld) activeSeq.pauseHeld = execResult.pauseHeld;
+    return {
+      content: [{ type: 'text', text: formatRunReply(recorder, {
+        name: sequence.name, total: commands.length, since: activeSeq.runSince ?? since, paused: true,
+        ...(args.steps ? { steps: args.steps } : {}), failures: failuresOf(execResult.results), rules, pauses,
+      }) + `\n\n**Paused at the pause point before step ${execResult.pausedAtMark + 1}**${execResult.pauseHeld?.length ? `, holding the page's ${execResult.pauseHeld.join(', ')}` : ''}. \`replay step\` or \`finish\` carries on.` }],
+    };
+  }
+
   if (execResult.personInput?.pausedBefore !== undefined) {
     recorder.updateActiveSequenceStep(execResult.personInput.pausedBefore);
-    if (execResult.personInput.held) activeSeq.personHeld = execResult.personInput.held;
+    if (execResult.pauseHeld) activeSeq.pauseHeld = execResult.pauseHeld;
     return {
       content: [{ type: 'text', text: formatRunReply(recorder, {
         name: sequence.name, total: commands.length, since: activeSeq.runSince ?? since, paused: true,

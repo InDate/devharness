@@ -282,7 +282,7 @@ function crossedUnder(
   for (const event of events) {
     // An older pass's crossing stays listed where a decision stands against it.
     const placed = placementOf(event, at, placements, stepCount)
-      ?? (event.runId !== undefined && event.step !== undefined && ruled(event)
+      ?? (event.runId !== undefined && event.step !== undefined && !event.paused && ruled(event)
         ? { origin: String(event.step), step: placements?.[`${event.step}|${kindOf(event)}`] ?? event.step }
         : undefined);
     if (!placed) continue;
@@ -322,13 +322,46 @@ export function rowOf(step: number, event: BoundaryEvent): string {
 }
 
 /** What crossed in a pause, counted by what it was: no step's window was open, so nothing is compared. */
-export function pauseSummary(events: BoundaryEvent[]): string {
+export function pauseSummary(events: BoundaryEvent[], actions = 0): string {
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
   const requests = events.filter(event => event.kind === 'request').length;
   const frames = events.filter(event => event.kind === 'frame').length;
   const writes = events.filter(event => event.kind === 'write').length;
-  return [requests ? plural(requests, 'request') : '', frames ? plural(frames, 'frame') : '', writes ? plural(writes, 'write') : '']
-    .filter(Boolean).join(', ');
+  return [actions ? plural(actions, 'action') : '', requests ? plural(requests, 'request') : '', frames ? plural(frames, 'frame') : '', writes ? plural(writes, 'write') : '']
+    .filter(Boolean).join(', ') || 'no events';
+}
+
+/**
+ * What happened while the run stood paused before `step`, in the order it
+ * happened: a person's inputs, as the input watch recorded them, and the
+ * traffic and writes that crossed. No step's window was open, so nothing here
+ * is compared.
+ */
+export function PauseCrossings({ activity, step, base }: { activity: Activity; step: number; base: string }) {
+  const [reading, setReading] = useState<string | null>(null);
+  const events = activity.pauses.get(step) ?? [];
+  const inputs = (activity.boundary?.pauseActions ?? []).filter(input => input.runId === activity.pass && input.step === step);
+  const rows = [
+    ...events.map(event => ({ at: event.at, event })),
+    ...inputs.map(input => ({ at: input.at, input })),
+  ].sort((a, b) => a.at - b.at);
+  if (rows.length === 0) return <p class="hint nothing pausenothing">no events</p>;
+  return (
+    <ol class="activitycards">
+      {rows.map(row => 'event' in row
+        ? (
+          <CrossingRow key={row.event.id} event={row.event} base={base} rule={activity.ruleFor(row.event)}
+            open={reading === row.event.id} onOpen={() => setReading(reading === row.event.id ? null : row.event.id)}
+            actions={activity.actions} />
+        )
+        : (
+          <Row key={`${row.input.kind}-${row.input.at}`} classes={['pauseinput']} source={row.input.kind === 'input' ? 'you' : row.input.kind} label={row.input.line}
+            title={row.input.index !== undefined ? `History #${row.input.index}` : undefined}
+            reading={row.input.index !== undefined ? <span class="meta">#{row.input.index}</span> : null}
+            slots={{}} open={false} onOpen={() => {}} />
+        ))}
+    </ol>
+  );
 }
 
 /** How many crossings each listed row stands for, by the event that heads it. */

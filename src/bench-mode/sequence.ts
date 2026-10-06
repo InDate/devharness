@@ -5,6 +5,7 @@ import { appendRun } from '../run-log.js';
 import { evaluateInPage, request, send, setInspectMode } from './cdp.js';
 import { type SequenceDriver } from './driver.js';
 import { letGoForRun, stoppedByDialog, withPageReleased } from './page-hold.js';
+import { holdReading } from '../hold.js';
 import { dialogMonitorOf, describeDialog } from '../dialog-monitor.js';
 import type { BenchDialog } from '../bench/wire.js';
 import { addRecordingTimer, attachStepTraffic, gateNewStep, recordedSteps } from './recording.js';
@@ -115,7 +116,13 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
         : {};
     })(),
     ...(session.sequencePlaying ? { playing: true } : {}),
-    ...(session.sequencePaused ? { paused: true } : {}),
+    // Paused by the bench or by a tool's stepTo alike: a session standing
+    // between steps is a paused run whichever surface stopped it.
+    ...(session.sequencePaused || (active.live && !session.sequencePlaying && !session.sequenceBusy && active.currentStep < active.total) ? { paused: true } : {}),
+    ...(() => {
+      const held = holdReading(connection).held.filter(one => one.source === 'sequence' && !one.via).map(one => one.layer);
+      return held.length ? { runHeld: held } : {};
+    })(),
     ...(active.heldAt ? { heldAt: active.heldAt } : {}),
     ...(active.repair ? { repair: active.repair } : {}),
     ...(session.recordingSequence ? { recording: true } : {}),
@@ -140,6 +147,7 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
       ...(step.traffic ? { traffic: step.traffic } : {}),
       ...(step.expected ? { expected: step.expected } : {}),
       ...(step.addedAt !== undefined ? { addedAt: step.addedAt } : {}),
+      ...(step.pauseBefore ? { pauseBefore: true as const, ...(step.pauseHolds ? { pauseHolds: step.pauseHolds } : {}) } : {}),
       done: index < active.currentStep,
       current: index === active.currentStep,
       ...(active.failedStep === index ? { failed: true } : {}),
@@ -382,8 +390,17 @@ export async function setSequenceBaseUrl(connection: string, baseUrl: string): P
   return getSequenceState(connection);
 }
 
-export const stepSequence = (connection: string) =>
-  driveSequence(connection, (driver, signal) => driver.step(signal));
+/** One step. `holdNothing` is a play's own step: the play stands still only where it stops. */
+export const stepSequence = (connection: string, holdNothing = false) =>
+  driveSequence(connection, (driver, signal) => driver.step(signal, holdNothing));
+
+/** Add, remove or set what the pause point before step `step` of the open sequence holds. */
+export async function setPausePoint(connection: string, step: number, change: { on?: boolean; holds?: Array<'code' | 'ui' | 'network'> }): Promise<SequenceState | undefined> {
+  const session = sessions.get(connection);
+  if (!session?.sequences) return undefined;
+  session.sequenceFailure = await session.sequences.setPause(step, change).catch(error => String(error));
+  return getSequenceState(connection);
+}
 
 /**
  * Put the run back at a step, so an annotation taken there can be seen again.
@@ -483,7 +500,7 @@ export async function playSequence(connection: string, options: { throughHolds?:
       for (let guard = 0; guard <= total; guard++) {
         const before = state?.currentStep ?? 0;
         (session.playStepStarts ??= [])[before] = Date.now();
-        state = await stepSequence(connection);
+        state = await stepSequence(connection, true);
         // Asked for part-way through: the step in flight is allowed to finish, so
         // the run stops on a step rather than inside one.
         if (session.sequenceHalt) {
@@ -492,6 +509,7 @@ export async function playSequence(connection: string, options: { throughHolds?:
           // Interrupted, not failed: the step stopped because someone asked, and
           // a failure line here puts a red box in front of what they chose.
           session.sequenceFailure = undefined;
+          await session.sequences!.holdPaused();
           state = await getSequenceState(connection);
           break;
         }
@@ -502,6 +520,13 @@ export async function playSequence(connection: string, options: { throughHolds?:
         }
         if (state.currentStep >= state.total) break;
         if (state.currentStep === before) break;
+        // A pause point saved before the next step: the play stops and holds there.
+        if (!options.throughHolds && state.steps[state.currentStep]?.pauseBefore) {
+          session.sequencePaused = true;
+          await session.sequences!.holdPaused(state.steps[state.currentStep].pauseHolds);
+          state = await getSequenceState(connection);
+          break;
+        }
       }
     });
   } finally {

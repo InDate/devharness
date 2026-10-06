@@ -124,7 +124,12 @@ export async function changeHold(connection: string, action: 'hold' | 'release' 
  */
 export function resumePausedRun(connection: string): void {
   const session = sessions.get(connection);
-  if (!session?.sequencePaused || session.sequencePlaying || session.sequenceBusy) return;
+  if (!session || session.sequencePlaying || session.sequenceBusy) return;
+  // Paused by the bench, or by a tool's stepTo or pause point: a session
+  // standing between steps with steps left, as the play bar reads it.
+  const active = session.sequences?.active();
+  const paused = session.sequencePaused || (!!active?.live && active.currentStep < active.total);
+  if (!paused) return;
   if (holdReading(connection).held.some(held => held.layer !== 'network' || held.source === 'sequence')) return;
   void playSequence(connection).catch(error => debugLog('bench', `resuming the paused run failed: ${error}`));
 }

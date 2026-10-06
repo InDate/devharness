@@ -852,6 +852,13 @@ export interface ExecuteStepsOptions {
   openStep?: { step: number; markedAt: number };
   /** Carries on a paused session (`step`, `finish`), whose abort leaves it paused rather than ended. */
   resumesSession?: boolean;
+  /** What a pause at `endStep` holds on the page: every layer when absent, nothing for []. */
+  holdWhilePaused?: HoldLayer[];
+  /**
+   * False for a play's own step, which carries straight on: stopping at
+   * `endStep` there is no pause, so it neither stamps one nor holds the page.
+   */
+  standsPaused?: boolean;
 }
 
 /**
@@ -1062,9 +1069,16 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
   const personLanded: NonNullable<ExecutionResult['personInput']>['landed'] = [];
   let pausedForPerson: number | undefined;
   let personSince = Date.now();
+  // A pause point saved before a step: the run stops there as at stepTo. The
+  // step it resumes at is the one it stopped before, so it does not stop again.
+  let pausedAtMark: number | undefined;
 
   for (let i = startStep; i < targetEnd; i++) {
     const cmd = commands[i];
+    if (i > startStep && (cmd as { pauseBefore?: boolean }).pauseBefore && !ctx.stampUnder) {
+      pausedAtMark = i;
+      break;
+    }
     if (i > startStep && ctx.connection && !ctx.stampUnder) {
       const moved = personInputSince(sanitizeReference(ctx.connection), personSince);
       personSince = Date.now();
@@ -1816,7 +1830,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
   // a fresh run cancelled is over and runs its teardown.
   const isPaused = (stoppedShortOfEnd && (!anyFailed || abortSignal?.aborted === true))
     || (options.resumesSession === true && abortSignal?.aborted === true)
-    || pausedForPerson !== undefined;
+    || pausedForPerson !== undefined || pausedAtMark !== undefined;
 
   const teardownOutcome = isPaused
     ? undefined
@@ -1838,18 +1852,25 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
   // what crosses in the pause is stamped as the pause's. A run that ended
   // leaves none: its finish line is the last step's release, and what crosses
   // after it belongs to no run.
-  if (isPaused && !ctx.stampUnder) {
-    const next = pausedForPerson
+  const stands = isPaused && options.standsPaused !== false;
+  if (stands && !ctx.stampUnder) {
+    const next = pausedForPerson ?? pausedAtMark
       ?? (abortSignal?.aborted ? (results.at(-1)?.step ?? startStep + 1) - 1 : targetEnd);
     await standPausedRun({ ...cursorAt(next), paused: true });
   }
 
-  // A run held for a person's input stops the page and its traffic as well as
-  // its steps: a page left running produces timers and frames no step caused.
-  let personHeld: HoldLayer[] | undefined;
-  if (pausedForPerson !== undefined && ctx.connection) {
-    const reading = await hold(sanitizeReference(ctx.connection), { source: 'sequence' }).catch(() => undefined);
-    personHeld = reading?.held.filter(held => held.source === 'sequence').map(held => held.layer);
+  // A paused run stops the page and its traffic as well as its steps: a page
+  // left running produces timers and frames no step caused. A person's input
+  // holds every layer; a stop at `endStep` holds what the run asked for, all
+  // by default. A refused click and an abort hold nothing: the repair reads
+  // the live page, and an abort hands the page back to whoever stopped it.
+  let pauseHeld: HoldLayer[] | undefined;
+  const stoppedAtEnd = (stoppedShortOfEnd || pausedAtMark !== undefined) && !anyFailed && pausedForPerson === undefined && !abortSignal?.aborted;
+  const markHolds = pausedAtMark !== undefined ? (commands[pausedAtMark] as { pauseHolds?: HoldLayer[] }).pauseHolds : undefined;
+  const layers = pausedForPerson !== undefined ? undefined : stoppedAtEnd ? markHolds ?? options.holdWhilePaused : [];
+  if (stands && (pausedForPerson !== undefined || stoppedAtEnd) && layers?.length !== 0 && ctx.connection && !ctx.stampUnder) {
+    const reading = await hold(sanitizeReference(ctx.connection), { source: 'sequence', ...(layers ? { layers } : {}) }).catch(() => undefined);
+    pauseHeld = reading?.held.filter(held => held.source === 'sequence').map(held => held.layer);
   }
 
   const ownDrift = comparesBehaviour
@@ -1866,8 +1887,10 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
     durationMs: Date.now() - startTime,
     ...(behaviourDrift && behaviourDrift.length > 0 ? { behaviourDrift } : {}),
     ...(teardownOutcome ? { teardownResults: teardownOutcome.results, teardownFailed: teardownOutcome.failed } : {}),
+    ...(pauseHeld?.length ? { pauseHeld } : {}),
+    ...(pausedAtMark !== undefined ? { pausedAtMark } : {}),
     ...(personLanded.length ? {
-      personInput: { mode: personMode, landed: personLanded, ...(pausedForPerson !== undefined ? { pausedBefore: pausedForPerson } : {}), ...(personHeld?.length ? { held: personHeld } : {}) },
+      personInput: { mode: personMode, landed: personLanded, ...(pausedForPerson !== undefined ? { pausedBefore: pausedForPerson } : {}), ...(pauseHeld?.length && pausedForPerson !== undefined ? { held: pauseHeld } : {}) },
     } : {}),
   };
 }
@@ -2035,14 +2058,15 @@ export async function executeSequenceWithPause(
     endStep: stepTo
   });
 
-  // Held before a step for a person's input, as a stepTo pause holds.
-  if (result.personInput?.pausedBefore !== undefined) {
-    result.pausedAtStep = result.personInput.pausedBefore;
+  // Held before a step for a person's input or at a saved pause point, as a stepTo pause holds.
+  const pausedBefore = result.personInput?.pausedBefore ?? result.pausedAtMark;
+  if (pausedBefore !== undefined) {
+    result.pausedAtStep = pausedBefore;
     result.activeSequenceState = {
       sequenceId: sequence.id,
       sequenceName: sequence.name,
       connection: connection || '',
-      currentStep: result.personInput.pausedBefore,
+      currentStep: pausedBefore,
       totalSteps: sequence.commands.length,
       pausedAt: Date.now(),
       historyIndexAtPause: commandRecorder.getCurrentHistoryIndex(),

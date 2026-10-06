@@ -57,7 +57,7 @@ export function HoldPanel({ state, post, onClose, onGo }: {
   return (
     <div class="holdbar" ref={bar}>
       <div class={anyHeld ? 'holdrow holdtop layer-held' : 'holdrow holdtop'}>
-        <b class="layername">Hold</b>
+        <b class="layername"><Glyph of="hold" /> Hold</b>
         <span class="holdbadges">
           {holders.length
             ? holders.map(source => <span key={source} class="badge holder" title={`held by the ${source}`}>{source}</span>)
@@ -85,7 +85,7 @@ export function HoldPanel({ state, post, onClose, onGo }: {
         const said = !available ? needs : !held ? stops : `${whereItStands(layer, held, state)} · ${ago(held.since)}`;
         return (
           <div class={`holdrow ${tone} row-${layer}`} key={layer}>
-            <b class="layername">{name}</b>
+            <b class="layername"><Glyph of={layer === 'ui' ? 'screen' : layer} /> {name}</b>
             <span class="holdbadges">
               {!available ? <span class="badge absent" title={needs}>{lacks}</span>
                 : !held ? <span class="badge running">running</span>
@@ -138,7 +138,7 @@ function SequenceRow({ sequence, stepAt, post, onGo }: {
   const atEnd = sequence.currentStep >= sequence.total;
   return (
     <div class={`holdrow ${sequence.recording ? 'row-recording' : 'row-sequence'}${active ? ' layer-held' : ''}`}>
-      <b class="layername">Sequence</b>
+      <b class="layername"><Glyph of="sequence" /> Sequence</b>
       <span class="holdbadges">
         <span class={`badge ${active ? 'holder' : failed ? 'failed' : 'running'}`}>{status}</span>
       </span>
@@ -170,7 +170,7 @@ function NoSequenceRow({ onGo }: { onGo: () => void }) {
   const off = 'Opens once a sequence is open';
   return (
     <div class="holdrow layer-absent">
-      <b class="layername">Sequence</b>
+      <b class="layername"><Glyph of="sequence" /> Sequence</b>
       <span class="holdbadges"><span class="badge absent" title="no sequence is open">none</span></span>
       <span class="layerstate">no sequence open - pick one in the footer, or from the list on the Sequence tab</span>
       <span class="holdreading" />

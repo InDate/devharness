@@ -150,6 +150,7 @@ export function writeEvents(connection: string, after = 0): BoundaryEvent[] {
         ...row, step: write.cursor.step, runId: write.cursor.runId,
         ...(write.cursor.within ? { within: write.cursor.within } : {}),
         ...(write.cursor.entry !== undefined ? { entry: write.cursor.entry } : {}),
+        ...(write.cursor.paused ? { paused: true as const } : {}),
         owned: true, level: 'positional' as const,
       };
     }

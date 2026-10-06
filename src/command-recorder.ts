@@ -63,6 +63,10 @@ export interface RecordedCommand {
   recordedAt?: number;
   /** The element this click acted on when it was recorded, which a replay of it is compared against. */
   fingerprint?: ElementFingerprint;
+  /** A pause point a person saved before this step: a run stops and holds the page here. */
+  pauseBefore?: true;
+  /** What that pause point holds: code, ui, network. Every layer when absent, nothing for []. */
+  pauseHolds?: HoldLayer[];
 }
 
 export interface CommandSequence {
@@ -326,8 +330,10 @@ export interface ActiveSequenceState {
   openStep?: { step: number; markedAt: number };
   /** History index before the run's first step, so a reply after a resume lists the steps before the pause too. */
   runSince?: number;
-  /** The layers a person's input held the page on; step, finish and cancel release them. */
-  personHeld?: HoldLayer[];
+  /** The layers a pause held the page on; step, finish and cancel release them. */
+  pauseHeld?: HoldLayer[];
+  /** What a later pause of this run holds, as the run asked; every layer when absent. */
+  holdWhilePaused?: HoldLayer[];
 }
 
 export class CommandRecorder {

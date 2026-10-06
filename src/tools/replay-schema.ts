@@ -48,6 +48,10 @@ export const replaySchema = z.object({
   totalTimeout: z.number().optional().describe('Total ms'),
   startFrom: z.number().optional().describe('Start step (1-indexed)'),
   stepTo: z.number().optional().describe('Pause after step'),
+  playing: z.boolean().optional()
+    .describe('run with stepTo, step: a step of a play that carries straight on - the run does not stand paused after it, so it neither holds the page nor stamps a pause'),
+  hold: z.array(z.enum(['code', 'ui', 'network'])).optional()
+    .describe('run with stepTo, step: what is held while the run stands paused - code, ui (the screen), network; default all, [] none'),
   stepCount: z.number().optional().describe('Steps to run'),
   insertIndices: z.array(z.number()).optional(),
   insertAfterStep: z.number().optional(),

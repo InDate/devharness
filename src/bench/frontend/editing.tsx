@@ -3,7 +3,7 @@ import { Fragment } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { Notice } from './notice.js';
 import { Draft } from './markup.js';
-import { ActivityRows, listedKinds, pauseSummary, stepTally, useActivity } from './activity.js';
+import { ActivityRows, listedKinds, PauseCrossings, pauseSummary, stepTally, useActivity } from './activity.js';
 import { RecordingRow } from './recorder.js';
 import { Recording } from './recording.js';
 import { LabelInput, Row } from './row.js';
@@ -301,7 +301,7 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted, 
   // When the run reached the step it is on, as this list first saw it: a
   // timer's marker counts down from there.
   if (runningNow !== reachedAt.current?.step) reachedAt.current = runningNow === undefined ? null : { step: runningNow, at: Date.now() };
-  const onIt = (step: SequenceStep) => (runningNow !== undefined ? step.index === runningNow : !!step.current && !into);
+  const onIt = (step: SequenceStep) => (runningNow !== undefined ? step.index === runningNow : !!step.current && !into && !pausedAt(step.index));
   const outcomeOf = (index: number) => (activity.boundary?.checkOutcomes ?? []).find(one => one.step === index);
   // A check that ran a sequence in the last run, with the steps it ran.
   const ranBy = (step: SequenceStep) => {
@@ -390,6 +390,60 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted, 
             {failedAt >= 0 ? 'failed' : 'completed'} · moved to: <span class="seqname">{from}</span>
           </RunMark>
         )}
+      </>
+    );
+  };
+  /**
+   * Whether the run stands paused before `step` now: that step is the next to
+   * run, the run is not mid-step, and the run reads as paused. Where it
+   * does, the pause is where the run stands, and it carries the highlight
+   * that marks that, rather than the step it has yet to run.
+   */
+  /**
+   * Whether a pause stands or happened before `step` in the newest pass: the
+   * fold is drawn for it. A pause point the run has gone past paused there
+   * whether or not anything crossed, so it is a pause that happened too.
+   */
+  const hasPause = (step: number): boolean => activity.pauses.has(step) || pausedAt(step)
+    || !!steps.find(one => one.index === step && one.pauseBefore && one.done)
+    || (activity.boundary?.pauseActions ?? []).some(action => action.runId === activity.pass && action.step === step);
+  const pausedAt = (step: number): boolean => {
+    const at = steps.find(one => one.index === step);
+    return !!at?.current && !sequence?.busy && sequence?.paused === true;
+  };
+  /**
+   * A pause before `step`, folded as a nested sequence's run is: one marker
+   * naming it and what crossed, opening to the traffic between a marker where
+   * the run stopped and one where it carried on.
+   */
+  const pauseSteps = (step: number): preact.ComponentChildren => {
+    const key = `pause.${step}`;
+    const standing = pausedAt(step);
+    // A pause a saved point made is drawn in the point's red and says what it holds;
+    // any other pause keeps the sequence's colour.
+    const at = steps.find(one => one.index === step);
+    const point = at?.pauseBefore ? ' pointfold' : '';
+    // What the point holds is named before the run reaches it; once it has paused, the fold says only that it did.
+    const label = standing ? 'paused' : 'paused, then resumed';
+    const events = activity.pauses.get(step) ?? [];
+    const inputs = (activity.boundary?.pauseActions ?? []).filter(input => input.runId === activity.pass && input.step === step).length;
+    // Open unless folded by hand: a pause shows its bookends even when nothing happened in it.
+    if (openRuns.has(key)) {
+      return (
+        <RunMark classes={(standing ? 'mark switch runfold here onit' : 'mark switch runfold') + point} title="open what crossed while the run was paused" onClick={() => toggleRun(key)}>
+          {label}<span class="pausedot">·</span>{pauseSummary(events, inputs)}
+        </RunMark>
+      );
+    }
+    return (
+      <>
+        <RunMark classes={(standing ? 'mark switch runfold open runstart onit' : 'mark switch runfold open runstart') + point} title="fold what crossed while the run was paused" onClick={() => toggleRun(key)}>
+          {label}
+        </RunMark>
+        <PauseCrossings activity={activity} step={step} base={base} />
+        <RunMark classes={(standing ? 'mark switch runfold open runend here' : 'mark switch runfold open runend') + point} title="fold what crossed while the run was paused" onClick={() => toggleRun(key)}>
+          {standing ? `paused · step ${step + 1} runs next` : `resumed at step ${step + 1}`}
+        </RunMark>
       </>
     );
   };
@@ -626,15 +680,41 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted, 
 
         {steps.filter(step => !definesAt.has(step.index)).map(step => (
           <Fragment key={step.index}>
+            {/* A pause point before this step: saved, it stands as a line a run
+                stops and holds the page at; unsaved, the gap shows where one
+                would go on pointing. Click either to change it. */}
+            {step.index > 0 && !sequence?.recording && (step.pauseBefore
+              ? hasPause(step.index) ? null : (
+                <div class="mark pausepoint">
+                  <span class="marktext">{pauseWords(step, pausedAt(step.index))}</span>
+                  <span class="marktools">
+                    {PAUSE_LAYERS.map(([layer, word]) => {
+                      const holds = step.pauseHolds ?? PAUSE_LAYERS.map(([one]) => one);
+                      const on = holds.includes(layer);
+                      return (
+                        <button key={layer} class={on ? 'pausechip on' : 'pausechip'} aria-label={word}
+                          title={on ? `stop holding the ${word} here` : `hold the ${word} here`}
+                          onClick={() => void post('/sequence/step/pause', {
+                            step: step.index, holds: on ? holds.filter(one => one !== layer) : [...holds, layer],
+                          })}><Glyph of={layer === 'ui' ? 'screen' : layer} /><span class="pauselabel">{word}</span></button>
+                      );
+                    })}
+                    <button class="pausecancel" title="remove this pause point" aria-label="remove this pause point"
+                      onClick={() => void post('/sequence/step/pause', { step: step.index, on: false })}><Glyph of="cross" /><span class="pauselabel">remove</span></button>
+                  </span>
+                </div>
+              )
+              : (
+                <div class="pausegap" role="button" title="add a pause point before this step"
+                  onClick={() => void post('/sequence/step/pause', { step: step.index })}>
+                  <span class="pausegapmark"><Glyph of="held" /></span>
+                </div>
+              ))}
             {/* What crossed while the run stood paused before this step: no
                 step's window was open, so it is counted here and against no step. */}
-            {!sequence?.recording && activity.pauses.has(step.index) && (
-              <div class="mark pause" role="note">
-                <span class="marktext">paused before step {step.index + 1} · {pauseSummary(activity.pauses.get(step.index)!)}</span>
-              </div>
-            )}
+            {!sequence?.recording && hasPause(step.index) && pauseSteps(step.index)}
             <div
-              class={['mark', step.current ? 'here' : '', step.failed ? 'failed' : '', onIt(step) ? 'onit' : '',
+              class={['mark', step.current && !pausedAt(step.index) ? 'here' : '', step.failed ? 'failed' : '', onIt(step) ? 'onit' : '',
                 folded.has(step.index) || dragging !== null ? 'folded' : '',
                 within(dragged, step.index) ? 'dragged' : '', within(selection, step.index) ? 'selected' : '',
                 ...motion.classesOf(step.index)]
@@ -853,7 +933,7 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted, 
         {/* The pass ended at its last step's release; what crosses after this line belongs to no run. */}
         {sequence?.name && !sequence.recording && !sequence.busy && activity.pass !== undefined && sequence.currentStep >= steps.length && (
           <div class="mark finish" role="note">
-            <span class="marktext">finished · traffic after this line is not the run's</span>
+            <span class="marktext">finished</span>
           </div>
         )}
 
@@ -920,6 +1000,28 @@ function VariableRow({ name, step, variable, stores, onSave, onRemove, usedBy = 
 }
 
 /** A marker a run puts into the list: a switch to or from a sequence, or a step it ran. */
+/**
+ * What a pause point does, in the tense of where the run stands: before it,
+ * at it, or past it - and what it holds, by name: `will pause code and
+ * network`, `paused just the sequence`, `paused code, then resumed`.
+ */
+function pauseWords(step: SequenceStep, standing: boolean): preact.ComponentChildren {
+  const holds = step.pauseHolds ?? PAUSE_LAYERS.map(([layer]) => layer);
+  // The sequence always stops at a pause point; the layers named after it are the ones it holds too.
+  const stopped: Array<[string, string]> = [['sequence', 'sequence'], ...PAUSE_LAYERS.filter(([layer]) => holds.includes(layer))];
+  // Each name carries the separator before it, so a comma sits against the word it follows.
+  const what = stopped.map(([layer, word], k) => (
+    <span class="pausenamed" key={layer}>
+      {k > 0 && (k === stopped.length - 1 ? <span class="pauseand">and</span> : <span class="pausecomma">,</span>)}
+      <Glyph of={layer === 'ui' ? 'screen' : layer} />{word}
+    </span>
+  ));
+  return standing ? <>paused{what}</> : step.done ? <>paused{what}<span>, then resumed</span></> : <>will pause{what}</>;
+}
+
+/** The layers a pause point can hold, as its toggles name them. */
+const PAUSE_LAYERS: Array<['code' | 'ui' | 'network', string]> = [['code', 'code'], ['ui', 'screen'], ['network', 'network']];
+
 export function RunMark({ classes, title, onClick, tools, children }: {
   classes: string; title?: string; onClick?: () => void;
   /** Buttons that take the marker's text's place on pointing, as a step marker's do. */

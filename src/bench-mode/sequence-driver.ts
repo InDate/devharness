@@ -3,6 +3,8 @@
  * its own tool, and the step labels the bench and the `bench` tool both show.
  */
 
+import { standPausedRun } from '../proxy/registry.js';
+import { hold } from '../hold.js';
 import { sweepCaptures } from './capture-sweep.js';
 import { assertAsCheck, formOf, subjectOf as subjectOfCheck } from '../tools/check-engine.js';
 import { checkSpecOf } from '../tools/check-tools.js';
@@ -703,6 +705,7 @@ export function createSequenceDriver(
             ...(resolved ? { resolved } : {}),
             ...(typeof command.params?.saveAs === 'string' ? { captures: command.params.saveAs } : {}),
             ...(storedValue(command) !== undefined ? { stores: storedValue(command) } : {}),
+        ...(command.pauseBefore ? { pauseBefore: true as const, ...(command.pauseHolds ? { pauseHolds: command.pauseHolds } : {}) } : {}),
             ...(readsOf(command).length ? { reads: readsOf(command) } : {}),
             tool: command.tool,
             params: command.params ?? {},
@@ -748,10 +751,43 @@ export function createSequenceDriver(
       return undefined;
     },
 
-    step: async (signal?: AbortSignal) => {
+    holdPaused: async (layers?: Array<'code' | 'ui' | 'network'>) => {
+      const active = commandRecorder.getActiveSequence();
+      if (!active) return;
+      // Where a play stops, the run stands paused: what crosses from here is the pause's.
+      if (active.runTimestamp !== undefined) {
+        await standPausedRun({ kind: 'replay', runId: `run-${active.runTimestamp.toString(36)}`, step: active.currentStep, paused: true });
+      }
+      const chosen = layers ?? active.holdWhilePaused;
+      if (chosen?.length === 0) return;
+      const reading = await hold(active.connection, { source: 'sequence', ...(chosen ? { layers: chosen } : {}) }).catch(() => undefined);
+      const held = reading?.held.filter(one => one.source === 'sequence').map(one => one.layer);
+      if (held?.length) active.pauseHeld = held;
+    },
+
+    setPause: async (step: number, change: { on?: boolean; holds?: Array<'code' | 'ui' | 'network'> }) => {
+      const sequence = openSequence();
+      if (!sequence) return 'no sequence is open';
+      const command = sequence.commands?.[step];
+      if (!command) return `step ${step + 1} is not in "${sequence.name}"`;
+      if (step === 0) return 'a run starts at step 1, so there is nothing before it to pause at';
+      const on = change.on ?? (change.holds ? true : !command.pauseBefore);
+      if (!on) {
+        delete command.pauseBefore;
+        delete command.pauseHolds;
+        return persist(sequence, `pause point removed before step ${step + 1}`);
+      }
+      command.pauseBefore = true;
+      // Every layer is the default and is stored as no list at all.
+      if (change.holds && change.holds.length < 3) command.pauseHolds = change.holds;
+      else if (change.holds) delete command.pauseHolds;
+      return persist(sequence, `pause point before step ${step + 1} holds ${command.pauseHolds ? command.pauseHolds.join(', ') || 'nothing' : 'everything'}`);
+    },
+
+    step: async (signal?: AbortSignal, holdNothing?: boolean) => {
       if (ourRun()) {
         const before = ourRun()!.currentStep;
-        const failure = await replay({ action: 'step', stepCount: 1 }, signal);
+        const failure = await replay({ action: 'step', stepCount: 1, ...(holdNothing ? { playing: true } : {}) }, signal);
         const after = ourRun();
         if (after) reached = after.currentStep;
         else {
@@ -764,6 +800,7 @@ export function createSequenceDriver(
       if (selected) {
         return replay({
           action: 'run', name: selected, stepTo: 1, wait: true, connection: selectedConnection, variables: recordedText(),
+          ...(holdNothing ? { playing: true } : {}),
           ...(rebindOnto(selected, selectedConnection) ? { connections: rebindOnto(selected, selectedConnection) } : {}),
           ...(baseUrl ? { baseUrl } : {}),
         }, signal);
@@ -1221,6 +1258,7 @@ export function createSequenceDriver(
         ...(command.comment ? { comment: command.comment } : {}),
         ...(typeof command.params?.saveAs === 'string' ? { captures: command.params.saveAs } : {}),
         ...(storedValue(command) !== undefined ? { stores: storedValue(command) } : {}),
+        ...((command as { pauseBefore?: true }).pauseBefore ? { pauseBefore: true as const } : {}),
         ...(readsOf(command).length ? { reads: readsOf(command) } : {}),
         tool: command.tool,
         params: command.params ?? {},

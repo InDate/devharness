@@ -144,6 +144,10 @@ export interface ExecutionResult {
     held?: HoldLayer[];
   };
   pausedAtStep?: number;
+  /** The 0-based step a saved pause point stopped the run before. */
+  pausedAtMark?: number;
+  /** The layers a pause held on the page, which `step`, `finish` and `cancel` release. */
+  pauseHeld?: HoldLayer[];
   /** The step a breakpoint stopped the page inside, left open for the resume to close. */
   openStep?: { step: number; markedAt: number };
   activeSequenceState?: ActiveSequenceState;

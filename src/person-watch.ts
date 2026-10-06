@@ -17,6 +17,7 @@ import type { CommandRecorder } from './command-recorder.js';
 import type { ElementFingerprint } from './element-fingerprint.js';
 import { personInputScript } from './element-fingerprint.js';
 import { addCause } from './proxy/cause-timeline.js';
+import { recordPauseAction } from './pause-actions.js';
 
 const BINDING = '__devharnessInput';
 
@@ -71,6 +72,8 @@ async function record(connection: string, input: PersonInput): Promise<void> {
     recorder.attachRelease(index, at + PERSON_INPUT_REACH_MS);
     input = { ...input, index };
   }
+  // Made while a run stands paused, it is part of that pause as well as of History.
+  recordPauseAction(connection, { at: input.at, kind: 'input', line: describePersonInput(input), ...(input.index !== undefined ? { index: input.index } : {}) });
   unread.set(connection, [...(unread.get(connection) ?? []), input]);
   const all = [...(landed.get(connection) ?? []), input];
   landed.set(connection, all.slice(-LANDED_KEPT));
@@ -144,6 +147,19 @@ export function personInputSince(connection: string, since: number): PersonInput
   const found = (landed.get(connection) ?? []).filter(input => input.at >= since);
   if (found.length) unread.set(connection, (unread.get(connection) ?? []).filter(input => !found.includes(input)));
   return found;
+}
+
+/**
+ * A control a person pressed in the bench - hold, release, a step - as a
+ * History entry from the bench channel, so what was done to the page reads
+ * in History beside what was done in it.
+ */
+export async function recordBenchCall(connection: string, tool: string, params: Record<string, unknown>, line: string): Promise<void> {
+  if (!recorder) return;
+  await recorder.recordCommand(tool, { ...params, connection }, {
+    from: 'bench',
+    result: { content: [{ type: 'text', text: line }], _meta: { tool, action: String(params.action ?? ''), timestamp: Date.now() } },
+  });
 }
 
 /** One input as a reply names it: `click [data-testid="open"]`, `type "draft" into #title`, `press Enter`. */

@@ -385,7 +385,7 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
                 title={failed ? sequence.failure : sequence.heldAt ? `breakpoint at ${sequence.heldAt}` : undefined}>
                 {sequence.playing ? 'running · '
                   : sequence.paused && sequence.heldAt ? 'paused at breakpoint · '
-                  : sequence.paused ? (frozen ? 'paused · held · ' : 'paused · ')
+                  : sequence.paused ? (frozen || sequence.runHeld?.length ? 'paused · held · ' : 'paused · ')
                   : failed ? 'failed · '
                   : ''}
                 step <b>{Math.min(sequence.currentStep + 1, sequence.total)}</b> of {sequence.total}

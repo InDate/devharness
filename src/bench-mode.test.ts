@@ -274,6 +274,8 @@ function noteSequences() {
       return 'that note is not in the open sequence';
     },
     moveAnnotation: async () => undefined,
+    holdPaused: async () => {},
+    setPause: async () => undefined,
     detachAnnotation: async (id: string) => {
       let found = false;
       for (const command of steps) {
@@ -946,6 +948,8 @@ describe('a step and the rest of devharness', () => {
         remove: async () => undefined,
         attachAnnotation: async () => undefined,
         moveAnnotation: async () => undefined,
+        holdPaused: async () => {},
+        setPause: async () => undefined,
         detachAnnotation: async () => undefined,
         attachScreenshot: async () => undefined,
         record: async () => undefined,
@@ -1070,6 +1074,8 @@ describe('stepping a sequence', () => {
         return undefined;
       },
       moveAnnotation: async () => undefined,
+      holdPaused: async () => {},
+      setPause: async () => undefined,
       detachAnnotation: async (id: string) => {
         calls.push(`detach:${id}`);
         let found = false;

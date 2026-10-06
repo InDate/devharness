@@ -567,6 +567,18 @@ window, so it is listed apart:
   bench placed stays. `replay.watchPersonInput: false` turns the watch off.
 - **Held page.** A driving call, or a run's step, on a page whose code a hold
   stops returns `PAGE_HELD` at once, naming the hold.
+- **A pause holds the page.** A `stepTo` pause, and a pause point's, hold the
+  page's code, ui and network unless `hold` names fewer (`hold: []` holds
+  nothing). `step`, `finish` and `cancel` release the run's own hold; the
+  bench's Play holds only where it stops. Releasing every layer from the bench
+  carries a paused run on.
+- **Pause points.** A step saved with `pauseBefore` (the bench: the line
+  between two steps) stops any run before it, holding the layers in
+  `pauseHolds`, all by default.
+- **What a pause records.** A person's input, each hold step - a statement, a
+  callback with where it ran, a message let through - and each hold or
+  release placed in the bench, in order beside the traffic; the bench's hold
+  controls write History entries as well.
 
 `proxy({ action: 'events' })` shows each stamp as `run-<id>/<step>`, with
 `paused` for a pause and `#<entry>` for the History row it counts on.

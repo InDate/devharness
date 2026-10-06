@@ -51,6 +51,9 @@ export interface SequenceDriver {
       traffic?: StepTraffic;
       expected?: Record<string, ExpectedValue>;
       addedAt?: number;
+      /** A pause point saved before this step. */
+      pauseBefore?: true;
+      pauseHolds?: Array<'code' | 'ui' | 'network'>;
     }>;
     placements?: Record<string, number>;
     variables: SequenceVariable[];
@@ -80,7 +83,14 @@ export interface SequenceDriver {
    * out its own settle before it returns, and a run stopped by hand reports
    * itself as still going for as long as that takes.
    */
-  step: (signal?: AbortSignal) => Promise<string | undefined>;
+  step: (signal?: AbortSignal, holdNothing?: boolean) => Promise<string | undefined>;
+  /** Hold the page as a paused run holds it: `layers` where given, else the run's own choice. */
+  holdPaused: (layers?: Array<'code' | 'ui' | 'network'>) => Promise<void>;
+  /**
+   * The pause point before step `step`: added, removed, or set to hold
+   * `holds`. Absent `on` toggles it.
+   */
+  setPause: (step: number, change: { on?: boolean; holds?: Array<'code' | 'ui' | 'network'> }) => Promise<string | undefined>;
   /** Re-run from the start up to and including `step` (0-based). */
   goto: (step: number, signal?: AbortSignal) => Promise<string | undefined>;
   /** Swap the origin every absolute URL in the run uses. '' clears it. */

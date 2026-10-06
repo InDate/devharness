@@ -22,6 +22,7 @@ import { translateSequence } from './tools/legacy-steps.js';
 import type { Annotation, StepTraffic } from './annotation.js';
 import { substituteCapturedValues, type CaptureEntry } from './tools/interpolation-reverse.js';
 import type { CallChannel } from './call-origin.js';
+import type { HoldLayer } from './hold.js';
 import type { ElementFingerprint, ElementRepair } from './element-fingerprint.js';
 
 /** JSON round-trip clone, tolerant of a result that isn't JSON-safe (drops it rather than throwing). */
@@ -241,7 +242,7 @@ export interface CommandSequence {
 }
 
 // Internal history tracking (includes index and timestamp)
-interface HistoryCommand extends RecordedCommand {
+export interface HistoryCommand extends RecordedCommand {
   index: number;
   timestamp: number;
   /**
@@ -263,6 +264,33 @@ interface HistoryCommand extends RecordedCommand {
   from: CallChannel;
   /** The sequence whose run executed this call as a step. */
   run?: string;
+  /**
+   * The run stopped at this step. A check reports a condition that failed as
+   * a reading, not an error, so the result alone leaves the step unmarked.
+   */
+  stepFailed?: boolean;
+  /** This call's position in `run`, 0-based. */
+  runStep?: number;
+  /**
+   * When a run's step marked the boundary. The executor marks before the
+   * step's call is recorded, so `timestamp` falls a few ms inside the window
+   * and traffic between the two would read as outside it.
+   */
+  markedAt?: number;
+  /** What crossed under this step against its recording, where the sequence holds one. */
+  stepMatch?: StepMatch;
+}
+
+/** A step's crossings against its recording, kind by kind. */
+export interface StepMatch {
+  matched: number;
+  kinds: number;
+  /** Each kind that did not match: `new`, `missing`, or what differs from the recording. */
+  unmatched: Array<{ kind: string; reasons: string[] }>;
+  /** How long the step was held open while recording and on this run, in ms. */
+  heldMs?: { recorded: number; replayed: number };
+  /** The step's recording holds no counts by kind, so nothing was compared. */
+  noBaseline?: true;
 }
 
 // Active sequence state for step-through debugging
@@ -294,6 +322,12 @@ export interface ActiveSequenceState {
   repair?: ElementRepair;
   /** Where the page stopped at a breakpoint the sequence did not set; step and finish resume it before the next step. */
   breakpointHit?: { url: string; lineNumber: number };
+  /** The step a breakpoint stopped the page inside, left open; step and finish close it on resume. */
+  openStep?: { step: number; markedAt: number };
+  /** History index before the run's first step, so a reply after a resume lists the steps before the pause too. */
+  runSince?: number;
+  /** The layers a person's input held the page on; step, finish and cancel release them. */
+  personHeld?: HoldLayer[];
 }
 
 export class CommandRecorder {
@@ -524,7 +558,7 @@ export class CommandRecorder {
   /**
    * Record a command (always-on, automatic)
    */
-  async recordCommand(tool: string, params: Record<string, any>, options?: { delay?: number; comment?: string; result?: any; from?: CallChannel; run?: string }): Promise<void> {
+  async recordCommand(tool: string, params: Record<string, any>, options?: { delay?: number; comment?: string; result?: any; from?: CallChannel; run?: string; runStep?: number }): Promise<void> {
     // Reset history viewed flag when the agent records a command
     // (it must view history again before inserting). A step the bench or a
     // run adds is not the agent's, and leaves what it viewed standing.
@@ -565,6 +599,7 @@ export class CommandRecorder {
       ...(options?.result !== undefined && { result: safeClone(options.result) }),
       from: options?.from ?? 'mcp',
       ...(options?.run !== undefined && { run: options.run }),
+      ...(options?.runStep !== undefined && { runStep: options.runStep }),
     };
 
     this.history.push(command);
@@ -605,6 +640,32 @@ export class CommandRecorder {
   attachResult(index: number, result: any): void {
     const cmd = this.history.find(c => c.index === index);
     if (cmd) cmd.result = safeClone(result);
+  }
+
+  /**
+   * Mark the newest call `run` made with `tool` as the step its run stopped
+   * at. A step that failed before its call was recorded matches no newer call
+   * of that tool, and nothing is marked.
+   */
+  markStepFailed(run: string, tool: string): void {
+    const newest = this.history[this.history.length - 1];
+    if (newest?.run === run && newest.tool === tool) newest.stepFailed = true;
+  }
+
+  /** Attach `match` to the newest call recorded as step `step` of `run`. */
+  noteStepMatch(run: string, step: number, match: StepMatch): void {
+    for (let i = this.history.length - 1; i >= 0; i--) {
+      const command = this.history[i];
+      if (command.run === run && command.runStep === step) { command.stepMatch = match; return; }
+    }
+  }
+
+  /** Attach the boundary window to the newest call recorded as step `step` of `run`. */
+  noteStepWindow(run: string, step: number, from: number, to: number): void {
+    for (let i = this.history.length - 1; i >= 0; i--) {
+      const command = this.history[i];
+      if (command.run === run && command.runStep === step) { command.markedAt = from; command.releasedAt = to; return; }
+    }
   }
 
   /**

@@ -44,8 +44,8 @@ export function describe(event: BoundaryEvent, typed = true): string {
   return parts.filter(Boolean).join(' · ');
 }
 
-export { isFrame, keyOf, frameMatch, leadingPairs } from '../kinds.js';
-import { isFrame, keyOf, leavesOf, marksFields, samePayload, shapeOf, typeOfLeaf, type ExpectedValue, type KindCount, type Verdict } from '../kinds.js';
+export { ignoreCoversKind, ignoreMatches, isFrame, keyOf, frameMatch, leadingPairs } from '../kinds.js';
+import { ignoreMatches, isFrame, keyOf, leavesOf, marksFields, samePayload, shapeOf, typeOfLeaf, type ExpectedValue, type KindCount, type Verdict } from '../kinds.js';
 import { lineDiff, sideBySide } from './diff.js';
 import { jsonLines } from './json-lines.js';
 import { Fold, LabelInput, Row, type RowSlots } from './row.js';
@@ -110,33 +110,6 @@ export function stabilityIn(events: BoundaryEvent[]): Map<string, Stability> {
   const out = new Map<string, Stability>();
   for (const [key, runs] of byKey) out.set(key, { in: runs.size, runs: passes.length });
   return out;
-}
-
-/**
- * Whether an ignore rule covers a crossing: its socket or path, its direction
- * or verb, its step, and then its one kind - or, for a socket-wide rule,
- * anything that crossed there.
- */
-export function ignoreMatches(rule: HiddenKind, event: BoundaryEvent): boolean {
-  if (rule.frame !== undefined && !!rule.frame !== isFrame(event)) return false;
-  if (rule.url && !event.url.includes(rule.url)) return false;
-  if (rule.direction && event.direction !== rule.direction) return false;
-  if (rule.method && (event.method ?? 'GET') !== rule.method) return false;
-  if (rule.step !== undefined && event.step !== rule.step) return false;
-  return !!rule.any || keyOf(event) === rule.key;
-}
-
-/**
- * Whether an ignore rule covers a kind recorded on a step, which a run may
- * not have produced. A recorded kind carries no socket, so a socket-wide rule
- * covers every recorded message kind going its way.
- */
-export function ignoreCoversKind(rule: HiddenKind, kind: string, step: number): boolean {
-  if (rule.step !== undefined && rule.step !== step) return false;
-  const arrow = kind.startsWith('← ') ? 'in' : kind.startsWith('→ ') ? 'out' : undefined;
-  if (rule.any) return !!rule.frame && arrow !== undefined && (!rule.direction || rule.direction === arrow);
-  const key = arrow ? kind.slice(2) : kind.slice(kind.indexOf(' ') + 1);
-  return key === rule.key;
 }
 
 /**
@@ -1135,8 +1108,12 @@ function attribution(event: BoundaryEvent): string {
  */
 export function CrossingRow({
   event, base, rule, repeats, cadence: every, seen, stale, open, onOpen, actions, extra,
-  onMenu, verdict, moves, hidden,
+  onMenu, verdict, moves, hidden, onGoToCause, onGoToTraffic,
 }: {
+  /** Open History on the call this crossed under, where it carries one. */
+  onGoToCause?: (entry: number) => void;
+  /** Open Traffic on this crossing, for a row listed outside it; takes the place of the History go-to. */
+  onGoToTraffic?: () => void;
   /** A hidden kind listed after all, as the footing asked: dimmed, and × shows it again. */
   hidden?: boolean;
   /** Move this row's kind to the step above or below, where there is one. */
@@ -1163,17 +1140,21 @@ export function CrossingRow({
   // What the proxy did to this crossing, not whether a rule exists: a rule
   // made after it crossed, or one bound to another step, left it as sent.
   const answered = event.answeredAs === 'replaced';
-  const blocked = event.answeredAs === 'dropped' || event.answeredAs === 'refused';
+  const blocked = event.answeredAs === 'dropped' || event.answeredAs === 'refused' || event.answeredAs === 'outOfScope';
   const pending = !answered && !blocked && !rule?.off && (rule?.verb === 'answer' || rule?.verb === 'block');
   // A row's own name first, then one given to its kind before rows were named.
   const named = (actions?.nameKey ? actions.names?.[actions.nameKey(event)] : undefined)
     ?? actions?.names?.[keyOf(event)];
   const [renaming, setRenaming] = useState(false);
+  const [pointing, setPointing] = useState(false);
   const served = blocked ? 'never sent'
     : answered && rule?.verb === 'answer'
       ? `${isFrame(event) ? '' : (rule.status ?? '') + ' · '}${bytes(rule.body?.length ?? 0)}`
       : null;
 
+  const cause = event.commandIndex ?? event.entry ?? event.openedBy;
+  const causeWords = cause === undefined ? undefined
+    : `${event.openedBy !== undefined && event.commandIndex === undefined ? 'opened by ' : ''}#${cause}${event.causeLabel ? ` ${event.causeLabel}` : ''}`;
   const hidable = actions && event.kind !== 'write';
   const intercepting = !!actions && !!rule && !rule.off && (rule.verb === 'answer' || rule.verb === 'block');
   // A storage write never reaches the proxy, so no rule can intercept or hide it.
@@ -1182,6 +1163,7 @@ export function CrossingRow({
     ...(actions?.rename ? ['rename'] as const : []),
     ...(actions?.report ? ['send'] as const : []),
     ...(moves ? ['up', 'down'] as const : []),
+    ...(onGoToTraffic || (cause !== undefined && onGoToCause) ? ['open'] as const : []),
   ];
   return (
     <Row
@@ -1204,7 +1186,9 @@ export function CrossingRow({
       way={event.kind === 'frame' ? (event.direction === 'out' ? '→' : '←') : ''}
       title={attribution(event)}
       badge={<Badge verdict={verdict} ignored={hidden} />}
-      label={<>
+      onEnter={() => setPointing(true)}
+      onLeave={() => setPointing(false)}
+      label={pointing && causeWords && onGoToCause ? <span class="what">{causeWords}</span> : <>
         {renaming && actions?.rename
           ? <LabelInput
               value={named ?? ''}
@@ -1223,7 +1207,7 @@ export function CrossingRow({
                   : (event.preview ?? event.url)}
             </span>}
         {(answered || blocked) && (
-          <span class="tag">{blocked ? (event.answeredAs === 'refused' ? 'refused' : 'never sent')
+          <span class="tag">{blocked ? (event.answeredAs === 'refused' ? 'refused' : event.answeredAs === 'outOfScope' ? 'out of scope' : 'never sent')
             : `Intercepted: ${rule?.mode === 'local' ? 'Local' : 'Global'} Response`}</span>
         )}
         {pending && (
@@ -1263,6 +1247,7 @@ export function CrossingRow({
         </span>
       </>}
       slots={{
+        ...(onGoToTraffic ? { open: onGoToTraffic } : cause !== undefined && onGoToCause ? { open: () => onGoToCause(cause) } : {}),
         ...(actions?.rename ? { rename: () => setRenaming(true) } : {}),
         ...(actions?.report ? { send: () => actions.report!(event) } : {}),
         ...(moves?.up ? { up: moves.up } : {}),
@@ -1280,8 +1265,11 @@ export function CrossingRow({
           : hidden ? { hide: () => actions!.unhide?.(actions!.ignoredBy?.(event) ?? keyOf(event)) }
           : hidable ? { hide: () => actions!.hide(event) } : {}),
       }}
-      glyphs={hidden ? { hide: 'eye' } : undefined}
+      glyphs={{ open: onGoToTraffic ? 'goto:request' : 'goto:history', ...(hidden ? { hide: 'eye' } : {}) }}
       titles={{
+        ...(onGoToTraffic ? { open: 'go to this in Traffic' } : cause !== undefined ? { open: event.commandIndex === undefined && event.openedBy !== undefined
+          ? `go to history #${cause}, the call that opened the stream this arrived on`
+          : `go to history #${cause}, the call this crossed under` } : {}),
         remove: rule?.mode === 'local' ? 'remove this interception' : 'stop intercepting this in this sequence',
         hide: hidden ? 'stop ignoring this - it is listed and compared again' : 'ignore this kind: out of the list and out of comparisons',
       }}

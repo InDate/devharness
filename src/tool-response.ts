@@ -608,6 +608,7 @@ const BREAKPOINT_ALLOWED_TOOLS = new Set([
   'breakpoint',   // Manage breakpoints
   'console',      // View console logs
   'bench',        // Owns the pause it would otherwise be blocked by
+  'hold',         // Reads the held layers and releases the pause a hold took
 ]);
 
 /**

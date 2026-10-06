@@ -1,3 +1,5 @@
+import type { HoldLayer } from '../hold.js';
+import type { PersonInput } from '../person-watch.js';
 /**
  * The shapes a replay run passes between the executor and what it calls: the
  * run's context, one step's result, the run's result.
@@ -128,7 +130,22 @@ export interface ExecutionResult {
   results: StepResult[];
   totalCommands: number;
   durationMs: number;
+  /**
+   * A person's input that landed on the run's page between steps, each with
+   * the 0-based step it landed before, and what the run did about it as
+   * `replay.personInputDuringRun` sets.
+   */
+  personInput?: {
+    mode: 'pause' | 'stop' | 'report';
+    landed: Array<{ before: number; inputs: PersonInput[] }>;
+    /** Under `pause`, the 0-based step the run is held before. */
+    pausedBefore?: number;
+    /** Under `pause`, the layers of the run's page held until `step`, `finish` or `cancel` releases them. */
+    held?: HoldLayer[];
+  };
   pausedAtStep?: number;
+  /** The step a breakpoint stopped the page inside, left open for the resume to close. */
+  openStep?: { step: number; markedAt: number };
   activeSequenceState?: ActiveSequenceState;
   breakpointHit?: BreakpointHitInfo;
   /** Click validation failure - sequence paused for inspection/retry */
@@ -154,24 +171,8 @@ export interface ExecutionResult {
     /** A nested sequence's step, as the caller's step and the path down to it: `1.3`. */
     path?: string;
     label: string;
-    recorded: { requests: number; failed: number; opened: number; writes: number };
-    observed: { requests: number; failed: number; opened: number; writes: number };
-    /**
-     * What crossed the boundary, per payload shape, weighted by how much of
-     * each event this step owns. Present where the recording and the replay
-     * both ran through a proxy; a shape in one side and not the other is the
-     * difference a count cannot show.
-     */
-    shapes?: { recorded: Record<string, number>; observed: Record<string, number> };
-    /**
-     * How long each side held this step open, in ms.
-     *
-     * Unowned traffic lands in a step by duration, so a wide gap here is the
-     * first thing to read a difference against: a step held 41s while
-     * recording and 0.3s on replay differs in pacing before it differs in
-     * behaviour.
-     */
-    window?: { recorded: number; observed: number };
+    /** Each kind that did not match its recording, and why; see `StepMatch`. */
+    unmatched: Array<{ kind: string; reasons: string[] }>;
   }>;
 }
 

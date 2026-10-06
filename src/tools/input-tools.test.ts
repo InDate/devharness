@@ -49,7 +49,13 @@ describe('an input action whose dispatch throws', () => {
   it('reports a type whose typing throws as failed', async () => {
     const { input } = makeInput({
       evaluate: vi.fn(async () => ({ blocked: false })),
-      type: vi.fn(async () => { throw new Error('Node is detached from document'); }),
+      $: vi.fn(async () => ({
+        scrollIntoView: async () => {}, clickablePoint: async () => ({ x: 1, y: 1 }), dispose: async () => {},
+      })),
+      keyboard: {
+        press: vi.fn(async () => {}), down: vi.fn(async () => {}), up: vi.fn(async () => {}),
+        type: vi.fn(async () => { throw new Error('Node is detached from document'); }),
+      },
     });
 
     const result: any = await input.handler({ ...on, action: 'type', selector: '#name', text: 'Ada', append: true });

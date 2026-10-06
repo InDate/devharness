@@ -369,11 +369,10 @@ export async function runCli(argv: string[]): Promise<number> {
     return 1;
   }
 
-  if (parsed.json) {
-    console.log(JSON.stringify(reply.response, null, 2));
-  } else {
-    console.log(renderResponse(reply.response));
-  }
+  // Written and drained before returning: the caller exits on the return, and
+  // a reply larger than the pipe's buffer was cut off at 64KB.
+  const text = parsed.json ? JSON.stringify(reply.response, null, 2) : renderResponse(reply.response);
+  await new Promise<void>(resolve => process.stdout.write(`${text}\n`, () => resolve()));
 
   return (reply.response as any)?.isError ? 1 : 0;
 }

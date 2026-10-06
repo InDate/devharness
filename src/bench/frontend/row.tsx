@@ -31,6 +31,8 @@ export interface RowSlots {
   down?: () => void;
   /** Keep this call under Favourites on the Tools tab. */
   star?: () => void;
+  /** Open the Sequence tab on the sequence this row ran in, at its step. */
+  sequence?: () => void;
   /** Stop what this row runs, such as a server. */
   stop?: () => void;
   /** Empty what this row has gathered, such as a server's logs. */
@@ -51,6 +53,7 @@ export interface RowSlotTitles {
   down?: string;
   hide?: string;
   star?: string;
+  sequence?: string;
   stop?: string;
   clear?: string;
 }
@@ -72,6 +75,7 @@ const SLOTS: Array<{ key: keyof RowSlots; glyph?: string; text?: string; title: 
   { key: 'down', glyph: 'down', title: 'list this under the step below, on every run', off: 'no step below to list this under' },
   { key: 'stop', glyph: 'stop', title: 'stop this', off: 'nothing on this row is running' },
   { key: 'clear', glyph: 'clear', title: 'empty this', off: 'nothing on this row to empty' },
+  { key: 'sequence', glyph: 'goto:sequence', title: 'go to this step in its sequence', off: 'this call ran in no sequence' },
   { key: 'star', glyph: 'star', title: 'keep this under Favourites on the Tools tab', off: 'this row cannot be kept as a favourite' },
 ];
 

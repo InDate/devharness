@@ -3,7 +3,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createServer, request as httpRequest, type Server } from 'node:http';
-import { startProxyFor, stopProxyFor, markOnProxies, forgetCursor, getProxy, shareProxy, listProxies, namesSharing, newlyIdleProxies } from './registry.js';
+import { startProxyFor, stopProxyFor, markOnProxies, forgetCursor, getProxy, shareProxy, listProxies, namesSharing, newlyIdleProxies, standPausedRun, markNextCommand, releaseCommand, currentCursor } from './registry.js';
 
 let origin: Server;
 let originPort = 0;
@@ -93,5 +93,40 @@ describe('a proxy no name in use holds', () => {
     expect(namesSharing('idle cart tab')).toEqual(['idle shop tab', 'idle cart tab']);
     await stopProxyFor('idle shop tab');
     await stopProxyFor('idle cart tab');
+  });
+});
+
+describe("a paused run's standing cursor", () => {
+  const pause = { kind: 'replay' as const, runId: 'run-paused', step: 2, paused: true as const };
+
+  it('is what a call made in the pause hands back to on release', async () => {
+    forgetCursor();
+    await standPausedRun(pause);
+    expect(currentCursor()).toEqual(pause);
+    await markNextCommand({ kind: 'command', index: 9 });
+    expect(currentCursor()).toEqual({ kind: 'command', index: 9 });
+    await releaseCommand(0, 0);
+    expect(currentCursor()).toEqual(pause);
+    await standPausedRun(undefined);
+  });
+
+  it('comes down with nothing in its place when the run resumes', async () => {
+    forgetCursor();
+    await standPausedRun(pause);
+    await standPausedRun(undefined);
+    expect(currentCursor()).toBeUndefined();
+    await markNextCommand({ kind: 'command', index: 10 });
+    await releaseCommand(0, 0);
+    expect(currentCursor()).toBeUndefined();
+  });
+
+  it('leaves a call in flight marked when it comes down', async () => {
+    forgetCursor();
+    await standPausedRun(pause);
+    await markNextCommand({ kind: 'command', index: 11 });
+    await standPausedRun(undefined);
+    expect(currentCursor()).toEqual({ kind: 'command', index: 11 });
+    await releaseCommand(0, 0);
+    expect(currentCursor()).toBeUndefined();
   });
 });

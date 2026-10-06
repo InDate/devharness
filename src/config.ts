@@ -88,6 +88,31 @@ export interface ReplayConfig {
   stepSettleMs: number;
   /** Longest a step boundary waits for quiet before giving up (default: 2000) */
   stepSettleCapMs: number;
+  /**
+   * Quiet the boundary waits for after a run resumes from a breakpoint, while
+   * the step the breakpoint stopped stays marked (default: 300). The page
+   * finishes that step's work only once it resumes, and what it sends then
+   * was credited to the next step, which marks straight after the resume.
+   */
+  breakpointResumeQuietMs: number;
+  /** Longest that wait runs, so a stream that never goes quiet does not hold the run (default: 3000) */
+  breakpointResumeCapMs: number;
+  /**
+   * Record a person's clicks, typing and Enter, Escape or Tab in every page
+   * devharness drives, into History and onto the next reply on that
+   * connection (default: true). A page moved by a person and read by an agent
+   * that does not know it was moved produces readings of a state the agent
+   * never drove to.
+   */
+  watchPersonInput: boolean;
+  /**
+   * What a run does when a person's input lands on a page it drives
+   * (default: 'pause'): `pause` holds the run at the next step boundary for
+   * `replay step` or `finish`, `stop` ends it there, `report` carries on and
+   * names the input in the reply. Steps after a person's input run against a
+   * page the recording never had, so carrying on can fail where the app is fine.
+   */
+  personInputDuringRun: 'pause' | 'stop' | 'report';
 }
 
 /**
@@ -335,6 +360,10 @@ const DEFAULT_CONFIG: CdpToolsConfig = {
     maxDelayMs: 1000,         // Cap recorded delays at 1 second (0 = no limit)
     stepSettleMs: 0,          // Step boundary settle: off (see ReplayConfig)
     stepSettleCapMs: 2000,
+    breakpointResumeQuietMs: 300,
+    breakpointResumeCapMs: 3000,
+    watchPersonInput: true,
+    personInputDuringRun: 'pause',
   },
   changeDetection: {
     enabled: true,            // Detect DOM changes by default
@@ -757,6 +786,11 @@ export class ConfigManager {
         maxDelayMs: loaded.replay?.maxDelayMs ?? defaults.replay.maxDelayMs,
         stepSettleMs: loaded.replay?.stepSettleMs ?? defaults.replay.stepSettleMs,
         stepSettleCapMs: loaded.replay?.stepSettleCapMs ?? defaults.replay.stepSettleCapMs,
+        breakpointResumeQuietMs: loaded.replay?.breakpointResumeQuietMs ?? defaults.replay.breakpointResumeQuietMs,
+        breakpointResumeCapMs: loaded.replay?.breakpointResumeCapMs ?? defaults.replay.breakpointResumeCapMs,
+        watchPersonInput: loaded.replay?.watchPersonInput ?? defaults.replay.watchPersonInput,
+        personInputDuringRun: (['pause', 'stop', 'report'] as const).includes(loaded.replay?.personInputDuringRun as any)
+          ? loaded.replay!.personInputDuringRun! : defaults.replay.personInputDuringRun,
       },
       changeDetection: {
         enabled: loaded.changeDetection?.enabled ?? defaults.changeDetection.enabled,

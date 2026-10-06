@@ -4,10 +4,11 @@ import type preact from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import {
   CrossingRow, MissingRow, choicesIn, rearmRule, keyOf, labelOf, isFrame, stabilityIn, passesIn, socketName,
-  ignoreMatches, ignoreCoversKind,
+  ignoreMatches,
   type RowMoves, type RuleActions, type RuleScope, type RowVerdict,
 } from './crossing.js';
-import { countKinds, kindOf, marksFields, verdictOf, type KindCount } from '../kinds.js';
+import { countKinds, kindOf, marksFields, type KindCount } from '../kinds.js';
+import { compareStep, placementOf, passOf, pausesOf } from '../step-compare.js';
 import { Row } from './row.js';
 import { useShowHidden } from './focus.js';
 import type { BoundaryEvent, BoundaryState, SequenceState } from '../wire.js';
@@ -110,20 +111,25 @@ export function useActivity(base: string, sequence: SequenceState | undefined) {
   for (const step of replayed ? sequence!.steps : []) {
     const recorded = step.traffic?.kinds;
     if (!recorded || step.index >= sequence!.currentStep) continue;
-    const observed = countKinds(listed.ran.get(step.index) ?? []);
+    const ran = listed.ran.get(step.index) ?? [];
+    const observed = countKinds(ran);
+    const compared = compareStep({
+      recorded, ran, step: step.index, ignores, ...(step.expected ? { expected: step.expected } : {}),
+      bodyOf: event => bodies[event.id],
+      ruledOut: event => event.verdict === 'background' || event.verdict === 'unknown',
+    });
+    const byKind = new Map(compared.kinds.map(one => [one.kind, one]));
     for (const row of crossed.get(step.index) ?? []) {
-      if (row.runId !== pass && originOf.get(row) !== 'after') continue;
-      // Ignored traffic is not compared: neither a match nor a difference.
-      if (wasHidden(row)) continue;
-      const kind = kindOf(row);
-      const was = recorded[kind];
+      if (row.runId !== pass) continue;
+      const one = byKind.get(kindOf(row));
+      if (!one) continue;
+      const kind = one.kind;
+      const was = one.recorded;
       const mark = step.expected?.[kind];
-      const body = bodies[row.id];
-      if (was && (marksFields(mark) || (!was.presence && was.body !== undefined)) && body === undefined) {
-        bodiesWanted.current.push(row.id);
+      if (was && (marksFields(mark) || (!was.presence && was.body !== undefined)) && bodies[one.event.id] === undefined) {
+        bodiesWanted.current.push(one.event.id);
       }
-      const read = verdictOf(was, observed[kind] ?? { n: 0 }, body, mark, row.kind === 'write');
-      if (!read) {
+      if (!one.verdict) {
         const held = lastVerdicts.current.get(rowOf(step.index, row));
         if (held) {
           if (held.verdict !== 'match') tally[held.verdict] += 1;
@@ -131,13 +137,13 @@ export function useActivity(base: string, sequence: SequenceState | undefined) {
         }
         continue;
       }
-      if (read.verdict !== 'match') tally[read.verdict] += 1;
+      if (one.verdict !== 'match') tally[one.verdict] += 1;
       verdicts.set(rowOf(step.index, row), {
-        ...read,
+        verdict: one.verdict, reasons: one.reasons,
         ...(was ? { recorded: was } : {}),
         onUpdate: () => void (async () => {
-          const payload = bodies[row.id]
-            ?? await fetch(`${base}/proxy/body?id=${encodeURIComponent(row.id)}`).then(res => res.text()).catch(() => undefined);
+          const payload = bodies[one.event.id]
+            ?? await fetch(`${base}/proxy/body?id=${encodeURIComponent(one.event.id)}`).then(res => res.text()).catch(() => undefined);
           await post('/sequence/recorded', {
             step: step.index, kind,
             recorded: { ...observed[kind], ...(was?.presence ? { presence: true } : {}), ...(payload ? { body: payload } : {}) },
@@ -146,15 +152,13 @@ export function useActivity(base: string, sequence: SequenceState | undefined) {
       });
       lastVerdicts.current.set(rowOf(step.index, row), verdicts.get(rowOf(step.index, row))!);
     }
-    const absent = Object.entries(recorded)
-      .filter(([kind]) => !observed[kind] && !ignores.some(rule => ignoreCoversKind(rule, kind, step.index)))
-      .map(([kind, was]) => ({
-        kind,
-        verdict: {
-          verdict: 'missing' as const, reasons: [], recorded: was,
-          onUpdate: () => void post('/sequence/recorded', { step: step.index, kind, recorded: null }),
-        },
-      }));
+    const absent = compared.missing.map(({ kind, recorded: was }) => ({
+      kind,
+      verdict: {
+        verdict: 'missing' as const, reasons: [], recorded: was,
+        onUpdate: () => void post('/sequence/recorded', { step: step.index, kind, recorded: null }),
+      },
+    }));
     tally.missing += absent.length;
     if (absent.length) missing.set(step.index, absent);
   }
@@ -241,9 +245,11 @@ export function useActivity(base: string, sequence: SequenceState | undefined) {
     }),
   };
 
+  const pauses = pausesOf(boundary?.events ?? []);
+
   return {
     boundary, reading, setReading, ruleFor, isHidden, wasHidden, crossed, stepCount, pass, stability,
-    verdicts, missing, tallied, passes, move, actions,
+    verdicts, missing, tallied, passes, move, actions, pauses,
   };
 }
 
@@ -267,31 +273,22 @@ function crossedUnder(
   stepCount: number,
 ): { byStep: Map<number, BoundaryEvent[]>; ran: Map<number, BoundaryEvent[]> } {
   const events = boundary?.events ?? [];
-  let pass: string | undefined;
-  for (const event of events) if (event.runId !== undefined) pass = event.runId;
-  // The pass ended at its last stamped crossing; what crossed after it with no
-  // stamp is the tail no step held open for, which is still the pass's doing.
-  let lastStamped: number | undefined;
-  for (const event of events) if (event.runId === pass && event.step !== undefined) lastStamped = event.at;
+  const at = passOf(events);
+  const pass = at.pass;
 
   const byStep = new Map<number, Map<string, BoundaryEvent>>();
   const ran = new Map<number, BoundaryEvent[]>();
   const counts = new Map<string, number>();
   for (const event of events) {
-    let origin: string;
-    if (event.runId !== undefined && event.step !== undefined) {
-      // This pass, or something a decision stands against.
-      if (event.runId !== pass && !ruled(event)) continue;
-      origin = String(event.step);
-    } else if (event.runId === undefined && lastStamped !== undefined && event.at > lastStamped) {
-      origin = 'after';
-    } else {
-      continue;
-    }
-    const home = origin === 'after' ? stepCount : Number(origin);
-    const step = placements?.[`${origin}|${kindOf(event)}`] ?? home;
+    // An older pass's crossing stays listed where a decision stands against it.
+    const placed = placementOf(event, at, placements, stepCount)
+      ?? (event.runId !== undefined && event.step !== undefined && ruled(event)
+        ? { origin: String(event.step), step: placements?.[`${event.step}|${kindOf(event)}`] ?? event.step }
+        : undefined);
+    if (!placed) continue;
+    const { origin, step } = placed;
     originOf.set(event, origin);
-    if (origin === 'after' || event.runId === pass) ran.set(step, [...(ran.get(step) ?? []), event]);
+    if (event.runId === pass) ran.set(step, [...(ran.get(step) ?? []), event]);
     const held = byStep.get(step) ?? new Map<string, BoundaryEvent>();
     // A request is its own row - two calls to one endpoint are two facts -
     // where two frames of one shape are the same fact twice. Traffic of a
@@ -319,8 +316,19 @@ function crossedUnder(
  * changes as each frame lands, and an open row keyed by event closed itself on
  * the next arrival.
  */
-function rowOf(step: number, event: BoundaryEvent): string {
+/** A row's key within a step: one per kind, which a verdict is held under. */
+export function rowOf(step: number, event: BoundaryEvent): string {
   return `${step}|${event.kind === 'request' ? `${event.method} ${keyOf(event)}` : keyOf(event)}`;
+}
+
+/** What crossed in a pause, counted by what it was: no step's window was open, so nothing is compared. */
+export function pauseSummary(events: BoundaryEvent[]): string {
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  const requests = events.filter(event => event.kind === 'request').length;
+  const frames = events.filter(event => event.kind === 'frame').length;
+  const writes = events.filter(event => event.kind === 'write').length;
+  return [requests ? plural(requests, 'request') : '', frames ? plural(frames, 'frame') : '', writes ? plural(writes, 'write') : '']
+    .filter(Boolean).join(', ');
 }
 
 /** How many crossings each listed row stands for, by the event that heads it. */
@@ -407,7 +415,7 @@ export function ActivityRows({ activity, step, base, recording, notesAt, within 
           rule={ruleFor(event)}
           repeats={repeatsOf.get(event)}
           seen={stability.get(keyOf(event))}
-          stale={event.runId !== pass && originOf.get(event) !== 'after'}
+          stale={event.runId !== pass}
           open={reading === rowOf(step, event)}
           onOpen={() => toggle(rowOf(step, event))}
           actions={{

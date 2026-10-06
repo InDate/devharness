@@ -199,7 +199,7 @@ export class ConnectionManager {
     };
     const detach = attachLayer(reference, 'code', {
       engage: async () => { await cdp.pause(); return standing(); },
-      disengage: async () => { if (cdp.isPaused()) await cdp.resume(); },
+      disengage: async () => { if (cdp.isPaused()) await cdp.resume(); else await cdp.disarmPause(); },
       step: async () => { await cdp.stepOver(); return standing(); },
     });
     const unwatch = cdp.watchPause((paused, event) => {

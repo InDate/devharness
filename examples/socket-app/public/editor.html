@@ -1,0 +1,29 @@
+<!doctype html>
+<meta charset="utf-8">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<title>socket-app — editor</title>
+<body style="font: 14px -apple-system, sans-serif; margin: 24px">
+<h1>Editor</h1>
+<!-- Two paragraphs, so a triple click selects one of them and not the box. -->
+<div data-testid="editor" contenteditable="true"
+     style="border: 1px solid #999; padding: 8px; min-height: 80px; max-width: 480px">
+  <p>First paragraph of the note.</p>
+  <p>Second paragraph of the note.</p>
+</div>
+<p>Editor text: <output data-testid="editor-text"></output></p>
+<textarea data-testid="notes" rows="4" cols="50">First line of the notes.
+Second line of the notes.</textarea>
+<p>Notes text: <output data-testid="notes-text"></output></p>
+<script>
+  // The text each field holds, kept on the page so a check reads what the
+  // field ended with rather than what was sent to it.
+  const editor = document.querySelector('[data-testid="editor"]');
+  const notes = document.querySelector('[data-testid="notes"]');
+  const show = () => {
+    document.querySelector('[data-testid="editor-text"]').textContent = editor.innerText.replace(/\n+/g, ' / ').trim();
+    document.querySelector('[data-testid="notes-text"]').textContent = notes.value.replace(/\n+/g, ' / ');
+  };
+  editor.addEventListener('input', show);
+  notes.addEventListener('input', show);
+  show();
+</script>

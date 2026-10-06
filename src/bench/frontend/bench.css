@@ -391,6 +391,14 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
    the two is visible and changes no size. */
 .rowright { position: relative; display: flex; justify-content: flex-end; }
 .rowreading { display: flex; gap: 8px; align-items: center; white-space: nowrap; }
+.gotomark { position: relative; display: inline-flex; }
+.gotoarrow {
+  position: absolute; top: -5px; left: calc(100% - 5px);
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 11px; height: 11px; border-radius: 6px;
+  background: var(--muted); color: var(--bg); box-shadow: 0 0 0 1.5px var(--bg);
+}
+.gotoarrow svg { display: block; }
 .rowactions {
   position: absolute; right: 0; top: 50%; transform: translateY(-50%);
   display: grid; visibility: hidden;
@@ -511,6 +519,11 @@ textarea.notewords::placeholder { color: var(--muted); }
 .capture .comparison { margin: 0; padding: 4px 10px 6px; border-top: 1px solid var(--line); }
 @media (max-width: 599px) { .takes.side { grid-template-columns: 1fr; } }
 .mark.tail { cursor: default; }
+/* A pause and the finish line are places in the run, not steps: no controls, no rows to open. */
+.mark.pause, .mark.finish { cursor: default; }
+.mark.pause .marktext { color: var(--muted); font-style: italic; }
+.mark.finish::before, .mark.finish::after { height: 2px; opacity: 0.7; }
+.mark.finish .marktext { font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
 
 .findingshead { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; }
 .nothing { max-width: 42ch; }
@@ -631,6 +644,7 @@ textarea.notewords::placeholder { color: var(--muted); }
 .seqstepno { flex: 0 0 4ch; color: var(--sequence); text-align: right; }
 .seqsteplabel { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .seqsteps li.teardown { color: var(--muted); }
+.seqsteps li.marked { margin: 0 -6px; padding: 0 6px; border-radius: 4px; background: color-mix(in srgb, var(--accent) 16%, transparent); }
 
 /* One tool call this devharness ran. No hue of its own: every other colour
    names a kind of thing in a sequence, and a call is any of them. */
@@ -638,7 +652,25 @@ textarea.notewords::placeholder { color: var(--muted); }
 .crossed.historyrow.failed { border-left-color: var(--alert); }
 .crossed.historyrow.running { border-left-style: dashed; }
 .historyrow .rowhead .dir { color: var(--fg); }
+.historyrow .rowlabel > .historyindex { flex: 0 0 auto; color: var(--muted); font-variant-numeric: tabular-nums; }
 .historybody { display: flex; flex-direction: column; gap: 8px; }
+.historysection > .markdown > pre:last-child { margin-bottom: 0; }
+.givenline { display: block; width: 100%; min-width: 0; padding: 0; border: 0;
+  background: none; color: var(--fg); text-align: left; cursor: pointer; }
+.givenpeek { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: 11px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.givenfull { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.historyindent > .markdown { font: 11px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.historyindent > .markdown code { font: inherit; }
+.givenline:hover .givenpeek, .givenline:hover .givenfull { color: var(--accent); }
+.historyindent { padding-left: 14px; }
+.callfacts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0 16px; margin: 0;
+  font: 11px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.callfacts > div { display: contents; }
+.callfacts dt { color: var(--muted); }
+.callfacts dd { margin: 0; min-width: 0; color: var(--fg); overflow-wrap: anywhere; }
+
 .historyrow .where { color: var(--muted); font: 11px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .historyrow .whererun { color: var(--sequence); }
 .historyfacts { margin: 0; color: var(--muted); font: 11px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -909,11 +941,16 @@ nav button.unproxied { color: var(--alert); }
 .markdown hr { border: 0; border-top: 2px solid var(--line); margin: 18px 0; }
 .markdown a { color: var(--accent); text-decoration: none; }
 .markdown a:hover { text-decoration: underline; }
+.markdown table { border-collapse: collapse; margin: 0 0 12px; font-variant-numeric: tabular-nums; }
+.markdown th, .markdown td { padding: 3px 10px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+.markdown th { font-weight: 600; background: var(--panel); }
 
 /* The tools tab: one fold per toolset, one row per tool, the same rows as History. */
 .toolsets .panelsec h3 .secsummary { min-width: 0; overflow: hidden; }
 .toolmarks { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-end; }
 .toolmark { display: inline-flex; align-items: center; color: var(--muted); }
+.historyrow .rowhead .dir { display: flex; align-items: center; overflow: hidden; white-space: nowrap; }
+.historyrow .dir .toolmark { flex: 0 0 auto; margin-right: 10px; }
 /* The Tools tab: a list of tools on the left, shutting to a strip of marks,
    and the chosen tool on the right with its actions as tabs. */
 .toolsplit { display: grid; grid-template-columns: 208px minmax(0, 1fr); gap: 14px; align-items: start; }
@@ -2277,9 +2314,29 @@ button.statedisc:hover { box-shadow: 0 0 0 3px color-mix(in srgb, var(--frost) 3
 .mark.switch.runfold:not(.open) { border-top: var(--run-rule); border-bottom: var(--run-rule); }
 .mark.switch.runfold.runstart { border-top: var(--run-rule); }
 .mark.switch.runfold.runend { border-bottom: var(--run-rule); }
+/* History lists newest first, so its run ends above and starts below. */
+.historylist .mark.switch.runfold.runstart { border-top: 0; border-bottom: var(--run-rule); }
+.historylist .mark.switch.runfold.runend { border-bottom: 0; border-top: var(--run-rule); }
 /* In History a run sits between two lists of calls rather than heading one, so
    its markers keep the same space either side. */
 .historylist > .mark.switch.runfold { margin: 14px 0; }
+/* What a call caused, as the bar counts its tabs: a mark per kind with events. */
+.activitymarks { display: inline-flex; gap: 12px; margin-right: 10px; vertical-align: middle; }
+.activitymark.requests, .activitymark.frames { color: var(--caused); }
+.activitymark.state { color: var(--store); }
+.activitymark.failed { color: var(--alert); }
+/* In a row the count sits on the mark's top-right corner, as a tab's does,
+   laid over the mark rather than in the flow, so the row's line keeps its
+   height. */
+.activitymark { position: relative; align-items: center; }
+.activitymark .tabbadge { position: absolute; top: -5px; left: calc(100% - 4px); margin: 0; }
+.causedlist { list-style: none; margin: 0; padding: 0; }
+/* An opened call's reply and what it caused sit in the call's own card, each
+   under a heading rather than in a box of its own, so a crossing row is one
+   level inside the card, as it is under a sequence step. */
+.historysection { margin-top: 12px; }
+.historysectionhead { margin-bottom: 6px; color: var(--muted); font: 10px/1.8 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.causedlist > li:not(.listrow) { display: flex; align-items: center; gap: 8px; }
 .crossed.checkrow.removing .rowactions .tool { color: var(--alert); }
 .crossed.checkrow.here { opacity: 1; }
 /* A hidden kind: muted, as what it keeps out of the list is. */

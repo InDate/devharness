@@ -11,11 +11,18 @@ import { createErrorResponse, responseWithOnce } from '../messages.js';
 import { getProxy, listProxies, namesSharing, stopProxyFor } from '../proxy/registry.js';
 import { levelOf, type ProxyEvent, type ProxyCursor } from '../proxy/intercept-proxy.js';
 
-/** A cursor as one column: the command, or the replay pass and step. */
+/**
+ * A cursor as one column: the command, or the replay pass and step, with the
+ * History entry of that step's call that History counts it on, and `paused`
+ * for what crossed in a pause before that step.
+ */
 function cursorText(cursor: ProxyCursor | undefined): string {
   if (!cursor) return '';
   if (cursor.kind === 'command') return `cmd ${cursor.index}`;
-  if (cursor.kind === 'replay') return `${cursor.runId}/${[cursor.step, ...(cursor.within ?? [])].join('.')}`;
+  if (cursor.kind === 'replay') {
+    return `${cursor.runId}/${[cursor.step, ...(cursor.within ?? [])].join('.')}`
+      + `${cursor.paused ? ' paused' : ''}${cursor.entry !== undefined ? ` #${cursor.entry}` : ''}`;
+  }
   return 'idle';
 }
 
@@ -30,7 +37,8 @@ function stampOf(e: ProxyEvent): string {
   const where = sent && (level === 'observed' || level === 'likely')
     ? cursorText(sent)
     : cursorText(e.runId !== undefined
-        ? { kind: 'replay', runId: e.runId, step: e.step ?? 0, ...(e.within ? { within: e.within } : {}) }
+        ? { kind: 'replay', runId: e.runId, step: e.step ?? 0, ...(e.within ? { within: e.within } : {}),
+          ...(e.entry !== undefined ? { entry: e.entry } : {}), ...(e.paused ? { paused: true as const } : {}) }
         : e.commandIndex !== undefined
           ? { kind: 'command', index: e.commandIndex }
           : undefined);
@@ -42,6 +50,7 @@ const proxySchema = z.object({
   connection: z.string()
     .describe("The browser, by the name connection({ action: 'launch', proxy: true }) gave it"),
   since: z.number().optional().describe('events: epoch ms, at or after'),
+  limit: z.number().int().positive().optional().describe('events: the newest N listed (default 30)'),
   until: z.number().optional().describe('events: epoch ms, before'),
   id: z.string().optional().describe('body: the event id. withdraw: the answer id'),
   urlIncludes: z.string().optional().describe('events: only URLs containing this. answer/answerFrame: the URL substring the answer applies to'),
@@ -54,6 +63,9 @@ const proxySchema = z.object({
   textIncludes: z.string().optional().describe('answerFrame: substring of the message payload that selects it'),
   direction: z.enum(['sent', 'received']).optional().describe('answerFrame: only messages going this way'),
 }).strict();
+
+/** How many events a reply lists unless asked for more. */
+const EVENTS_LISTED = 30;
 
 export function createProxyTools() {
   return {
@@ -142,7 +154,12 @@ export function createProxyTools() {
               ? all.filter(e => e.url.includes(args.urlIncludes!))
               : all;
             const elsewhere = all.length - events.length;
-            const lines = events.map(e => {
+            // The newest only: a stream or a heartbeat fills the buffer with
+            // hundreds of events, and listing them all puts that whole buffer
+            // into the caller's context.
+            const shown = events.slice(-(args.limit ?? EVENTS_LISTED));
+            const older = events.length - shown.length;
+            const lines = shown.map(e => {
               const cmd = stampOf(e);
               // The level sits beside the stamp: a stamp with no statement of
               // what backs it reads as attribution whatever it was built from.
@@ -154,8 +171,8 @@ export function createProxyTools() {
             return responseWithOnce({
               content: [{ type: 'text', text: events.length === 0
                 ? `Nothing matching crossed the boundary in that window.${elsewhere ? ` ${elsewhere} went elsewhere.` : ''}`
-                : `${events.length} event(s)${elsewhere ? `, ${elsewhere} elsewhere` : ''}\n\n${lines.join('\n')}` }],
-              _meta: meta({ proxyEvents: events, elsewhere }),
+                : `${events.length} event(s)${elsewhere ? `, ${elsewhere} elsewhere` : ''}${older ? `; the newest ${shown.length} listed, ${older} older left out - narrow with urlIncludes or since, or raise limit` : ''}\n\n${lines.join('\n')}` }],
+              _meta: meta({ proxyEvents: shown, total: events.length, older, elsewhere }),
             }, 'PROXY_EVENTS_REPLY');
           }
 

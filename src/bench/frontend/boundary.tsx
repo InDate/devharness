@@ -4,7 +4,7 @@ import { CrossingRow, choicesIn, socketName, keyOf, type RuleActions } from './c
 import { useActivity } from './activity.js';
 import type { BoundaryEvent, BoundaryTotals, QueuedView } from '../wire.js';
 import { waited } from './sequence.js';
-import { useGoToTarget } from './goto.js';
+import { askedSection, goToSection, useGoToAnyTarget, useGoToTarget } from './goto.js';
 import { useEscape } from './escape.js';
 import { Fold, Row } from './row.js';
 import { EnableProxy } from './enable-proxy.js';
@@ -97,10 +97,12 @@ function group(events: BoundaryEvent[]): Group[] {
   const byKey = new Map<string, Group>();
   for (const event of events) {
     // A request is its own row: two calls to one endpoint are two facts, where
-    // two frames of one shape on one socket are the same fact twice.
+    // two frames of one shape on one socket are the same fact twice. Frames
+    // under different calls stay apart, so a row's cause covers every event in it.
+    const cause = event.commandIndex ?? event.entry ?? event.openedBy;
     const key = event.kind === 'request'
       ? event.id
-      : `${event.url}|${event.direction}|${event.evidence?.shape ?? event.size}`;
+      : `${cause ?? ''}|${event.url}|${event.direction}|${event.evidence?.shape ?? event.size}`;
     const held = byKey.get(key);
     if (held) {
       held.events.push(event);
@@ -135,7 +137,7 @@ function cadence(ms: number): string {
  * same card, the same actions, the same hidden kinds. Repeats still arriving
  * sit above the stream, counted in place.
  */
-export function Traffic({ base }: { base: string }): preact.JSX.Element {
+export function Traffic({ base, onGoToEntry }: { base: string; onGoToEntry?: (entry: number) => void }): preact.JSX.Element {
   const activity = useActivity(base, undefined);
   const state = activity.boundary;
   const [filters, setFilters] = useState<Filter[]>([]);
@@ -194,6 +196,19 @@ export function Traffic({ base }: { base: string }): preact.JSX.Element {
     choices: choicesIn(state?.events ?? [], state?.steps, state?.forSequence),
   };
 
+  // A go-to from History names one crossing, which may sit folded inside
+  // another's row: the row holding it is opened and scrolled to.
+  useEffect(() => {
+    const asked = askedSection();
+    if (!asked?.startsWith('crossing-')) return;
+    const id = asked.slice('crossing-'.length);
+    const holding = [...repeating, ...stream].find(made => made.events.some(event => event.id === id));
+    if (!holding) return;
+    setOpen(holding.key);
+    goToSection(`crossing-${holding.newest.id}`);
+  });
+  useGoToAnyTarget();
+
   const sendReport = async (event: BoundaryEvent) => {
     const words = note.current?.value.trim() ?? '';
     const res = await fetch(
@@ -222,6 +237,7 @@ export function Traffic({ base }: { base: string }): preact.JSX.Element {
       onOpen={() => setOpen(open === made.key ? null : made.key)}
       actions={actions}
       onMenu={(x, y) => setMenu({ event: made.newest, x, y })}
+      onGoToCause={onGoToEntry}
     />
   );
 
@@ -591,7 +607,10 @@ function Report({ event, alike, said, note, onClose, onSend }: {
   if (event.root) facts.push(['started by', event.root]);
   if (event.evidence?.shape) facts.push(['shape', event.evidence.shape]);
   if (alike > 1) facts.push(['of this kind', String(alike)]);
-  if (event.commandIndex !== undefined) facts.push(['step', `cmd ${event.commandIndex}`]);
+  // The call that caused it, as History numbers it; a run's step also names its pass.
+  const entry = event.commandIndex ?? event.entry;
+  if (entry !== undefined) facts.push(['history', `#${entry}${event.causeLabel ? ` ${event.causeLabel}` : ''}`]);
+  if (entry === undefined && event.openedBy !== undefined) facts.push(['opened by', `#${event.openedBy}${event.causeLabel ? ` ${event.causeLabel}` : ''}`]);
   if (event.runId !== undefined) facts.push(['step', `${event.runId}/${event.step}`]);
 
   return (

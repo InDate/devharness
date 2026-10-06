@@ -75,6 +75,7 @@ export const replaySchema = z.object({
   showReplayOverlay: z.boolean().optional(),
   showAll: z.boolean().optional().describe('Show all sequences including completed/fixed issues'),
   requireSockets: z.boolean().optional().describe('run/runAll: fail the run when a WebSocket closes or errors during it'),
+  steps: z.enum(['all']).optional().describe("run/step/finish: 'all' lists every step's row; omitted, only the failed and mismatched ones"),
   strict: z.enum(['errors', 'warnings']).optional().describe("run/runAll: fail the run on console output it produces - 'errors', or 'warnings' for errors and warnings"),
   folder: z.string().optional().describe("runAll: sequences subfolder to run; omitted, every folder not starting with '_'"),
   continueOnFailure: z.boolean().optional().describe('runAll: keep going after a sequence fails (default true)'),

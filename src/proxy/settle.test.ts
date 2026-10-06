@@ -60,6 +60,19 @@ describe('a boundary held until the app goes quiet', () => {
     await proxy.stop();
   });
 
+  it('counts the quiet from a start time later than the last crossing', async () => {
+    const proxy = new InterceptProxy();
+    await proxy.start();
+    // A page resumed after a long stop has crossed nothing for longer than the
+    // window; counted from the last crossing the wait would end at once.
+    const began = Date.now();
+    await proxy.settle(150, 2000, began);
+    const waited = Date.now() - began;
+    expect(waited).toBeGreaterThanOrEqual(140);
+    expect(waited).toBeLessThan(1000);
+    await proxy.stop();
+  });
+
   it('gives up at the cap on an app that never goes quiet', async () => {
     const proxy = new InterceptProxy();
     const { port } = await proxy.start();

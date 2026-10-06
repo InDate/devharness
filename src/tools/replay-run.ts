@@ -33,7 +33,8 @@ import { sequenceNeedsProxy } from './replay-connections.js';
 import { getProxy } from '../proxy/registry.js';
 import { PROXIED_WORD } from '../reference-validator.js';
 import {
-  formatExecutionResults,
+  formatTeardown,
+  failuresOf,
   formatPausedResponse,
   formatDebugState,
   formatBreakpointHit,
@@ -41,6 +42,10 @@ import {
   extractTextVariables,
   formatVariablePrompt,
 } from './replay-formatters.js';
+import { formatRunReply } from './run-table.js';
+import { pausesIn, rulesForRun } from './run-rules.js';
+import { armForRun, keepArmedForRun, originOf } from '../bench-mode/rules.js';
+import { siteReaderOf } from '../bench-mode/sequence-driver.js';
 import { configManager } from '../config.js';
 import { hasTemplateToken } from './interpolation.js';
 import { snapshotConsole, strictConsoleFailures, snapshotSockets, socketFailures } from './replay-run-health.js';
@@ -79,7 +84,7 @@ const WAIT_BOUND_MS = 120_000;
  * the bench while it plays. The bench drives from the file alone, so a
  * run-time retarget or variable has nothing to reach it through and is refused.
  */
-async function runInBench(args: ReplayArgs) {
+async function runInBench(args: ReplayArgs, recorder: CommandRecorder) {
   const bench = await import('../bench-mode.js');
   const connection = args.connection;
   if (!connection || !bench.isBenchOpen(connection)) {
@@ -89,6 +94,7 @@ async function runInBench(args: ReplayArgs) {
     .filter(key => args[key] !== undefined);
   if (carried.length) return createErrorResponse('REPLAY_BENCH_UNSUPPORTED', { params: carried.join(', ') });
   const name = String(args.name ?? '');
+  const since = recorder.getCurrentHistoryIndex();
   await bench.selectSequence(connection, name);
   const play = (async () => {
     await bench.gotoSequenceStep(connection, 0);
@@ -100,10 +106,12 @@ async function runInBench(args: ReplayArgs) {
     return createSuccessResponse('REPLAY_BENCH_PLAYING', { name, connection, benchUrl });
   }
   const state = await play;
+  const rules = rulesForRun(connection);
   return createSuccessResponse('REPLAY_BENCH_PLAYED', {
     name, benchUrl,
-    reached: state?.currentStep ?? 0, total: state?.total ?? 0,
-    failure: state?.failure ? `\n\nStopped: ${state.failure}` : '',
+    // The bench line is joined here: the template loader keeps one newline
+    // between a variable and the line after it, and the reply's blank line would go.
+    steps: `${formatRunReply(recorder, { name, total: state?.total ?? 0, since, ...(args.steps ? { steps: args.steps } : {}), rules, pauses: pausesIn(connection) })}\n\nBench: \`${benchUrl}\``,
   });
 }
 
@@ -121,7 +129,7 @@ export async function handleRun(
    */
   opts?: { validateVariableKeys?: boolean; suite?: { id: string; label: string } }
 ) {
-  if (args.bench) return runInBench(args);
+  if (args.bench) return runInBench(args, recorder);
 
   // Load sequence
   const loadResult = await loadSequence({ name: args.name, sequenceId: args.sequenceId }, recorder);
@@ -600,6 +608,8 @@ export async function performRun(
     sequence, analysis, needsConnection, connectionMap,
     launchedConnections, runEnv } = deps;
   let connection = deps.connection;
+  // The run's steps are recorded after this; its reply is read off them.
+  const since = recorder.getCurrentHistoryIndex();
 
   // Build execution context
   const ctx: ExecutionContext = {
@@ -653,11 +663,15 @@ export async function performRun(
       proxiedNote = `\n\n**Proxied window:** played in "${window}", the proxied window already open beside "${given}", which runs outside the proxy.`;
     } else {
       const listed: any = await executeToolCall('connection', { action: 'list' }).catch(() => null);
-      const port = listed?._meta?.connections?.find((row: any) => row.reference === given)?.port;
+      const givenRow = listed?._meta?.connections?.find((row: any) => row.reference === given);
+      const port = givenRow?.port;
+      // A sequence without a startUrl starts on the page the given connection
+      // shows; a window opened without it stays blank and the first step finds nothing.
+      const pageUrl = givenRow?.url && givenRow.url !== 'about:blank' ? givenRow.url : undefined;
       try {
         await executeToolCall('connection', {
           action: 'launch', connection: window, newContextWindow: true, proxy: true,
-          copyCookiesFrom: given, ...(port !== undefined && { port }),
+          copyCookiesFrom: given, ...(port !== undefined && { port }), ...(pageUrl && { url: pageUrl }),
         });
       } catch (launchError: any) {
         return {
@@ -757,6 +771,17 @@ export async function performRun(
     abortSignal.addEventListener('abort', () => { cleanup(true); }, { once: true });
   }
 
+  // The sequence's saved rules, armed as opening it in the bench arms them,
+  // so a run outside the bench answers, ignores and refuses what one inside does.
+  const release = ctx.connection
+    ? await armForRun(ctx.connection, sequence,
+      // The page's own origin where the sequence names none, as the bench reads it.
+      originOf(args.baseUrl ?? sequence.startUrl)
+        ?? originOf(await getPageForConnection(ctx.connection).then(page => page?.url?.()).catch(() => undefined)),
+      siteReaderOf(recorder)).catch(() => async () => {})
+    : async () => {};
+  const keepArmed = () => { if (runId) keepArmedForRun(runId, release); else void release(); };
+
   // Execute the sequence
   const execResult = await executeSequenceWithPause({
     sequence,
@@ -790,6 +815,7 @@ export async function performRun(
       tool: 'replay', action: 'run', timestamp: Date.now(),
       replay: { success: false, totalSteps: sequence.commands.length, failedSteps: failed, paused: false, cancelled: true }
     };
+    await release();
     return { response: abortedResponse, outcome: 'cancelled', results: execResult.results };
   }
 
@@ -804,9 +830,15 @@ export async function performRun(
       historyIndexAtPause: recorder.getHistory().length,
       connection,
       runId,
+      runSince: since,
+      // The pass keeps its id, and {{timestamp}} its value, through the resume.
+      runTimestamp: ctx.runTimestamp,
+      capturedVariables: ctx.variableStore,
       ...(connectionMap && { connectionMap }),
       breakpointHit: { url: execResult.breakpointHit.url, lineNumber: execResult.breakpointHit.lineNumber },
+      ...(execResult.openStep ? { openStep: execResult.openStep } : {}),
     });
+    keepArmed();
     return { outcome: 'paused', results: execResult.results, response: { content: [{ type: 'text', text: formatBreakpointHit(
       sequence.name,
       execResult.results,
@@ -834,12 +866,17 @@ export async function performRun(
       historyIndexAtPause: recorder.getHistory().length,
       connection,
       runId,
+      runSince: since,
+      // The pass keeps its id, and {{timestamp}} its value, through the resume.
+      runTimestamp: ctx.runTimestamp,
+      capturedVariables: ctx.variableStore,
       // step/finish must resolve per-step connections the way this run did
       ...(connectionMap && { connectionMap }),
       ...(execResult.clickValidationFailure.repair && { repair: execResult.clickValidationFailure.repair }),
     };
     recorder.setActiveSequence(activeState);
 
+    keepArmed();
     return { outcome: 'paused', results: execResult.results, response: { content: [{ type: 'text', text: formatClickValidationFailure(
       sequence,
       execResult.results,
@@ -859,10 +896,22 @@ export async function performRun(
     } };
   }
 
-  // Handle paused state (stepTo)
+  // Handle paused state (stepTo, or a person's input)
   if (execResult.pausedAtStep && execResult.activeSequenceState) {
-    recorder.setActiveSequence({ ...execResult.activeSequenceState, runId });
-    return { outcome: 'paused', results: execResult.results, response: { content: [{ type: 'text', text: formatPausedResponse(sequence, execResult.results, execResult.pausedAtStep, execResult.durationMs) }],
+    recorder.setActiveSequence({
+      ...execResult.activeSequenceState, runId, runSince: since,
+      ...(execResult.personInput?.held ? { personHeld: execResult.personInput.held } : {}),
+    });
+    keepArmed();
+    const heldForPerson = execResult.personInput?.pausedBefore !== undefined;
+    const text = heldForPerson
+      ? formatRunReply(recorder, {
+        name: sequence.name, total: execResult.totalCommands, since, paused: true,
+        ...(args.steps ? { steps: args.steps } : {}), failures: failuresOf(execResult.results), person: execResult.personInput,
+        ...(ctx.connection ? { rules: rulesForRun(ctx.connection) } : {}),
+      })
+      : formatPausedResponse(sequence, execResult.results, execResult.pausedAtStep, execResult.durationMs);
+    return { outcome: 'paused', results: execResult.results, response: { content: [{ type: 'text', text }],
       _meta: {
         tool: 'replay', action: 'run', timestamp: Date.now(),
         replay: { success: false, totalSteps: sequence.commands.length, failedSteps: execResult.results.filter(r => !r.success).length, paused: true }
@@ -875,43 +924,20 @@ export async function performRun(
   await closeOwnedWindow();
 
   // Format results
-  let response = formatExecutionResults(
-    sequence.name,
-    execResult.results,
-    execResult.totalCommands,
-    execResult.durationMs,
-    execResult.teardownResults
-      ? { results: execResult.teardownResults, ...(execResult.teardownFailed !== undefined ? { failed: execResult.teardownFailed } : {}) }
-      : undefined
-  );
+  const rules = ctx.connection ? rulesForRun(ctx.connection) : undefined;
+  const pauses = ctx.connection ? pausesIn(ctx.connection) : undefined;
+  await release();
+  let response = formatRunReply(recorder, {
+    name: sequence.name, total: execResult.totalCommands, since,
+    ...(args.steps ? { steps: args.steps } : {}),
+    failures: failuresOf(execResult.results),
+    ...(rules ? { rules } : {}), ...(pauses ? { pauses } : {}),
+    ...(execResult.personInput ? { person: execResult.personInput } : {}),
+  });
+  response += formatTeardown(execResult.teardownResults
+    ? { results: execResult.teardownResults, ...(execResult.teardownFailed !== undefined ? { failed: execResult.teardownFailed } : {}) }
+    : undefined);
   response += proxiedNote;
-
-  if (execResult.behaviourDrift?.length) {
-    // Reported, never a verdict: what a step should do at the boundary is the
-    // person's call, and a run that differs is as often a fixed bug as a broken
-    // one.
-    response += `\n\n**Boundary behaviour differs from the recording**`;
-    for (const d of execResult.behaviourDrift) {
-      const moved = (['requests', 'failed', 'opened', 'writes'] as const)
-        .filter(f => d.recorded[f] !== d.observed[f])
-        .map(f => `${f} ${d.recorded[f]} → ${d.observed[f]}`)
-        .join(', ');
-      const shapes = d.shapes
-        ? [...new Set([...Object.keys(d.shapes.recorded), ...Object.keys(d.shapes.observed)])]
-            .filter(k => (d.shapes!.recorded[k] ?? 0) !== (d.shapes!.observed[k] ?? 0))
-            .map(k => `${k} ${d.shapes!.recorded[k] ?? 0} → ${d.shapes!.observed[k] ?? 0}`)
-        : [];
-      const parts = [moved, ...shapes].filter(Boolean).join(', ');
-      response += `\n- step ${d.path ?? d.step} \`${d.label}\`: ${parts}`;
-      // The hold times sit beside the difference rather than under it: a step
-      // held far longer while recording collected traffic that arrives on the
-      // app's own schedule, and that reads as drift before anything changed.
-      if (d.window) {
-        const secs = (ms: number) => ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
-        response += ` (held ${secs(d.window.recorded)} recording, ${secs(d.window.observed)} replaying)`;
-      }
-    }
-  }
 
   // Add debug state if successful
   const failed = execResult.results.filter(r => !r.success).length;

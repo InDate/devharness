@@ -540,6 +540,37 @@ replay({ action: 'insert', insertIndices: [42, 43], insertAfterStep: 3 })
 By default `insert` creates a new sequence named `<name>-modified` (override
 with `newName`); pass `overwrite: true` to edit the sequence in place.
 
+### What a paused run counts
+
+A crossing belongs to the step whose window it crossed in. A pause opens no
+window, so it is listed apart:
+
+- **Pause row.** What crosses while the run stands paused (`stepTo`, a
+  person's input, an abort, a refused click) is stamped `paused` before the
+  step the run resumes at. The reply lists it as `paused before N` between
+  the two steps and counts it in `Rules`; the bench draws the same line. A
+  call made in the pause stamps its own traffic, then hands the stamp back.
+- **Finish line.** A run ends where its last step's window closes. What
+  crosses after it belongs to no run: the reply has no `after` row, and the
+  bench draws `finished` under the last step.
+- **Whole run.** The reply to `step` or `finish` counts from the run's first
+  step, under one pass id.
+- **Breakpoint.** A breakpoint stops the page inside a step, so that step's
+  window stays open through the pause. On resume the boundary waits for
+  `replay.breakpointResumeQuietMs` (300) of quiet, capped at
+  `replay.breakpointResumeCapMs` (3000), so what the page sends on resume
+  counts on the step that caused it.
+- **A person's input.** Under `replay.personInputDuringRun: 'pause'` (the
+  default; `stop`, `report`) the run also holds the page's code and network,
+  and its screen where a bench is open. `step` and `finish` release the run's
+  own hold; `cancel` releases it and ends the run; a hold the person or the
+  bench placed stays. `replay.watchPersonInput: false` turns the watch off.
+- **Held page.** A driving call, or a run's step, on a page whose code a hold
+  stops returns `PAGE_HELD` at once, naming the hold.
+
+`proxy({ action: 'events' })` shows each stamp as `run-<id>/<step>`, with
+`paused` for a pause and `#<entry>` for the History row it counts on.
+
 ### Closing Chrome Afterwards
 
 ```javascript

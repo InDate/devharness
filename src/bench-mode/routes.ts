@@ -1,4 +1,5 @@
 import type { Page } from 'puppeteer-core';
+import { isWatchingPersonInput } from '../person-watch.js';
 import { appendEvent } from '../session-events.js';
 import { holdableLayers, holdReading } from '../hold.js';
 import type { BenchHandlers } from '../bench-control.js';
@@ -14,6 +15,7 @@ import { discardPick, highlightAnnotation, moveAnnotation, noteAtStep, noteTarge
 import { beginCapture, cancelCapture, captureBenchScreenshot, discardBenchScreenshot, readMoreFacts, retakeCapture, saveBenchScreenshot, seriesOfNotes, setFactChoice } from './captures.js';
 import { setInspectMode } from './cdp.js';
 import { changeHold, haltSequence, openDevtools, resumePausedRun, setHeld, setPicker } from './controls.js';
+import { setPersonInput } from './person-input.js';
 import { stepTraffic, tickBench } from './page-hold.js';
 import { addRecordingTimer, addRecordingVariable, cancelRecordingSequence, chooseStepSelector, dropRecordedStep, editRecordingVariable, flagRecordedStep, keepRecordedStep, recordSequence, stopRecordingSequence } from './recording.js';
 import { clearBoundaryRule, hiddenOf, hideKind, nameTarget, namesOf, persistRules, ruleFrom, rulesOf, savePayloadFor, setBoundaryName, setBoundaryRule, setHiddenMode, setHiddenUse, setResponseMode, setResponseUse, unhideKind, useFrom } from './rules.js';
@@ -21,6 +23,7 @@ import { baselineSequence, playHere, playToStep, renameFromHome, runFromHome, ru
 import { answerBenchDialog, cancelSequence, commentSequenceStep, describeSequence, dismissSequenceFailure, repairSequenceStep, editSequenceStep, getSequenceState, gotoSequenceStep, insertSequenceCheck, insertSequenceTimer, moveSequenceStep, playSequence, removeSequence, removeSequenceStep, removeSequenceVariable, selectSequence, setSequenceBaseUrl, setSequenceVariable, stepSequence } from './sequence.js';
 import { type BenchSession, sessions } from './session.js';
 import { openSequence, openSteps, recordedStepOf, summariseBoundary, writeEvents } from './traffic.js';
+import { openerEntryOf } from '../activity-index.js';
 
 /** What the bench server calls, for one connection's session and page. */
 /**
@@ -56,6 +59,20 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
     return { benchUrl };
   };
 
+  /** Each event's cause named as History lists it, one lookup per distinct entry. */
+  const labelCauses = (events: BoundaryEvent[]): BoundaryEvent[] => {
+    const sequences = sessions.get(connection)?.sequences;
+    if (!sequences) return events;
+    const labels = new Map<number, string | undefined>();
+    return events.map(event => {
+      const cause = event.commandIndex ?? event.entry ?? event.openedBy;
+      if (cause === undefined) return event;
+      if (!labels.has(cause)) labels.set(cause, sequences.callLabel(cause));
+      const label = labels.get(cause);
+      return label ? { ...event, causeLabel: label } : event;
+    });
+  };
+
   return {
     // Everything but `primary`: only the route knows which copy is asking.
     getState: async (): Promise<Omit<BenchView, 'primary'>> => {
@@ -69,6 +86,7 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
         queued: getProxy(connection)?.queue.list() ?? [],
         holdable: holdableLayers(connection),
         pickerArmed: session.pickerArmed,
+        personInput: isWatchingPersonInput(connection),
         tickMs: session.tickMs,
         totalSteps: session.totalSteps,
         lastTick: session.lastTick,
@@ -90,6 +108,7 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
     openDevtools: async () => openDevtools(connection),
     changeHold: async (action, layers) => { await changeHold(connection, action, layers); },
     setPicker: async (armed: boolean) => { await setPicker(connection, armed); },
+    setPersonInput: async (on: boolean) => { await setPersonInput(connection, on); },
     setHeld: async (held: boolean, resume?: boolean) => {
       await setHeld(connection, held);
       if (!held && resume) resumePausedRun(connection);
@@ -309,8 +328,12 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
         // The level and whether any step owns it are read here rather than
         // recomputed in the pane: both are policy over stored evidence, and a
         // second copy of that policy in the browser would drift from this one.
-        events: [...all.slice(at + 1).map(event => ({
+        events: labelCauses([...all.slice(at + 1).map(event => ({
           ...event,
+          ...(() => {
+            const opener = openerEntryOf(event.id);
+            return opener !== undefined ? { openedBy: opener } : {};
+          })(),
           level: levelOf(event),
           owned: causeOf(event) !== undefined,
           ...recordedStepOf(connection, event),
@@ -320,7 +343,7 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
           // when the decision was made on a different frame.
           verdict: event.evidence?.shape ? rules[event.evidence.shape] : undefined,
         })) as unknown as BoundaryEvent[],
-          ...writeEvents(connection, at >= 0 ? all[at].at : 0)].sort((a, b) => a.at - b.at),
+          ...writeEvents(connection, at >= 0 ? all[at].at : 0)].sort((a, b) => a.at - b.at)),
         // Counted over everything the proxy holds, not over what this pane has
         // accumulated: a reader who opened the tab late would otherwise see a
         // summary of their own arrival time.

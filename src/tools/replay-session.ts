@@ -10,11 +10,15 @@ import { appendRun } from '../run-log.js';
 import type { StepResult } from './replay-executor.js';
 import type { StepCheck } from '../bench/wire.js';
 import { executeSteps, type ExecutionContext } from './replay-executor.js';
-import { formatExecutionResults, formatActiveStatus, formatStepResults, formatClickValidationFailure } from './replay-formatters.js';
+import { formatActiveStatus, formatClickValidationFailure, failuresOf } from './replay-formatters.js';
+import { formatRunReply } from './run-table.js';
+import { pausesIn, rulesForRun } from './run-rules.js';
+import { releaseArmedRun } from '../bench-mode/rules.js';
 import type { ExecutionResult } from './replay-types.js';
 import { drainDeclaredCleanup } from './replay-run-owned.js';
 import { type ReplayArgs } from './replay-schema.js';
-import { release } from '../hold.js';
+import { holdReading, release } from '../hold.js';
+import { standPausedRun } from '../proxy/registry.js';
 
 /**
  * How a check, assert or wait step read, from the run's own result: a check's
@@ -152,6 +156,7 @@ export async function handleStatus(args: ReplayArgs, recorder: CommandRecorder) 
  * `wait: true` pause registers no record, and nothing is done for it.
  */
 function endPausedRun(runId: string | undefined, status: 'completed' | 'failed' | 'cancelled'): void {
+  void releaseArmedRun(runId);
   const record = runId ? runRegistry.get(runId) : undefined;
   if (!record || record.status !== 'paused') return;
   record.status = status;
@@ -207,6 +212,8 @@ export async function handleCancel(args: ReplayArgs, recorder: CommandRecorder) 
   // behaviour - `cancel` always meant "drop the paused session").
   const activeSeq = recorder.getActiveSequence();
   if (activeSeq) {
+    await releasePersonHold(activeSeq);
+    await standPausedRun(undefined);
     endPausedRun(activeSeq.runId, 'cancelled');
     const name = activeSeq.sequenceName;
     recorder.setActiveSequence(null);
@@ -241,6 +248,28 @@ async function resumeBreakpointHold(activeSeq: ActiveSequenceState): Promise<voi
   if (!activeSeq.breakpointHit) return;
   await release(activeSeq.connection, { layers: ['code'] });
   delete activeSeq.breakpointHit;
+}
+
+/** The step a breakpoint left open, handed to the resume that closes it once. */
+function takeOpenStep(activeSeq: ActiveSequenceState): ActiveSequenceState['openStep'] {
+  const open = activeSeq.openStep;
+  delete activeSeq.openStep;
+  return open;
+}
+
+/**
+ * Release the layers a person's input held the run's page on. Only the layers
+ * the run itself still holds go: a hold the person or the bench placed since
+ * stays, and the next step drives a page that still runs only where it was released.
+ */
+async function releasePersonHold(activeSeq: ActiveSequenceState): Promise<void> {
+  const layers = activeSeq.personHeld;
+  if (!layers) return;
+  delete activeSeq.personHeld;
+  const stillOurs = holdReading(activeSeq.connection).held
+    .filter(held => held.source === 'sequence' && layers.includes(held.layer))
+    .map(held => held.layer);
+  if (stillOurs.length) await release(activeSeq.connection, { layers: stillOurs });
 }
 
 /**
@@ -283,6 +312,8 @@ export async function handleStep(
    *  out the step's own settle before the call returns. */
   abortSignal?: AbortSignal
 ) {
+  // The steps this call runs are recorded after this; its reply is read off them.
+  const since = recorder.getCurrentHistoryIndex();
   const activeSeq = recorder.getActiveSequence();
   if (!activeSeq) {
     return createErrorResponse('NO_ACTIVE_SEQUENCE', {
@@ -304,6 +335,7 @@ export async function handleStep(
   const endStep = Math.min(startStep + stepCount, commands.length);
 
   if (startStep >= commands.length) {
+    await standPausedRun(undefined);
     recorder.setActiveSequence(null);
     endPausedRun(activeSeq.runId, 'completed');
     const closedNote = await drainDeclaredCleanup(activeSeq.runId, activeSeq.sequenceId);
@@ -311,6 +343,7 @@ export async function handleStep(
   }
 
   await resumeBreakpointHold(activeSeq);
+  await releasePersonHold(activeSeq);
 
   const ctx: ExecutionContext = {
     executeToolCall,
@@ -323,13 +356,17 @@ export async function handleStep(
     ...(activeSeq.connectionMap && { connectionMap: activeSeq.connectionMap })
   };
 
+  const openStep = takeOpenStep(activeSeq);
   const execResult = await executeSteps({
     sequence,
     startStep,
     endStep,
     ctx,
-    ...(abortSignal ? { abortSignal } : {})
+    ...(abortSignal ? { abortSignal } : {}),
+    ...(openStep ? { openStep } : {}),
   });
+  const rules = rulesForRun(activeSeq.connection);
+  const pauses = pausesIn(activeSeq.connection);
 
   if (execResult.clickValidationFailure && !abortSignal?.aborted) {
     return holdAtClickPause(recorder, activeSeq, sequence, execResult, 'step');
@@ -337,6 +374,7 @@ export async function handleStep(
 
   const lastExecuted = execResult.results.length > 0 ? execResult.results[execResult.results.length - 1].step : startStep;
   const failed = execResult.results.some(r => !r.success);
+  if (execResult.personInput?.held) activeSeq.personHeld = execResult.personInput.held;
 
   // Update active sequence state
   let closedNote = '';
@@ -357,7 +395,12 @@ export async function handleStep(
   } else if (!failed && execResult.breakpointHit && lastExecuted < commands.length) {
     recorder.updateActiveSequenceStep(lastExecuted);
     activeSeq.breakpointHit = { url: execResult.breakpointHit.url, lineNumber: execResult.breakpointHit.lineNumber };
-    return { content: [{ type: 'text', text: formatStepResults(sequence.name, execResult.results, startStep, commands.length, failed)
+    if (execResult.openStep) activeSeq.openStep = execResult.openStep;
+    return { content: [{ type: 'text', text: formatRunReply(recorder, {
+        name: sequence.name, total: commands.length, since: activeSeq.runSince ?? since, paused: true,
+        ...(args.steps ? { steps: args.steps } : {}), failures: failuresOf(execResult.results),
+        rules, pauses, ...(execResult.personInput ? { person: execResult.personInput } : {}),
+      })
       + `\n\n**Held at step ${lastExecuted}:** a breakpoint the sequence did not set stopped the page at \`${execResult.breakpointHit.url}:${execResult.breakpointHit.lineNumber}\`. \`replay({ action: 'step' })\` or \`finish\` resumes it and carries on.` }] };
   } else if (failed || lastExecuted >= commands.length) {
     recorder.setActiveSequence(null);
@@ -369,13 +412,22 @@ export async function handleStep(
     recorder.updateActiveSequenceStep(lastExecuted);
   }
 
-  return { content: [{ type: 'text', text: formatStepResults(sequence.name, execResult.results, startStep, commands.length, failed) + closedNote }] };
+  return {
+    content: [{ type: 'text', text: formatRunReply(recorder, {
+      name: sequence.name, total: commands.length, since: activeSeq.runSince ?? since, paused: !failed && lastExecuted < commands.length,
+      ...(args.steps ? { steps: args.steps } : {}), failures: failuresOf(execResult.results),
+        rules, pauses, ...(execResult.personInput ? { person: execResult.personInput } : {}),
+    }) + closedNote }],
+    ...(failed ? { isError: true } : {}),
+  };
 }
 
 export async function handleFinish(
+  args: ReplayArgs,
   recorder: CommandRecorder,
   executeToolCall: ExecuteToolCall
 ) {
+  const since = recorder.getCurrentHistoryIndex();
   const activeSeq = recorder.getActiveSequence();
   if (!activeSeq) {
     return createErrorResponse('NO_ACTIVE_SEQUENCE', {
@@ -395,6 +447,7 @@ export async function handleFinish(
   const startStep = activeSeq.currentStep;
 
   if (startStep >= commands.length) {
+    await standPausedRun(undefined);
     recorder.setActiveSequence(null);
     endPausedRun(activeSeq.runId, 'completed');
     const alreadyDone = await drainDeclaredCleanup(activeSeq.runId, activeSeq.sequenceId);
@@ -402,6 +455,7 @@ export async function handleFinish(
   }
 
   await resumeBreakpointHold(activeSeq);
+  await releasePersonHold(activeSeq);
 
   const ctx: ExecutionContext = {
     executeToolCall,
@@ -413,19 +467,45 @@ export async function handleFinish(
     ...(activeSeq.connectionMap && { connectionMap: activeSeq.connectionMap })
   };
 
+  const openStep = takeOpenStep(activeSeq);
   const execResult = await executeSteps({
     sequence,
     startStep,
-    ctx
+    ctx,
+    ...(openStep ? { openStep } : {}),
   });
+  const rules = rulesForRun(activeSeq.connection);
+  const pauses = pausesIn(activeSeq.connection);
 
   if (execResult.clickValidationFailure) {
     return holdAtClickPause(recorder, activeSeq, sequence, execResult, 'finish');
   }
 
+  // A person's input landed on the page: the run stays held before the next
+  // step, as `pause` sets, for a later step or finish.
+  if (execResult.personInput?.pausedBefore !== undefined) {
+    recorder.updateActiveSequenceStep(execResult.personInput.pausedBefore);
+    if (execResult.personInput.held) activeSeq.personHeld = execResult.personInput.held;
+    return {
+      content: [{ type: 'text', text: formatRunReply(recorder, {
+        name: sequence.name, total: commands.length, since: activeSeq.runSince ?? since, paused: true,
+        ...(args.steps ? { steps: args.steps } : {}), failures: failuresOf(execResult.results),
+        rules, pauses, person: execResult.personInput,
+      }) }],
+    };
+  }
+
   recorder.setActiveSequence(null);
-  endPausedRun(activeSeq.runId, execResult.results.some(r => !r.success) ? 'failed' : 'completed');
+  const failed = execResult.results.some(r => !r.success);
+  endPausedRun(activeSeq.runId, failed ? 'failed' : 'completed');
   const closedNote = await drainDeclaredCleanup(activeSeq.runId, activeSeq.sequenceId);
 
-  return { content: [{ type: 'text', text: formatExecutionResults(sequence.name, execResult.results, commands.length, execResult.durationMs) + closedNote }] };
+  return {
+    content: [{ type: 'text', text: formatRunReply(recorder, {
+      name: sequence.name, total: commands.length, since: activeSeq.runSince ?? since,
+      ...(args.steps ? { steps: args.steps } : {}), failures: failuresOf(execResult.results),
+        rules, pauses, ...(execResult.personInput ? { person: execResult.personInput } : {}),
+    }) + closedNote }],
+    ...(failed ? { isError: true } : {}),
+  };
 }

@@ -6,9 +6,36 @@
  * two sides agree on what they are counting.
  */
 
-import type { BoundaryEvent } from './wire.js';
+import type { BoundaryEvent, HiddenKind } from './wire.js';
 
 export const isFrame = (event: Pick<BoundaryEvent, 'kind'>) => event.kind === 'frame';
+
+/**
+ * Whether an ignore rule covers a crossing: its socket or path, its direction
+ * or verb, its step, and then its one kind - or, for a socket-wide rule,
+ * anything that crossed there.
+ */
+export function ignoreMatches(rule: HiddenKind, event: BoundaryEvent): boolean {
+  if (rule.frame !== undefined && !!rule.frame !== isFrame(event)) return false;
+  if (rule.url && !event.url.includes(rule.url)) return false;
+  if (rule.direction && event.direction !== rule.direction) return false;
+  if (rule.method && (event.method ?? 'GET') !== rule.method) return false;
+  if (rule.step !== undefined && event.step !== rule.step) return false;
+  return !!rule.any || keyOf(event) === rule.key;
+}
+
+/**
+ * Whether an ignore rule covers a kind recorded on a step, which a run may
+ * not have produced. A recorded kind carries no socket, so a socket-wide rule
+ * covers every recorded message kind going its way.
+ */
+export function ignoreCoversKind(rule: HiddenKind, kind: string, step: number): boolean {
+  if (rule.step !== undefined && rule.step !== step) return false;
+  const arrow = kind.startsWith('← ') ? 'in' : kind.startsWith('→ ') ? 'out' : undefined;
+  if (rule.any) return !!rule.frame && arrow !== undefined && (!rule.direction || rule.direction === arrow);
+  const key = arrow ? kind.slice(2) : kind.slice(kind.indexOf(' ') + 1);
+  return key === rule.key;
+}
 
 /**
  * What a rule matches on.
@@ -121,6 +148,41 @@ export function leadingPairs(text: string): Array<[string, unknown]> {
   return pairs;
 }
 
+/** A size as a band, so a binary body's length compares without its exact bytes. */
+export function sizeBand(size: number): string {
+  return size < 128 ? 'xs' : size < 2048 ? 's' : size < 65536 ? 'm' : size < 1048576 ? 'l' : 'xl';
+}
+
+/** What of one replayed crossing the comparison reads beside its count. */
+export interface Crossed {
+  payloadClass?: 'structured' | 'document' | 'binary';
+  sent?: string;
+  band?: string;
+}
+
+/**
+ * How what a request sent differs from what it sent when recorded, field by
+ * field where both are JSON objects: `sent compact added`, `sent dark
+ * missing`, `sent theme "light", recorded "dark"`.
+ */
+export function sentDiffers(recorded: string, sent: string | undefined): string[] {
+  if (sent === undefined) return ['sent nothing comparable'];
+  if (samePayload(sent, recorded)) return [];
+  let was: unknown;
+  let now: unknown;
+  try { was = JSON.parse(recorded); now = JSON.parse(sent); } catch { return ['sent payload differs']; }
+  const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
+  if (!object(was) || !object(now)) return ['sent payload differs'];
+  const reasons: string[] = [];
+  const short = (value: unknown) => cut(JSON.stringify(value) ?? 'undefined', 40);
+  for (const key of Object.keys(now)) {
+    if (!(key in was)) reasons.push(`sent ${key} added`);
+    else if (!same(now[key], was[key])) reasons.push(`sent ${key} ${short(now[key])}, recorded ${short(was[key])}`);
+  }
+  for (const key of Object.keys(was)) if (!(key in now)) reasons.push(`sent ${key} missing`);
+  return reasons;
+}
+
 /** How many of one kind a step produced. */
 export interface KindCount {
   n: number;
@@ -132,8 +194,12 @@ export interface KindCount {
    * number measures how long the step took, not what it did.
    */
   presence?: true;
-  /** The payload of the last of this kind, as the proxy or the write watch kept it. */
+  /** The payload of the last of this kind, as the proxy or the write watch kept it: a structured body only. */
   body?: string;
+  /** What the last request of this kind sent, as JSON text: a structured body only. */
+  sent?: string;
+  /** The size band of the last binary body of this kind. */
+  band?: string;
 }
 
 type Countable = Pick<BoundaryEvent, 'kind' | 'url' | 'direction'>
@@ -325,6 +391,7 @@ export function verdictOf(
   body: string | undefined,
   mark?: ExpectedValue,
   byShape = false,
+  crossed: Crossed = {},
 ): { verdict: Verdict; reasons: string[] } | undefined {
   if (!recorded) return { verdict: 'unexpected', reasons: [] };
   // A pushed kind arrives on the server's schedule, so its count and status
@@ -337,11 +404,18 @@ export function verdictOf(
     const after = (observed.statuses ?? []).slice().sort().join('/');
     if (before !== after) reasons.push(`status ${after || '—'}, recorded ${before || '—'}`);
   }
+  if (!recorded.presence && recorded.band !== undefined && crossed.band !== undefined && crossed.band !== recorded.band) {
+    reasons.push(`size ${crossed.band}, recorded ${recorded.band}`);
+  }
+  if (recorded.sent !== undefined) reasons.push(...sentDiffers(recorded.sent, crossed.sent));
+  // A document or binary body is compared on arriving, its status and its
+  // size band; a body a recording kept before bodies had a class is not read.
+  const unread = crossed.payloadClass === 'document' || crossed.payloadClass === 'binary';
   const shape = byShape && recorded.body !== undefined ? shapeOf(recorded.body) : {};
   const compared = marksFields(mark) ? mark
     : mark?.value !== undefined ? { value: mark.value }
     : byShape ? (Object.keys(shape).length ? { shape } : undefined)
-    : recorded.body !== undefined ? { value: recorded.body } : undefined;
+    : recorded.body !== undefined && !unread ? { value: recorded.body } : undefined;
   if (compared) {
     if (body === undefined) return undefined;
     if (marksFields(compared)) {

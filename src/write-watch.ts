@@ -24,6 +24,7 @@
 
 import type { CDPSession, Page, Target, WebWorker } from 'puppeteer-core';
 import { currentCursor, onCursorEnd } from './proxy/registry.js';
+import { causeAt, onCauseAdded } from './proxy/cause-timeline.js';
 import type { ProxyCursor } from './proxy/intercept-proxy.js';
 import { describeStructuredValue } from './structured-value.js';
 import { movesPerRun } from './bench/kinds.js';
@@ -109,6 +110,9 @@ function diff(
 
 type Reading = Map<string, { sig: string; value?: string }>;
 
+/** Called with each write as it is stored, stamped: how an index follows writes without scanning. */
+export const stampedWrites = new Set<(write: PageWrite) => void>();
+
 export class WriteWatch {
   readonly writes: PageWrite[] = [];
   private count = 0;
@@ -135,6 +139,9 @@ export class WriteWatch {
   constructor(private client: CDPSession, private page: Page) {}
 
   private push(write: Omit<PageWrite, 'id' | 'at' | 'cursor'>, at = Date.now(), cursor = currentCursor()): void {
+    // Nothing in flight when it was made: the timeline answers, which holds a
+    // cause added after the fact.
+    if (!cursor) cursor = causeAt(at);
     this.writes.push({
       id: `write-${++this.count}`,
       at,
@@ -143,6 +150,8 @@ export class WriteWatch {
       ...(cursor ? { cursor } : {}),
     });
     if (this.writes.length > MAX_WRITES) this.writes.splice(0, this.writes.length - MAX_WRITES);
+    const stored = this.writes[this.writes.length - 1];
+    for (const listener of stampedWrites) listener(stored);
   }
 
   /** Run a read after the ones queued before it, stamped with the moment it was asked for. */
@@ -153,6 +162,15 @@ export class WriteWatch {
   }
 
   async start(): Promise<void> {
+    // A cause added after the fact - a person's input - takes the writes made
+    // inside its window with nothing in flight.
+    this.detach.push(onCauseAdded(window => {
+      for (const write of this.writes) {
+        if (write.cursor || write.at < window.from || (window.to !== undefined && write.at >= window.to)) continue;
+        write.cursor = window.cursor;
+        for (const listener of stampedWrites) listener(write);
+      }
+    }));
     const area = (event: any): WriteStore => (event?.storageId?.isLocalStorage ? 'localStorage' : 'sessionStorage');
     this.client.on('DOMStorage.domStorageItemAdded' as any, (e: any) =>
       this.push({ store: area(e), operation: 'set', key: e.key, value: e.newValue }));

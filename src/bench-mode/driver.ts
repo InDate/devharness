@@ -15,6 +15,8 @@ export interface SequenceDriver {
   history: () => HistoryEntry[];
   /** One call by its history index, or undefined once history has dropped it. */
   historyDetail: (index: number) => HistoryDetail | undefined;
+  /** One call's label, as History lists it, or undefined once history has dropped it. */
+  callLabel: (index: number) => string | undefined;
   /** Every tool this devharness serves, by the toolset that built it. */
   tools: () => ToolGroup[];
   /** Every note in the saved sequences, the issues folder's included, newest first. */

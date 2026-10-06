@@ -47,6 +47,7 @@ export interface BenchHandlers {
   openDevtools: () => Promise<string>;
   changeHold: (action: 'hold' | 'release' | 'step', layers?: Array<'code' | 'ui' | 'network'>) => Promise<void>;
   setPicker: (armed: boolean) => Promise<void>;
+  setPersonInput: (on: boolean) => Promise<void>;
   setHeld: (held: boolean, resume?: boolean) => Promise<void>;
   selectSequence: (name: string) => Promise<void>;
   describeSequence: (description: string, expectedOutcome: string) => Promise<void>;
@@ -549,6 +550,7 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
               );
               break;
             case '/picker': await handlers.setPicker(!!body.armed); break;
+            case '/input/person': await handlers.setPersonInput(!!body.on); break;
             case '/hold/page': await handlers.setHeld(!!body.held, body.resume === true); break;
             case '/sequence/select': await handlers.selectSequence(String(body.name ?? '')); break;
             case '/sequence/describe':

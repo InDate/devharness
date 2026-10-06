@@ -43,3 +43,11 @@ describe('the pause guard and a held replay run', () => {
     expect(checkBreakpointPause(pausedConnections(), 'replay', undefined, 'run').blocked).toBe(true);
   });
 });
+
+describe('the pause guard and the hold tool', () => {
+  it('lets hold run while a pause is unacknowledged, since a hold can be what stopped the page', () => {
+    for (const action of ['status', 'release', 'hold', 'step']) {
+      expect(checkBreakpointPause(pausedConnections(), 'hold', undefined, action).blocked, action).toBe(false);
+    }
+  });
+});

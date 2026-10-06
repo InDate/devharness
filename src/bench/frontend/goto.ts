@@ -13,10 +13,25 @@ let asked: string | null = null;
 export function goToSection(id: string): void {
   const there = document.getElementById(id);
   if (there) {
+    asked = null;
     there.scrollIntoView({ behavior: 'smooth', block: 'start' });
     return;
   }
   asked = id;
+}
+
+/**
+ * Ask for a section on a tab about to be shown. Not scrolled now: the tab
+ * being left can hold an element of the same id, such as a crossing History
+ * lists under the call that caused it.
+ */
+export function askSection(id: string): void {
+  asked = id;
+}
+
+/** The section a go-to is waiting on; a list that resolves it to another id asks again with `goToSection`. */
+export function askedSection(): string | null {
+  return asked;
 }
 
 /**

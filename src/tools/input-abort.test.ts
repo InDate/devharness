@@ -67,6 +67,7 @@ function makePage(opts: { onDispatch?: (d: Dispatch) => void; elementExists?: bo
       press: vi.fn(async (...a: any[]) => record('keyboard.press', ...a)),
       down: vi.fn(async (...a: any[]) => record('keyboard.down', ...a)),
       up: vi.fn(async (...a: any[]) => record('keyboard.up', ...a)),
+      type: vi.fn(async (...a: any[]) => record('keyboard.type', ...a)),
     },
   };
 
@@ -235,7 +236,7 @@ describe('input: multi-dispatch paths stop mid-gesture', () => {
     const controller = new AbortController();
     const { page, dispatches } = makePage({
       onDispatch: (d) => {
-        // Abort right after the triple-click + Backspace that clears the field.
+        // Abort right after the select-all + Backspace that clears the field.
         if (d.kind === 'keyboard.press' && d.args[0] === 'Backspace') controller.abort();
       },
     });
@@ -251,7 +252,7 @@ describe('input: multi-dispatch paths stop mid-gesture', () => {
     expect(isAbortError((outcome as any).err)).toBe(true);
     // The clear went out and stays out; the new text never got dispatched.
     expect(dispatches.some((d) => d.kind === 'keyboard.press' && d.args[0] === 'Backspace')).toBe(true);
-    expect(page.type).not.toHaveBeenCalled();
+    expect(dispatches.some((d) => d.kind === 'keyboard.type')).toBe(false);
   });
 });
 

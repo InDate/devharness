@@ -275,3 +275,102 @@ function fingerprintInPage(t: any, given?: any): ElementFingerprint | undefined 
     return fingerprint as unknown as ElementFingerprint;
   }
 }
+
+/**
+ * A selector that resolves to `el` alone, built from what identifies it - a
+ * test id, an id, a name, else its tag where that is unique in its scope - as
+ * a `host >>> inner` chain through open shadow roots; undefined where some
+ * step of the chain has nothing unique. Serialised into the page.
+ */
+function selectorInPage(el: any): string | undefined {
+  const doc = (globalThis as any).document;
+  const TEST_ATTRS = ['data-testid', 'data-test-id', 'data-test', 'data-cy', 'data-qa'];
+  const esc = (v: string) => (globalThis as any).CSS.escape(v);
+  const stepFor = (node: any, scope: any): string | undefined => {
+    const tag = node.tagName.toLowerCase();
+    const attr = TEST_ATTRS.find(a => node.getAttribute(a));
+    const options = [
+      attr ? `[${attr}="${esc(node.getAttribute(attr))}"]` : undefined,
+      node.id ? `#${esc(node.id)}` : undefined,
+      node.getAttribute('name') ? `${tag}[name="${esc(node.getAttribute('name'))}"]` : undefined,
+      tag,
+    ].filter(Boolean) as string[];
+    return options.find(option => scope.querySelectorAll(option).length === 1 && scope.querySelector(option) === node);
+  };
+  const chain: any[] = [el];
+  let root = el.getRootNode();
+  while (root && root !== doc && root.host) {
+    chain.unshift(root.host);
+    root = root.host.getRootNode();
+  }
+  const steps: string[] = [];
+  for (let i = 0; i < chain.length; i++) {
+    const step = stepFor(chain[i], i === 0 ? doc : chain[i - 1].shadowRoot);
+    if (!step) return undefined;
+    steps.push(step);
+  }
+  return steps.join(' >>> ');
+}
+
+/**
+ * The listener the bench installs while it records a person's input. Each
+ * click, each field left after typing into it, and each Enter, Escape or Tab is
+ * reported the moment it happens through the `__devharnessInput` binding, with
+ * the element's fingerprint and a selector built from it - a point only where
+ * nothing identifies the element. A click reads as its nearest interactive
+ * ancestor, through shadow roots. devharness's own input runs with
+ * `__cdpReplayClickInProgress` set and is not reported.
+ */
+export function personInputScript(): string {
+  return `(() => {
+  if (globalThis.__devharnessPersonInput) return;
+  globalThis.__devharnessPersonInput = true;
+  const fingerprintOf = ${fingerprintInPage.toString()};
+  const selectorOf = ${selectorInPage.toString()};
+  const INTERACTIVE = 'a[href],button,input,select,textarea,summary,label,[role],[onclick],[contenteditable=""],[contenteditable=true],[tabindex]';
+  const ours = () => globalThis.__cdpReplayClickInProgress === true;
+  const send = (input) => { try { globalThis.__devharnessInput(JSON.stringify({ ...input, at: Date.now() })); } catch {} };
+  const parentOf = (el) => el.parentElement || (el.parentNode && el.parentNode.host) || null;
+  const where = (el, point) => {
+    const selector = selectorOf(el);
+    return selector ? { selector } : point ? { x: Math.round(point.clientX), y: Math.round(point.clientY) } : {};
+  };
+  addEventListener('click', (e) => {
+    if (ours() || !e.isTrusted) return;
+    let el = e.composedPath()[0];
+    while (el && el.nodeType === 1 && !el.matches(INTERACTIVE)) el = parentOf(el);
+    if (!el || el.nodeType !== 1 || el === document.body) el = e.composedPath()[0];
+    if (!el || el.nodeType !== 1) return;
+    send({ action: 'click', ...where(el, e), fingerprint: fingerprintOf({}, el) });
+  }, true);
+  const typedInto = new Set();
+  // A field that keeps focus never reports on leaving it, so typing that
+  // pauses is reported then too.
+  const idle = new Map();
+  addEventListener('input', (e) => {
+    if (ours()) return;
+    let el = e.composedPath()[0];
+    if (!el || !el.matches) return;
+    if (!el.matches('input,textarea,[contenteditable],[contenteditable=true],[contenteditable=""]')) el = el.closest && el.closest('[contenteditable]');
+    if (!el) return;
+    typedInto.add(el);
+    clearTimeout(idle.get(el));
+    idle.set(el, setTimeout(() => flush(el), 1000));
+  }, true);
+  const flush = (el) => {
+    if (!typedInto.has(el)) return;
+    typedInto.delete(el);
+    clearTimeout(idle.get(el));
+    idle.delete(el);
+    const text = 'value' in el ? el.value : el.textContent;
+    send({ action: 'type', ...where(el), text, fingerprint: fingerprintOf({}, el) });
+  };
+  addEventListener('focusout', (e) => flush(e.composedPath()[0]), true);
+  addEventListener('keydown', (e) => {
+    if (ours() || !e.isTrusted) return;
+    if (e.key !== 'Enter' && e.key !== 'Escape' && e.key !== 'Tab') return;
+    flush(e.composedPath()[0]);
+    send({ action: 'press', key: e.key });
+  }, true);
+})();`;
+}

@@ -13,13 +13,13 @@ import { EnableProxy } from './enable-proxy.js';
 import { ConnectionPicker } from './connection-picker.js';
 import { DISC_TONES, discFill, discSaid } from './disc.js';
 import { About } from './sequence.js';
-import { Editing } from './editing.js';
+import { Editing, type CardAsk } from './editing.js';
 import { Glyph } from './glyph.js';
 import { ToolGlyph } from './tool-glyph.js';
 import { onRevealResponse, setShowHidden, useShowHidden } from './focus.js';
 import { CaptureDialog } from './capture.js';
 import { HoldPanel } from './hold-panel.js';
-import { goToSection } from './goto.js';
+import { askSection, goToSection } from './goto.js';
 import { SavedHidden, SavedPayloads, SavedResponses, choicesIn, rearmRule } from './crossing.js';
 import type { BenchView, BoundaryEvent, BoundaryState, DiscMode } from '../wire.js';
 import './bench.css';
@@ -583,6 +583,15 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
             await post('/shot/begin');
             setShooting(false);
           }}><Glyph of="capture" /></button>
+        {/* On, what the person does in the app lands in History as calls of
+            its own, each with what it caused, beside devharness's. */}
+        <button class={state.personInput ? 'chip-toggle on' : 'chip-toggle'}
+          title={state.personInput
+            ? 'your clicks and typing in the app go into History - turn off'
+            : 'put your clicks and typing in the app into History'}
+          aria-label="RECORD MY INPUT"
+          onClick={() => void post('/input/person', { on: !state.personInput })}
+        ><Glyph of="history" /></button>
         <span class="rule" />
         {/* A browser is launched through a proxy or it is not, and a running
             one cannot gain one - so this states which, and asking is the only
@@ -803,10 +812,12 @@ interface Place {
   issue: number | null;
   tool: string | null;
   action: string | null;
+  /** The History entry a go-to opened. */
+  entry: number | null;
 }
 
 /** A tab's own place, cleared: a tab opened from its button opens on its list. */
-const TAB_START = { issue: null, tool: null, action: null } as const;
+const TAB_START = { issue: null, tool: null, action: null, entry: null } as const;
 
 function placeOf(): Place {
   const query = new URLSearchParams(location.search);
@@ -819,6 +830,7 @@ function placeOf(): Place {
     issue: tab === 'issues' && Number.isInteger(issue) && issue > 0 ? issue : null,
     tool: tab === 'tools' ? query.get('tool') || null : null,
     action: tab === 'tools' ? query.get('action') || null : null,
+    entry: tab === 'history' && query.get('entry') !== null && Number.isInteger(Number(query.get('entry'))) ? Number(query.get('entry')) : null,
   };
 }
 
@@ -829,13 +841,14 @@ function addressOf(place: Place): string {
   if (place.issue !== null) query.set('issue', String(place.issue));
   if (place.tool) query.set('tool', place.tool);
   if (place.action) query.set('action', place.action);
+  if (place.entry !== null) query.set('entry', String(place.entry));
   const search = query.toString();
   return `${location.pathname}${search ? `?${search}` : ''}`;
 }
 
 function samePlace(a: Place, b: Place): boolean {
   return a.tab === b.tab && a.sequence === b.sequence && a.issue === b.issue
-    && a.tool === b.tool && a.action === b.action;
+    && a.tool === b.tool && a.action === b.action && a.entry === b.entry;
 }
 
 /** A count as the badge prints it: four digits and more print as 999+, so the badge holds its width. */
@@ -943,6 +956,8 @@ function Bench() {
    * reported. Polls in flight while the post lands still carry the old name,
    * and each would push that name back onto the history.
    */
+  /** The sequence card a go-to from History asked the home page to open. */
+  const [cardAsk, setCardAsk] = useState<CardAsk | null>(null);
   const pending = useRef<{ sequence: string | null } | null>(null);
 
   const go = (next: Place) => {
@@ -987,6 +1002,7 @@ function Bench() {
   useEffect(() => {
     const onPop = () => {
       const back = placeOf();
+      if (back.tab === 'history' && back.entry !== null) askSection(`history-${back.entry}`);
       setAt(back);
       reach(back.sequence);
     };
@@ -1043,10 +1059,26 @@ function Bench() {
           returnsFromShot={shotFrom !== null}
           starting={starting}
           onStarted={() => setStarting(false)}
+          card={cardAsk}
         />
       )}
-      {tab === 'traffic' && <Traffic base={BASE} />}
-      {tab === 'history' && <History base={BASE} onGoTo={seed => {
+      {tab === 'traffic' && <Traffic base={BASE} onGoToEntry={entry => {
+        askSection(`history-${entry}`);
+        go({ ...TAB_START, tab: 'history', sequence: placeOf().sequence, entry });
+      }} />}
+      {tab === 'history' && <History base={BASE} entry={at.entry} onGoToEvent={id => {
+        askSection(`crossing-${id}`);
+        go({ ...TAB_START, tab: 'traffic', sequence: placeOf().sequence });
+      }} onGoToStep={(sequence, step, entry) => {
+        // The home page shows with no sequence open, and closing one cancels
+        // its run, so a go-to while a run is going stays put as `home` does.
+        if (busy) return;
+        // Back returns to the call the go-to left from, opened.
+        history.replaceState(null, '', addressOf({ ...placeOf(), entry }));
+        reach(null);
+        setCardAsk({ sequence, step });
+        go({ ...TAB_START, tab: 'editing', sequence: null });
+      }} onGoTo={seed => {
         setToolSeed(seed);
         go({
           ...TAB_START, tab: 'tools', sequence: placeOf().sequence, tool: seed.tool,

@@ -9,6 +9,7 @@ import { runRegistry } from './replay-run-registry.js';
 import type { CommandSequence } from '../command-recorder.js';
 import { productionShaped } from '../test-support/fake-execute-tool-call.js';
 import { attachLayer, recordHeld, holdReading } from '../hold.js';
+import { currentCursor, forgetCursor, standPausedRun } from '../proxy/registry.js';
 
 const CONNECTION = 'hold-test-page';
 const LOGPOINT_LINE = { url: 'http://localhost:3101/client.js', lineNumber: 180, functionName: 'handleCalculate' };
@@ -62,7 +63,7 @@ function makeReplay() {
 }
 
 beforeEach(() => runRegistry.clear());
-afterEach(() => { detach?.(); detach = undefined; });
+afterEach(async () => { detach?.(); detach = undefined; await standPausedRun(undefined); forgetCursor(); });
 
 describe('a run that a breakpoint the sequence did not set stops', () => {
   it('holds on the step that ran into it, with where the page stopped', async () => {
@@ -107,5 +108,40 @@ describe('a run that a breakpoint the sequence did not set stops', () => {
     expect(resume).toHaveBeenCalledTimes(1);
     expect(ran).toEqual(['#a', '#stops', '#c']);
     expect(recorder.getActiveSequence()).toBeNull();
+  });
+});
+
+describe('the step a breakpoint stopped the page inside', () => {
+  it("stays open through the pause, its cursor standing on the run's own pass", async () => {
+    const { replay, recorder } = makeReplay();
+
+    await replay.handler({ action: 'run', sequenceId: 'seq-hold', connection: CONNECTION, wait: true });
+
+    const active = recorder.getActiveSequence();
+    expect(active.openStep).toMatchObject({ step: 1 });
+    expect(active.runTimestamp).toEqual(expect.any(Number));
+    expect(currentCursor()).toMatchObject({ kind: 'replay', runId: `run-${active.runTimestamp.toString(36)}`, step: 1 });
+    expect(currentCursor()).not.toHaveProperty('paused');
+  });
+
+  it('is closed by finish, which leaves no cursor standing once the run ends', async () => {
+    const { replay } = makeReplay();
+
+    await replay.handler({ action: 'run', sequenceId: 'seq-hold', connection: CONNECTION, wait: true });
+    await replay.handler({ action: 'finish' });
+
+    expect(currentCursor()).toBeUndefined();
+  });
+});
+
+describe('a run paused at stepTo', () => {
+  it('stands a pause stamp before the step it resumes at, which cancel takes down', async () => {
+    const { replay } = makeReplay();
+
+    await replay.handler({ action: 'run', sequenceId: 'seq-hold', connection: CONNECTION, wait: true, stepTo: 1 });
+    expect(currentCursor()).toMatchObject({ kind: 'replay', step: 1, paused: true });
+
+    await replay.handler({ action: 'cancel' });
+    expect(currentCursor()).toBeUndefined();
   });
 });

@@ -10,19 +10,24 @@
 
 import type { StepTraffic } from '../annotation.js';
 import type { CommandRecorder, RecordedCommand, CommandSequence, ActiveSequenceState } from '../command-recorder.js';
-import { markNextCommand, releaseCommand, boundarySettled, getProxy, recordCheckOutcome, noteCallStart } from '../proxy/registry.js';
-import { tallyShapes, type ShapeRules } from '../proxy/intercept-proxy.js';
+import { markNextCommand, releaseCommand, boundarySettled, getProxy, recordCheckOutcome, noteCallStart, standPausedRun, settleProxies } from '../proxy/registry.js';
+import type { ProxyEvent, ShapeRules } from '../proxy/intercept-proxy.js';
+import { compareStep, placePass, type Crossing } from '../bench/step-compare.js';
+import { writeEvents } from '../bench-mode/traffic.js';
+import { sessions } from '../bench-mode/session.js';
 import type { ExecuteToolCall } from '../types.js';
 import { abortableDelayResult } from '../utils/abort.js';
 import { debugLog } from '../debug-logger.js';
 import { sanitizeReference } from '../reference-validator.js';
 import { configManager } from '../config.js';
+import { describePersonInput, personInputSince } from '../person-watch.js';
+import { hold, type HoldLayer } from '../hold.js';
 import { interpolateParams } from './interpolation.js';
 import { getMessage, isElementNotFoundFailure } from '../messages.js';
 import type { CheckOutcome as CheckAction } from './check-tools.js';
 import { assertAsCheck, subjectOf as subjectOfCheck, waitAsCheck } from './check-engine.js';
 import type { CheckOutcome as CheckOutcomeRecord, RanStep } from '../proxy/registry.js';
-import { asStep, originChannel, withinRun } from '../call-origin.js';
+import { asStep, atRunStep, originChannel, withinRun } from '../call-origin.js';
 import { showingPickers } from '../dialog-monitor.js';
 import { addressedConnection, addressesConnection, createsConnection, createdName, isLaunchStep } from './connection-steps.js';
 
@@ -840,13 +845,21 @@ export interface ExecuteStepsOptions {
    * (nested runs): substeps report through their parent step only.
    */
   onProgress?: (ev: { step: number; totalSteps: number; tool: string }) => void;
+  /**
+   * The step a breakpoint stopped the page inside, still open: the resume
+   * waits for its quiet under its cursor, then closes it before the next step marks.
+   */
+  openStep?: { step: number; markedAt: number };
 }
 
 /**
  * Execute a range of steps from a sequence
  */
-export function executeSteps(options: ExecuteStepsOptions): Promise<ExecutionResult> {
-  return withinRun(options.sequence.name, () => executeStepsWithin(options));
+export async function executeSteps(options: ExecuteStepsOptions): Promise<ExecutionResult> {
+  const execution = await withinRun(options.sequence.name, () => executeStepsWithin(options));
+  const last = execution.results[execution.results.length - 1];
+  if (last && !last.success) options.ctx.commandRecorder?.markStepFailed?.(options.sequence.name, last.tool);
+  return execution;
 }
 
 async function executeStepsWithin(options: ExecuteStepsOptions): Promise<ExecutionResult> {
@@ -958,6 +971,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
   // step runs to the next step's start while its recording ran to a release,
   // and the two spans are not comparable.
   const stepReleasedAt = new Map<number, number>();
+  const stepMarkedAt = new Map<number, number>();
   const settleConfig = configManager.getReplayConfig();
   const releaseStep = async (step: number): Promise<void> => {
     const at = await releaseCommand(
@@ -965,6 +979,8 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
       overrideConnectionReason ?? ctx.connection
     ).catch(() => Date.now());
     stepReleasedAt.set(step, at);
+    const from = stepMarkedAt.get(step);
+    if (from !== undefined) commandRecorder?.noteStepWindow?.(sequence.name, step, from, at);
   };
   let boundaryStep: number | undefined;
 
@@ -982,18 +998,95 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
     ? { step: ctx.stampUnder.step, within: [...ctx.stampUnder.within, i] }
     : { step: i };
   const cursorAt = (i: number) => ({ kind: 'replay' as const, runId: proxyRun, ...positionOf(i) });
+  // A pause that returns from inside the loop - a breakpoint, a refused click -
+  // closes the open step's window and stands the run's cursor before the step
+  // it resumes at, as a pause at the loop's end does.
+  //
+  // A breakpoint stops the page inside the step whose window is open, and the
+  // page finishes that step's work only once it resumes: that window stays
+  // open, its cursor standing through the pause, and the resume closes it.
+  // The steps already closed are compared here, as the end of a pass compares them.
+  const pausedAt = async (result: ExecutionResult, next: number, insideStep = false): Promise<ExecutionResult> => {
+    let openStep: ExecutionResult['openStep'];
+    if (insideStep && boundaryStep !== undefined && !ctx.stampUnder) {
+      const open = boundaryStep;
+      openStep = { step: open, markedAt: stepMarkedAt.get(open) ?? Date.now() };
+      // The step's cursor is built again with its History entry: the one in
+      // flight can have been re-marked without it, and what the page sends on
+      // resume would then count on no History row.
+      const entry = ctx.commandRecorder?.getHistory?.(Number.MAX_SAFE_INTEGER)
+        .find(command => command.run === sequence.name && command.runStep === open)?.index;
+      const cursor = { ...cursorAt(open), ...(entry !== undefined ? { entry } : {}) };
+      await markNextCommand(cursor);
+      await standPausedRun(cursor);
+    } else {
+      if (boundaryStep !== undefined) {
+        await releaseStep(boundaryStep);
+        boundaryStep = undefined;
+      }
+      await boundarySettled();
+      if (!ctx.stampUnder) await standPausedRun({ ...cursorAt(next), paused: true });
+    }
+    const closed = new Map([...stepStartedAt].filter(([step]) => step !== openStep?.step));
+    const drift = comparesBehaviour && closed.size
+      ? await compareBehaviour(
+          sequence.name, commands, closed, stepReleasedAt, ctx, proxyRun,
+          overrideConnectionReason ?? ctx.connection,
+          (sequence as any).shapeRules, (sequence as any).boundaryPlacements)
+      : undefined;
+    const behaviourDrift = [...(drift ?? []), ...nestedDrift];
+    return { ...result, ...(behaviourDrift.length ? { behaviourDrift } : {}), ...(openStep ? { openStep } : {}) };
+  };
   const nestedUnder = (i: number) => {
     const at = positionOf(i);
     return { step: at.step, within: at.within ?? [] };
   };
 
+  // A person's input on the run's page, read at each step boundary. Steps
+  // after it run against a page the recording never had, so the setting
+  // decides whether the run holds there, stops, or carries on naming it.
+  const personMode = configManager.getReplayConfig().personInputDuringRun;
+  // A run resumed from a breakpoint reopens the step the page stopped inside:
+  // the page finishes its work now, under that step's still-standing cursor,
+  // and the first boundary of the loop closes it once that work is quiet.
+  if (options.openStep && !ctx.stampUnder) {
+    boundaryStep = options.openStep.step;
+    stepMarkedAt.set(options.openStep.step, options.openStep.markedAt);
+    if (comparesBehaviour) stepStartedAt.set(options.openStep.step, options.openStep.markedAt);
+    await settleProxies(settleConfig.breakpointResumeQuietMs, settleConfig.breakpointResumeCapMs, Date.now());
+  }
+  // A resumed run takes down the cursor its pause left standing; its steps mark their own.
+  if (!ctx.stampUnder) await standPausedRun(undefined);
+  const personLanded: NonNullable<ExecutionResult['personInput']>['landed'] = [];
+  let pausedForPerson: number | undefined;
+  let personSince = Date.now();
+
   for (let i = startStep; i < targetEnd; i++) {
     const cmd = commands[i];
+    if (i > startStep && ctx.connection && !ctx.stampUnder) {
+      const moved = personInputSince(sanitizeReference(ctx.connection), personSince);
+      personSince = Date.now();
+      if (moved.length) {
+        personLanded.push({ before: i, inputs: moved });
+        if (personMode === 'stop') {
+          results.push({
+            step: i + 1, tool: cmd.tool, success: false,
+            error: `stopped before this step: a person's ${moved.map(describePersonInput).join(', ')} landed on ${ctx.connection}`,
+          });
+          break;
+        }
+        if (personMode === 'pause') {
+          pausedForPerson = i;
+          break;
+        }
+      }
+    }
     // A traffic check counts what the step before it caused, so that step
     // stays marked while it waits: the crossings it counts are listed under
     // the step that caused them, not under the check.
     // Every step is a call a traffic check can count back to.
     noteCallStart();
+    atRunStep(i);
     const holdsPrevious = cmd.tool === 'check' && cmd.params?.traffic !== undefined && boundaryStep !== undefined;
     if (!holdsPrevious) {
       // The previous step's boundary is released before this one marks, so a
@@ -1001,6 +1094,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
       // as it is while recording.
       if (boundaryStep !== undefined) await releaseStep(boundaryStep);
       if (comparesBehaviour) stepStartedAt.set(i, Date.now());
+      stepMarkedAt.set(i, Date.now());
       await markNextCommand(cursorAt(i));
       boundaryStep = i;
     }
@@ -1282,13 +1376,13 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
         if (action === 'continue') {
           outcomeFor();
           results.push({ step: i + 1, tool: cmd.tool, success: true, check });
-          if (pausedHere) return { results, totalCommands: commands.length, durationMs: Date.now() - startTime, breakpointHit: pausedHere };
+          if (pausedHere) return pausedAt({ results, totalCommands: commands.length, durationMs: Date.now() - startTime, breakpointHit: pausedHere }, i + 1, true);
           continue;
         }
         if (pausedHere) {
           outcomeFor();
           results.push({ step: i + 1, tool: cmd.tool, success: true, check });
-          return { results, totalCommands: commands.length, durationMs: Date.now() - startTime, breakpointHit: pausedHere };
+          return pausedAt({ results, totalCommands: commands.length, durationMs: Date.now() - startTime, breakpointHit: pausedHere }, i + 1, true);
         }
         const branch = await runBranch(
           action.run, { ...stepCtx, variableStore, stampUnder: nestedUnder(i) }, commandRecorder,
@@ -1459,7 +1553,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
         if (execResult.errorId === 'INPUT_ELEMENT_MISMATCH') {
           const refused = execResult.response?._meta?.element;
           results.push({ step: i + 1, tool: cmd.tool, success: false, error: execResult.error });
-          return {
+          return pausedAt({
             results,
             totalCommands: commands.length,
             durationMs: Date.now() - startTime,
@@ -1472,7 +1566,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
               info: ['nothing sent: the element was compared before the input was'],
               ...(refused?.repair ? { repair: refused.repair } : {}),
             },
-          };
+          }, i);
         }
         if (execResult.errorId === 'DIALOG_OPENED' && nextAnswers) {
           const dialog = execResult.response?._meta?.dialog;
@@ -1602,7 +1696,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
             error: `Click validation: ${clickValidation.errors.join('; ')}`
           });
 
-          return {
+          return pausedAt({
             results,
             totalCommands: commands.length,
             durationMs: Date.now() - startTime,
@@ -1615,7 +1709,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
               info: clickValidation.info,
               ...(clickValidation.repair ? { repair: clickValidation.repair } : {}),
             }
-          };
+          }, i);
         }
       }
 
@@ -1649,7 +1743,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
       // Check if we hit a breakpoint after this step (on the step's own connection)
       const breakpointHit = await unexpectedPause();
       if (breakpointHit) {
-        return { results, totalCommands: commands.length, durationMs: Date.now() - startTime, breakpointHit };
+        return pausedAt({ results, totalCommands: commands.length, durationMs: Date.now() - startTime, breakpointHit }, i + 1, true);
       }
 
       // Post-step async operations (after marking success)
@@ -1714,7 +1808,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
   // recorded as a failure, so without this the run would tear down the
   // sequence - running its declared teardown commands - in the middle of a
   // session somebody stopped to look at.
-  const isPaused = stoppedShortOfEnd && (!anyFailed || abortSignal?.aborted === true);
+  const isPaused = (stoppedShortOfEnd && (!anyFailed || abortSignal?.aborted === true)) || pausedForPerson !== undefined;
 
   const teardownOutcome = isPaused
     ? undefined
@@ -1732,11 +1826,29 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
   if (boundaryStep !== undefined) await releaseStep(boundaryStep);
   await boundarySettled();
 
+  // A paused run leaves its cursor standing before the step it resumes at, so
+  // what crosses in the pause is stamped as the pause's. A run that ended
+  // leaves none: its finish line is the last step's release, and what crosses
+  // after it belongs to no run.
+  if (isPaused && !ctx.stampUnder) {
+    const next = pausedForPerson
+      ?? (abortSignal?.aborted ? (results.at(-1)?.step ?? startStep + 1) - 1 : targetEnd);
+    await standPausedRun({ ...cursorAt(next), paused: true });
+  }
+
+  // A run held for a person's input stops the page and its traffic as well as
+  // its steps: a page left running produces timers and frames no step caused.
+  let personHeld: HoldLayer[] | undefined;
+  if (pausedForPerson !== undefined && ctx.connection) {
+    const reading = await hold(sanitizeReference(ctx.connection), { source: 'sequence' }).catch(() => undefined);
+    personHeld = reading?.held.filter(held => held.source === 'sequence').map(held => held.layer);
+  }
+
   const ownDrift = comparesBehaviour
     ? await compareBehaviour(
-        commands, stepStartedAt, stepReleasedAt, ctx, proxyRun,
+        sequence.name, commands, stepStartedAt, stepReleasedAt, ctx, proxyRun,
         overrideConnectionReason ?? ctx.connection,
-        (sequence as any).shapeRules)
+        (sequence as any).shapeRules, (sequence as any).boundaryPlacements)
     : undefined;
   const behaviourDrift = [...(ownDrift ?? []), ...nestedDrift];
 
@@ -1745,7 +1857,10 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
     totalCommands: commands.length,
     durationMs: Date.now() - startTime,
     ...(behaviourDrift && behaviourDrift.length > 0 ? { behaviourDrift } : {}),
-    ...(teardownOutcome ? { teardownResults: teardownOutcome.results, teardownFailed: teardownOutcome.failed } : {})
+    ...(teardownOutcome ? { teardownResults: teardownOutcome.results, teardownFailed: teardownOutcome.failed } : {}),
+    ...(personLanded.length ? {
+      personInput: { mode: personMode, landed: personLanded, ...(pausedForPerson !== undefined ? { pausedBefore: pausedForPerson } : {}), ...(personHeld?.length ? { held: personHeld } : {}) },
+    } : {}),
   };
 }
 
@@ -1762,6 +1877,8 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
  * difference there says nothing about the step.
  */
 async function compareBehaviour(
+  /** The run whose History entries each step's match is attached to. */
+  run: string,
   commands: RecordedCommand[],
   stepStartedAt: Map<number, number>,
   /** When each step's boundary closed, which ends that step's span. */
@@ -1772,75 +1889,67 @@ async function compareBehaviour(
   /** The browser whose proxy holds it. */
   reference: string,
   /** What a person ruled about each payload shape when this was recorded. */
-  rules?: ShapeRules
+  rules?: ShapeRules,
+  /** Where the sequence lists a kind that crossed at another step. */
+  placements?: Record<string, number>
 ): Promise<ExecutionResult['behaviourDrift']> {
-  const { executeToolCall, connection } = ctx;
   const indices = [...stepStartedAt.keys()].sort((a, b) => a - b);
+  // The rules, placement and comparison the bench's rows use, so a step reads
+  // the same here as on its rows.
+  const { rulesForRun } = await import('./run-rules.js');
+  const ignores = rulesForRun(reference).ignores.map(one => one.kind);
+  const proxy = getProxy(reference);
+  const writes = writeEvents(reference);
+  const values = new Map((sessions.get(reference)?.writeWatch?.writes ?? []).map(write => [write.id, write.value]));
+  const events: Crossing[] = [...(proxy?.eventsIn() ?? []), ...writes]
+    .filter(event => event.runId === proxyRun || event.runId === undefined)
+    .sort((a, b) => a.at - b.at);
+  const under = ctx.stampUnder;
+  const ran = under ? undefined : placePass(events, placements, commands.length);
+  const path = (index: number) => [...(under?.within ?? []), index].join('.');
+  const ranAt = (index: number) => (under
+    ? events.filter(event => event.runId === proxyRun && event.step === under.step && (event.within ?? []).join('.') === path(index))
+    : ran?.get(index) ?? []);
+  const bodyOf = (event: Crossing) => (event.kind === 'write' ? values.get(event.id) : proxy?.bodyOf(event.id));
+  const ruledOut = (event: Crossing) => {
+    const shape = (event as ProxyEvent).evidence?.shape;
+    const ruled = shape ? rules?.[shape] : undefined;
+    return ruled === 'background' || ruled === 'unknown';
+  };
   const drift: NonNullable<ExecutionResult['behaviourDrift']> = [];
 
   for (const [position, index] of indices.entries()) {
-    const recorded = (commands[index] as any).traffic;
-    if (!recorded) continue;
+    const traffic = commands[index].traffic;
+    if (!traffic) continue;
     const from = stepStartedAt.get(index)!;
-    const to = stepReleasedAt.get(index)
-      ?? stepStartedAt.get(indices[position + 1])
-      ?? Date.now();
-
-    const counted = await countStepTraffic(executeToolCall, connection!, from, to);
-    const observed = {
-      requests: counted?.requests ?? 0,
-      failed: counted?.failed ?? 0,
-      opened: counted?.opened ?? 0,
-      writes: counted?.writes ?? 0,
-    };
-    const before = {
-      requests: recorded.requests ?? 0,
-      failed: recorded.failed ?? 0,
-      opened: recorded.opened ?? 0,
-      writes: recorded.writes ?? 0,
-    };
-    // Read off the stamps rather than a clock window: a consequence arriving
-    // after the next step began carries the step that caused it, and a window
-    // hands it to whichever step was open when it landed.
-    const proxy = getProxy(reference);
-    const recordedShapes = commands[index].traffic?.shapes;
-    const recordedSeen = commands[index].traffic?.seen;
-    const under = ctx.stampUnder;
-    const tally = proxy
-      ? tallyShapes(under ? proxy.eventsForStep(proxyRun, under.step, [...under.within, index]) : proxy.eventsForStep(proxyRun, index), rules)
-      : undefined;
-    const observedShapes = tally?.weight;
-    const shapesDiffer = recordedShapes !== undefined && observedShapes !== undefined
-      && [...new Set([...Object.keys(recordedShapes), ...Object.keys(observedShapes)])]
-        .some(shape => Math.abs((recordedShapes[shape] ?? 0) - (observedShapes[shape] ?? 0)) > 0.5);
-    // Counts, not just presence: a push weighs nothing so a server that
-    // stopped pushing is invisible to the weights, and a same-path request
-    // arriving twice where it arrived once is 0.3 of weight and passes the
-    // threshold above. Shapes ruled background or unknown are not counted, so
-    // an app's own chatter does not read as drift because a step ran longer.
-    const countDiffer = recordedSeen !== undefined && tally !== undefined
-      && [...new Set([...Object.keys(recordedSeen), ...Object.keys(tally.seen)])]
-        .some(shape => (recordedSeen[shape] ?? 0) !== (tally.seen[shape] ?? 0));
-
-    const heldFor = to - from;
-    const recordedWindow = commands[index].traffic?.windowMs;
-
-    // A replay whose network log could not be read has no counts to compare.
-    const differs = counted !== undefined && (['requests', 'failed', 'opened', 'writes'] as const)
-      .some(field => before[field] !== observed[field]);
-    if (differs || shapesDiffer || countDiffer) {
+    const to = stepReleasedAt.get(index) ?? stepStartedAt.get(indices[position + 1]) ?? Date.now();
+    const heldMs = traffic.windowMs !== undefined ? { heldMs: { recorded: traffic.windowMs, replayed: to - from } } : {};
+    if (!traffic.kinds) {
+      ctx.commandRecorder?.noteStepMatch?.(run, index, { matched: 0, kinds: 0, unmatched: [], noBaseline: true, ...heldMs });
+      continue;
+    }
+    const compared = compareStep({
+      recorded: traffic.kinds, ran: ranAt(index), step: index, ignores, bodyOf, ruledOut,
+      ...(commands[index].expected ? { expected: commands[index].expected } : {}),
+    });
+    const unmatched = [
+      ...compared.kinds.filter(one => one.verdict !== 'match').map(one => ({
+        kind: one.kind,
+        reasons: one.verdict === 'unexpected' ? ['new'] : one.verdict === undefined ? ['payload not held'] : one.reasons,
+      })),
+      ...compared.missing.map(one => ({ kind: one.kind, reasons: ['missing'] })),
+    ];
+    ctx.commandRecorder?.noteStepMatch?.(run, index, {
+      matched: compared.kinds.length - compared.kinds.filter(one => one.verdict !== 'match').length,
+      kinds: compared.kinds.length + compared.missing.length,
+      unmatched, ...heldMs,
+    });
+    if (unmatched.length) {
       drift.push({
         step: index + 1,
         ...(under ? { path: [under.step, ...under.within, index].map(n => n + 1).join('.') } : {}),
         label: `${commands[index].tool}.${commands[index].params?.action ?? ''}`.replace(/\.$/, ''),
-        recorded: before,
-        observed,
-        ...(recordedShapes && observedShapes
-          ? { shapes: { recorded: recordedShapes, observed: observedShapes } }
-          : {}),
-        ...(recordedWindow !== undefined
-          ? { window: { recorded: recordedWindow, observed: heldFor } }
-          : {}),
+        unmatched,
       });
     }
   }
@@ -1917,6 +2026,24 @@ export async function executeSequenceWithPause(
     ...options,
     endStep: stepTo
   });
+
+  // Held before a step for a person's input, as a stepTo pause holds.
+  if (result.personInput?.pausedBefore !== undefined) {
+    result.pausedAtStep = result.personInput.pausedBefore;
+    result.activeSequenceState = {
+      sequenceId: sequence.id,
+      sequenceName: sequence.name,
+      connection: connection || '',
+      currentStep: result.personInput.pausedBefore,
+      totalSteps: sequence.commands.length,
+      pausedAt: Date.now(),
+      historyIndexAtPause: commandRecorder.getCurrentHistoryIndex(),
+      capturedVariables: ctx.variableStore,
+      runTimestamp: ctx.runTimestamp,
+      ...(ctx.connectionMap && { connectionMap: ctx.connectionMap }),
+    };
+    return result;
+  }
 
   // If we stopped at stepTo and didn't fail, set up paused state
   if (stepTo !== undefined && result.results.length > 0) {

@@ -731,3 +731,51 @@ describe('CDPManager array display', () => {
     expect(await cdpManager.evaluateExpression('[1, 2, 3]', undefined, false)).toBe('Array(3)');
   });
 });
+
+describe('CDPManager.disarmPause() - a pause asked for while no JS ran', () => {
+  // Chrome has no command that cancels a pending pause, so the mock plays the
+  // part of the page: the statement disarmPause runs fires the pause, as
+  // Debugger.paused would, and resume ends it, as Debugger.resumed would.
+  function armedManager() {
+    const manager = new CDPManager();
+    const state = (manager as any).state;
+    state.connected = true;
+    const fire = () => {
+      state.paused = true;
+      (manager as any).pauseArmed = false;
+      for (const resolve of (manager as any).pauseResolvers.splice(0)) resolve();
+    };
+    const evaluate = vi.fn(async () => { fire(); return { result: { type: 'number', value: 0 } }; });
+    const resume = vi.fn(async () => {
+      state.paused = false;
+      for (const resolve of (manager as any).resumeWaiters.splice(0)) resolve();
+    });
+    (manager as any).client = { Runtime: { evaluate }, Debugger: { pause: vi.fn(async () => {}), resume } };
+    return { manager, evaluate, resume, state };
+  }
+
+  it('fires the armed pause on one statement and resumes from it', async () => {
+    const { manager, evaluate, resume, state } = armedManager();
+    await manager.pause();
+    await manager.disarmPause();
+    expect(evaluate).toHaveBeenCalledTimes(1);
+    expect(resume).toHaveBeenCalledTimes(1);
+    expect(state.paused).toBe(false);
+  });
+
+  it('runs nothing where no pause is armed', async () => {
+    const { manager, evaluate, resume } = armedManager();
+    await manager.disarmPause();
+    expect(evaluate).not.toHaveBeenCalled();
+    expect(resume).not.toHaveBeenCalled();
+  });
+
+  it('runs nothing where the armed pause has already fired', async () => {
+    const { manager, evaluate, state } = armedManager();
+    await manager.pause();
+    state.paused = true;
+    (manager as any).pauseArmed = false;
+    await manager.disarmPause();
+    expect(evaluate).not.toHaveBeenCalled();
+  });
+});

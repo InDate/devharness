@@ -236,6 +236,12 @@ Step through interactively with `step`, `finish`, `insert`, `status`, `cancel`
 and you drive it from there). A bare `cancel` prefers the paused session;
 use `runId` to address a specific background run.
 
+A pause is a place in the run, not a step: what crosses in it is listed as
+`paused before N`, and the run ends where its last step's window closes, so
+traffic after that is no run's. A person's input mid-run holds the page as
+well as the run (`replay.personInputDuringRun`). `docs/replay.md`, *What a
+paused run counts*, holds the rest.
+
 ## Two different "variables" - don't confuse them
 
 **1. `variables` on `run` replaces recorded typed text.** Keyed

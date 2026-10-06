@@ -121,19 +121,27 @@ export function formatExecutionResults(
     });
   }
 
-  if (teardown && teardown.results.length > 0) {
-    const tdFailed = teardown.results.filter(r => !r.success).length;
-    response += `\n\n**Teardown** (${teardown.results.length} step(s)`;
-    response += tdFailed > 0 ? `, ${tdFailed} failed - does not change the run's verdict)\n` : `)\n`;
-    teardown.results.forEach((r) => {
-      const icon = r.success ? '✓' : '✗';
-      response += `T${r.step}. ${r.tool} ${icon}`;
-      if (!r.success && r.error) response += ` - ${r.error}`;
-      response += `\n`;
-    });
-  }
+  return response + formatTeardown(teardown);
+}
 
-  return response;
+/** A run's teardown in a section of its own, never counted into the run's verdict. */
+export function formatTeardown(teardown?: { results: StepResult[]; failed?: boolean }): string {
+  if (!teardown || teardown.results.length === 0) return '';
+  const tdFailed = teardown.results.filter(r => !r.success).length;
+  let section = `\n\n**Teardown** (${teardown.results.length} step(s)`;
+  section += tdFailed > 0 ? `, ${tdFailed} failed - does not change the run's verdict)\n` : `)\n`;
+  teardown.results.forEach((r) => {
+    const icon = r.success ? '✓' : '✗';
+    section += `T${r.step}. ${r.tool} ${icon}`;
+    if (!r.success && r.error) section += ` - ${r.error}`;
+    section += `\n`;
+  });
+  return section;
+}
+
+/** Why each step failed, by 1-based step, as the executor reported it. */
+export function failuresOf(results: StepResult[]): Map<number, string> {
+  return new Map(results.filter(r => !r.success && r.error).map(r => [r.step, r.error!]));
 }
 
 /**
@@ -397,7 +405,7 @@ interface HistoryCommand {
   /** The sequence whose run executed this call as a step. */
   run?: string;
   /** The channel the call came in on. */
-  from?: 'mcp' | 'cli' | 'bench';
+  from?: 'mcp' | 'cli' | 'bench' | 'person';
 }
 
 /**
@@ -408,6 +416,7 @@ interface HistoryCommand {
 const CHANNEL_WORDS: Partial<Record<NonNullable<HistoryCommand['from']>, string>> = {
   bench: ' from the bench',
   cli: ' from the CLI',
+  person: ' by a person in the app',
 };
 
 /**

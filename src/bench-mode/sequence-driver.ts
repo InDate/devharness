@@ -9,6 +9,7 @@ import { promises as fs } from 'fs';
 import { dirname, join } from 'path';
 import { getIssuesBySequenceFile } from '../issue-tracker.js';
 import { getProxy } from '../proxy/registry.js';
+import { configManager } from '../config.js';
 import { createdName, isLaunchStep } from '../tools/connection-steps.js';
 import { stopRecording, cancelRecording, eventsToCommands } from '../interaction-recorder.js';
 import { translateSequence } from '../tools/legacy-steps.js';
@@ -22,13 +23,15 @@ import { announceSequenceSaved } from '../sequence-events.js';
 import { activityPathFor, readActivity, readSiteActivity, renumberSteps, siteActivityPath, stepMap, writeSiteActivity } from '../sequence-activity.js';
 import type { ActivityMove, ExpectedValue, KindCount } from '../bench/kinds.js';
 import type { SequenceDriver } from './driver.js';
-import { getBenchSession } from './session.js';
+import { getBenchSession, sessions } from './session.js';
 import type { Annotation, AnnotationTarget } from '../annotation.js';
 import { NO_TOOL_VALUES, type BoundaryRule, type HiddenKind, type RuleCatalogueEntry, type SequenceNote, type ServerLog, type ServerRow, type ToolGroup, type ToolValues } from '../bench/wire.js';
 import { unlisted } from '../call-origin.js';
 import { countStepTraffic } from '../step-traffic.js';
+import { activityOf, countsOf } from '../activity-index.js';
 import { describeFingerprint, type ElementFingerprint } from '../element-fingerprint.js';
 import { CANCELLED } from './session.js';
+import { heldRulesOf, type SiteReader } from './rules.js';
 
 /**
  * Stands in for the bench's own address inside a recorded sequence.
@@ -91,6 +94,15 @@ function readsOf(command: { params?: Record<string, any> }): string[] {
 }
 
 /** Where the sequence files that hold the notes live. */
+/** Reads a site's stored responses and hidden kinds from the activity folder beside the sequences. */
+export function siteReaderOf(commandRecorder: CommandRecorder): SiteReader {
+  const read = (origin: string) => readSiteActivity(siteActivityPath(join(dirname(getSequencesRoot(commandRecorder)), 'activity'), origin));
+  return {
+    rules: async (origin: string) => ((await read(origin))?.responses ?? []) as Array<Record<string, unknown>>,
+    hidden: async (origin: string) => ((await read(origin))?.hidden ?? []) as Array<Record<string, unknown>>,
+  };
+}
+
 export function getSequencesRoot(commandRecorder: CommandRecorder): string {
   return (commandRecorder as any).getSequencesDir?.(false) ?? '.devharness/sequences';
 }
@@ -509,11 +521,16 @@ export function createSequenceDriver(
         ...(typeof connection === 'string' ? { connection } : {}),
         from: command.from,
         ...(command.run !== undefined ? { run: command.run } : {}),
+        ...(command.runStep !== undefined ? { runStep: command.runStep } : {}),
         ...(command.tool === 'replay' ? { replay: {
           action: String(command.params?.action),
           ...(typeof command.params?.name === 'string' ? { name: command.params.name } : {}),
         } } : {}),
-        ...(command.result !== undefined ? { failed: command.result?.isError === true } : {}),
+        ...(() => {
+          const lines = activityOf(command.index);
+          return lines.length ? { activity: countsOf(lines) } : {};
+        })(),
+        ...(command.result !== undefined ? { failed: command.result?.isError === true || command.stepFailed === true } : {}),
         ...(text ? { said: text.split('\n').find(line => line.trim())?.slice(0, 160) } : {}),
       };
     }),
@@ -521,10 +538,22 @@ export function createSequenceDriver(
     historyDetail: (index: number) => {
       const command = commandRecorder.getCommand(index);
       if (!command) return undefined;
+      const activity = activityOf(index).map(({ id, kind, line, failed }) => ({ id, kind, line, ...(failed ? { failed } : {}) }));
       return {
         params: command.params,
         ...(command.result !== undefined ? { result: textOf(command.result) } : {}),
+        ...(activity.length ? { activity } : {}),
+        ...(command.markedAt !== undefined ? { markedAt: command.markedAt } : {}),
+        ...(command.releasedAt !== undefined ? { releasedAt: command.releasedAt } : {}),
+        ...(command.runStep !== undefined ? { runStep: command.runStep } : {}),
       };
+    },
+
+    callLabel: (index: number) => {
+      const command = commandRecorder.getCommand(index);
+      if (!command) return undefined;
+      const step = command.run !== undefined && command.runStep !== undefined ? `step ${command.runStep + 1} of ${command.run} · ` : '';
+      return `${step}${labelFor(command)}`;
     },
 
     tools: catalogue,
@@ -1027,11 +1056,9 @@ export function createSequenceDriver(
       return entries;
     },
 
-    openSiteHidden: async (origin: string) =>
-      ((await readSiteActivity(siteActivityPath(join(dirname(getSequencesRoot(commandRecorder)), 'activity'), origin)))?.hidden ?? []) as Array<Record<string, unknown>>,
+    openSiteHidden: siteReaderOf(commandRecorder).hidden,
 
-    openSiteRules: async (origin: string) =>
-      ((await readSiteActivity(siteActivityPath(join(dirname(getSequencesRoot(commandRecorder)), 'activity'), origin)))?.responses ?? []) as Array<Record<string, unknown>>,
+    openSiteRules: siteReaderOf(commandRecorder).rules,
 
     saveSiteRules: async (origin: string, rules: Array<Record<string, unknown>>, change?: string, hidden: Array<Record<string, unknown>> = []) => {
       const path = siteActivityPath(join(dirname(getSequencesRoot(commandRecorder)), 'activity'), origin);
@@ -1048,28 +1075,7 @@ export function createSequenceDriver(
       return undefined;
     },
 
-    openBoundaryRules: () => {
-      const sequence = openSequence();
-      if (!sequence) return { rules: [], refuseWrites: false, names: {}, off: [], on: [], hiddenOn: [], hiddenOff: [] };
-      const held = sequence as {
-        boundaryRules?: Array<Record<string, unknown>>;
-        boundaryRefuse?: 'writes';
-        boundaryNames?: Record<string, string>;
-        boundaryRulesOff?: string[];
-        boundaryRulesOn?: Array<{ key: string; steps?: number[] }>;
-        boundaryHiddenOn?: string[];
-        boundaryHiddenOff?: string[];
-      };
-      return {
-        rules: held.boundaryRules ?? [],
-        refuseWrites: held.boundaryRefuse === 'writes',
-        names: held.boundaryNames ?? {},
-        off: held.boundaryRulesOff ?? [],
-        on: held.boundaryRulesOn ?? [],
-        hiddenOn: held.boundaryHiddenOn ?? [],
-        hiddenOff: held.boundaryHiddenOff ?? [],
-      };
-    },
+    openBoundaryRules: () => heldRulesOf(openSequence()),
 
     saveExpected: async (index: number, kind: string, expected: ExpectedValue | undefined) => {
       const sequence = openSequence();
@@ -1126,9 +1132,9 @@ export function createSequenceDriver(
         if (mark && !commands[to].expected?.[kind]) commands[to].expected = { ...commands[to].expected, [kind]: mark };
       }
 
-      if (move.origin !== undefined) {
+      if (move.origin !== undefined && Number.isInteger(Number(move.origin))) {
         const key = `${move.origin}|${kind}`;
-        const home = move.origin === 'after' ? gutter : Number(move.origin);
+        const home = Number(move.origin);
         const placements = { ...sequence.boundaryPlacements };
         if (to === home) delete placements[key]; else placements[key] = to;
         if (Object.keys(placements).length) sequence.boundaryPlacements = placements;

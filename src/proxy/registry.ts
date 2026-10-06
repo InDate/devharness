@@ -6,6 +6,7 @@
  * browses, and a browse crosses tabs.
  */
 import { InterceptProxy, type ProxyCursor } from './intercept-proxy.js';
+import { markedNow } from './cause-timeline.js';
 import { attachLayer } from '../hold.js';
 
 const proxies = new Map<string, InterceptProxy>();
@@ -16,6 +17,12 @@ const launchArgs = new Map<string, string[]>();
 
 /** What was last marked, so a proxy started mid-command inherits it. */
 let current: ProxyCursor | undefined;
+/**
+ * The cursor a paused run leaves standing between its steps. A call made in
+ * the pause stamps its own traffic and hands back to it on release, so what
+ * crosses in the pause is the run's pause rather than nobody's.
+ */
+let standing: ProxyCursor | undefined;
 
 /**
  * How one check step went in one pass: the answer, what
@@ -138,6 +145,7 @@ export function onCursorEnd(listener: (ending: ProxyCursor) => void): () => void
 export function markOnProxies(cursor: ProxyCursor | undefined): void {
   if (current) for (const listener of cursorEnds) listener(current);
   current = cursor;
+  markedNow(cursor);
   for (const proxy of distinctProxies()) proxy.mark(cursor);
 }
 
@@ -155,9 +163,9 @@ export function markOnProxies(cursor: ProxyCursor | undefined): void {
  * The cursor stays in place through the wait: marked idle before it, the tail
  * this exists to keep would carry no command and fall out of every step.
  */
-export async function settleProxies(quietMs: number, capMs: number): Promise<void> {
+export async function settleProxies(quietMs: number, capMs: number, from?: number): Promise<void> {
   if (quietMs <= 0 || proxies.size === 0) return;
-  await Promise.all(distinctProxies().map(proxy => proxy.settle(quietMs, capMs)));
+  await Promise.all(distinctProxies().map(proxy => proxy.settle(quietMs, capMs, from)));
 }
 
 /** Runs one boundary at a time; see markNextCommand and releaseCommand. */
@@ -218,8 +226,20 @@ export function releaseCommand(
   return onBoundary(async () => {
     if (reference === undefined) await settleProxies(quietMs, capMs);
     else await proxies.get(reference)?.settle(quietMs, capMs);
-    markOnProxies(undefined);
+    markOnProxies(standing);
     return Date.now();
+  });
+}
+
+/**
+ * Stand a paused run's cursor between its steps, or take it down. Placed on
+ * the boundary queue, so it lands after the release of the step before it.
+ */
+export function standPausedRun(cursor: ProxyCursor | undefined): Promise<void> {
+  return onBoundary(async () => {
+    const was = standing;
+    standing = cursor;
+    if (current === was) markOnProxies(cursor);
   });
 }
 
@@ -233,6 +253,16 @@ export function boundarySettled(): Promise<void> {
  * a command. Read by what records outside the proxy - storage writes - so it
  * carries the same step as the traffic beside it.
  */
+/**
+ * Put a replay step's history entry on the cursor in flight. A run marks its
+ * step before the step's call is recorded, so the entry is known only once the
+ * call is; written onto the same cursor, everything stamped after it joins
+ * that call in history.
+ */
+export function attachEntryToCursor(index: number): void {
+  if (current?.kind === 'replay') current.entry = index;
+}
+
 export function currentCursor(): ProxyCursor | undefined {
   return current;
 }
@@ -268,6 +298,7 @@ export function getProxy(reference: string): InterceptProxy | undefined {
 /** Drop the cursor, so a later proxy starts unstamped. Tests use it. */
 export function forgetCursor(): void {
   current = undefined;
+  markedNow(undefined);
 }
 
 export function listProxies(): string[] {

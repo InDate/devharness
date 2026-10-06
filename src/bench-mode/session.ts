@@ -21,6 +21,7 @@ export interface BenchReport {
   picks: number;
   annotations: number;
   pickerArmed: boolean;
+  /** The person's input in the app is recorded into history; the binding's listener while it is. */
   /** Whether the screen is held. The bench outlives a release: the picker
    *  stays available so the app can be driven up to the moment worth holding. */
   frozen: boolean;

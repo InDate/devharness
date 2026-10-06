@@ -4,6 +4,35 @@ import { readPayload, savePayload } from '../saved-payloads.js';
 import { type BenchSession, type ResponseUse, sessions } from './session.js';
 
 /**
+ * Where a connection's rules are held: the bench session open on it, or, for a
+ * run with no bench open, a holder of the same fields. One holder per
+ * connection, so a run arms, reads and reports its rules through the same
+ * functions whether the bench is open or not.
+ */
+export type RuleHolder = Pick<BenchSession,
+  'boundaryRules' | 'boundaryNames' | 'boundaryPins' | 'site' | 'uses' | 'siteWritten'
+  | 'hiddenKinds' | 'hiddenUses' | 'rulesWritten'> & {
+  /** The sequence a holder with no bench session was armed for. */
+  armedFor?: string;
+};
+
+const standalone = new Map<string, RuleHolder>();
+
+export function holderOf(connection: string): RuleHolder | undefined {
+  return sessions.get(connection) ?? standalone.get(connection);
+}
+
+function isBench(holder: RuleHolder): holder is BenchSession {
+  return 'stepBreakpointsSet' in holder;
+}
+
+/** Reads a site's stored responses and hidden kinds. */
+export interface SiteReader {
+  rules: (origin: string) => Promise<Array<Record<string, unknown>>>;
+  hidden: (origin: string) => Promise<Array<Record<string, unknown>>>;
+}
+
+/**
  * The rules, each carrying the count its pin has served.
  *
  * The count is held on the pin, which is the thing the wire passes through;
@@ -15,7 +44,7 @@ import { type BenchSession, type ResponseUse, sessions } from './session.js';
  * and nothing crosses under it.
  */
 export function rulesOf(connection: string): BoundaryRule[] {
-  const session = sessions.get(connection);
+  const session = holderOf(connection);
   if (!session) return [];
   const proxy = getProxy(connection);
   const served = new Map<string, { hits: number; matchedAs?: 'field' | 'text' }>();
@@ -43,13 +72,14 @@ export function rulesOf(connection: string): BoundaryRule[] {
  * everywhere, `optIn` nowhere. A `local` response answers only in the
  * sequence it belongs to, whatever another says.
  */
-function useOf(session: BenchSession, rule: BoundaryRule): ResponseUse {
+function useOf(session: RuleHolder, rule: BoundaryRule): ResponseUse {
   if (rule.mode === 'local' && rule.owner !== nameOf(session)) return 'none';
   return session.uses?.get(rule.key) ?? (rule.mode === 'optOut' ? 'all' : 'none');
 }
 
 /** The sequence being recorded, or else the one open. */
-function nameOf(session: BenchSession): string | undefined {
+function nameOf(session: RuleHolder): string | undefined {
+  if (!isBench(session)) return session.armedFor;
   return session.recordingSequence ? session.recordingName : session.sequences?.active()?.name;
 }
 
@@ -116,7 +146,7 @@ export function nameTarget(key: string): string {
 export async function savePayloadFor(connection: string, name: string, content: string): Promise<string | undefined> {
   const failure = await savePayload(name, content);
   if (failure) return failure;
-  const session = sessions.get(connection);
+  const session = holderOf(connection);
   const serving = [...(session?.boundaryRules?.values() ?? [])].filter(rule => rule.payload === name);
   for (const rule of serving) setBoundaryRule(connection, rule);
   if (serving.length) await persistRules(connection, false, `payload ${name} changed, served by ${serving.length}`);
@@ -125,7 +155,7 @@ export async function savePayloadFor(connection: string, name: string, content: 
 
 /** Name a kind of traffic, or with an empty name go back to its payload. */
 export function setBoundaryName(connection: string, key: string, name: string): void {
-  const session = sessions.get(connection);
+  const session = holderOf(connection);
   if (!session || !key) return;
   const names = session.boundaryNames ??= new Map();
   if (name.trim()) names.set(key, name.trim());
@@ -141,7 +171,7 @@ export function setBoundaryName(connection: string, key: string, name: string): 
  * `hide` arms nothing: it decides what the list shows, not what crosses.
  */
 export function setBoundaryRule(connection: string, rule: BoundaryRule): BoundaryRule[] {
-  const session = sessions.get(connection);
+  const session = holderOf(connection);
   if (!session) return [];
   const rules = session.boundaryRules ??= new Map();
   const pins = session.boundaryPins ??= new Map();
@@ -213,7 +243,7 @@ export function setBoundaryRule(connection: string, rule: BoundaryRule): Boundar
 }
 
 /** Take one rule out of the armed set, and the pin it armed with it. */
-function dropRule(session: BenchSession, connection: string, key: string): void {
+function dropRule(session: RuleHolder, connection: string, key: string): void {
   const pin = session.boundaryPins?.get(key);
   if (pin) getProxy(connection)?.unpin(pin);
   session.boundaryPins?.delete(key);
@@ -225,7 +255,7 @@ function dropRule(session: BenchSession, connection: string, key: string): void 
  * sequence on the site.
  */
 export function clearBoundaryRule(connection: string, key: string): BoundaryRule[] {
-  const session = sessions.get(connection);
+  const session = holderOf(connection);
   if (!session) return [];
   dropRule(session, connection, key);
   session.uses?.delete(key);
@@ -240,7 +270,7 @@ export function clearBoundaryRule(connection: string, key: string): BoundaryRule
  * differs from the site, which is what the panel lists under a response.
  */
 export function setResponseUse(connection: string, key: string, use: ResponseUse): BoundaryRule[] {
-  const session = sessions.get(connection);
+  const session = holderOf(connection);
   const rule = session?.boundaryRules?.get(key);
   if (!session || !rule) return rulesOf(connection);
   const uses = session.uses ??= new Map();
@@ -255,7 +285,7 @@ export function setResponseUse(connection: string, key: string, use: ResponseUse
  * belongs to the open sequence.
  */
 export function setResponseMode(connection: string, key: string, mode: 'local' | 'optIn' | 'optOut'): BoundaryRule[] {
-  const session = sessions.get(connection);
+  const session = holderOf(connection);
   const rule = session?.boundaryRules?.get(key);
   if (!session || !rule) return rulesOf(connection);
   const use = useOf(session, rule);
@@ -265,14 +295,14 @@ export function setResponseMode(connection: string, key: string, mode: 'local' |
 }
 
 /** Whether the open sequence keeps a hidden kind out of its list: by its type, unless it says otherwise. */
-function hiddenHere(session: BenchSession, kind: HiddenKind): boolean {
+function hiddenHere(session: RuleHolder, kind: HiddenKind): boolean {
   if (kind.mode === 'local') return kind.owner === nameOf(session);
   return session.hiddenUses?.get(kind.key) ?? kind.mode === 'optOut';
 }
 
 /** Every hidden kind, each marked `off` where the open sequence lists it anyway. */
 export function hiddenOf(connection: string): HiddenKind[] {
-  const session = sessions.get(connection);
+  const session = holderOf(connection);
   if (!session) return [];
   return [...(session.hiddenKinds?.values() ?? [])]
     .map(kind => (hiddenHere(session, kind) ? kind : { ...kind, off: true }));
@@ -302,7 +332,7 @@ function hiddenFrom(raw: Record<string, unknown>): HiddenKind | undefined {
  * by this sequence.
  */
 export function hideKind(connection: string, raw: Record<string, unknown>): void {
-  const session = sessions.get(connection);
+  const session = holderOf(connection);
   const kind = hiddenFrom(raw);
   if (!session || !kind) return;
   const kinds = session.hiddenKinds ??= new Map();
@@ -320,14 +350,14 @@ export function hideKind(connection: string, raw: Record<string, unknown>): void
 
 /** Show a kind again everywhere: its hiding leaves the site file. */
 export function unhideKind(connection: string, key: string): void {
-  const session = sessions.get(connection);
+  const session = holderOf(connection);
   session?.hiddenKinds?.delete(key);
   session?.hiddenUses?.delete(key);
 }
 
 /** Hide a kind in the open sequence, or list it there; a choice its type already gives is not recorded. */
 export function setHiddenUse(connection: string, key: string, on: boolean): void {
-  const session = sessions.get(connection);
+  const session = holderOf(connection);
   const kind = session?.hiddenKinds?.get(key);
   if (!session || !kind) return;
   const uses = session.hiddenUses ??= new Map();
@@ -341,7 +371,7 @@ export function setHiddenUse(connection: string, key: string, on: boolean): void
 
 /** Change which sequences a hidden kind is hidden in. Made local, it belongs to the open sequence. */
 export function setHiddenMode(connection: string, key: string, mode: HiddenKind['mode']): void {
-  const session = sessions.get(connection);
+  const session = holderOf(connection);
   const kind = session?.hiddenKinds?.get(key);
   if (!session || !kind) return;
   const here = hiddenHere(session, kind);
@@ -351,7 +381,7 @@ export function setHiddenMode(connection: string, key: string, mode: HiddenKind[
   if (mode !== 'local') setHiddenUse(connection, key, here);
 }
 
-export function kinds(session: BenchSession): Map<string, HiddenKind> {
+export function kinds(session: RuleHolder): Map<string, HiddenKind> {
   return session.hiddenKinds ??= new Map();
 }
 
@@ -425,8 +455,46 @@ export async function persistRules(connection: string, force = false, change?: s
 export async function armSavedRules(connection: string): Promise<void> {
   const session = sessions.get(connection);
   if (!session?.sequences) return;
+  await armHeldRules(connection, session.sequences.openBoundaryRules(),
+    session.sequences.siteOf() ?? originOf(session.page.url()));
+}
 
-  const held = session.sequences.openBoundaryRules();
+/** What a sequence holds about its traffic: its own old responses, the refuse setting, its names, and its uses of the site's rules. */
+export interface HeldRules {
+  rules: Array<Record<string, unknown>>;
+  refuseWrites: boolean;
+  names?: Record<string, string>;
+  off?: string[];
+  on?: Array<{ key: string; steps?: number[] }>;
+  hiddenOn?: string[];
+  hiddenOff?: string[];
+}
+
+/** The rules a loaded sequence carries, as opening it reads them. */
+export function heldRulesOf(sequence: object | undefined): HeldRules {
+  const held = (sequence ?? {}) as {
+    boundaryRules?: Array<Record<string, unknown>>;
+    boundaryRefuse?: 'writes';
+    boundaryNames?: Record<string, string>;
+    boundaryRulesOff?: string[];
+    boundaryRulesOn?: Array<{ key: string; steps?: number[] }>;
+    boundaryHiddenOn?: string[];
+    boundaryHiddenOff?: string[];
+  };
+  return {
+    rules: held.boundaryRules ?? [],
+    refuseWrites: held.boundaryRefuse === 'writes',
+    names: held.boundaryNames ?? {},
+    off: held.boundaryRulesOff ?? [],
+    on: held.boundaryRulesOn ?? [],
+    hiddenOn: held.boundaryHiddenOn ?? [],
+    hiddenOff: held.boundaryHiddenOff ?? [],
+  };
+}
+
+async function armHeldRules(connection: string, held: HeldRules, site: string | undefined, reader?: SiteReader): Promise<void> {
+  const session = holderOf(connection);
+  if (!session) return;
   session.boundaryNames = new Map(Object.entries(held.names ?? {}));
   session.rulesWritten = held.rules.length > 0 || held.refuseWrites
     || session.boundaryNames.size > 0 || (held.off?.length ?? 0) > 0 || (held.on?.length ?? 0) > 0;
@@ -439,7 +507,7 @@ export async function armSavedRules(connection: string): Promise<void> {
     ...(held.hiddenOn ?? []).map(key => [key, true] as const),
     ...(held.hiddenOff ?? []).map(key => [key, false] as const),
   ]);
-  await armSiteRules(connection, session.sequences.siteOf() ?? originOf(session.page.url()), uses, hiddenUses);
+  await armSiteRules(connection, site, uses, hiddenUses, reader);
   // A response kept on the sequence before responses moved to the site file:
   // moved there, used by this sequence where it answered before.
   for (const raw of held.rules) {
@@ -454,7 +522,31 @@ export async function armSavedRules(connection: string): Promise<void> {
   }
   // Old hides moved out of the responses are written back at once, so the
   // site file stops holding a hide where an answer belongs.
-  if (session.siteWritten === 'moved') await persistRules(connection, false, 'hidden kinds moved to their own list');
+  if (isBench(session) && session.siteWritten === 'moved') await persistRules(connection, false, 'hidden kinds moved to their own list');
+}
+
+/**
+ * Arm a sequence's rules for a run of it on `connection`, as opening it in
+ * the bench arms them, and answer what puts the connection back afterwards.
+ *
+ * A bench already open on the sequence holds them armed, and nothing changes.
+ * A bench open on another sequence is re-armed for its own once the run ends;
+ * with no bench open, the run's holder is dropped and its pins with it.
+ */
+export async function armForRun(
+  connection: string, sequence: object & { name: string }, site: string | undefined, reader: SiteReader,
+): Promise<() => Promise<void>> {
+  const bench = sessions.get(connection);
+  if (bench && nameOf(bench) === sequence.name) return async () => {};
+  if (!bench) standalone.set(connection, { armedFor: sequence.name });
+  await armHeldRules(connection, heldRulesOf(sequence), site, reader);
+  return async () => {
+    const holder = holderOf(connection);
+    for (const key of [...(holder?.boundaryRules?.keys() ?? [])]) if (holder) dropRule(holder, connection, key);
+    getProxy(connection)?.refuseUnmatchedWrites(false);
+    if (sessions.get(connection)) await armSavedRules(connection);
+    else standalone.delete(connection);
+  };
 }
 
 /**
@@ -466,17 +558,19 @@ export async function armSavedRules(connection: string): Promise<void> {
  */
 export async function armSiteRules(
   connection: string, site: string | undefined, uses: Map<string, ResponseUse>,
-  hiddenUses: Map<string, boolean> = new Map(),
+  hiddenUses: Map<string, boolean> = new Map(), reader?: SiteReader,
 ): Promise<void> {
-  const session = sessions.get(connection);
-  if (!session?.sequences) return;
+  const session = holderOf(connection);
+  const bench = session && isBench(session) ? session.sequences : undefined;
+  const read = reader ?? (bench ? { rules: bench.openSiteRules, hidden: bench.openSiteHidden } : undefined);
+  if (!session || !read) return;
   for (const key of [...(session.boundaryRules?.keys() ?? [])]) dropRule(session, connection, key);
   session.site = site;
   session.uses = uses;
   session.hiddenUses = hiddenUses;
   session.hiddenKinds = new Map();
-  const raws = site ? await session.sequences.openSiteRules(site).catch(() => []) : [];
-  const hidden = site ? await session.sequences.openSiteHidden(site).catch(() => []) : [];
+  const raws = site ? await read.rules(site).catch(() => []) : [];
+  const hidden = site ? await read.hidden(site).catch(() => []) : [];
   for (const raw of hidden) {
     const kind = hiddenFrom(raw);
     if (kind) session.hiddenKinds.set(kind.key, kind);
@@ -507,4 +601,19 @@ export function originOf(url: string | undefined): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/** What puts a connection back after a paused run, by the run's id, until the run ends. */
+const armedRuns = new Map<string, () => Promise<void>>();
+
+/** Keep a paused run's rules armed until `releaseArmedRun` names it. */
+export function keepArmedForRun(runId: string, release: () => Promise<void>): void {
+  armedRuns.set(runId, release);
+}
+
+export async function releaseArmedRun(runId: string | undefined): Promise<void> {
+  if (runId === undefined) return;
+  const release = armedRuns.get(runId);
+  armedRuns.delete(runId);
+  await release?.().catch(() => {});
 }

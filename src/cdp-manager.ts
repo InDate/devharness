@@ -110,6 +110,8 @@ export class CDPManager {
   private pauseResolvers: Array<() => void> = [];
   /** Callers of resume() waiting for Chrome's Debugger.resumed event. */
   private resumeWaiters: Array<() => void> = [];
+  /** A pause asked for while no JS ran: it fires on the next statement the page runs. */
+  private pauseArmed = false;
   private scriptWaitResolvers: Array<{ pattern: string | RegExp; resolve: (url: string) => void }> = [];
   private sourceMapHandler: SourceMapHandler | null = null;
   private logpointLimitExceeded: {
@@ -304,6 +306,7 @@ export class CDPManager {
       Debugger.paused((params: any) => {
         debugLog('cdp-manager', `Debugger.paused event received, resolvers count: ${this.pauseResolvers.length}`);
         this.state.paused = true;
+        this.pauseArmed = false;
         this.state.currentCallFrames = params.callFrames;
 
         // Resolve all pending pause promises
@@ -714,7 +717,25 @@ export class CDPManager {
     }
 
     const { Debugger } = this.client;
+    if (!this.state.paused) this.pauseArmed = true;
     await Debugger.pause();
+  }
+
+  /**
+   * Drop a pause that was asked for and never fired. Chrome has no command that
+   * cancels it, and Debugger.resume refuses a page that is not paused, so the
+   * armed pause would stop the next callback the page runs - long after the
+   * hold that asked for it was released. One statement is run to fire it on,
+   * and the page is resumed from there.
+   */
+  async disarmPause(): Promise<void> {
+    if (!this.pauseArmed || this.state.paused || !this.state.connected) return;
+    this.pauseArmed = false;
+    const { Runtime } = this.client;
+    const ran = Runtime.evaluate({ expression: '0' }).catch(() => {});
+    await this.waitForPause(1000).catch(() => {});
+    if (this.state.paused) await this.resume();
+    await ran;
   }
 
   /**

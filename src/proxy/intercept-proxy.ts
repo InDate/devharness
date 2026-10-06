@@ -11,6 +11,8 @@
  * for. A half-right proxy corrupts responses in ways that are miserable to
  * find; a byte pipe cannot.
  */
+import { classOf, structuredText } from './payload-class.js';
+import { causeAt, onCauseAdded, type CauseWindow } from './cause-timeline.js';
 import { createServer as createHttpServer, request as httpRequest, type IncomingMessage, type ServerResponse } from 'http';
 import { createServer as createHttpsServer } from 'https';
 import { request as httpsRequest } from 'https';
@@ -84,6 +86,10 @@ export interface ProxyEvent {
   /** Response body bytes for a request, payload bytes for a frame. */
   size: number;
   contentType?: string;
+  /** What the response body is (`src/proxy/payload-class.ts`), which decides what of it is compared. */
+  payloadClass?: 'structured' | 'document' | 'binary';
+  /** What a write request sent, as JSON text, where it was a structured body. */
+  sent?: string;
   /** Request issued to response complete. Absent for a frame, which is a point. */
   durationMs?: number;
   /**
@@ -104,7 +110,9 @@ export interface ProxyEvent {
   /** First characters of the payload, for a list. The whole body is kept
    *  separately and only up to BODY_CAP. */
   preview?: string;
-  answeredAs?: 'replaced' | 'dropped' | 'refused';
+  answeredAs?: 'replaced' | 'dropped' | 'refused' | 'outOfScope';
+  /** The pin that answered it, by id: which rule replaced or dropped it. */
+  answeredBy?: string;
   /**
    * The history command in flight when this crossed, while a person drives.
    *
@@ -135,6 +143,13 @@ export interface ProxyEvent {
    * run, and its traffic was counted as the parent's first step.
    */
   within?: number[];
+  /** The history entry of the replay step this crossed under, which joins a run's traffic to that step's call. */
+  entry?: number;
+  /**
+   * Crossed while the run stood paused before `step`: no step's window was
+   * open, so it counts against no step, and the run lists it apart.
+   */
+  paused?: true;
   /**
    * How much the stamp above claims about cause.
    *
@@ -400,6 +415,25 @@ function shapeOfJson(text: string): string | undefined {
  * Bucketing on arrival alone puts an answer in whichever step it landed
  * under, which is the timing sensitivity the stamps exist to remove.
  */
+/** Write a cause onto an event, in the fields its kind is carried in. */
+function stampWith(event: ProxyEvent, cursor: ProxyCursor): void {
+  if (cursor.kind === 'command') { event.commandIndex = cursor.index; return; }
+  event.runId = cursor.runId;
+  event.step = cursor.step;
+  if (cursor.within) event.within = cursor.within;
+  if (cursor.entry !== undefined) event.entry = cursor.entry;
+  if (cursor.paused) event.paused = true;
+}
+
+/** Called with each event as the proxy stores it, stamped: how an index follows what crosses without scanning. */
+export const stampedEvents = new Set<(event: ProxyEvent) => void>();
+
+/** The history entry a stamped event belongs to: its command, or the replay step's own call. */
+export function entryOf(event: ProxyEvent): number | undefined {
+  const owner = causeOf(event);
+  return owner?.kind === 'command' ? owner.index : owner?.kind === 'replay' ? owner.entry : undefined;
+}
+
 export function causeOf(event: ProxyEvent): ProxyCursor | undefined {
   const paired = event.evidence?.pairing?.sentUnder;
   if (paired) return paired;
@@ -417,7 +451,7 @@ export function causeOf(event: ProxyEvent): ProxyCursor | undefined {
   // `background` is the control for a push whose count moves with pacing.
   if (event.evidence?.initiator === 'timer') return undefined;
   if (event.runId !== undefined) {
-    return { kind: 'replay', runId: event.runId, step: event.step ?? 0, ...(event.within ? { within: event.within } : {}) };
+    return { kind: 'replay', runId: event.runId, step: event.step ?? 0, ...(event.within ? { within: event.within } : {}), ...(event.entry !== undefined ? { entry: event.entry } : {}), ...(event.paused ? { paused: true as const } : {}) };
   }
   if (event.commandIndex !== undefined) return { kind: 'command', index: event.commandIndex };
   return undefined;
@@ -597,7 +631,7 @@ function shapeKey(event: ProxyEvent): string {
 /** What a later event carries: one live command, or one step of one replay. */
 export type ProxyCursor =
   | { kind: 'command'; index: number }
-  | { kind: 'replay'; runId: string; step: number; within?: number[] };
+  | { kind: 'replay'; runId: string; step: number; within?: number[]; entry?: number; paused?: true };
 
 /**
  * Hosts the browser talks to on its own account, refused outright.
@@ -687,6 +721,16 @@ function sendableCloseCode(code: number): number {
 const MAX_ALLOWANCES = 64;
 /** How far apart a request and the page's report of it may start and still be one. */
 const JOIN_WINDOW_MS = 4000;
+
+/** `https://fonts.example:443/x` → `fonts.example:443`, the host a CONNECT names; nothing for no URL. */
+function originOfUrl(url: string): string | undefined {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.hostname.toLowerCase()}:${parsed.port || (parsed.protocol === 'https:' || parsed.protocol === 'wss:' ? '443' : '80')}`;
+  } catch {
+    return undefined;
+  }
+}
 /** Events scanned back for a request a late report belongs to. */
 const JOIN_SCAN = 200;
 /** The blank line an event-stream message ends with, in any of the protocol's line endings. */
@@ -938,6 +982,8 @@ export class InterceptProxy {
   private blockedCount = 0;
   private refusedHosts = new Map<string, number>();
   private refuseWrites = false;
+  /** Refusals by the host scope awaiting the page's report of the request. */
+  private outOfScopeHeld: Array<{ origin: string; at: number; cursor: ProxyCursor | undefined }> = [];
   private refusedWriteCount = 0;
   private frameHandlers = new Set<(frame: SocketFrame) => void>();
   private pinSeq = 0;
@@ -1062,6 +1108,10 @@ export class InterceptProxy {
       return !allowed;
     }
 
+    return this.onServiceList(name, path);
+  }
+
+  private onServiceList(name: string, path?: string): boolean {
     return this.blockedHosts.some(blocked => {
       const cut = blocked.indexOf('/');
       if (cut < 0) return name === blocked || name.endsWith(`.${blocked}`);
@@ -1074,6 +1124,38 @@ export class InterceptProxy {
   private noteRefusal(host: string): void {
     this.blockedCount += 1;
     this.refusedHosts.set(host, (this.refusedHosts.get(host) ?? 0) + 1);
+  }
+
+  /**
+   * A request the host scope refused, recorded as a crossing once the page is
+   * known to have made it.
+   *
+   * The browser reaches its own services through the same proxy, and outside
+   * a scope they are refused alike; a request the page made is the one its
+   * CDP session reports. So a refusal is held until a report for its origin
+   * arrives within the join window, or taken at once where the report came
+   * first, and one no report claims stays out of the record.
+   */
+  private recordOutOfScope(url: string, method: string, at: number, cursor: ProxyCursor | undefined): void {
+    if (this.allowedHosts.length === 0) return;
+    const origin = originOfUrl(url);
+    if (!origin) return;
+    const reported = this.reportedInitiators.find(held =>
+      originOfUrl(held.key.slice(held.key.indexOf(' ') + 1)) === origin && Math.abs(held.at - at) <= JOIN_WINDOW_MS);
+    if (reported) {
+      const space = reported.key.indexOf(' ');
+      this.writeOutOfScope(reported.key.slice(space + 1), reported.key.slice(0, space), at, cursor);
+      return;
+    }
+    this.outOfScopeHeld = this.outOfScopeHeld.filter(held => at - held.at <= JOIN_WINDOW_MS);
+    this.outOfScopeHeld.push({ origin, at, cursor });
+  }
+
+  private writeOutOfScope(url: string, method: string, at: number, cursor: ProxyCursor | undefined): void {
+    this.record({
+      at: Date.now(), kind: 'request', direction: 'out', url, method,
+      size: 0, durationMs: 0, startedAt: at, answeredAs: 'outOfScope',
+    }, undefined, cursor);
   }
 
   /**
@@ -1111,6 +1193,13 @@ export class InterceptProxy {
     method: string, url: string, root: InitiatorRoot, at: number, document?: string
   ): void {
     const key = `${method.toUpperCase()} ${url}`;
+    const origin = originOfUrl(url);
+    const refused = this.outOfScopeHeld.findIndex(held => held.origin === origin && Math.abs(held.at - at) <= JOIN_WINDOW_MS);
+    if (refused >= 0) {
+      const [held] = this.outOfScopeHeld.splice(refused, 1);
+      this.writeOutOfScope(url, method.toUpperCase(), held.at, held.cursor);
+      return;
+    }
     for (let i = this.events.length - 1; i >= 0 && i > this.events.length - JOIN_SCAN; i--) {
       const event = this.events[i];
       if (event.kind !== 'request') continue;
@@ -1159,6 +1248,8 @@ export class InterceptProxy {
         event.runId = marked.cursor.runId;
         event.step = marked.cursor.step;
         if (marked.cursor.within) event.within = marked.cursor.within;
+        if (marked.cursor.entry !== undefined) event.entry = marked.cursor.entry;
+        if (marked.cursor.paused) event.paused = true;
       }
       return;
     }
@@ -1173,6 +1264,7 @@ export class InterceptProxy {
         event.runId = carrier.runId;
         event.step = carrier.step;
         if (carrier.within) event.within = carrier.within;
+        if (carrier.entry !== undefined) event.entry = carrier.entry;
       }
       return;
     }
@@ -1300,11 +1392,32 @@ export class InterceptProxy {
     return { ...this.rules };
   }
 
-  /** What crossed under one live command, oldest first. */
+  /**
+   * Stamp a late cause onto what crossed unowned inside its window. A
+   * person's input reaches the server after the request it caused reached
+   * this proxy; the timeline adds it with the window its own time bounds.
+   */
+  private restamp(window: CauseWindow): void {
+    for (const event of this.events) {
+      const began = event.startedAt ?? event.at;
+      if (began < window.from || (window.to !== undefined && began >= window.to)) continue;
+      if (causeOf(event) !== undefined || event.evidence?.initiator === 'timer') continue;
+      stampWith(event, window.cursor);
+      for (const listener of stampedEvents) listener(event);
+    }
+  }
+
+  private readonly causesAdded = onCauseAdded(window => this.restamp(window));
+
+  /**
+   * What crossed under one History entry, oldest first: a live command's own
+   * stamp, or a run's step whose cursor carries the entry it was recorded at.
+   */
   eventsForCommand(index: number): ProxyEvent[] {
     return this.events.filter(e => {
       const owner = causeOf(e);
-      return owner?.kind === 'command' && owner.index === index;
+      return (owner?.kind === 'command' && owner.index === index)
+        || (owner?.kind === 'replay' && owner.entry === index);
     });
   }
 
@@ -1338,11 +1451,17 @@ export class InterceptProxy {
    * goes quiet and the cap ends the wait instead. The boundary is then as wide
    * as the cap rather than as tight as the app allows.
    */
-  async settle(quietMs: number, capMs: number): Promise<void> {
+  /**
+   * Wait until nothing has crossed for `quietMs`, at most `capMs`. Quiet is
+   * counted from `from` where that is later than the last crossing: a page
+   * resumed after a long stop has crossed nothing for longer than any quiet,
+   * and counted from the last crossing the wait ends before it sends anything.
+   */
+  async settle(quietMs: number, capMs: number, from = 0): Promise<void> {
     if (quietMs <= 0) return;
     const deadline = Date.now() + capMs;
     while (Date.now() < deadline) {
-      const quietFor = Date.now() - this.lastEventAt;
+      const quietFor = Date.now() - Math.max(this.lastEventAt, from);
       if (quietFor >= quietMs) return;
       const wait = Math.min(quietMs - quietFor, deadline - Date.now());
       await new Promise(resolve => setTimeout(resolve, Math.max(wait, 10)));
@@ -1396,10 +1515,17 @@ export class InterceptProxy {
       id: `ev-${++this.eventSeq}`,
       ...event,
       ...(cursor?.kind === 'command' && { commandIndex: cursor.index }),
-      ...(cursor?.kind === 'replay' && { runId: cursor.runId, step: cursor.step, ...(cursor.within ? { within: cursor.within } : {}) }),
+      ...(cursor?.kind === 'replay' && { runId: cursor.runId, step: cursor.step, ...(cursor.within ? { within: cursor.within } : {}), ...(cursor.entry !== undefined ? { entry: cursor.entry } : {}), ...(cursor.paused ? { paused: true as const } : {}) }),
     };
     this.attributeFromPage(stored);
+    // Nothing in flight when it began, and nothing the page reported: the
+    // timeline answers, which holds a cause added after the fact.
+    if (causeOf(stored) === undefined && stored.evidence?.initiator !== 'timer') {
+      const late = causeAt(stored.startedAt ?? stored.at);
+      if (late) stampWith(stored, late);
+    }
     this.events.push(stored);
+    for (const listener of stampedEvents) listener(stored);
     if (body !== undefined) this.bodies.set(stored.id, body);
     if (this.events.length > MAX_EVENTS) {
       for (const gone of this.events.splice(0, this.events.length - MAX_EVENTS)) {
@@ -1628,6 +1754,7 @@ export class InterceptProxy {
       // the network being away and backs off, where an empty success can send
       // it round again.
       this.noteRefusal(host);
+      this.recordOutOfScope(url, req.method ?? 'GET', requestedAt, issuedUnder);
       res.destroy();
       return;
     }
@@ -1646,7 +1773,8 @@ export class InterceptProxy {
         size: Buffer.byteLength(pin.body), preview: pin.body.slice(0, PREVIEW_CHARS),
         durationMs: 0, startedAt: requestedAt,
         ...(pin.headers['content-type'] ? { contentType: pin.headers['content-type'].split(';')[0] } : {}),
-        answeredAs: 'replaced',
+        payloadClass: classOf(pin.headers['content-type'], Buffer.from(pin.body)),
+        answeredAs: 'replaced', answeredBy: pin.id,
       }, pin.body, issuedUnder);
       return;
     }
@@ -1683,6 +1811,24 @@ export class InterceptProxy {
     let target: URL;
     try { target = new URL(url); } catch { res.writeHead(400).end('bad request line'); return; }
 
+    // What a write sends is tapped as the response is: the bytes pipe through
+    // untouched and a copy up to the cap is kept, compared field by field where
+    // it is structured. A read sends nothing worth comparing.
+    const sentHead: Buffer[] = [];
+    let sentLength = 0;
+    if (!SAFE_METHODS.has(method)) {
+      req.on('data', (chunk: Buffer) => {
+        if (sentLength < BODY_CAP) sentHead.push(chunk.subarray(0, BODY_CAP - sentLength));
+        sentLength += chunk.length;
+      });
+    }
+    const sentType = typeof req.headers['content-type'] === 'string' ? req.headers['content-type'] : undefined;
+    const sentText = (): string | undefined => {
+      if (!sentLength) return undefined;
+      const bytes = Buffer.concat(sentHead);
+      return classOf(sentType, bytes) === 'structured' ? structuredText(sentType, bytes) : undefined;
+    };
+
     const send = secure ? httpsRequest : httpRequest;
     const upstream = send({
       protocol: target.protocol,
@@ -1713,6 +1859,8 @@ export class InterceptProxy {
       // later without the proxy having to parse anything now.
       let kept = '';
       let size = 0;
+      const head: Buffer[] = [];
+      let headLength = 0;
 
       // A stream's response never ends while it is doing its job. Recorded at
       // the headers rather than at the end, so an event source or a long poll
@@ -1761,7 +1909,7 @@ export class InterceptProxy {
               size: Buffer.byteLength(data),
               evidence: { shape: payloadShape(data, false, Buffer.byteLength(data)) },
               preview: data.slice(0, PREVIEW_CHARS),
-              ...(answer ? { answeredAs: answer.replaceWith === undefined ? 'dropped' as const : 'replaced' as const } : {}),
+              ...(answer ? { answeredAs: answer.replaceWith === undefined ? 'dropped' as const : 'replaced' as const, answeredBy: answer.id } : {}),
             }, data);
           }
           if (!answer) {
@@ -1786,7 +1934,11 @@ export class InterceptProxy {
 
       answer.on('data', (chunk: Buffer) => {
         size += chunk.length;
-        if (kept.length < BODY_CAP) kept += chunk.toString('utf8', 0, BODY_CAP - kept.length);
+        if (opened && kept.length < BODY_CAP) kept += chunk.toString('utf8', 0, BODY_CAP - kept.length);
+        if (headLength < BODY_CAP) {
+          head.push(chunk.subarray(0, BODY_CAP - headLength));
+          headLength += Math.min(chunk.length, BODY_CAP - headLength);
+        }
         if (opened) {
           opened.size = size;
           opened.durationMs = Date.now() - startedAt;
@@ -1798,16 +1950,31 @@ export class InterceptProxy {
           }
         }
       });
+      answer.on('close', () => { if (opened) opened.open = undefined; });
       answer.on('end', () => {
         if (events) {
           const tail = pending;
           if (quiet || !this.queue.offer({ kind: 'response', url, preview: 'stream end', deliver: () => res.end(tail) })) res.end(tail);
         }
+        // A binary body is never decoded: kept as text it was mangled, and
+        // compared whole it differed on bytes nobody reads. An event stream's
+        // messages are recorded as frames, and its body stays as it was.
+        const bytes = Buffer.concat(head);
+        const payloadClass = events ? undefined : classOf(contentType, bytes);
+        const text = payloadClass === 'binary' ? undefined : bytes.toString('utf8');
+        const sent = sentText();
         if (opened) {
           opened.size = size;
           opened.durationMs = Date.now() - startedAt;
-          opened.preview = kept.slice(0, PREVIEW_CHARS);
           opened.open = undefined;
+          if (payloadClass) opened.payloadClass = payloadClass;
+          if (sent !== undefined) opened.sent = sent;
+          if (payloadClass === 'binary') {
+            opened.preview = undefined;
+            this.bodies.delete(opened.id);
+            return;
+          }
+          opened.preview = kept.slice(0, PREVIEW_CHARS);
           this.bodies.set(opened.id, kept);
           return;
         }
@@ -1815,14 +1982,20 @@ export class InterceptProxy {
           at: Date.now(), kind: 'request', direction: 'out', url,
           method: req.method ?? 'GET', status: answer.statusCode ?? 0,
           evidence: { protocolPaired: true },
-          size, preview: kept.slice(0, PREVIEW_CHARS),
+          size, ...(text !== undefined ? { preview: text.slice(0, PREVIEW_CHARS) } : {}),
           durationMs: Date.now() - startedAt, startedAt: requestedAt,
-          ...(contentType ? { contentType } : {}),
-        }, kept, issuedUnder);
+          ...(contentType ? { contentType } : {}), payloadClass,
+          ...(sent !== undefined ? { sent } : {}),
+        }, text, issuedUnder);
       });
       if (!events) answer.pipe(res);
     };
     upstream.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end(); });
+    // The page hanging up on a response still arriving ends the exchange.
+    // Left open, a closed event stream kept its upstream connection, and every
+    // message the server went on sending was recorded against a stream the
+    // page no longer had.
+    res.on('close', () => { if (!res.writableEnded) upstream.destroy(); });
     req.pipe(upstream);
   }
 
@@ -2005,7 +2178,7 @@ export class InterceptProxy {
             at: Date.now(), kind: 'frame', direction: direction === 'sent' ? 'out' : 'in',
             url, binary, size: buf.length, evidence,
             ...(text !== undefined ? { preview: text.slice(0, PREVIEW_CHARS) } : {}),
-            ...(answeredAs ? { answeredAs } : {}),
+            ...(answeredAs ? { answeredAs, answeredBy: answer!.id } : {}),
           }, text);
           // Held so a report arriving after this frame reaches the frame it
           // names rather than whichever one shares its length.
@@ -2088,6 +2261,7 @@ export class InterceptProxy {
       socket.on('error', () => socket.destroy());
       if (this.isBrowserService(req.url ?? '')) {
         this.noteRefusal(req.url ?? '(unknown)');
+        this.recordOutOfScope(`https://${req.url ?? '(unknown)'}/`, 'CONNECT', Date.now(), this.cursor);
         socket.destroy();
         return;
       }
@@ -2151,6 +2325,7 @@ export class InterceptProxy {
   }
 
   async stop(): Promise<void> {
+    this.causesAdded();
     this.upgrades.close();
     await new Promise<void>((resolve) => this.front.close(() => resolve()));
   }

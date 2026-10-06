@@ -67,7 +67,7 @@ export function createReplayTools(
           case 'step':
             return handleStep(args, commandRecorder, executeToolCall, abortSignal);
           case 'finish':
-            return handleFinish(commandRecorder, executeToolCall);
+            return handleFinish(args, commandRecorder, executeToolCall);
           case 'insert':
             return handleInsert(args, commandRecorder);
           case 'addCheck':

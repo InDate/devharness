@@ -112,6 +112,15 @@ export function splitActivity<T extends WithActivity>(sequence: T): { actions: T
 }
 
 /**
+ * Placements keyed by the step a kind crossed at. A key from before a run had
+ * a finish line names `after`, where traffic past the last step was listed;
+ * none crosses there now, so the key moves nothing and is dropped.
+ */
+function stepPlacements(placements: Record<string, number>): Record<string, number> {
+  return Object.fromEntries(Object.entries(placements).filter(([key]) => Number.isInteger(Number(key.slice(0, key.indexOf('|'))))));
+}
+
+/**
  * The sequence with its activity folded back in.
  *
  * An activity file written for another sequence - a sequence replaced by a
@@ -134,7 +143,7 @@ export function mergeActivity<T extends WithActivity>(sequence: T, activity: Seq
     ...(activity.responses && !sequence.boundaryRules ? { boundaryRules: activity.responses } : {}),
     ...(activity.refuseWrites && !sequence.boundaryRefuse ? { boundaryRefuse: 'writes' as const } : {}),
     ...(activity.names && !sequence.boundaryNames ? { boundaryNames: activity.names } : {}),
-    ...(activity.placements && !sequence.boundaryPlacements ? { boundaryPlacements: activity.placements } : {}),
+    ...(activity.placements && !sequence.boundaryPlacements ? { boundaryPlacements: stepPlacements(activity.placements) } : {}),
     ...(activity.responsesOff && !sequence.boundaryRulesOff ? { boundaryRulesOff: activity.responsesOff } : {}),
     ...(activity.responsesOn && !sequence.boundaryRulesOn ? { boundaryRulesOn: activity.responsesOn } : {}),
     ...(activity.hiddenOn && !sequence.boundaryHiddenOn ? { boundaryHiddenOn: activity.hiddenOn } : {}),
@@ -252,7 +261,7 @@ export function renumberSteps<T extends WithActivity & { commands?: Array<{ tool
       const bar = key.indexOf('|');
       const stamped = key.slice(0, bar);
       const kind = key.slice(bar + 1);
-      const from = stamped === 'after' ? stamped : map(Number(stamped));
+      const from = map(Number(stamped));
       const to = map(listed);
       if (from === undefined || to === undefined) continue;
       placed[`${from}|${kind}`] = to;

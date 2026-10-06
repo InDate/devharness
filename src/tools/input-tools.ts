@@ -206,6 +206,30 @@ function macEditingCommand(modifiers: string[], key: string): string | undefined
   return MAC_EDITING_COMMANDS[[...held, named].join('+')];
 }
 
+/** Press a chord such as `Meta+a`, with the editing command it carries on macOS. */
+async function pressChord(page: any, combo: string): Promise<void> {
+  const { modifiers, key } = splitKeyCombo(combo);
+  const command = macEditingCommand(modifiers, key);
+  for (const modifier of modifiers) await page.keyboard.down(modifier as any);
+  try {
+    await page.keyboard.press(key as any, command ? { commands: [command] } : undefined);
+  } finally {
+    for (const modifier of [...modifiers].reverse()) await page.keyboard.up(modifier as any);
+  }
+}
+
+const SELECT_ALL = process.platform === 'darwin' ? 'Meta+a' : 'Control+a';
+const TO_END = process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End';
+
+/** What a field holds: an input's value, or an editable element's text. */
+function fieldText(page: any, selector: string): Promise<string> {
+  return page.$eval(selector, (el: unknown) => {
+    const element = el as { value?: string; innerText?: string; textContent?: string | null };
+    if ('value' in element && element.value !== undefined) return element.value;
+    return (element.innerText ?? element.textContent ?? '').trim();
+  });
+}
+
 /** The focused element, followed down through open shadow roots; null when only the body holds focus. */
 async function readFocusedField(page: any): Promise<{ tag: string; value: string } | null> {
   return page.evaluate(() => {
@@ -845,26 +869,31 @@ export function createInputTools(
 
                   // Clear existing text first (unless append mode)
                   await checkAborted(); // last exit before keystrokes go on the wire
-                  if (!append) {
-                    await withReplayBypass(page, async () => {
-                      await clickSelector(page, selector, { clickCount: 3 });
+                  // Every step is a key the page receives, so an editor that keeps
+                  // its own model sees the selection, the deletion and the text.
+                  // Setting the value directly reaches the DOM and leaves that
+                  // model holding the old text, and focusing by script puts the
+                  // caret wherever the field last had it.
+                  await withReplayBypass(page, async () => {
+                    await clickSelector(page, selector);
+                    if (!append) {
+                      // The whole field, where a triple click reaches one paragraph.
+                      await pressChord(page, SELECT_ALL);
                       await page.keyboard.press('Backspace');
-                    });
-                    // Abortable between clear and retype: the clear that went
-                    // out stays out, but the new text is not dispatched.
-                    await checkAborted();
-                  }
-                  // Type new text - use wrapper to bypass replay blocker overlay
-                  await withReplayBypass(page, () => page.type(selector, text, { delay }));
-
-                  // Get the actual value after typing
-                  const currentValue = await page.$eval(selector, (el: unknown) => {
-                    const element = el as { value?: string; textContent?: string | null };
-                    if ('value' in element && element.value !== undefined) {
-                      return element.value;
+                    } else {
+                      await pressChord(page, TO_END);
                     }
-                    return element.textContent || '';
                   });
+                  // Abortable between clear and retype: the clear that went out
+                  // stays out, but the new text is not dispatched.
+                  await checkAborted();
+                  if (!append) {
+                    const left = await fieldText(page, selector);
+                    if (left !== '') return { selector, uncleared: left, fingerprint };
+                  }
+                  await withReplayBypass(page, () => page.keyboard.type(text, { delay }));
+
+                  const currentValue = await fieldText(page, selector);
 
                   return { selector, text, currentValue, fingerprint };
                 },
@@ -895,6 +924,9 @@ export function createInputTools(
 
               if (result.result?.refused) {
                 return elementMismatch('type', `\`${rawSelector}\``, result.result.refused, result.result.fingerprint);
+              }
+              if (result.result?.uncleared !== undefined) {
+                return createErrorResponse('TYPE_NOT_CLEARED', { selector: rawSelector, left: result.result.uncleared });
               }
 
               // A failed dispatch, an absent element or a blocking modal
@@ -960,14 +992,7 @@ export function createInputTools(
                 executeWithPauseDetection(
                   targetCdpManager,
                   async () => {
-                    const { modifiers, key: pressed } = splitKeyCombo(key);
-                    const command = macEditingCommand(modifiers, pressed);
-                    for (const modifier of modifiers) await page.keyboard.down(modifier as any);
-                    try {
-                      await page.keyboard.press(pressed as any, command ? { commands: [command] } : undefined);
-                    } finally {
-                      for (const modifier of [...modifiers].reverse()) await page.keyboard.up(modifier as any);
-                    }
+                    await pressChord(page, key);
                     return true;
                   },
                   'pressKey'

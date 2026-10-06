@@ -16,11 +16,14 @@
 
 import { AsyncLocalStorage } from 'async_hooks';
 
-export type CallChannel = 'mcp' | 'cli' | 'bench';
+/** `person` is input a person made in the app while the bench recorded it. */
+export type CallChannel = 'mcp' | 'cli' | 'bench' | 'person';
 
 interface Place {
   from: CallChannel;
   run?: string;
+  /** The run's step now executing, 0-based; one object shared by every call inside the run. */
+  position?: { step?: number };
   step?: boolean;
   recorded?: boolean;
   inner?: boolean;
@@ -36,7 +39,13 @@ export function arriveOn<T>(from: CallChannel, work: () => T): T {
 /** Run `work` as the run of `sequence`, keeping the channel the run was started from. */
 export function withinRun<T>(sequence: string, work: () => T): T {
   const outer = place.getStore();
-  return place.run({ from: outer?.from ?? 'mcp', run: sequence, recorded: false }, work);
+  return place.run({ from: outer?.from ?? 'mcp', run: sequence, recorded: false, position: {} }, work);
+}
+
+/** Set the step the current run is executing, which the step's own call is recorded under. */
+export function atRunStep(step: number): void {
+  const position = place.getStore()?.position;
+  if (position) position.step = step;
 }
 
 /** Run `work` as one step's own call inside the current run. */
@@ -55,11 +64,15 @@ export function unlisted<T>(work: () => T): T {
 }
 
 /** Where the current call belongs in history, or undefined for a call made on another's behalf. */
-export function historyPlace(): { from: CallChannel; run?: string } | undefined {
+export function historyPlace(): { from: CallChannel; run?: string; runStep?: number } | undefined {
   const here = place.getStore();
   if (!here || here.recorded) return undefined;
   if (here.run !== undefined && !here.step) return undefined;
-  return { from: here.from, ...(here.run !== undefined ? { run: here.run } : {}) };
+  return {
+    from: here.from,
+    ...(here.run !== undefined ? { run: here.run } : {}),
+    ...(here.run !== undefined && here.position?.step !== undefined ? { runStep: here.position.step } : {}),
+  };
 }
 
 /** The channel of a call that entered from outside, or undefined for a call made inside another call or run. */

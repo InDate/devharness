@@ -3,7 +3,7 @@ import { Fragment } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { Notice } from './notice.js';
 import { Draft } from './markup.js';
-import { ActivityRows, listedKinds, stepTally, useActivity } from './activity.js';
+import { ActivityRows, listedKinds, pauseSummary, stepTally, useActivity } from './activity.js';
 import { RecordingRow } from './recorder.js';
 import { Recording } from './recording.js';
 import { LabelInput, Row } from './row.js';
@@ -13,7 +13,7 @@ import type {
   Annotation, BenchView, BoundaryEvent, CaptureRect, CaptureVersion, FactKind, RanStep, RunRow, SequenceCard, SequenceOutline, SequenceStep, SequenceVariable,
 } from '../wire.js';
 import { useEscape } from './escape.js';
-import { useGoToAnyTarget } from './goto.js';
+import { askSection, useGoToAnyTarget } from './goto.js';
 import { comparisonOf } from '../check-words.js';
 import { keyOf, kindOf, type KindCount } from '../kinds.js';
 import { socketName } from './crossing.js';
@@ -21,7 +21,11 @@ import { useVariablesHidden } from './variables-shown.js';
 import { moveShift, spliceIn, spliceShift, useStepMotion } from './step-motion.js';
 import { EnableProxy } from './enable-proxy.js';
 
-const CLIENT_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
+/**
+ * This tab's id on `/state`, which holds the primary client. History reads the
+ * same state under it, so switching between the two tabs keeps one primary.
+ */
+export const CLIENT_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
 
 /** Why a finding cannot be taken yet, on the controls that would take one. */
 const NO_ADDRESS = 'open a sequence first - a finding is stored in the step it belongs to, '
@@ -35,8 +39,16 @@ const NO_ADDRESS = 'open a sequence first - a finding is stored in the step it b
  * marker. The marker says where you were; the finding says what you saw there,
  * and the two are read together rather than joined up across a gutter.
  */
-export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }: {
+/** A sequence's card on the home page, and the 0-based step to mark in it. */
+export interface CardAsk {
+  sequence: string;
+  step: number;
+}
+
+export function Editing({ base, onReturn, returnsFromShot, starting, onStarted, card: askedCard }: {
   base: string;
+  /** A sequence's card on the home page a go-to asked for, opened with its step marked. */
+  card?: CardAsk | null;
   /** A new sequence has been asked for and not yet started or dropped. */
   starting: boolean;
   /** The ask is over: the recording ran and ended, or the form was left. */
@@ -592,7 +604,7 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
         )}
 
         {!sequence?.name && (
-          <HomeLists base={base} post={post} cards={sequence?.catalogue ?? []}
+          <HomeLists base={base} post={post} cards={sequence?.catalogue ?? []} card={askedCard ?? null}
             onOpen={(name) => void post('/sequence/select', { name })} />
         )}
 
@@ -614,6 +626,13 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
 
         {steps.filter(step => !definesAt.has(step.index)).map(step => (
           <Fragment key={step.index}>
+            {/* What crossed while the run stood paused before this step: no
+                step's window was open, so it is counted here and against no step. */}
+            {!sequence?.recording && activity.pauses.has(step.index) && (
+              <div class="mark pause" role="note">
+                <span class="marktext">paused before step {step.index + 1} · {pauseSummary(activity.pauses.get(step.index)!)}</span>
+              </div>
+            )}
             <div
               class={['mark', step.current ? 'here' : '', step.failed ? 'failed' : '', onIt(step) ? 'onit' : '',
                 folded.has(step.index) || dragging !== null ? 'folded' : '',
@@ -824,14 +843,18 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted }
           </div>
         ))}
 
-        {/* What the newest pass produced after its last step ended, which no
-            step held open for. A row moved up from here joins the last step,
-            on the recording and on every run after. */}
+        {/* Kinds the sequence lists after its last step, moved there from a step. */}
         {sequence?.name && (activity.crossed.get(steps.length) ?? []).length > 0 && !sequence.recording && (
           <>
-            <div class="mark tail"><span class="marktext">after the last step</span></div>
+            <div class="mark tail"><span class="marktext">listed after the last step</span></div>
             <ActivityRows activity={activity} step={steps.length} base={base} recording={false} />
           </>
+        )}
+        {/* The pass ended at its last step's release; what crosses after this line belongs to no run. */}
+        {sequence?.name && !sequence.recording && !sequence.busy && activity.pass !== undefined && sequence.currentStep >= steps.length && (
+          <div class="mark finish" role="note">
+            <span class="marktext">finished · traffic after this line is not the run's</span>
+          </div>
         )}
 
       </main>}
@@ -1664,29 +1687,41 @@ function Finding({ note, base, post, moves, series }: {
  * the whole of what it is for and the steps it takes.
  */
 /** The home page's lists, reading the runs once for both: those going and ended, then the sequences. */
-function HomeLists({ base, post, cards, onOpen }: {
+function HomeLists({ base, post, cards, card, onOpen }: {
   base: string;
   post: (path: string, body?: Record<string, unknown>) => Promise<void>;
   cards: SequenceCard[];
+  card: CardAsk | null;
   onOpen: (name: string) => void;
 }) {
   const runs = useRuns(base);
   return (
     <>
       <RunsPanel view={runs} base={base} post={post} onOpen={onOpen} />
-      <Catalogue base={base} post={post} cards={cards} onOpen={onOpen} running={runs?.running ?? []} />
+      <Catalogue base={base} post={post} cards={cards} card={card} onOpen={onOpen} running={runs?.running ?? []} />
     </>
   );
 }
 
-function Catalogue({ base, post, cards, onOpen, running }: {
+function Catalogue({ base, post, cards, card: asked, onOpen, running }: {
   base: string;
   post: (path: string, body?: Record<string, unknown>) => Promise<void>;
   cards: SequenceCard[];
+  card: CardAsk | null;
   onOpen: (name: string) => void;
   running: RunRow[];
 }) {
   const [reading, setReading] = useState<string | null>(null);
+  // A go-to opens the card it names, under the first tag that lists it, once
+  // the catalogue holding it has been read.
+  useEffect(() => {
+    if (!asked) return;
+    const group = byTag(cards).find(([, grouped]) => grouped.some(one => one.name === asked.sequence));
+    if (!group) return;
+    setReading(`${group[0]}|${asked.sequence}`);
+    askSection(`seqcard-${asked.sequence}`);
+  }, [asked, cards.length]);
+  useGoToAnyTarget();
   const [renaming, setRenaming] = useState<string | null>(null);
   // Deleting takes a second click on the same row; leaving the row clears the first.
   const [removing, setRemoving] = useState<string | null>(null);
@@ -1715,7 +1750,8 @@ function Catalogue({ base, post, cards, onOpen, running }: {
       {grouped.map(card => {
         const going = running.find(run => run.sequence === card.name);
         return (
-        <Row key={card.name} classes={removing === card.name ? ['seqrow', 'removearmed'] : ['seqrow']}
+        <Row key={card.name} id={reading === `${tag}|${card.name}` ? `seqcard-${card.name}` : undefined}
+          classes={removing === card.name ? ['seqrow', 'removearmed'] : ['seqrow']}
           onLeave={() => { if (removing === card.name) setRemoving(null); }}
           columns={['here', 'run', 'open', 'rename', 'remove']}
           slots={{
@@ -1732,7 +1768,7 @@ function Catalogue({ base, post, cards, onOpen, running }: {
               void post('/sequence/delete', { name: card.name });
             },
           }}
-          glyphs={{ ...(going ? { run: 'stop' } : {}), ...(removing === card.name ? { remove: 'tick' } : {}) }}
+          glyphs={{ ...(going ? { run: 'stop' } : {}), remove: removing === card.name ? 'tick' : 'trash' }}
           titles={{
             here: 'play this in this browser: the bench opens it and plays it from step 1',
             run: going ? `stop this run, at step ${going.step} of ${going.total}` : 'run this in a headless browser of its own',
@@ -1751,7 +1787,8 @@ function Catalogue({ base, post, cards, onOpen, running }: {
           reading={card.notes > 0 && <span class="seqnotes">{card.notes} note{card.notes === 1 ? '' : 's'}</span>}
           open={reading === `${tag}|${card.name}`}
           onOpen={() => setReading(reading === `${tag}|${card.name}` ? null : `${tag}|${card.name}`)}>
-          <SequenceReadme base={base} card={card} onOpen={() => onOpen(card.name)} />
+          <SequenceReadme base={base} card={card} onOpen={() => onOpen(card.name)}
+            marked={asked?.sequence === card.name ? asked.step : undefined} />
         </Row>
         );
       })}
@@ -1763,10 +1800,12 @@ function Catalogue({ base, post, cards, onOpen, running }: {
 }
 
 /** An opened sequence row: what it is for in full, where it starts, and each step it takes. */
-function SequenceReadme({ base, card, onOpen }: {
+function SequenceReadme({ base, card, onOpen, marked }: {
   base: string;
   card: SequenceCard;
   onOpen: () => void;
+  /** The 0-based step a go-to landed on. */
+  marked?: number;
 }) {
   const [outline, setOutline] = useState<SequenceOutline | null | undefined>(undefined);
   useEffect(() => {
@@ -1787,7 +1826,7 @@ function SequenceReadme({ base, card, onOpen }: {
       {outline && (
         <ol class="seqsteps">
           {outline.steps.map((step, k) => (
-            <li key={k}>
+            <li key={k} class={k === marked ? 'marked' : undefined}>
               <span class="seqstepno">{k + 1}</span>
               <span class="seqsteplabel">{step.label}</span>
               {step.notes > 0 && <span class="seqnotes">{step.notes} note{step.notes === 1 ? '' : 's'}</span>}

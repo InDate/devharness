@@ -47,6 +47,7 @@ import { createConsoleTools } from './tools/console-tools.js';
 import { createNetworkTools } from './tools/network-tools.js';
 import { createProxyTools } from './tools/proxy-tools.js';
 import { createHoldTools } from './tools/hold-tools.js';
+import { heldConnections, holdReading } from './hold.js';
 import { createPageTools } from './tools/page-tools.js';
 import { createDOMTools } from './tools/dom-tools.js';
 import { createScreenshotTools } from './tools/screenshot-tools.js';
@@ -79,7 +80,9 @@ import { configManager } from './config.js';
 import { ToolError } from './tool-error.js';
 import type { ServerLog, ServerRow, ToolGroup, ToolValues } from './bench/wire.js';
 import { arriveOn, unlisted, historyPlace, entryChannel, asInnerCall } from './call-origin.js';
-import { markNextCommand, releaseCommand, noteCallStart, newlyIdleProxies } from './proxy/registry.js';
+import { markNextCommand, releaseCommand, noteCallStart, newlyIdleProxies, attachEntryToCursor } from './proxy/registry.js';
+import { describePersonInput, recordPersonInputInto, takeUnreadPersonInput, watchPersonInput } from './person-watch.js';
+import { activitySummary } from './activity-index.js';
 
 /**
  * Tools that read the app without driving it.
@@ -374,6 +377,7 @@ const connectionManager = new ConnectionManager();
 const logpointTracker = new LogpointExecutionTracker();
 const clickableCache = new ClickableCache();
 const commandRecorder = new CommandRecorder();
+recordPersonInputInto(commandRecorder);
 const portReserver = new PortReserver();
 const serverManager = new ServerManager();
 
@@ -455,6 +459,18 @@ let orchestratorInstance: Orchestrator | null = null;
  * connection has that name. Every tool that acts on a connection reaches it
  * here, and each reach counts as activity against the inactivity timeout.
  */
+/**
+ * Watch the page a call named for a person's input, once the call has run: a
+ * launch has made the page by then, and every later call on it finds it watched.
+ */
+async function watchNamedPage(params: Record<string, unknown> | undefined): Promise<void> {
+  const named = params?.connection;
+  if (typeof named !== 'string' || !configManager.getReplayConfig().watchPersonInput) return;
+  const resolved = await resolveConnectionByName(named).catch(() => null);
+  const page = resolved?.puppeteerManager ? await Promise.resolve(resolved.puppeteerManager.getPage()).catch(() => null) : null;
+  if (page) await watchPersonInput(sanitizeReference(named), page).catch(() => {});
+}
+
 async function resolveConnectionByName(name: string): Promise<{
   connection: Connection;
   cdpManager: CDPManager;
@@ -524,7 +540,35 @@ function pageHeldRefusal(toolName: string, args: Record<string, any>): any {
     || (toolName === 'replay' && DRIVING_REPLAY.has(String(args.action)));
   if (!drives) return undefined;
   const hold = benchHold(args.connection);
-  return hold ? createErrorResponse('PAGE_HELD_BY_BENCH', { ...hold, toolName }) : undefined;
+  if (hold) return createErrorResponse('PAGE_HELD_BY_BENCH', { ...hold, toolName });
+  const held = heldPage(args.connection, toolName === 'replay' && RESUMES_HELD_RUN.has(String(args.action)));
+  return held ? createErrorResponse('PAGE_HELD', { ...held, toolName }) : undefined;
+}
+
+/** The replay actions that release the hold a paused run placed before they drive the page. */
+const RESUMES_HELD_RUN = new Set(['step', 'finish']);
+
+/**
+ * A page whose JS a hold stops, with no bench open on it: the hold tool's, a
+ * paused run's, a trigger's. A click or a step on it waits until its timeout.
+ * A breakpoint's stop is left to the paused-execution guard. With no
+ * connection named, the first held page.
+ */
+function heldPage(connection: string | undefined, resumesRun: boolean): { connection: string; why: string; release: string } | undefined {
+  const names = connection !== undefined ? [sanitizeReference(connection)] : heldConnections();
+  for (const name of names) {
+    const held = holdReading(name).held.filter(layer => !layer.via && layer.layer !== 'network' && layer.source !== 'breakpoint'
+      && !(resumesRun && layer.source === 'sequence'));
+    if (!held.length) continue;
+    return {
+      connection: name,
+      why: `its ${held.map(layer => layer.layer).join(' and ')} ${held.length > 1 ? 'are' : 'is'} held by the ${held[0].source}`,
+      release: held.every(layer => layer.source === 'sequence')
+        ? `replay({ action: 'finish' }) or replay({ action: 'step' }) carries the paused run on and releases it; replay({ action: 'cancel' }) releases it and ends the run`
+        : `hold({ action: 'release', connection: '${name}' })`,
+    };
+  }
+  return undefined;
 }
 
 /** The page a call names, with the monitor on its dialogs; undefined for a call that names none. */
@@ -550,8 +594,10 @@ async function executeToolCall(calledName: string, calledParams: Record<string, 
   }
 
   // The MCP handler refuses before it gets here; a CLI call arrives here first.
+  // A run's step meets the same refusal, so a step on a held page fails naming
+  // the hold rather than waiting out its step timeout.
   const cliEntry = entryChannel() === 'cli';
-  if (cliEntry) {
+  if (cliEntry || historyPlace()?.run !== undefined) {
     const held = pageHeldRefusal(toolName, params);
     if (held) throw new ToolError(held);
   }
@@ -576,7 +622,13 @@ async function executeToolCall(calledName: string, calledParams: Record<string, 
   if (place) {
     await commandRecorder.recordCommand(toolName, validation.data, place);
     index = commandRecorder.getCurrentHistoryIndex();
-    noteCallStart();
+    // A run's step was already counted as a call by the executor that ran it,
+    // and a replay call walks steps counted on their own; a second start
+    // would stand between a traffic check and the step it counts back to.
+    if (toolName !== 'replay' && !place.run) noteCallStart();
+    // A run marked this step before its call was recorded; the entry joins
+    // what the step causes to the call that caused it.
+    if (place.run) attachEntryToCursor(index);
   }
 
   // The proxy credits what crosses to the entry just recorded, as the MCP
@@ -595,6 +647,7 @@ async function executeToolCall(calledName: string, calledParams: Record<string, 
   let result: any;
   try {
     result = await (cliEntry ? run() : asInnerCall(run));
+    await watchNamedPage(validation.data);
   } catch (error) {
     if (index !== null) {
       commandRecorder.attachResult(index, error instanceof ToolError || error instanceof InvalidReferenceError
@@ -869,7 +922,9 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
     if (recordedInHistory(toolName, validation.data)) {
       await commandRecorder.recordCommand(toolName, validation.data);
       commandIndex = commandRecorder.getCurrentHistoryIndex();
-      noteCallStart();
+      // A replay call walks steps that each start a call of their own; counted
+      // too, it would stand between a traffic check and the step it counts back to.
+      if (toolName !== 'replay') noteCallStart();
     }
 
     // Check for failed monitored ports
@@ -944,6 +999,7 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
       if (commandIndex !== null) {
         commandRecorder.attachResult(commandIndex, result);
       }
+      await watchNamedPage(validation.data);
 
       // Prepend port failure prefix if any
       if (portCheck.prefix) {
@@ -968,6 +1024,24 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
 
       // Collect status lines to append to response
       const statusItems: StatusLineItem[] = [];
+
+      // What this call caused that crossed or was written by the time it
+      // returned; what arrives after is in the index and in History.
+      const activity = commandIndex !== null ? activitySummary(commandIndex) : undefined;
+      if (activity) statusItems.push({ label: 'Activity', value: activity });
+
+      // What a person did on this page since the last call here read it, so
+      // a reading is not taken for the state the agent drove to.
+      if (typeof validation.data?.connection === 'string') {
+        const moved = takeUnreadPersonInput(sanitizeReference(validation.data.connection));
+        if (moved.length) {
+          statusItems.push({
+            label: 'Person',
+            value: `${moved.map(describePersonInput).join(', ')} in ${validation.data.connection} since your last call`
+              + ` (History ${moved.map(input => `#${input.index}`).join(', ')})`,
+          });
+        }
+      }
 
 
       // Append server log status to all tool responses

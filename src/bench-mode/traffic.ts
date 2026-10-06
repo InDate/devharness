@@ -3,7 +3,7 @@ import { levelOf, causeOf, type ProxyEvent } from '../proxy/intercept-proxy.js';
 import type { StepTraffic } from '../annotation.js';
 import type { BoundaryEvent, BoundaryTotals } from '../bench/wire.js';
 import { writeKey, writeLine } from '../write-watch.js';
-import { countKinds, kindOf } from '../bench/kinds.js';
+import { recordKinds } from '../bench/step-compare.js';
 import { type BenchSession, sessions } from './session.js';
 
 /**
@@ -110,17 +110,14 @@ export function withWrites(session: BenchSession, traffic: StepTraffic, from: nu
   const proxy = getProxy(session.connection);
   const crossed = (proxy?.eventsIn() ?? []).filter(event => event.at >= from && event.at < to);
   const written = writeEvents(session.connection).filter(event => event.at >= from && event.at < to);
-  const kinds = countKinds([...crossed, ...written]);
-  // The payload of the last of each kind, which a replayed row is compared
-  // against; the proxy holds its bodies in memory for this session only.
+  // The proxy holds its bodies in memory for this session only, so the
+  // payload each kind is compared on is stored with the recording.
   const values = new Map((session.writeWatch?.writes ?? []).map(write => [write.id, write.value]));
-  for (const event of [...crossed, ...written]) {
-    const count = kinds[kindOf(event)];
-    if (!count || count.presence) continue;
-    const body = event.kind === 'write' ? values.get(event.id) : proxy?.bodyOf(event.id);
-    if (body !== undefined) count.body = body.slice(0, RECORDED_BODY_CAP);
-  }
-  if (Object.keys(kinds).length) traffic = { ...traffic, kinds };
+  const kinds = recordKinds([...crossed, ...written],
+    event => (event.kind === 'write' ? values.get(event.id) : proxy?.bodyOf(event.id)), RECORDED_BODY_CAP);
+  // Stored empty too: a step that caused nothing is compared, so traffic it
+  // starts causing reads as new rather than as a step with no record.
+  traffic = { ...traffic, kinds };
   if (!writes.length) return traffic;
   // The log's own storage lines say less than the watch's and would list
   // each local or session write twice.
@@ -152,10 +149,14 @@ export function writeEvents(connection: string, after = 0): BoundaryEvent[] {
       return {
         ...row, step: write.cursor.step, runId: write.cursor.runId,
         ...(write.cursor.within ? { within: write.cursor.within } : {}),
+        ...(write.cursor.entry !== undefined ? { entry: write.cursor.entry } : {}),
         owned: true, level: 'positional' as const,
       };
     }
-    return { ...row, ...recordedStepOf(connection, { at: write.at } as ProxyEvent) } as BoundaryEvent;
+    return {
+      ...row, ...recordedStepOf(connection, { at: write.at } as ProxyEvent),
+      ...(write.cursor?.kind === 'command' ? { commandIndex: write.cursor.index } : {}),
+    } as BoundaryEvent;
   });
 }
 

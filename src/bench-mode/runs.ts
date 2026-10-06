@@ -1,12 +1,13 @@
 import { getOutputPath } from '../helpers/paths.js';
 import { debugLog } from '../debug-logger.js';
 import { getProxy } from '../proxy/registry.js';
+import type { ProxyEvent } from '../proxy/intercept-proxy.js';
 import type { StepTraffic } from '../annotation.js';
 import type { SequenceState, RunRow, RunsView } from '../bench/wire.js';
 import { listSuites, readRuns } from '../run-log.js';
 import { runRegistry } from '../tools/replay-run-registry.js';
 import { renameSequence } from '../sequence-rename.js';
-import { countKinds, kindOf } from '../bench/kinds.js';
+import { recordKinds } from '../bench/step-compare.js';
 import { haltSequence } from './controls.js';
 import { letGoForRun } from './page-hold.js';
 import { getSequenceState, gotoSequenceStep, playSequence, selectSequence } from './sequence.js';
@@ -152,21 +153,22 @@ export async function baselineSequence(connection: string): Promise<SequenceStat
   const at = Date.now();
   const entries = Array.from({ length: played.total }, (_, index) => {
     const crossed = pass ? all.filter(event => event.runId === pass && event.step === index) : [];
-    const kinds = countKinds(crossed);
-    // The payload of the last of each kind, which a later play's row is compared against.
-    for (const event of crossed) {
-      const count = kinds[kindOf(event)];
-      if (!count || count.presence) continue;
-      const body = event.kind === 'write' ? values.get(event.id) : proxy.bodyOf(event.id);
-      if (body !== undefined) count.body = body.slice(0, RECORDED_BODY_CAP);
-    }
+    const kinds = recordKinds(crossed,
+      event => (event.kind === 'write' ? values.get(event.id) : proxy.bodyOf(event.id)), RECORDED_BODY_CAP);
     const requests = crossed.filter(event => event.kind === 'request');
+    // A transport is a socket upgrade or an event stream, as `countStepTraffic`
+    // counts them for a recording: counted by 101 alone, a stream the step
+    // opened read as no transport, and the two records of one step disagreed.
+    const opened = requests.filter(event => event.status === 101 || (event as ProxyEvent).contentType === 'text/event-stream');
     const traffic: StepTraffic = {
       requests: requests.length,
       failed: requests.filter(event => (event.status ?? 0) >= 400).length,
-      opened: requests.filter(event => event.status === 101).length,
+      opened: opened.length,
       writes: crossed.filter(event => event.kind === 'write').length,
-      lines: requests.slice(0, 8).map(event => `${event.method ?? 'GET'} ${pathOf(event.url)} ${event.status ?? 'pending'}`),
+      lines: [
+        ...requests.slice(0, 8).map(event => `${event.method ?? 'GET'} ${pathOf(event.url)} ${event.status ?? 'pending'}`),
+        ...opened.slice(0, 4).map(event => `opened ${event.url}`),
+      ],
       kinds,
       recordedAt: at,
     };

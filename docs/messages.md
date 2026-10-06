@@ -971,6 +971,21 @@ Element not found: `{{selector}}`
 
 ---
 
+## TYPE_NOT_CLEARED
+
+**Type:** error
+**Code:** TYPE_NOT_CLEARED
+
+`{{selector}}` still held text after it was selected whole and deleted, so nothing was typed: typing now would land beside what is left rather than replace it.
+
+Left in the field: `{{left}}`
+
+**Suggestions:**
+- The field may refuse a select-all; `input({ action: 'press', key })` with the keys it accepts, then `type` with `append: true`
+- Read the field with `content({ action: 'extractText', connection })` to see what it holds
+
+---
+
 ## TYPE_NO_FOCUSED_ELEMENT
 
 **Type:** error
@@ -1960,11 +1975,9 @@ The run is the bench's own play, so `replay status` does not track it; its rows,
 ## REPLAY_BENCH_PLAYED
 
 **Type:** success
-**Summary:** {{name}} played in the bench: {{reached}}/{{total}}
+**Summary:** Played {{name}} in the bench
 
-**Played in the bench:** {{name}}, reached step {{reached}} of {{total}}.{{failure}}
-
-Bench: `{{benchUrl}}`
+{{steps}}
 
 ---
 
@@ -2017,6 +2030,19 @@ A waiting run answers within {{seconds}}s, so a step that never finishes cannot 
 **The bench holds `{{connection}}`:** {{why}}.
 
 {{toolName}} would drive a page that cannot move, and wait on it until its timeout. Release it first:
+
+- {{release}}
+
+---
+
+## PAGE_HELD
+
+**Type:** error
+**Summary:** A hold stops this page
+
+**`{{connection}}` is held:** {{why}}.
+
+{{toolName}} would drive a page whose JS is stopped, and wait on it until its timeout. Release it first:
 
 - {{release}}
 

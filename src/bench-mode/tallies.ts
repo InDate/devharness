@@ -2,6 +2,7 @@ import { getProxy, checkOutcomesFor, type CheckOutcome } from '../proxy/registry
 import type { SequenceState, StepCheck, StepTally } from '../bench/wire.js';
 import { sessions } from './session.js';
 import { writeEvents } from './traffic.js';
+import * as stepCompare from '../bench/step-compare.js';
 
 /**
  * The pass a run produced on a browser: a replay stamps what it caused with
@@ -54,8 +55,11 @@ export function stepTallies(
   const pass = passOf(connection, startedAt, endedAt);
   const watched = !!sessions.get(connection)?.writeWatch;
   const tallies: StepTally[] = Array.from({ length: total }, () => ({ requests: 0, frames: 0, intercepted: 0, ...(watched ? { state: 0 } : {}) }));
-  for (const event of getProxy(connection)?.eventsIn(startedAt) ?? []) {
-    const tally = event.runId === pass && event.step !== undefined ? tallies[event.step] : undefined;
+  const events = getProxy(connection)?.eventsIn(startedAt) ?? [];
+  // A step run twice counts its newest attempt, and a pause counts against no step.
+  const attempts = stepCompare.passOf(events.filter(event => event.runId === pass));
+  for (const event of events) {
+    const tally = stepCompare.countsForStep(event, attempts) ? tallies[event.step!] : undefined;
     if (!tally) continue;
     if (event.kind === 'request') tally.requests += 1;
     else tally.frames += 1;

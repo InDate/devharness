@@ -214,11 +214,15 @@ export interface HistoryEntry {
   label: string;
   connection?: string;
   /** The channel the call came in on; a run's step carries the channel its run was started from. */
-  from: 'mcp' | 'cli' | 'bench';
+  from: 'mcp' | 'cli' | 'bench' | 'person';
   /** The sequence whose run executed this call as a step. */
   run?: string;
+  /** This call's position in `run`, 0-based. */
+  runStep?: number;
   /** On a `replay` call: its action, and the sequence it names where it names one. */
   replay?: { action: string; name?: string };
+  /** What this call caused, counted: present where anything was stamped to it. */
+  activity?: { requests: number; failed: number; frames: number; writes: number };
   /** Absent while the call is still running. */
   failed?: boolean;
   /** The first line the call returned. */
@@ -230,6 +234,14 @@ export interface HistoryDetail {
   params: Record<string, unknown>;
   /** Absent while the call is still running. */
   result?: string;
+  /** What the call caused, one line each, oldest first. */
+  activity?: Array<{ id: string; kind: 'request' | 'frame' | 'write'; line: string; failed?: boolean }>;
+  /** When a run's step marked the boundary, which opens its window a few ms before `at`. */
+  markedAt?: number;
+  /** When the call released the boundary: `at` to here is the window traffic is attributed to it over. Absent for a call that marks no boundary, and while one settles. */
+  releasedAt?: number;
+  /** A run's step: its position in `run`, 0-based. */
+  runStep?: number;
 }
 
 /** One tracked issue, as the Issues tab lists it; times are epoch milliseconds. */
@@ -433,7 +445,7 @@ export interface SequenceState {
   catalogue: SequenceCard[];
   name?: string;
   steps: SequenceStep[];
-  /** Where a kind of traffic is listed and compared, by where it crossed: `"3|kind"` or `"after|kind"` → step, the step count being the gutter. */
+  /** Where a kind of traffic is listed and compared, by the step it crossed at: `"3|kind"` → step, the step count being the gutter. */
   placements?: Record<string, number>;
   currentStep: number;
   total: number;
@@ -678,6 +690,8 @@ export interface BenchView {
   /** The layers this page can hold: code needs the debugger, ui the bench, network the proxy. */
   holdable: Array<HeldLayerView['layer']>;
   pickerArmed: boolean;
+  /** The person's input in the app is recorded into history. */
+  personInput: boolean;
   tickMs: number;
   totalSteps: number;
   lastTick?: TickResult;
@@ -723,7 +737,11 @@ export interface BoundaryEvent {
   contentType?: string;
   durationMs?: number;
   preview?: string;
-  answeredAs?: 'replaced' | 'dropped' | 'refused';
+  answeredAs?: 'replaced' | 'dropped' | 'refused' | 'outOfScope';
+  /** What the response body is (`src/proxy/payload-class.ts`), which decides what of it is compared. */
+  payloadClass?: 'structured' | 'document' | 'binary';
+  /** What a write request sent, as JSON text, where it was a structured body. */
+  sent?: string;
   /** The response is still arriving - a stream, rather than a finished call. */
   open?: boolean;
   commandIndex?: number;
@@ -731,6 +749,18 @@ export interface BoundaryEvent {
   step?: number;
   /** The position inside `step` it crossed at, when that step ran another sequence. */
   within?: number[];
+  /** The history entry of the replay step it crossed under. */
+  entry?: number;
+  /** Crossed while the run stood paused before `step`, counted against no step. */
+  paused?: true;
+  /**
+   * The history entry whose call opened the stream or socket a later message
+   * arrived on, while that stream stayed open. The message is owned by no
+   * call, so `commandIndex` stays empty and drift comparison is unchanged.
+   */
+  openedBy?: number;
+  /** The label History lists for `commandIndex`, `entry` or `openedBy`. */
+  causeLabel?: string;
   level: 'observed' | 'likely' | 'positional' | 'unprompted';
   owned: boolean;
   root?: string;

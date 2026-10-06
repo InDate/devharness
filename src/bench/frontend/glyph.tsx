@@ -27,6 +27,7 @@ export function Glyph({ of }: { of: string }) {
     cog: <><circle cx="8" cy="8" r="3" /><path d="M8 1.4v1.8M8 12.8v1.8M1.4 8h1.8M12.8 8h1.8M3.3 3.3l1.3 1.3M11.4 11.4l1.3 1.3M12.7 3.3l-1.3 1.3M4.6 11.4l-1.3 1.3" /></>,
     cogset: <><circle cx="8" cy="8" r="3" fill="currentColor" /><path d="M8 1.4v1.8M8 12.8v1.8M1.4 8h1.8M12.8 8h1.8M3.3 3.3l1.3 1.3M11.4 11.4l1.3 1.3M12.7 3.3l-1.3 1.3M4.6 11.4l-1.3 1.3" /></>,
     box: <rect x="2.6" y="4" width="10.8" height="8" rx="1" />,
+    trash: <><path d="M2.5 4.2h11" /><path d="M6.2 4.2V2.6h3.6v1.6" /><path d="M3.8 4.2l.8 9.2h6.8l.8-9.2" /><path d="M6.6 6.6v4.6M9.4 6.6v4.6" /></>,
     arrow: <><path d="M2.8 13.2 12.6 3.4" /><path d="M7.4 3.4h5.2v5.2" /></>,
     pen: <><path d="M2.6 13.4l1-3.2 6.7-6.7 2.2 2.2-6.7 6.7z" /><path d="M9.6 4.2l2.2 2.2" /></>,
     crop: <><path d="M4.4 1.6v10h10" /><path d="M1.6 4.4h10v10" /></>,
@@ -77,6 +78,21 @@ export function Glyph({ of }: { of: string }) {
     pulse: <path d="M1.4 8.6h3l1.8-4.8 3.4 8.4 1.8-3.6h3.2" />,
     picker: <><path d="M8 1.5v3.5" /><path d="M8 11v3.5" /><path d="M1.5 8H5" /><path d="M11 8h3.5" /><circle cx="8" cy="8" r="2" /></>,
   };
+  // `goto:<mark>` draws the tab a go-to lands on, with an arrow badged on its
+  // top-right corner where a tab carries its count.
+  if (of.startsWith('goto:')) {
+    return (
+      <span class="gotomark">
+        <Glyph of={of.slice('goto:'.length)} />
+        <span class="gotoarrow">
+          <svg viewBox="0 0 8 8" width="7" height="7" aria-hidden="true" focusable="false"
+            fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M1.6 6.4 6.4 1.6" /><path d="M2.8 1.6h3.6v3.6" />
+          </svg>
+        </span>
+      </span>
+    );
+  }
   return (
     <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false"
       fill="none" stroke="currentColor" stroke-width="1.5"

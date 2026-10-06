@@ -1,8 +1,8 @@
 /** @jsxImportSource preact */
-import type { ComponentChildren } from 'preact';
+import { Fragment, type ComponentChildren } from 'preact';
 
 /**
- * Markdown as Preact nodes, for issue bodies and comments.
+ * Markdown as Preact nodes, for issue bodies, comments and tool replies.
  *
  * An issue can be imported from GitHub, so its text is another account's
  * input; building nodes rather than setting HTML leaves any markup in it as
@@ -11,11 +11,24 @@ import type { ComponentChildren } from 'preact';
  * A link keeps its href only for http, https and mailto, so a `javascript:`
  * URL renders as plain text.
  */
-export function Markdown({ text }: { text: string }) {
-  return <div class="markdown">{blocksOf(text.replace(/\r\n?/g, '\n').split('\n'))}</div>;
+export function Markdown({ text, breaks = false }: {
+  text: string;
+  /** Each line of a paragraph on its own, as a tool reply sets its fields one per line; off, lines join as GitHub joins them. */
+  breaks?: boolean;
+}) {
+  return <div class="markdown">{blocksOf(text.replace(/\r\n?/g, '\n').split('\n'), breaks)}</div>;
 }
 
-function blocksOf(lines: string[]): ComponentChildren[] {
+/** A table opens on a row of cells with a row of dashes under it. */
+function opensTable(lines: string[], at: number): boolean {
+  return /^\s*\|/.test(lines[at] ?? '') && /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/.test(lines[at + 1] ?? '');
+}
+
+function cellsOf(line: string): string[] {
+  return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(cell => cell.trim());
+}
+
+function blocksOf(lines: string[], breaks = false): ComponentChildren[] {
   const out: ComponentChildren[] = [];
   let at = 0;
   while (at < lines.length) {
@@ -41,7 +54,20 @@ function blocksOf(lines: string[]): ComponentChildren[] {
     if (/^\s*>/.test(line)) {
       const quoted: string[] = [];
       while (at < lines.length && /^\s*>/.test(lines[at])) quoted.push(lines[at++].replace(/^\s*>\s?/, ''));
-      out.push(<blockquote key={out.length}>{blocksOf(quoted)}</blockquote>);
+      out.push(<blockquote key={out.length}>{blocksOf(quoted, breaks)}</blockquote>);
+      continue;
+    }
+    if (opensTable(lines, at)) {
+      const head = cellsOf(lines[at]);
+      at += 2;
+      const body: string[][] = [];
+      while (at < lines.length && /^\s*\|/.test(lines[at])) body.push(cellsOf(lines[at++]));
+      out.push(
+        <table key={out.length}>
+          <thead><tr>{head.map((cell, n) => <th key={n}>{inline(cell)}</th>)}</tr></thead>
+          <tbody>{body.map((row, r) => <tr key={r}>{row.map((cell, n) => <td key={n}>{inline(cell)}</td>)}</tr>)}</tbody>
+        </table>,
+      );
       continue;
     }
     const listed = line.match(/^\s*([-*+]|\d+[.)])\s+/);
@@ -65,10 +91,13 @@ function blocksOf(lines: string[]): ComponentChildren[] {
       continue;
     }
     const para: string[] = [];
-    while (at < lines.length && lines[at].trim() && !/^(#{1,6}\s|\s*```|\s*~~~|\s*>|\s*([-*+]|\d+[.)])\s)/.test(lines[at])) {
+    while (at < lines.length && lines[at].trim() && !opensTable(lines, at)
+      && !/^(#{1,6}\s|\s*```|\s*~~~|\s*>|\s*([-*+]|\d+[.)])\s)/.test(lines[at])) {
       para.push(lines[at++].trim());
     }
-    out.push(<p key={out.length}>{inline(para.join(' '))}</p>);
+    out.push(<p key={out.length}>{breaks
+      ? para.map((one, n) => <Fragment key={n}>{n > 0 && <br />}{inline(one)}</Fragment>)
+      : inline(para.join(' '))}</p>);
   }
   return out;
 }

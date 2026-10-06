@@ -3,7 +3,9 @@
  * loading and deleting them.
  */
 import { getProxy } from '../proxy/registry.js';
-import { tallyShapes } from '../proxy/intercept-proxy.js';
+import { recordKinds } from '../bench/step-compare.js';
+import { RECORDED_BODY_CAP, writeEvents } from '../bench-mode/traffic.js';
+import { sessions } from '../bench-mode/session.js';
 import { countStepTraffic } from '../step-traffic.js';
 import type { ExecuteToolCall } from '../types.js';
 import { announceSequenceSaved } from '../sequence-events.js';
@@ -15,6 +17,12 @@ import { configManager } from '../config.js';
 import { generatePuppeteerCode, generatePlaywrightCode } from './replay-codegen.js';
 import { type ReplayArgs } from './replay-schema.js';
 import { validateSequenceToolNames, handleLoadSequenceError } from './replay-validation.js';
+
+
+/** The bench's write watch on `connection`, which holds the payload each write stored. */
+function writeWatchOf(connection: string) {
+  return sessions.get(connection)?.writeWatch;
+}
 
 export async function handleCreate(
   args: ReplayArgs,
@@ -111,12 +119,20 @@ export async function handleCreate(
         unmeasured.push(position + 1);
         continue;
       }
-      const tally = tallyShapes(recordingProxy.eventsForCommand(command.recordedAt), rules);
+      // Counted by kind as a bench recording counts them, so a run outside
+      // the bench and the bench's rows compare against the same record.
+      const recordedAt = command.recordedAt;
+      const crossed = [
+        ...recordingProxy.eventsForCommand(recordedAt),
+        ...writeEvents(normalized.hoisted!).filter(write => write.commandIndex === recordedAt),
+      ];
+      const values = new Map((writeWatchOf(normalized.hoisted!)?.writes ?? []).map(write => [write.id, write.value]));
+      const kinds = recordKinds(crossed,
+        event => (event.kind === 'write' ? values.get(event.id) : recordingProxy.bodyOf(event.id)), RECORDED_BODY_CAP);
       command.traffic = {
         ...command.traffic,
         ...counted,
-        shapes: tally.weight,
-        seen: tally.seen,
+        kinds,
         windowMs: ended - began!,
       };
     }
@@ -443,12 +459,22 @@ export async function handleDeleteSaved(args: ReplayArgs, recorder: CommandRecor
     });
   }
 
-  const deleted = await recorder.deleteSequenceFromDisk(args.filename);
+  // An exact name or filename only: matched by prefix, "asd" would take
+  // "asdasd" with it, and a deletion cannot be undone.
+  const wanted = args.filename;
+  const onDisk = (await recorder.listSavedSequencesOnDisk().catch(() => [] as any[]))
+    .find((entry: any) => entry.name === wanted || entry.filename === wanted
+      || entry.filename === `${wanted}.json` || entry.fullPath === wanted);
+  const deleted = onDisk ? await recorder.deleteSequenceFromDisk(onDisk.fullPath) : false;
   if (!deleted) {
     return createErrorResponse('DELETE_FAILED', {
       filename: args.filename,
-      message: `Failed to delete file "${args.filename}". File may not exist.`
+      message: `No saved sequence is named exactly "${args.filename}"; nothing was deleted.`
     });
+  }
+  // The copy loaded in memory goes too, or a later export writes the file back.
+  for (const loaded of recorder.listSequences().filter(sequence => sequence.name === onDisk.name)) {
+    recorder.deleteSequence(loaded.id);
   }
 
   return createSuccessResponse('SAVED_SEQUENCE_DELETED', {

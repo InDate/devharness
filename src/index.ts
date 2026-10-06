@@ -15,6 +15,7 @@ const STARTUP_TIME = performance.now();
  * MCP server providing Chrome DevTools Protocol debugging capabilities to AI assistants
  */
 
+import { boundReply } from './reply-bound.js';
 import { enableRunLog } from './run-log.js';
 import { benchHold, isBenchOpen } from './bench-mode.js';
 import { runAs, appendEvent } from './session-events.js';
@@ -1128,7 +1129,7 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
         sessionDetectorInstance.verify(process.pid);
       }
 
-      return result;
+      return boundReply(result);
     } catch (error) {
       const response = error instanceof ToolError || error instanceof InvalidReferenceError
         ? error.response

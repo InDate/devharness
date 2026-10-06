@@ -470,6 +470,41 @@ export class SourceMapHandler {
     this.loadingPromises.clear();
   }
 
+  /**
+   * Every original source the registered maps carry, with its text: embedded
+   * `sourcesContent`, or the file on disk beside a directory map where the map
+   * embeds none. Each map is loaded on the way; a source two maps both carry
+   * is listed once. `limit` bounds how many maps are loaded, since each blocks
+   * the event loop while it parses.
+   */
+  async originalSources(limit = 200): Promise<Array<{ source: string; content: string }>> {
+    for (const [scriptUrl, sourceMapURL] of [...this.pendingSourceMaps].slice(0, limit)) {
+      await this.loadSourceMapFromURL(scriptUrl, sourceMapURL);
+      this.pendingSourceMaps.delete(scriptUrl);
+    }
+    const mapDirs = new Map<string, string>();
+    for (const [relative, mapPath] of [...this.directoryMaps].slice(0, limit)) {
+      await this.directoryConsumer(relative);
+      mapDirs.set(relative, path.dirname(mapPath));
+    }
+    const found = new Map<string, string>();
+    for (const [key, consumer] of this.sourceMaps) {
+      const sources = ((consumer as any).sources as string[] | undefined) ?? [];
+      for (const source of sources) {
+        if (found.has(source)) continue;
+        let content: string | null = null;
+        try { content = consumer.sourceContentFor(source, true); } catch { content = null; }
+        const dir = mapDirs.get(key);
+        if (content === null && dir) {
+          const onDisk = path.resolve(dir, source.replace(/^webpack:\/\/[^/]*\//, '').replace(/^file:\/\//, ''));
+          content = await fs.readFile(onDisk, 'utf8').catch(() => null);
+        }
+        if (content !== null) found.set(source, content);
+      }
+    }
+    return [...found].map(([source, content]) => ({ source, content }));
+  }
+
   /** The scripts whose maps are loaded, by the key each is stored under. */
   getLoadedSourceMaps(): string[] {
     return Array.from(this.sourceMaps.keys());

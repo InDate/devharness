@@ -9,9 +9,19 @@ import { CDPManager } from '../cdp-manager.js';
 import { SourceMapHandler } from '../sourcemap-handler.js';
 import { createTool } from '../validation-helpers.js';
 import { createSuccessResponse, createErrorResponse } from '../messages.js';
+import { join } from 'path';
+import { getProjectDir } from '../helpers/paths.js';
+
+/** Where a project's built scripts and their maps usually are. */
+const BUILD_DIRS = ['build', 'dist', 'out', '.next', 'lib'];
 
 const sourceSchema = z.object({
-  action: z.enum(['get', 'loadMaps']),
+  action: z.enum(['get', 'loadMaps', 'search']),
+  pattern: z.string().optional().describe('search: what to find in the original sources'),
+  isRegex: z.boolean().optional().describe('search: pattern is a regex (default true)'),
+  caseSensitive: z.boolean().optional().describe('search: case sensitive (default false)'),
+  urlFilter: z.string().optional().describe('search: only sources whose path contains this'),
+  limit: z.number().int().positive().optional().describe('search: most matches listed (default 100)'),
   url: z.string().optional().describe('get: file URL or path'),
   startLine: z.number().optional().describe('get: start line number'),
   endLine: z.number().optional().describe('get: end line number'),
@@ -78,15 +88,59 @@ export function createSourceTools(
     }
   };
 
+  /**
+   * Search the original sources the registered maps carry, line by line.
+   * With no map registered, the project's usual build directories are
+   * registered first, so a search works before any `loadMaps`.
+   */
+  const search = async (args: SourceArgs): Promise<any> => {
+    let sources = await sourceMapHandler.originalSources();
+    if (sources.length === 0) {
+      for (const dir of BUILD_DIRS) {
+        const full = join(getProjectDir(), dir);
+        if ((await fs.stat(full).catch(() => null))?.isDirectory()) await sourceMapHandler.registerSourceMapsFromDirectory(full);
+      }
+      sources = await sourceMapHandler.originalSources();
+    }
+    let matcher: RegExp;
+    try {
+      const flags = args.caseSensitive ? 'g' : 'gi';
+      matcher = new RegExp(args.isRegex === false ? args.pattern!.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : args.pattern!, flags);
+    } catch (error) {
+      return createErrorResponse('INVALID_PARAMETER', { parameter: 'pattern', value: args.pattern, message: `${error}` });
+    }
+    const limit = args.limit ?? 100;
+    const matches: string[] = [];
+    let total = 0;
+    for (const { source, content } of sources) {
+      if (args.urlFilter && !source.includes(args.urlFilter)) continue;
+      content.split('\n').forEach((line, index) => {
+        matcher.lastIndex = 0;
+        const hit = matcher.exec(line);
+        if (!hit) return;
+        total += 1;
+        if (matches.length < limit) matches.push(`${source}:${index + 1}:${hit.index + 1}  ${line.trim().slice(0, 160)}`);
+      });
+    }
+    const head = sources.length === 0
+      ? `No source map is registered, and none was found in ${BUILD_DIRS.join(', ')}. Register a directory with loadMaps.`
+      : `${total} match(es) in ${sources.length} original source(s)${total > matches.length ? `; the first ${matches.length} listed - narrow with urlFilter or raise limit` : ''}`;
+    return {
+      content: [{ type: 'text', text: matches.length ? `${head}\n\n${matches.join('\n')}` : head }],
+      _meta: { tool: 'source', action: 'search', timestamp: Date.now(), search: { total, listed: matches.length, sources: sources.length } },
+    };
+  };
+
   /** Parameters each action cannot run without, checked before it runs. */
   const REQUIRED: Record<SourceArgs['action'], Array<keyof SourceArgs>> = {
     get: ['url', 'connection'],
     loadMaps: ['directory'],
+    search: ['pattern'],
   };
 
   return {
     source: createTool(
-      'Read source code and load source maps. Actions: get (a script\'s code over a line range, 10 lines from startLine when endLine is omitted), loadMaps (register the .js.map files in a directory and its subdirectories; each loads when first needed)',
+      'Read source code and load source maps. Actions: get (a script\'s code over a line range, 10 lines from startLine when endLine is omitted), loadMaps (register the .js.map files in a directory and its subdirectories; each loads when first needed), search (the original sources the maps carry, as file:line:column; with none registered, build, dist, out, .next and lib are registered first)',
       sourceSchema,
       async (args) => {
         const missing = REQUIRED[args.action].filter(key => args[key] === undefined);
@@ -97,7 +151,7 @@ export function createSourceTools(
             message: `The "${args.action}" action requires ${missing.map(key => `"${String(key)}"`).join(' and ')}`,
           });
         }
-        return args.action === 'get' ? get(args) : loadMaps(args);
+        return args.action === 'get' ? get(args) : args.action === 'search' ? search(args) : loadMaps(args);
       }
     ),
   };

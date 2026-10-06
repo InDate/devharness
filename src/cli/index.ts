@@ -63,6 +63,8 @@ interface ParsedArgs {
   command: string;
   positional: string[];
   session?: string;
+  /** `--connection=`: the browser `bench` opens on, three words. */
+  connection?: string;
   json: boolean;
   timeoutMs: number;
   waitMs?: number;
@@ -77,6 +79,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
   let session: string | undefined;
   let json = false;
+  let connection: string | undefined;
   let explicitTimeoutMs: number | undefined;
   let waitMs: number | undefined;
   // Everything after `--` is text, not flags: message bodies contain `--json`
@@ -88,6 +91,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
       if (arg === '--') { flagsEnded = true; continue; }
       if (arg === '--json') { json = true; continue; }
       if (arg.startsWith('--session=')) { session = arg.slice('--session='.length); continue; }
+      if (arg.startsWith('--connection=')) { connection = arg.slice('--connection='.length); continue; }
       if (arg.startsWith('--timeout=')) { explicitTimeoutMs = Number(arg.slice('--timeout='.length)) || undefined; continue; }
       if (arg.startsWith('--wait=')) { waitMs = Number(arg.slice('--wait='.length)) || undefined; continue; }
     }
@@ -97,7 +101,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
   const timeoutMs = explicitTimeoutMs
     ?? (waitMs ? waitMs + WAIT_SOCKET_MARGIN_MS : DEFAULT_TIMEOUT_MS);
 
-  return { command: argv[0], positional, session, json, timeoutMs, waitMs };
+  return { command: argv[0], positional, session, connection, json, timeoutMs, waitMs };
 }
 
 /** The tool call a command stands for. */
@@ -126,7 +130,9 @@ export function buildCall(parsed: ParsedArgs): { tool: string; args: Record<stri
      * browser on the reference yet, one call opens the page and the pane.
      */
     case 'bench': {
-      const reference = parsed.session ?? 'bench';
+      // The session picks which server the call reaches; the browser is a
+      // connection of three words, named or the bench's own.
+      const reference = parsed.connection ?? 'bench-cli-browser';
       const url = rest.find(word => /^https?:\/\//.test(word));
       const sequence = first && !/^https?:\/\//.test(first) ? first : undefined;
       return {

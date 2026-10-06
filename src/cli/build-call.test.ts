@@ -57,3 +57,16 @@ describe('issue verbs', () => {
     expect(call(['feature'])).toBe('Usage: devharness feature <title> [body]');
   });
 });
+
+describe('devharness bench', () => {
+  it('opens on a three-word connection of its own, whatever session is named', () => {
+    expect(call(['bench', 'editor-typing', 'http://localhost:7788/', '--session=b1afdd24'])).toEqual({
+      tool: 'bench',
+      args: { action: 'start', connection: 'bench-cli-browser', sequence: 'editor-typing', url: 'http://localhost:7788/' },
+    });
+  });
+
+  it('opens on the connection named with --connection', () => {
+    expect((call(['bench', '--connection=app-under-test']) as { args: Record<string, unknown> }).args).toMatchObject({ connection: 'app-under-test' });
+  });
+});

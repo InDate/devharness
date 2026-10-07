@@ -275,7 +275,10 @@ server's own environment, a name it omits falls through to `process.env`, and
 `process.env` is never written, so concurrent runs may name different files and
 changing the file needs no client restart. A missing file or a line that is not
 blank, a `#` comment, or `NAME=value` fails before any step runs. No `$VAR`
-expansion inside values. `runAll` takes it too.
+expansion inside values. `runAll` takes it too. With none named, a run - a
+bench play included - reads `.devharness/sequences.env` when it exists, and
+`NAME@https://staging.example.com=value` there is the value for a run starting
+at that origin. The reply names the file and each name it supplied.
 
 ```
 replay({ action: 'run', sequenceId: 'seq-signup',

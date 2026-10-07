@@ -74,7 +74,7 @@ it restarts that child and sends `notifications/tools/list_changed`. So a
 rebuild is usually enough; no `/mcp` reconnect.
 
 - Chrome instances the old child launched are killed - call `connection` action `launch` again.
-- Managed dev servers survive and reattach; they live outside the child's lifetime.
+- Managed dev servers survive and reattach; they live outside the child's lifetime. Supervisor shutdown (session end, `/reload-plugins`, SIGTERM/SIGINT/SIGHUP, host stdin closing) stops the servers the session owns.
 - The **supervisor** keeps running its own older code until the client
   reconnects. A change under `src/supervisor/` needs `/mcp`, not a rebuild.
 - `config({ action: 'restart' })` is itself in the frozen tool list, so testing a

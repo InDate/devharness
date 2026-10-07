@@ -6,6 +6,7 @@ import type { Annotation, AnnotationTarget } from '../annotation.js';
 import { request, send, setInspectMode } from './cdp.js';
 import { recordedSteps } from './recording.js';
 import { type BenchSession, sessions } from './session.js';
+import { ownScript } from '../utils/own-script.js';
 
 /**
  * Confirm a reported source position against the file on disk, and correct it
@@ -242,7 +243,7 @@ export async function highlightAnnotation(connection: string, selector: string):
   // Overlay.highlightNode takes in place of a node id.
   try {
     const expression = matchExpression(selector);
-    const { result } = await request(client, 'Runtime.evaluate', { expression, returnByValue: false });
+    const { result } = await request(client, 'Runtime.evaluate', { expression: ownScript('annotation', expression), returnByValue: false });
     if (!result?.objectId) {
       await send(client, 'Overlay.hideHighlight').catch(() => {});
       return;

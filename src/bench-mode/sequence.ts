@@ -14,6 +14,7 @@ import { addRecordingTimer, attachStepTraffic, gateNewStep, recordedSteps } from
 import { armSavedRules } from './rules.js';
 import { type BenchSession, STEP_TIMEOUT_MS, sessions } from './session.js';
 import { benchReadings, stepTimes, withTallies } from './tallies.js';
+import { ownScript } from '../utils/own-script.js';
 
 /** What the pane shows for the sequence card, whether or not one is running. */
 export async function getSequenceState(connection: string): Promise<SequenceState | undefined> {
@@ -319,7 +320,7 @@ async function driveSequence(
       // Bounded, because rAF never fires on a page that is still held.
       if (!stoppedByDialog(session)) await Promise.race([
         send(session.client, 'Runtime.evaluate', {
-          expression: 'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))',
+          expression: ownScript('bench-frames', 'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))'),
           awaitPromise: true,
         }, 600),
         new Promise(resolve => setTimeout(resolve, 500)),
@@ -382,6 +383,14 @@ export async function dismissSequenceFailure(connection: string): Promise<Sequen
   if (!session) return undefined;
   session.sequenceFailure = undefined;
   return getSequenceState(connection);
+}
+
+/** The env file the bench's runs read {{env:NAME}} from; '' returns them to `.devharness/sequences.env`. */
+export function setSequenceEnvFile(connection: string, envFile: string): boolean {
+  const session = sessions.get(connection);
+  if (!session?.sequences) return false;
+  session.sequences.setEnvFile(envFile.trim());
+  return true;
 }
 
 /** Point the run at another deployment - another port, another host. */

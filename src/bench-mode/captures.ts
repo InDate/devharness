@@ -13,6 +13,7 @@ import { DESCRIBE_ELEMENT, heldAnnotation, matchExpression } from './annotations
 import { request, send, setInspectMode } from './cdp.js';
 import { describePause, holdUi, releaseUi } from './page-hold.js';
 import { type BenchSession, type CaptureContext, sessions } from './session.js';
+import { ownScript } from '../utils/own-script.js';
 
 /**
  * Every capture a live session still holds, by path.
@@ -49,7 +50,7 @@ async function layoutOf(session: BenchSession): Promise<Layout> {
   const metrics = await request(session.client, 'Page.getLayoutMetrics');
   const css = metrics.cssLayoutViewport;
   const ratio = await request(session.client, 'Runtime.evaluate', {
-    expression: 'devicePixelRatio', returnByValue: true,
+    expression: ownScript('capture', 'devicePixelRatio'), returnByValue: true,
   }).catch(() => undefined);
   return {
     viewport: { width: css.clientWidth, height: css.clientHeight, dpr: Number(ratio?.result?.value) || 1 },
@@ -149,7 +150,7 @@ export async function readMoreFacts(connection: string, kinds: FactKind[]): Prom
 /** The element a selector names, walked out by `widen`, as a remote object. */
 async function elementObject(session: BenchSession, selector: string, widen: number): Promise<string | undefined> {
   const { result } = await request(session.client, 'Runtime.evaluate', {
-    expression: `(() => {
+    expression: ownScript('capture', `(() => {
       let el = ${matchExpression(selector)};
       if (!el) return null;
       for (let out = 0; out < ${Math.max(0, Math.trunc(widen))}; out++) {
@@ -157,7 +158,7 @@ async function elementObject(session: BenchSession, selector: string, widen: num
         el = el.parentElement;
       }
       return el;
-    })()`,
+    })()`),
     returnByValue: false,
   }).catch(() => ({ result: undefined }));
   return result?.objectId;
@@ -293,7 +294,7 @@ async function anchorFor(
   region: { x: number; y: number; w: number; h: number },
 ): Promise<CaptureRecord['anchor'] | undefined> {
   const { result } = await request(session.client, 'Runtime.evaluate', {
-    expression: `(() => {
+    expression: ownScript('capture', `(() => {
       const r = ${JSON.stringify(region)};
       let best = null, area = Infinity;
       for (const el of document.body.querySelectorAll('*')) {
@@ -303,7 +304,7 @@ async function anchorFor(
         if (b.width * b.height < area) { best = el; area = b.width * b.height; }
       }
       return best || document.body;
-    })()`,
+    })()`),
     returnByValue: false,
   }).catch(() => ({ result: undefined }));
   const objectId = result?.objectId;
@@ -535,7 +536,7 @@ export async function retakeCapture(
     if (recipe.frozen || heldBefore) await holdUi(session);
     if (recipe.kind === 'screen' && recipe.scroll) {
       await request(session.client, 'Runtime.evaluate', {
-        expression: `scrollTo(${recipe.scroll.x}, ${recipe.scroll.y})`,
+        expression: ownScript('capture', `scrollTo(${recipe.scroll.x}, ${recipe.scroll.y})`),
       });
     }
     const layout = await layoutOf(session);
@@ -674,7 +675,7 @@ export async function retakeCapture(
   } finally {
     if (recipe.kind === 'screen' && recipe.scroll) {
       await send(session.client, 'Runtime.evaluate', {
-        expression: `scrollTo(${current.scroll.x}, ${current.scroll.y})`,
+        expression: ownScript('capture', `scrollTo(${current.scroll.x}, ${current.scroll.y})`),
       });
     }
     if (resize) {
@@ -706,8 +707,8 @@ export async function retakeCapture(
  */
 async function settleLayout(session: BenchSession): Promise<boolean> {
   const { result } = await request(session.client, 'Runtime.evaluate', {
-    expression: `document.visibilityState === 'hidden' ? false
-      : new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => r(true), 50))))`,
+    expression: ownScript('capture', `document.visibilityState === 'hidden' ? false
+      : new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => r(true), 50))))`),
     awaitPromise: true,
     returnByValue: true,
   }, 2000).catch(() => ({ result: { value: false } }));
@@ -728,7 +729,7 @@ async function elementBox(
 ): Promise<{ x: number; y: number; width: number; height: number; tag: string } | undefined> {
   try {
     const { result } = await request(session.client, 'Runtime.evaluate', {
-      expression: `(() => {
+      expression: ownScript('capture', `(() => {
         let el = ${matchExpression(selector)};
         if (!el) return null;
         for (let out = 0; out < ${Math.max(0, Math.trunc(widen))}; out++) {
@@ -742,7 +743,7 @@ async function elementBox(
           tag: el.localName + (el.className && typeof el.className === 'string' && el.className.trim()
             ? '.' + el.className.trim().split(/\\s+/)[0] : ''),
         });
-      })()`,
+      })()`),
       returnByValue: true,
     });
     return result?.value ? JSON.parse(result.value) : undefined;

@@ -1,6 +1,7 @@
 import type { CDPSession } from 'puppeteer-core';
 import { debugLog } from '../debug-logger.js';
 import { type BenchSession } from './session.js';
+import { ownScript } from '../utils/own-script.js';
 
 export const HIGHLIGHT_CONFIG = {
   showInfo: true,
@@ -28,7 +29,7 @@ export async function setInspectMode(session: BenchSession, armed: boolean): Pro
 export async function isRunning(client: CDPSession, timeoutMs = 600): Promise<boolean> {
   const ran = client
     .send('Runtime.evaluate', {
-      expression: 'new Promise(resolve => setTimeout(() => resolve(true), 20))',
+      expression: ownScript('bench-settle', 'new Promise(resolve => setTimeout(() => resolve(true), 20))'),
       awaitPromise: true,
       returnByValue: true,
     } as any)
@@ -99,7 +100,7 @@ export function nextPause(client: CDPSession, timeoutMs: number): Promise<any | 
 export async function pageTime(client: CDPSession): Promise<number> {
   try {
     const result = (await client.send('Runtime.evaluate', {
-      expression: 'performance.now()',
+      expression: ownScript('bench-clock', 'performance.now()'),
       returnByValue: true,
     } as any)) as any;
     return typeof result.result?.value === 'number' ? result.result.value : 0;
@@ -117,7 +118,7 @@ export async function pageTime(client: CDPSession): Promise<number> {
  */
 export async function evaluateInPage(session: BenchSession, expression: string): Promise<any> {
   const { result } = await request(session.client, 'Runtime.evaluate', {
-    expression,
+    expression: ownScript('bench-evaluate', expression),
     returnByValue: true,
   });
   return result?.value;

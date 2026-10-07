@@ -293,6 +293,8 @@ export interface ChromeLauncherOptions {
 
 export class ChromeLauncher {
   private chromeProcesses: Map<number, ChildProcess> = new Map();
+  /** When the Chrome on each port was spawned, so a cleanup leaves a launch still connecting alone. */
+  private spawnedAt: Map<number, number> = new Map();
   private launchLocks: Map<number, Promise<{ port: number; pid: number }>> = new Map();
   /** profile name -> in-flight launch for that profile (see launch()) */
   private profileLaunchLocks: Map<string, Promise<{ port: number; pid: number }>> = new Map();
@@ -745,6 +747,7 @@ export class ChromeLauncher {
       // CRITICAL FIX: Add to tracking map IMMEDIATELY after spawn to prevent orphans
       // This ensures the process is tracked even if waitForChromeReady fails
       this.chromeProcesses.set(port, chromeProcess);
+      this.spawnedAt.set(port, Date.now());
       await debugLog('ChromeLauncher', `Added Chrome process (PID: ${pid}) to tracking map for port ${port}`);
 
       // Set up auto-cleanup when process exits (BEFORE waitForChromeReady)
@@ -974,6 +977,12 @@ export class ChromeLauncher {
    */
   getRunningPorts(): number[] {
     return Array.from(this.chromeProcesses.keys());
+  }
+
+  /** How long the Chrome on `port` has run, in ms; undefined for a port with none running. */
+  runningForMs(port: number): number | undefined {
+    const since = this.spawnedAt.get(port);
+    return this.chromeProcesses.has(port) && since !== undefined ? Date.now() - since : undefined;
   }
 
   /**

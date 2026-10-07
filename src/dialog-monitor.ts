@@ -22,6 +22,7 @@ import type { CDPSession, Page } from 'puppeteer-core';
 import { debugLog } from './debug-logger.js';
 import { createErrorResponse, createSuccessResponse } from './messages.js';
 import type { ToolResponseMeta } from './tool-response.js';
+import { ownScript } from './utils/own-script.js';
 
 export type JavaScriptDialogType = 'alert' | 'confirm' | 'prompt' | 'beforeunload';
 
@@ -144,8 +145,8 @@ export class DialogMonitor {
     await session.send('Runtime.enable');
     await session.send('Runtime.addBinding', { name: BINDING });
     await session.send('Page.enable', { enableFileChooserOpenedEvent: true } as any);
-    await session.send('Page.addScriptToEvaluateOnNewDocument', { source: CHOOSER_CLOSE_SCRIPT });
-    await session.send('Runtime.evaluate', { expression: CHOOSER_CLOSE_SCRIPT }).catch(() => {});
+    await session.send('Page.addScriptToEvaluateOnNewDocument', { source: ownScript('chooser-close', CHOOSER_CLOSE_SCRIPT) });
+    await session.send('Runtime.evaluate', { expression: ownScript('chooser-close', CHOOSER_CLOSE_SCRIPT) }).catch(() => {});
     return monitor;
   }
 

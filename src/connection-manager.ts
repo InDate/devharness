@@ -13,6 +13,7 @@ import type { DialogMonitor } from './dialog-monitor.js';
 import type { RuntimeType } from './types.js';
 import type { ChromeLauncher } from './chrome-launcher.js';
 import { disposeWorkerTargetRegistry } from './worker-targets.js';
+import { ownScript } from './utils/own-script.js';
 
 export interface Connection {
   id: string;
@@ -299,7 +300,7 @@ export class ConnectionManager {
           // Browser.getVersion is browser-level and works even when the tab is closed
           // Runtime.evaluate is target-level and will fail if the tab is closed
           // This properly detects closed tabs, not just killed Chrome processes
-          await client.Runtime.evaluate({ expression: '1', silent: true });
+          await client.Runtime.evaluate({ expression: ownScript('alive', '1'), silent: true });
           return true;
         } catch {
           return false;

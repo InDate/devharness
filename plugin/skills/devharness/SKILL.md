@@ -152,7 +152,7 @@ If devharness itself is stuck (not the target app), restart it — don't wait to
 
 `config({ action: 'status' })` reports version, entry file, its timestamp, and pids — check the timestamp before believing a rebuild landed; a build signals the supervisor in its own project's pidfile, not always this session's.
 
-Restart kills Chrome instances this session launched (relaunch with `connection launch`); managed servers survive and reattach. `config({ action: 'reload' })` hot-applies most config edits — restart is only needed for `tools.enabled`/`tools.disabled` or a genuinely stuck process.
+Restart kills Chrome instances this session launched (relaunch with `connection launch`); managed servers survive and reattach. Ending the session or `/reload-plugins` stops the servers this session started; `server start` or `autoRun: true` brings them back. `config({ action: 'reload' })` hot-applies most config edits — restart is only needed for `tools.enabled`/`tools.disabled` or a genuinely stuck process.
 
 ## Practices
 

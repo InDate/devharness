@@ -12,6 +12,7 @@
 
 import type { CDPSession } from 'puppeteer-core';
 import type { FactKind } from './bench/wire.js';
+import { ownScript } from './utils/own-script.js';
 
 export interface ListenerFact {
   /** `self`, an ancestor as `tag#id.class (n up)`, `document` or `window`. */
@@ -130,7 +131,7 @@ async function readEvents(
     current = parent?.result?.objectId;
     up++;
   }
-  const win: any = await call(client, 'Runtime.evaluate', { expression: 'window' });
+  const win: any = await call(client, 'Runtime.evaluate', { expression: ownScript('element-facts', 'window') });
   if (win?.result?.objectId) {
     const { listeners = [] } = await call(client, 'DOMDebugger.getEventListeners', { objectId: win.result.objectId, depth: 0 });
     if (listeners.length > DELEGATION_ROOT) {

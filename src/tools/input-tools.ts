@@ -16,7 +16,7 @@ import { domChangeMonitor, formatDOMChanges, DOMChanges } from '../dom-change-mo
 import type { ToolResponseMeta, ClickActionMeta } from '../tool-response.js';
 import { abortErrorFor, abortableSleep, isAbortError, throwIfAborted } from '../utils/abort.js';
 import { clickElement } from '../utils/click-element.js';
-import { readFingerprint, refuseOtherElement, type ElementFingerprint, type ElementRepair } from '../element-fingerprint.js';
+import { describeFingerprint, readFingerprint, refuseOtherElement, type ElementFingerprint, type ElementRepair } from '../element-fingerprint.js';
 
 // Coordinate schema for mouse actions
 const coordinateSchema = z.object({
@@ -52,7 +52,7 @@ const inputToolSchema = z.object({
   // drag
   from: coordinateSchema.optional(),
   to: coordinateSchema.optional(),
-  steps: z.number().optional().describe('Drag smoothness'),
+  steps: z.number().optional().describe('drag/swipe: moves; scroll: wheel events (default 1)'),
 
   // swipe: gesture on an element, instead of from/to pixels
   direction: z.enum(['left', 'right', 'up', 'down']).optional()
@@ -60,11 +60,12 @@ const inputToolSchema = z.object({
   distance: z.number().optional()
     .describe('swipe: travel px (default 60% of the element, capped at 96px, a reveal nudge; further can commit a row\'s destructive action)'),
   durationMs: z.number().optional()
-    .describe('swipe: gesture ms across `steps` (default 300); a short one is a flick, which can commit a row\'s destructive action'),
+    .describe('swipe: gesture ms across `steps` (default 300); a short one is a flick, which can commit a row\'s destructive action. scroll: ms across `steps` (default 16 per event)'),
 
   // scroll
   deltaX: z.number().optional().describe('Horizontal scroll px'),
   deltaY: z.number().optional().describe('Vertical scroll px'),
+  decay: z.number().optional().describe('scroll: each event\'s delta times this over the previous one (default 1); 0.85 over 20 steps is a momentum tail'),
   x: z.number().optional(),
   y: z.number().optional(),
 
@@ -148,6 +149,31 @@ async function withReplayBypass<T>(page: any, action: () => Promise<T>): Promise
       await page.evaluate(() => { (globalThis as any).__cdpReplayClickInProgress = false; });
     } catch { /* page may have navigated/closed */ }
   }
+}
+
+/**
+ * The element under a gesture's point, as a reply names it. A point over the
+ * bare page reads as no element, so a gesture that missed its target and one
+ * its target ignored return different replies.
+ */
+function pointTarget(fingerprint: ElementFingerprint | undefined): string {
+  if (!fingerprint || fingerprint.tag === 'html' || fingerprint.tag === 'body') return 'no element';
+  return describeFingerprint(fingerprint);
+}
+
+/**
+ * The element under a point, or the viewport the point falls outside. A wheel
+ * or touch dispatched outside the viewport reaches no element, and the reply
+ * names the viewport so the next point is aimed inside it.
+ */
+async function readPoint(page: any, point: { x: number; y: number }): Promise<{ fingerprint?: ElementFingerprint; outside?: { width: number; height: number } }> {
+  const viewport = await page.evaluate(() => ({ width: (globalThis as any).innerWidth, height: (globalThis as any).innerHeight })).catch(() => undefined);
+  if (viewport && (point.x < 0 || point.y < 0 || point.x >= viewport.width || point.y >= viewport.height)) return { outside: viewport };
+  return { fingerprint: await readFingerprint(page, point) };
+}
+
+function pointReading(reading: { fingerprint?: ElementFingerprint; outside?: { width: number; height: number } }): string {
+  return reading.outside ? `nothing: outside the ${reading.outside.width}x${reading.outside.height} viewport` : pointTarget(reading.fingerprint);
 }
 
 /**
@@ -1355,6 +1381,8 @@ export function createInputTools(
                 };
               }
 
+              const fromPoint = await readPoint(page, from);
+              const toPoint = await readPoint(page, to);
               const result = await executeWithPauseDetection(
                 targetCdpManager,
                 async () => {
@@ -1418,14 +1446,18 @@ export function createInputTools(
                 content: [
                   {
                     type: 'text',
-                    text: `Dragged from (${dragResult?.from.x}, ${dragResult?.from.y}) to (${dragResult?.to.x}, ${dragResult?.to.y})\n**Distance:** ${dragResult?.distance.toFixed(1)}px over ${dragResult?.steps} steps`,
+                    text: `Dragged from (${dragResult?.from.x}, ${dragResult?.from.y}) on ${pointReading(fromPoint)} to (${dragResult?.to.x}, ${dragResult?.to.y}) on ${pointReading(toPoint)}\n**Distance:** ${dragResult?.distance.toFixed(1)}px over ${dragResult?.steps} steps`,
                   },
                 ],
+                _meta: { tool: 'input', action: 'drag', timestamp: Date.now(), elements: { from: fromPoint.fingerprint ?? null, to: toPoint.fingerprint ?? null }, ...(fromPoint.outside || toPoint.outside ? { outsideViewport: { from: !!fromPoint.outside, to: !!toPoint.outside, viewport: fromPoint.outside ?? toPoint.outside } } : {}) },
               };
             }
 
             case 'scroll': {
               const { deltaX = 0, deltaY = 0, x, y } = args;
+              const events = Math.max(1, Math.round(args.steps ?? 1));
+              const decay = args.decay ?? 1;
+              const spacingMs = events > 1 ? (args.durationMs ?? events * 16) / (events - 1) : 0;
 
               if (deltaX === 0 && deltaY === 0) {
                 return {
@@ -1439,6 +1471,7 @@ export function createInputTools(
                 };
               }
 
+              const scrollPoint = x !== undefined && y !== undefined ? await readPoint(page, { x, y }) : undefined;
               const result = await executeWithPauseDetection(
                 targetCdpManager,
                 async () => {
@@ -1454,8 +1487,13 @@ export function createInputTools(
                       await mouse.move(x, y);
                     }
 
-                    // Perform scroll
-                    await mouse.wheel({ deltaX, deltaY });
+                    let scale = 1;
+                    for (let i = 0; i < events; i++) {
+                      throwIfAborted(abortSignal);
+                      await mouse.wheel({ deltaX: deltaX * scale, deltaY: deltaY * scale });
+                      scale *= decay;
+                      if (i < events - 1 && spacingMs > 0) await abortableSleep(spacingMs, abortSignal);
+                    }
 
                     // Get current scroll position
                     const scrollPosition = await page.evaluate(() => ({
@@ -1489,16 +1527,17 @@ export function createInputTools(
               if (deltaX < 0) directionParts.push(`left ${Math.abs(deltaX)}px`);
 
               const positionInfo = scrollResult?.position
-                ? ` at (${scrollResult.position.x}, ${scrollResult.position.y})`
+                ? ` at (${scrollResult.position.x}, ${scrollResult.position.y}) on ${pointReading(scrollPoint!)}`
                 : '';
 
               return {
                 content: [
                   {
                     type: 'text',
-                    text: `Scrolled ${directionParts.join(' and ')}${positionInfo}\n**Page position:** (${scrollResult?.scrollPosition.scrollX}, ${scrollResult?.scrollPosition.scrollY}) of (${scrollResult?.scrollPosition.maxScrollX}, ${scrollResult?.scrollPosition.maxScrollY})`,
+                    text: `Scrolled ${directionParts.join(' and ')}${positionInfo}${events > 1 ? ` as the first of ${events} wheel events, ${Math.round(spacingMs)}ms apart, each delta ×${decay} the last` : ''}\n**Page position:** (${scrollResult?.scrollPosition.scrollX}, ${scrollResult?.scrollPosition.scrollY}) of (${scrollResult?.scrollPosition.maxScrollX}, ${scrollResult?.scrollPosition.maxScrollY})`,
                   },
                 ],
+                _meta: { tool: 'input', action: 'scroll', timestamp: Date.now(), ...(scrollPoint ? { element: scrollPoint.fingerprint ?? null } : {}), ...(scrollPoint?.outside ? { outsideViewport: { viewport: scrollPoint.outside } } : {}) },
               };
             }
 
@@ -1645,6 +1684,8 @@ export function createInputTools(
 
               const end = isSwipe ? (args.to ?? selectorEnd!) : start;
               const steps = Math.max(1, args.steps ?? 10);
+              const fromPoint = await readPoint(page, { x: start.x, y: start.y });
+              const toPoint = isSwipe ? await readPoint(page, { x: end.x, y: end.y }) : fromPoint;
 
               const result = await executeWithPauseDetection(
                 targetCdpManager,
@@ -1699,9 +1740,10 @@ export function createInputTools(
                 content: [{
                   type: 'text',
                   text: isSwipe
-                    ? `Swiped (touch) from (${r.from.x},${r.from.y}) to (${r.to.x},${r.to.y}) in ${r.steps} steps`
-                    : `Tapped (touch) at (${r.from.x},${r.from.y})`,
+                    ? `Swiped (touch) from (${r.from.x},${r.from.y}) on ${pointReading(fromPoint)} to (${r.to.x},${r.to.y}) on ${pointReading(toPoint)} in ${r.steps} steps`
+                    : `Tapped (touch) at (${r.from.x},${r.from.y}) on ${pointReading(fromPoint)}`,
                 }],
+                _meta: { tool: 'input', action: args.action, timestamp: Date.now(), elements: { from: fromPoint.fingerprint ?? null, to: toPoint.fingerprint ?? null }, ...(fromPoint.outside || toPoint.outside ? { outsideViewport: { from: !!fromPoint.outside, to: !!toPoint.outside, viewport: fromPoint.outside ?? toPoint.outside } } : {}) },
               };
             }
 

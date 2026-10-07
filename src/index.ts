@@ -1616,7 +1616,11 @@ async function main() {
         await debugLog('index', `Closed ${closedCount} inactive connection(s)`);
       }
 
+      // A launch registers its connection only after Chrome is up and the
+      // page settles; a Chrome younger than the threshold is still in that
+      // window, and killing it fails the launch that started it.
       for (const port of chromeLauncher.getRunningPorts()) {
+        if ((chromeLauncher.runningForMs(port) ?? Infinity) < INACTIVITY_THRESHOLD) continue;
         if (!connectionManager.hasBrowser('localhost', port)) {
           console.error(`[devharness] Killing orphaned Chrome on port ${port} (no tracked connections)`);
           await debugLog('index', `Killing orphaned Chrome on port ${port} (no tracked connections) due to inactivity`);

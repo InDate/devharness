@@ -31,6 +31,7 @@ import { NO_TOOL_VALUES, type ServerLog, type ServerRow, type ToolGroup, type To
 import { createSequenceDriver, getSequencesRoot, labelFor } from '../bench-mode/sequence-driver.js';
 import { answerCalls, describeDialog, type OpenDialog } from '../dialog-monitor.js';
 import { sanitizeReference } from '../reference-validator.js';
+import { holdReading } from '../hold.js';
 
 const benchSchema = z.object({
   action: z.enum(['start', 'stop', 'tick', 'hold', 'release', 'picker', 'list', 'status', 'keepStep', 'dropStep', 'flagStep', 'sweep', 'retake', 'capture']),
@@ -124,6 +125,20 @@ async function readSequenceAnnotations(commandRecorder: CommandRecorder): Promis
     });
   }
   return out.sort((a, b) => a.annotation.at.localeCompare(b.annotation.at));
+}
+
+/**
+ * The page's standing as a reply names it: the debugger's pause where one
+ * stands, else every non-network hold with its source, else the bench's own
+ * hold, else running. The bench's flag alone reads a pause another surface
+ * took as running.
+ */
+function pageStanding(connection: string, cdpManager: { pausedAt(): { url: string; line: number } | undefined } | undefined, frozen: boolean): string {
+  const pausedAt = cdpManager?.pausedAt();
+  if (pausedAt) return `paused in the debugger at ${pausedAt.url}:${pausedAt.line}`;
+  const held = holdReading(connection).held.filter(one => one.layer !== 'network');
+  if (held.length) return `held (${held.map(one => `${one.layer} by ${one.source}`).join(', ')})`;
+  return frozen ? 'held' : 'running';
 }
 
 export function createBenchTools(
@@ -250,9 +265,12 @@ export function createBenchTools(
               return at ? { at: { step: at.index + 1, label: at.label } } : {};
             })()),
           } : null;
+          const pausedAt = resolved.cdpManager?.pausedAt();
+          const held = holdReading(connection).held.filter(one => one.layer !== 'network');
+          const page = pageStanding(connection, resolved.cdpManager, state?.frozen === true);
           const lines = [
             state
-              ? `Page ${state.frozen ? 'held' : 'running'}, picker ${state.pickerArmed ? 'armed' : 'idle'}, ${state.totalSteps} callback(s)/${state.tickMs}ms stepped, ${state.picks} pick(s), ${state.annotations} annotation(s). Bench: ${state.benchUrl}`
+              ? `Page ${page}, picker ${state.pickerArmed ? 'armed' : 'idle'}, ${state.totalSteps} callback(s)/${state.tickMs}ms stepped, ${state.picks} pick(s), ${state.annotations} annotation(s). Bench: ${state.benchUrl}`
               : `The bench is closed here. \`bench({ action: "start", connection: "${connection}" })\` opens it with the page running.`,
             sequence
               ? `**Sequence:** "${sequence.name}" ${sequence.standing} at step ${sequence.nextStep} of ${sequence.totalSteps}${sequence.at ? `: ${sequence.at.label}` : ''}.`
@@ -268,7 +286,7 @@ export function createBenchTools(
             active: state ? 'open' : 'closed',
             detail: lines.join('\n'),
           });
-          return { ...response, _meta: buildMeta('status', { active: !!state, connection, state, pane: sequence, dialog }) };
+          return { ...response, _meta: buildMeta('status', { active: !!state, connection, state, pane: sequence, dialog, page: { paused: !!pausedAt, ...(pausedAt ? { pausedAt } : {}), held: held.map(one => ({ layer: one.layer, source: one.source })) } }) };
         }
 
         const targetPuppeteerManager = resolved.puppeteerManager;
@@ -291,7 +309,7 @@ export function createBenchTools(
               const response = createSuccessResponse('BENCH_ALREADY_OPEN', {
                 connection,
                 benchUrl: running.benchUrl,
-                held: running.frozen ? 'held' : 'running',
+                held: pageStanding(connection, resolved.cdpManager, running.frozen),
                 pickerState: running.pickerArmed ? 'armed' : 'idle',
                 unapplied: unapplied || undefined,
               });
@@ -356,6 +374,7 @@ export function createBenchTools(
             const response = createSuccessResponse('BENCH_STARTED', {
               connection,
               benchUrl: state.benchUrl,
+              page: pageStanding(connection, resolved.cdpManager, state.frozen),
               eventStreamPath: streamPath,
               ...(await streamReaders(sessionName) === 0
                 ? { watchCall: watchCall(sessionName) }

@@ -96,6 +96,9 @@ export interface SequenceDriver {
   /** Swap the origin every absolute URL in the run uses. '' clears it. */
   setBaseUrl: (baseUrl: string) => void;
   baseUrl: () => string | undefined;
+  /** The KEY=value file each run this bench starts reads {{env:NAME}} from. '' returns to `.devharness/sequences.env`. */
+  setEnvFile: (envFile: string) => void;
+  envFile: () => string | undefined;
   finish: (signal?: AbortSignal) => Promise<string | undefined>;
   /**
    * Stop the run where it stands, holding the step it reached.

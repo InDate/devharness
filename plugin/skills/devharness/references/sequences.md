@@ -207,7 +207,8 @@ separate runs. Pass `wait: true` to block until completion and get the full
 result in one call (the pre-0.7 behaviour). `bench: true` plays it instead in
 the bench open on `connection`, from step 1, so its rows, badges and
 check outcomes show there; `replay status` does not track that play. It
-replaces the sequence showing; no `stop`.
+replaces the sequence showing; no `stop`. An `envFile` passed with it holds
+for every later play in that bench, the pane's Replay button included.
 
 Useful `run` parameters:
 

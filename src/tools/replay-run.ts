@@ -92,9 +92,16 @@ async function runInBench(args: ReplayArgs, recorder: CommandRecorder) {
   if (!connection || !bench.isBenchOpen(connection)) {
     return createErrorResponse('REPLAY_BENCH_NOT_OPEN', { connection: connection ?? '(none given)' });
   }
-  const carried = (['baseUrl', 'startUrl', 'variables', 'envFile', 'connections', 'startFrom', 'stepTo'] as const)
+  const carried = (['baseUrl', 'startUrl', 'variables', 'connections', 'startFrom', 'stepTo'] as const)
     .filter(key => args[key] !== undefined);
   if (carried.length) return createErrorResponse('REPLAY_BENCH_UNSUPPORTED', { params: carried.join(', ') });
+  if (args.envFile !== undefined) {
+    const loaded = await loadRunEnv(args.envFile);
+    if ('error' in loaded) {
+      return createErrorResponse('INVALID_PARAMETER', { parameter: 'envFile', value: args.envFile, message: loaded.error });
+    }
+    bench.setSequenceEnvFile(connection, args.envFile);
+  }
   const name = String(args.name ?? '');
   const since = recorder.getCurrentHistoryIndex();
   await bench.selectSequence(connection, name);

@@ -27,7 +27,8 @@ async function measureChrome(page: Page): Promise<Size> {
   });
 }
 
-async function readViewport(page: Page): Promise<Size> {
+/** The layout viewport the page measures now, innerWidth x innerHeight. */
+export async function readViewport(page: Page): Promise<Size> {
   return page.evaluate(() => {
     const w = (globalThis as any).window;
     return { width: w.innerWidth, height: w.innerHeight };

@@ -5,6 +5,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CDPManager, EvaluateExpressionExceptionError, EvaluateExpressionTimeoutError } from './cdp-manager.js';
+import { ownScript } from './utils/own-script.js';
 
 // We can't directly test the private methods, but we can test the logic
 // by extracting and testing the calculations
@@ -402,7 +403,7 @@ describe('CDPManager.evaluateExpression() - bug-004 (hang on thrown RangeError)'
     await cdpManager.evaluateExpression('1');
 
     expect(evaluate).toHaveBeenCalledWith(
-      expect.objectContaining({ expression: '1', timeout: expect.any(Number) })
+      expect.objectContaining({ expression: ownScript('evaluate', '1'), timeout: expect.any(Number) })
     );
     const passedTimeout = evaluate.mock.calls[0][0].timeout;
     expect(passedTimeout).toBeLessThan(10_000); // strictly less than our own client-side bound

@@ -8,6 +8,7 @@
  */
 
 import CDP from 'chrome-remote-interface';
+import { ownScript } from './utils/own-script.js';
 
 /** The three target types that run script outside the page. */
 const WORKER_TYPES = ['service_worker', 'worker', 'shared_worker'] as const;
@@ -106,7 +107,7 @@ export class WorkerTargetRegistry {
     const target = await this.resolve(ref);
     const worker = await this.attach(target);
     const result = await worker.client.Runtime.evaluate({
-      expression,
+      expression: ownScript('worker-evaluate', expression),
       returnByValue: true,
       awaitPromise,
     });

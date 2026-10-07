@@ -226,9 +226,10 @@ Chrome launched with debugging on port {{port}}
 
 ## CHROME_LAUNCH_AUTO_CONNECT_FAILED
 
-**Type:** warning
+**Type:** error
+**Code:** CHROME_LAUNCH_AUTO_CONNECT_FAILED
 
-Chrome launched successfully but auto-connect failed: {{error}}
+Chrome started on port {{port}}, and connecting to it failed: {{error}}. The launch made no connection, so no step reaches this browser.
 
 **Note:** Use `connection({ action: 'attach', connection })` to connect manually.
 
@@ -3960,7 +3961,7 @@ Note: `tools.enabled`/`tools.disabled` changes still require an MCP server resta
 
 Sent a restart signal to the devharness supervisor (PID {{pid}}). The server restarts shortly - no reconnect needed.
 
-Note: any Chrome instances this session launched will be killed (launch them again with `connection({ action: 'launch' })`). Managed dev servers (the `server` tool) survive and reattach automatically.
+Note: any Chrome instances this session launched will be killed (launch them again with `connection({ action: 'launch' })`). Managed dev servers (the `server` tool) survive this restart and reattach. Ending the session or `/reload-plugins` ends the supervisor, which stops the servers this session started; `server({ action: 'start' })` or `autoRun: true` brings them back.
 
 ---
 
@@ -4530,7 +4531,7 @@ Bench: `{{benchUrl}}` - the page is {{held}} and the picker is {{pickerState}}; 
 **Type:** success
 **Summary:** Bench open on {{connection}}
 
-Bench: `{{benchUrl}}` - the page runs and the picker is idle.
+Bench: `{{benchUrl}}` - the page is {{page}} and the picker is idle.
 
 {{#watchCall}}**No watch reads the event stream. Arm it now:** `{{watchCall}}`{{/watchCall}}
 

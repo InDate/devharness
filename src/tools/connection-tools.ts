@@ -25,7 +25,7 @@ import { configManager } from '../config.js';
 import { debugLog } from '../debug-logger.js';
 import { validateReference, requireValidReference, sanitizeReference, UNNAMED_CONNECTION } from '../reference-validator.js';
 import { startProxyFor, shareProxy, getProxy } from '../proxy/registry.js';
-import { sizeWindowToViewport } from '../window-sizing.js';
+import { readViewport, sizeWindowToViewport } from '../window-sizing.js';
 import type { ToolResponseMeta, PausedAtMeta } from '../tool-response.js';
 
 /**
@@ -399,6 +399,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
         let consoleStats = '';
         let viewportSet: { width: number; height: number } | undefined;
         let viewportClamped: { width: number; height: number } | undefined;
+        let viewportTarget: { width: number; height: number } | undefined;
 
         if (autoConnect) {
           try {
@@ -479,6 +480,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
                   height: args.height ?? current.height,
                 };
                 const sized = await sizeWindowToViewport(page, target, args.headless === true);
+                viewportTarget = target;
                 viewportSet = sized.viewport;
                 viewportClamped = sized.clampedTo;
                 await debugLog(
@@ -546,6 +548,16 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
               const page = puppeteerManager.getPage();
               pageUrl = page.url();
               title = await page.title();
+              // A navigation can change the viewport the sizing read on the blank tab:
+              // per-origin zoom rescales CSS pixels and a window manager can move the
+              // window, so the reply carries what the loaded page measures.
+              if (viewportTarget) {
+                const measured = await readViewport(page).catch(() => undefined);
+                if (measured) {
+                  viewportSet = measured;
+                  viewportClamped = measured.width !== viewportTarget.width || measured.height !== viewportTarget.height ? measured : undefined;
+                }
+              }
 
               // Get console stats and update cursor so first tool call doesn't re-report these
               const logStats = consoleMonitor.getLogStats();
@@ -566,13 +578,9 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
 
             // If auto-connect fails, return detailed error
             const errorMessage = connectError instanceof Error ? connectError.message : String(connectError);
-            return createSuccessResponse('CHROME_LAUNCH_AUTO_CONNECT_FAILED', {
+            return createErrorResponse('CHROME_LAUNCH_AUTO_CONNECT_FAILED', {
               port: port.toString(),
               error: errorMessage,
-              suggestion: 'Chrome launched but auto-connect failed. Try connecting with `connection` action `attach`.'
-            }, {
-              port: port,
-              isNewBrowser,
             });
           }
         }
@@ -755,6 +763,14 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
       }
       if (args.url) await page.goto(args.url, { waitUntil: 'load', timeout: 30000 });
       if (args.bringToFront) await page.bringToFront();
+      if (viewport) {
+        const target = { width: args.width ?? viewport.width, height: args.height ?? viewport.height };
+        const measured = await readViewport(page).catch(() => undefined);
+        if (measured) {
+          viewport = measured;
+          viewportClamped = measured.width !== target.width || measured.height !== target.height;
+        }
+      }
 
       const pageIndex = (await puppeteerManager.getPages()).findIndex(p => p === page);
       const connectionId = connectionManager.createConnection(

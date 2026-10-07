@@ -10,6 +10,7 @@
  */
 
 import type { Page, CDPSession } from 'puppeteer-core';
+import { ownScript } from './utils/own-script.js';
 
 // Types for verification results
 export interface UIIssue {
@@ -347,7 +348,7 @@ export class UIVerifier {
       try {
         // Get element handle and objectId via Runtime.evaluate
         const result = await this.cdpSession!.send('Runtime.evaluate', {
-          expression: `document.querySelector('${el.selector.replace(/'/g, "\\'")}')`,
+          expression: ownScript('ui-verify', `document.querySelector('${el.selector.replace(/'/g, "\\'")}')`),
           objectGroup: 'ui-verify',
         });
 

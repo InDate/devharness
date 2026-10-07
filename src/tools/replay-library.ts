@@ -317,6 +317,13 @@ export async function handleDelete(args: ReplayArgs, recorder: CommandRecorder) 
 }
 
 export async function handleExport(args: ReplayArgs, recorder: CommandRecorder) {
+  if (args.filename !== undefined) {
+    return createErrorResponse('INVALID_PARAMETER', {
+      parameter: 'filename',
+      value: args.filename,
+      message: 'export writes the file under the sequence\'s own name, so `filename` holds no effect on it. Inserted steps reach the original file through `insert` with `overwrite: true`; a saved sequence takes a new name on the bench home page.'
+    });
+  }
   const loadResult = await loadSequence({ name: args.name, sequenceId: args.sequenceId }, recorder);
   if (!loadResult.success) {
     return handleLoadSequenceError(loadResult, 'export');

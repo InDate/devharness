@@ -7,9 +7,9 @@ import CDP from 'chrome-remote-interface';
 import type { BreakpointInfo, CallFrame, DebuggerState, RuntimeType, CDPConsoleMessage, ConsoleMessageCallback, DOMBreakpointInfo, DOMBreakpointType, EventListenerBreakpointInfo, XHRBreakpointInfo } from './types.js';
 import type { SourceMapHandler } from './sourcemap-handler.js';
 import { debugLog } from './debug-logger.js';
+import { OWN_SCRIPTS, WRAPS_APP_CODE, ownScript } from './utils/own-script.js';
 
 /** Scripts devharness itself runs in a page, which Puppeteer names pptr:…. */
-const OWN_SCRIPTS = /^pptr:/;
 
 /**
  * Thrown by evaluateExpression() when the evaluated code itself threw
@@ -115,6 +115,8 @@ export class CDPManager {
   private resumeWaiters: Array<() => void> = [];
   /** A pause asked for while no JS ran: it fires on the next statement the page runs. */
   private pauseArmed = false;
+  /** Set while an armed pause steps on from a devharness script; the resume that step produces is no resume of the page. */
+  private steppingOwnScript = false;
   private scriptWaitResolvers: Array<{ pattern: string | RegExp; resolve: (url: string) => void }> = [];
   private sourceMapHandler: SourceMapHandler | null = null;
   private logpointLimitExceeded: {
@@ -308,17 +310,22 @@ export class CDPManager {
 
       Debugger.paused((params: any) => {
         // A pause devharness asked for on an idle page stops at the next script
-        // the page runs, and devharness's own reads of the page - Puppeteer's,
-        // named pptr:… - are page scripts too. Stopped in one, the read hangs
-        // until the hold is released. Stepping out runs the read to its end
-        // and stops at the next script after it, which is the app's.
+        // the page runs, and devharness's own scripts are page scripts too:
+        // Puppeteer's, named pptr:…, and the ones tagged devharness:// (see
+        // utils/own-script.ts). Stopped in a read, the read hangs until the
+        // hold is released; stepping out runs it to its end. A wrapper that
+        // calls into the app - the timer wrapper - is stepped into instead, so
+        // the pause lands in the app's callback rather than running past it.
         const top = params.callFrames?.[0];
         const where = top?.url || (top?.location?.scriptId ? this.scriptIdToUrl.get(top.location.scriptId) : '') || '';
         if (this.pauseArmed && OWN_SCRIPTS.test(where)) {
-          debugLog('cdp-manager', `the armed pause landed in ${where}; stepping out of it`);
-          void Debugger.stepOut().catch(() => {});
+          const into = WRAPS_APP_CODE.test(where);
+          debugLog('cdp-manager', `the armed pause landed in ${where}; stepping ${into ? 'into' : 'out of'} it`);
+          this.steppingOwnScript = true;
+          void (into ? Debugger.stepInto() : Debugger.stepOut()).catch(() => {});
           return;
         }
+        this.steppingOwnScript = false;
         debugLog('cdp-manager', `Debugger.paused event received, resolvers count: ${this.pauseResolvers.length}`);
         this.state.paused = true;
         this.pauseArmed = false;
@@ -344,6 +351,10 @@ export class CDPManager {
       });
 
       Debugger.resumed(() => {
+        if (this.steppingOwnScript) {
+          this.steppingOwnScript = false;
+          return;
+        }
         this.state.paused = false;
         this.state.currentCallFrames = undefined;
         for (const resolve of this.resumeWaiters.splice(0)) resolve();
@@ -443,6 +454,13 @@ export class CDPManager {
     return this.state.paused;
   }
 
+  /** The script and 1-based line the debugger stands paused at; undefined while running. */
+  pausedAt(): { url: string; line: number } | undefined {
+    const top = this.state.paused ? this.state.currentCallFrames?.[0] : undefined;
+    if (!top) return undefined;
+    return { url: top.url || this.scriptIdToUrl.get(top.location.scriptId) || 'unknown', line: top.location.lineNumber + 1 };
+  }
+
   /**
    * Get the runtime type (chrome, node, or unknown)
    */
@@ -464,7 +482,7 @@ export class CDPManager {
 
       // Try to evaluate 'typeof window' - exists in browsers, not in Node.js
       const windowCheck = await Runtime.evaluate({
-        expression: 'typeof window',
+        expression: ownScript('runtime-type', 'typeof window'),
         silent: true,
       });
 
@@ -476,7 +494,7 @@ export class CDPManager {
 
       // Try to evaluate 'typeof process' - exists in Node.js, not in browsers
       const processCheck = await Runtime.evaluate({
-        expression: 'typeof process',
+        expression: ownScript('runtime-type', 'typeof process'),
         silent: true,
       });
 
@@ -1141,7 +1159,7 @@ export class CDPManager {
         // when the page is actually running.
         const canAwaitInProtocol = awaitPromise && !this.state.paused;
         result = await Runtime.evaluate({
-          expression,
+          expression: ownScript('evaluate', expression),
           timeout: cdpTimeoutMs,
           ...(canAwaitInProtocol ? { awaitPromise: true } : {}),
         });
@@ -1619,7 +1637,7 @@ export class CDPManager {
 
     // Sent without waiting: a pause requested on an idle page stops at this
     // evaluation, which then answers only once the page resumes.
-    Runtime.evaluate({ expression: consoleExpression }).catch(() => {});
+    Runtime.evaluate({ expression: ownScript('console-link', consoleExpression) }).catch(() => {});
   }
 
   /**

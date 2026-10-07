@@ -277,6 +277,7 @@ export function createSequenceDriver(
   /** Origin override for the run: a sequence recorded against one port can be
    *  pointed at another without editing the file. */
   let baseUrl = '';
+  let envFile = '';
 
   /**
    * The run's variable store, held by reference.
@@ -373,12 +374,12 @@ export function createSequenceDriver(
       if (declared?.connection) references.add(String(declared.connection));
     }
 
-    references.delete(connection);
-    if (references.size === 0) return undefined;
     if (references.size > 1) {
       debugLog('bench', `sequence ${name} uses ${references.size} connections; left unbound`);
       return undefined;
     }
+    references.delete(connection);
+    if (references.size === 0) return undefined;
     return Object.fromEntries([...references].map(reference => [reference, connection]));
   };
 
@@ -810,6 +811,7 @@ export function createSequenceDriver(
           ...(holdNothing ? { playing: true } : {}),
           ...(rebindOnto(selected, selectedConnection) ? { connections: rebindOnto(selected, selectedConnection) } : {}),
           ...(baseUrl ? { baseUrl } : {}),
+          ...(envFile ? { envFile } : {}),
         }, signal);
       }
       return undefined;
@@ -826,6 +828,7 @@ export function createSequenceDriver(
           action: 'run', name: selected, wait: true, connection: selectedConnection, variables: recordedText(),
           ...(rebindOnto(selected, selectedConnection) ? { connections: rebindOnto(selected, selectedConnection) } : {}),
           ...(baseUrl ? { baseUrl } : {}),
+          ...(envFile ? { envFile } : {}),
         }, signal);
         // A whole run leaves no session behind, so nothing else records where it
         // got to - and without that the cursor sits at 0 with the first step
@@ -856,6 +859,7 @@ export function createSequenceDriver(
         action: 'run', name, stepTo: step + 1, wait: true, connection: selectedConnection, variables: recordedText(),
         ...(rebindOnto(name, selectedConnection) ? { connections: rebindOnto(name, selectedConnection) } : {}),
         ...(baseUrl ? { baseUrl } : {}),
+        ...(envFile ? { envFile } : {}),
       }, signal);
     },
 
@@ -1451,5 +1455,7 @@ export function createSequenceDriver(
 
     setBaseUrl: (value: string) => { baseUrl = value; },
     baseUrl: () => baseUrl || undefined,
+    setEnvFile: (value: string) => { envFile = value; },
+    envFile: () => envFile || undefined,
   };
 }

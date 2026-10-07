@@ -363,6 +363,8 @@ export interface BenchToolMeta {
   alreadyOpen?: boolean;
   connection?: string;
   state?: BenchReport;
+  /** status: the page's standing - the debugger's pause and every non-network hold, each with its source. */
+  page?: { paused: boolean; pausedAt?: { url: string; line: number }; held: Array<{ layer: string; source: string }> };
   /** status: the sequence open in the bench as its pane shows it, or null with none selected. */
   pane?: {
     name: string;

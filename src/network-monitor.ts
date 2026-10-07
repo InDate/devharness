@@ -6,6 +6,7 @@
 import { Page, HTTPRequest, HTTPResponse } from 'puppeteer-core';
 import type { InitiatorRoot } from './proxy/intercept-proxy.js';
 import { SEND_BINDING, SEND_WRAPPER_SOURCE, type SocketSendReport, type RequestOriginReport } from './proxy/send-provenance.js';
+import { ownScript } from './utils/own-script.js';
 
 export interface StoredNetworkRequest {
   id: string;
@@ -372,7 +373,7 @@ export class NetworkMonitor {
         // for those sends, and the settle window is what covers it.
         child.on('Runtime.executionContextCreated', (created: any) => {
           void child.send('Runtime.evaluate', {
-            expression: SEND_WRAPPER_SOURCE, awaitPromise: false, returnByValue: true,
+            expression: ownScript('send-wrapper', SEND_WRAPPER_SOURCE), awaitPromise: false, returnByValue: true,
             ...(created?.context?.id !== undefined ? { contextId: created.context.id } : {}),
           }).catch(() => { /* the target went with its page */ });
         });
@@ -443,10 +444,10 @@ export class NetworkMonitor {
       // evaluate below is what reaches a worker, and what reaches a page that
       // was attached to after its document had already loaded.
       void client.send('Page.enable').catch(() => {});
-      void client.send('Page.addScriptToEvaluateOnNewDocument', { source: SEND_WRAPPER_SOURCE })
+      void client.send('Page.addScriptToEvaluateOnNewDocument', { source: ownScript('send-wrapper', SEND_WRAPPER_SOURCE) })
         .catch(() => { /* no Page here; the evaluate still installs it */ });
       void client.send('Runtime.evaluate', {
-        expression: SEND_WRAPPER_SOURCE, awaitPromise: false, returnByValue: true,
+        expression: ownScript('send-wrapper', SEND_WRAPPER_SOURCE), awaitPromise: false, returnByValue: true,
       }).catch(() => { /* nothing to evaluate against yet */ });
     } catch {
       // No Runtime on this target: sends cross unreported and the wire's own

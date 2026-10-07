@@ -181,9 +181,12 @@ export async function handleInsert(args: ReplayArgs, recorder: CommandRecorder) 
       return createErrorResponse('CREATE_FAILED', { message: 'Failed to create new sequence' });
     }
 
-    // Manually set commands
+    const { id: _id, name: _name, createdAt: _createdAt, commands: _commands, ...fields } = JSON.parse(JSON.stringify(sequence));
+    renumberSteps(fields, (old) => (old >= insertAfter ? old + commandsToInsert.length : old));
+    Object.assign(newSequence, fields);
     (newSequence as any).commands = newCommands;
     if (normalized.hoisted) (newSequence as any).recordedConnection = normalized.hoisted;
+    else delete (newSequence as any).recordedConnection;
 
     return { content: [{ type: 'text', text: formatInsertResult(newName, newSequence.id, commandsToInsert.length, insertAfter, newCommands.length, false) + connectionNote }] };
   }

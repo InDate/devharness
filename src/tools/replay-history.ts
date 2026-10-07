@@ -13,6 +13,29 @@ import { formatHistory } from './replay-formatters.js';
 import { readHistoryLines, getHistoryFilePath } from '../debug-logger.js';
 import { type ReplayArgs } from './replay-schema.js';
 
+/** The most of one `inspect` step's reading a batch reply carries. */
+const READING_CHARS = 4_000;
+
+/**
+ * What a batch reply prints under a step's line: an `inspect` step's reading,
+ * whole up to READING_CHARS, since a repeated read-back is run for its value;
+ * any other step's first line of reply, which names what it acted on.
+ */
+function stepReply(tool: string, response: any): string {
+  const text: string = (response?.content ?? [])
+    .filter((part: any) => part?.type === 'text' && typeof part.text === 'string')
+    .map((part: any) => part.text)
+    .join('\n')
+    .trim();
+  if (!text) return '';
+  if (tool === 'inspect') {
+    const reading = text.length > READING_CHARS ? `${text.slice(0, READING_CHARS)}\n[cut at ${READING_CHARS} of ${text.length} characters]` : text;
+    return `\n${reading.split('\n').map(line => `    ${line}`).join('\n')}`;
+  }
+  const first = text.split('\n').map(line => line.replace(/\*\*/g, '').trim()).find(Boolean);
+  return first ? ` - ${first}` : '';
+}
+
 export async function handleHistory(args: ReplayArgs, recorder: CommandRecorder) {
   const limit = args.limit || 50;
   const history = recorder.getHistory(limit);
@@ -138,7 +161,7 @@ export async function handleRepeat(
   }
 
   // Execute commands
-  const results: Array<{ index: number; tool: string; success: boolean; error?: string }> = [];
+  const results: Array<{ index: number; tool: string; success: boolean; error?: string; reply?: string }> = [];
   const startTime = Date.now();
 
   for (const cmd of commands) {
@@ -152,8 +175,8 @@ export async function handleRepeat(
         params.connection = connection;
       }
 
-      await executeToolCall(cmd.tool, params);
-      results.push({ index: cmd.index, tool: cmd.tool, success: true });
+      const response = await executeToolCall(cmd.tool, params);
+      results.push({ index: cmd.index, tool: cmd.tool, success: true, reply: stepReply(cmd.tool, response) });
     } catch (error: any) {
       results.push({ index: cmd.index, tool: cmd.tool, success: false, error: error.message || String(error) });
       // Stop on first error
@@ -173,7 +196,7 @@ export async function handleRepeat(
   response += '\n';
   results.forEach(r => {
     const icon = r.success ? '✓' : '✗';
-    response += `\n#${r.index}. **${r.tool}** ${icon}`;
+    response += `\n#${r.index}. **${r.tool}** ${icon}${r.reply ?? ''}`;
     if (r.error) {
       response += ` - ${r.error}`;
     }
@@ -286,7 +309,7 @@ export async function handleRunFromLog(
   }
 
   // Execute commands
-  const results: Array<{ line: number; tool: string; success: boolean; error?: string }> = [];
+  const results: Array<{ line: number; tool: string; success: boolean; error?: string; reply?: string }> = [];
   const startTime = Date.now();
 
   for (const cmd of commands) {
@@ -297,8 +320,8 @@ export async function handleRunFromLog(
         params.connection = connection;
       }
 
-      await executeToolCall(cmd.tool, params);
-      results.push({ line: cmd.line, tool: cmd.tool, success: true });
+      const response = await executeToolCall(cmd.tool, params);
+      results.push({ line: cmd.line, tool: cmd.tool, success: true, reply: stepReply(cmd.tool, response) });
     } catch (error: any) {
       results.push({ line: cmd.line, tool: cmd.tool, success: false, error: error.message || String(error) });
       break;
@@ -316,7 +339,7 @@ export async function handleRunFromLog(
   response += '\n';
   results.forEach(r => {
     const icon = r.success ? '✓' : '✗';
-    response += `\nL${r.line}. **${r.tool}** ${icon}`;
+    response += `\nL${r.line}. **${r.tool}** ${icon}${r.reply ?? ''}`;
     if (r.error) {
       response += ` - ${r.error}`;
     }

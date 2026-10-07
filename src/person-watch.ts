@@ -18,6 +18,7 @@ import type { ElementFingerprint } from './element-fingerprint.js';
 import { personInputScript } from './element-fingerprint.js';
 import { addCause } from './proxy/cause-timeline.js';
 import { recordPauseAction } from './pause-actions.js';
+import { ownScript } from './utils/own-script.js';
 
 const BINDING = '__devharnessInput';
 
@@ -93,7 +94,7 @@ export async function watchPersonInput(connection: string, page: any): Promise<v
     if (typeof input?.action !== 'string') return;
     void record(connection, { ...input, at: typeof input.at === 'number' ? input.at : Date.now() }).catch(() => {});
   };
-  const script = personInputScript();
+  const script = ownScript('person-watch', personInputScript());
   try {
     await page.exposeFunction(BINDING, onReport);
   } catch {

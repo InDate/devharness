@@ -294,6 +294,8 @@ function noteSequences() {
     issue: async () => undefined,
     setBaseUrl: () => {},
     baseUrl: () => undefined,
+    setEnvFile: () => {},
+    envFile: () => undefined,
   };
   return api;
 }
@@ -977,6 +979,8 @@ describe('a step and the rest of devharness', () => {
         issue: async () => undefined,
         setBaseUrl: () => {},
         baseUrl: () => undefined,
+        setEnvFile: () => {},
+        envFile: () => undefined,
       };
     })();
     const order: string[] = [];
@@ -1064,6 +1068,8 @@ describe('stepping a sequence', () => {
       issue: async () => undefined,
       setBaseUrl: (value: string) => { calls.push(`baseUrl:${value}`); base = value; },
       baseUrl: () => base || undefined,
+      setEnvFile: () => {},
+      envFile: () => undefined,
       halt: async () => { calls.push('halt'); },
       cancel: async () => { calls.push('cancel'); open = null; },
       attachAnnotation: async (step: number, annotation: any) => {

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { createTool } from '../validation-helpers.js';
 import { createErrorResponse } from '../messages.js';
-import { ALL_LAYERS, hold, holdReading, release, step, type HoldReading } from '../hold.js';
+import { ALL_LAYERS, hold, holdableLayers, holdReading, release, step, type HoldReading } from '../hold.js';
 import { getProxy } from '../proxy/registry.js';
 
 const layerEnum = z.enum(['code', 'ui', 'network']);
@@ -60,11 +60,23 @@ export function createHoldTools() {
           _meta: meta(reading),
         });
 
+        if (holdableLayers(connection).length === 0 && holdReading(connection).held.length === 0) {
+          return createErrorResponse('CONNECTION_NOT_FOUND', {
+            message: `Nothing on "${connection}" can be held: no connection by that name has a debugger, a bench or a proxy attached. \`connection({ action: 'list' })\` names the live ones.`,
+          });
+        }
         switch (args.action) {
           case 'hold':
             return respond(await hold(connection, { source: 'tool', layers: args.layers ?? ALL_LAYERS }));
-          case 'release':
-            return respond(await release(connection, args.layers ? { layers: args.layers } : {}));
+          case 'release': {
+            const before = holdReading(connection).held.map(layer => layer.layer);
+            const reading = await release(connection, args.layers ? { layers: args.layers } : {});
+            const after = new Set(reading.held.map(layer => layer.layer));
+            const released = before.filter(layer => !after.has(layer));
+            const response = respond(reading);
+            response.content[0].text = `${released.length ? `Released ${released.map(layer => `${LAYER_WORDS[layer]} (${layer})`).join(', ')}.` : 'Released nothing: no named layer was held.'}\n${response.content[0].text}`;
+            return { ...response, _meta: { ...response._meta, released } };
+          }
           case 'status':
             return respond(holdReading(connection));
           case 'step': {

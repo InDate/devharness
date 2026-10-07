@@ -540,9 +540,10 @@ function pageHeldRefusal(toolName: string, args: Record<string, any>): any {
     || (toolName === 'check' && Number(args.withinMs) > 0)
     || (toolName === 'replay' && DRIVING_REPLAY.has(String(args.action)));
   if (!drives) return undefined;
-  const hold = benchHold(args.connection);
+  const resumesRun = toolName === 'replay' && RESUMES_HELD_RUN.has(String(args.action));
+  const hold = benchHold(args.connection, resumesRun);
   if (hold) return createErrorResponse('PAGE_HELD_BY_BENCH', { ...hold, toolName });
-  const held = heldPage(args.connection, toolName === 'replay' && RESUMES_HELD_RUN.has(String(args.action)));
+  const held = heldPage(args.connection, resumesRun);
   return held ? createErrorResponse('PAGE_HELD', { ...held, toolName }) : undefined;
 }
 

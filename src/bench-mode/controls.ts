@@ -13,8 +13,10 @@ import { type BenchReport, type BenchSession, getBenchSession, sessions } from '
  * recording, which would take the tool's clicks for the person's. Nothing
  * for a page the bench holds in none of these ways, or a connection with no
  * bench; with no connection named, the first bench that holds its page.
+ * `resumesRun` passes over the paused run's own hold, which `replay step` and
+ * `finish` release before they drive the page.
  */
-export function benchHold(connection?: string): { connection: string; why: string; release: string } | undefined {
+export function benchHold(connection?: string, resumesRun = false): { connection: string; why: string; release: string } | undefined {
   const held = connection !== undefined ? [[connection, sessions.get(connection)] as const] : [...sessions.entries()];
   for (const [name, session] of held) {
     if (!session) continue;
@@ -26,12 +28,15 @@ export function benchHold(connection?: string): { connection: string; why: strin
     }
     // Held traffic leaves the page drivable: a tool that drives it meets a
     // network that is slow or gone, which is what the hold stands for.
-    const held = holdReading(name).held.filter(layer => !layer.via && layer.layer !== 'network' && HOLDING_SOURCES.has(layer.source));
+    const held = holdReading(name).held.filter(layer => !layer.via && layer.layer !== 'network' && HOLDING_SOURCES.has(layer.source)
+      && !(resumesRun && layer.source === 'sequence'));
     if (held.length) {
       return {
         connection: name,
         why: `its ${held.map(layer => layer.layer).join(' and ')} ${held.length > 1 ? 'are' : 'is'} held by the ${held[0].source}`,
-        release: `bench({ action: 'release', connection: '${name}' }), or the hold button in the bench`,
+        release: held.every(layer => layer.source === 'sequence')
+          ? `replay({ action: 'finish' }) or replay({ action: 'step' }) carries the paused run on and releases it; replay({ action: 'cancel' }) releases it and ends the run`
+          : `bench({ action: 'release', connection: '${name}' }), or the hold button in the bench`,
       };
     }
   }

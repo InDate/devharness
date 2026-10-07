@@ -291,6 +291,21 @@ export interface ChromeLauncherOptions {
   staleProfileMaxAgeMs?: number;
 }
 
+/**
+ * The ports whose Chrome the inactivity cleanup kills: no connection uses it,
+ * and it has run at least `minAgeMs`. A launch registers its connection only
+ * after Chrome is up and the page settles, so a younger Chrome with no
+ * connection is a launch still connecting, and killing it fails that launch.
+ */
+export function orphanedChromePorts(
+  ports: number[],
+  runningForMs: (port: number) => number | undefined,
+  inUse: (port: number) => boolean,
+  minAgeMs: number,
+): number[] {
+  return ports.filter(port => (runningForMs(port) ?? Infinity) >= minAgeMs && !inUse(port));
+}
+
 export class ChromeLauncher {
   private chromeProcesses: Map<number, ChildProcess> = new Map();
   /** When the Chrome on each port was spawned, so a cleanup leaves a launch still connecting alone. */

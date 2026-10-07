@@ -28,7 +28,7 @@ import {
 
 import { CDPManager } from './cdp-manager.js';
 import { SourceMapHandler } from './sourcemap-handler.js';
-import { ChromeLauncher } from './chrome-launcher.js';
+import { ChromeLauncher, orphanedChromePorts } from './chrome-launcher.js';
 import { PuppeteerManager } from './puppeteer-manager.js';
 import { ConsoleMonitor } from './console-monitor.js';
 import { NetworkMonitor } from './network-monitor.js';
@@ -1616,17 +1616,17 @@ async function main() {
         await debugLog('index', `Closed ${closedCount} inactive connection(s)`);
       }
 
-      // A launch registers its connection only after Chrome is up and the
-      // page settles; a Chrome younger than the threshold is still in that
-      // window, and killing it fails the launch that started it.
-      for (const port of chromeLauncher.getRunningPorts()) {
-        if ((chromeLauncher.runningForMs(port) ?? Infinity) < INACTIVITY_THRESHOLD) continue;
-        if (!connectionManager.hasBrowser('localhost', port)) {
-          console.error(`[devharness] Killing orphaned Chrome on port ${port} (no tracked connections)`);
-          await debugLog('index', `Killing orphaned Chrome on port ${port} (no tracked connections) due to inactivity`);
-          chromeLauncher.setPendingCloseReason(port, 'inactivity');
-          await chromeLauncher.kill(port);
-        }
+      const orphaned = orphanedChromePorts(
+        chromeLauncher.getRunningPorts(),
+        port => chromeLauncher.runningForMs(port),
+        port => connectionManager.hasBrowser('localhost', port),
+        INACTIVITY_THRESHOLD,
+      );
+      for (const port of orphaned) {
+        console.error(`[devharness] Killing orphaned Chrome on port ${port} (no tracked connections)`);
+        await debugLog('index', `Killing orphaned Chrome on port ${port} (no tracked connections) due to inactivity`);
+        chromeLauncher.setPendingCloseReason(port, 'inactivity');
+        await chromeLauncher.kill(port);
       }
     } catch (error) {
       console.error(`[devharness] Error during cleanup: ${error}`);

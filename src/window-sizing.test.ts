@@ -7,7 +7,7 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { Page } from 'puppeteer-core';
-import { sizeWindowToViewport } from './window-sizing.js';
+import { loadedViewport, sizeWindowToViewport } from './window-sizing.js';
 
 interface FakeWindowOptions {
   /** Frame the browser adds around the viewport. */
@@ -140,5 +140,32 @@ describe('sizeWindowToViewport', () => {
 
     await expect(sizeWindowToViewport(fake.page, { width: 1280, height: 720 }, false)).rejects.toThrow('target closed');
     expect(fake.detach).toHaveBeenCalled();
+  });
+});
+
+describe('loadedViewport', () => {
+  const pageMeasuring = (size: { width: number; height: number } | Error) => ({
+    evaluate: vi.fn(async () => {
+      if (size instanceof Error) throw size;
+      return size;
+    }),
+  }) as unknown as Page;
+
+  it('reports what the loaded page measures, and that it differs from the size asked for', async () => {
+    const settled = await loadedViewport(pageMeasuring({ width: 500, height: 612 }), { width: 500, height: 700 });
+
+    expect(settled).toEqual({ viewport: { width: 500, height: 612 }, differs: true });
+  });
+
+  it('reports no difference where the loaded page measures the size asked for', async () => {
+    const settled = await loadedViewport(pageMeasuring({ width: 500, height: 700 }), { width: 500, height: 700 });
+
+    expect(settled).toEqual({ viewport: { width: 500, height: 700 }, differs: false });
+  });
+
+  it('returns nothing where the page cannot be read, so the sizing numbers stand', async () => {
+    const settled = await loadedViewport(pageMeasuring(new Error('Execution context was destroyed')), { width: 500, height: 700 });
+
+    expect(settled).toBeUndefined();
   });
 });

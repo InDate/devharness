@@ -16,6 +16,19 @@ export interface SizeWindowResult {
 }
 
 /**
+ * The viewport a launch reports once its page has loaded. A navigation can
+ * change the size the sizing read on the blank tab: per-origin zoom rescales
+ * CSS pixels and a window manager can move the window. `differs` is set where
+ * the loaded page measures other than `target`. Undefined where the page
+ * cannot be read, and the launch keeps the sizing's own numbers.
+ */
+export async function loadedViewport(page: Page, target: Size): Promise<{ viewport: Size; differs: boolean } | undefined> {
+  const measured = await readViewport(page).catch(() => undefined);
+  if (!measured) return undefined;
+  return { viewport: measured, differs: measured.width !== target.width || measured.height !== target.height };
+}
+
+/**
  * Chrome's window bounds are outer dimensions — they include the tab strip, the
  * omnibox and the frame. The caller asks for a *viewport*, so the chrome around it
  * has to be measured and added back.

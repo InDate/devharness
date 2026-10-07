@@ -25,7 +25,7 @@ import { configManager } from '../config.js';
 import { debugLog } from '../debug-logger.js';
 import { validateReference, requireValidReference, sanitizeReference, UNNAMED_CONNECTION } from '../reference-validator.js';
 import { startProxyFor, shareProxy, getProxy } from '../proxy/registry.js';
-import { readViewport, sizeWindowToViewport } from '../window-sizing.js';
+import { loadedViewport, sizeWindowToViewport } from '../window-sizing.js';
 import type { ToolResponseMeta, PausedAtMeta } from '../tool-response.js';
 
 /**
@@ -548,15 +548,10 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
               const page = puppeteerManager.getPage();
               pageUrl = page.url();
               title = await page.title();
-              // A navigation can change the viewport the sizing read on the blank tab:
-              // per-origin zoom rescales CSS pixels and a window manager can move the
-              // window, so the reply carries what the loaded page measures.
-              if (viewportTarget) {
-                const measured = await readViewport(page).catch(() => undefined);
-                if (measured) {
-                  viewportSet = measured;
-                  viewportClamped = measured.width !== viewportTarget.width || measured.height !== viewportTarget.height ? measured : undefined;
-                }
+              const settled = viewportTarget ? await loadedViewport(page, viewportTarget) : undefined;
+              if (settled) {
+                viewportSet = settled.viewport;
+                viewportClamped = settled.differs ? settled.viewport : undefined;
               }
 
               // Get console stats and update cursor so first tool call doesn't re-report these
@@ -764,11 +759,10 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
       if (args.url) await page.goto(args.url, { waitUntil: 'load', timeout: 30000 });
       if (args.bringToFront) await page.bringToFront();
       if (viewport) {
-        const target = { width: args.width ?? viewport.width, height: args.height ?? viewport.height };
-        const measured = await readViewport(page).catch(() => undefined);
-        if (measured) {
-          viewport = measured;
-          viewportClamped = measured.width !== target.width || measured.height !== target.height;
+        const settled = await loadedViewport(page, { width: args.width ?? viewport.width, height: args.height ?? viewport.height });
+        if (settled) {
+          viewport = settled.viewport;
+          viewportClamped = settled.differs;
         }
       }
 

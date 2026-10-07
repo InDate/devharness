@@ -14,7 +14,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as net from 'net';
-import { ChromeLauncher, ChromeBinaryAbsentError, ChromeLaunchFailure, EPHEMERAL_PROFILE_PREFIX, type ChromeProfileRecord } from './chrome-launcher.js';
+import { ChromeLauncher, ChromeBinaryAbsentError, ChromeLaunchFailure, EPHEMERAL_PROFILE_PREFIX, orphanedChromePorts, type ChromeProfileRecord } from './chrome-launcher.js';
 
 /** A port that was bound and released, so nothing listens on it right now. */
 function closedPort(): Promise<number> {
@@ -342,5 +342,29 @@ describe('launch observations', () => {
     expect(fs.existsSync(o.profileDir as string)).toBe(true);
     // The probe loop stops on the exit rather than spending its whole budget.
     expect(o.probeAttempts).toBeLessThan(15);
+  });
+});
+
+describe('orphanedChromePorts', () => {
+  const THRESHOLD = 60_000;
+  const ages: Record<number, number | undefined> = { 9301: 5_000, 9302: 120_000, 9303: 120_000, 9304: undefined };
+  const inUse = new Set([9303]);
+
+  const orphaned = () => orphanedChromePorts([9301, 9302, 9303, 9304], port => ages[port], port => inUse.has(port), THRESHOLD);
+
+  it('leaves a Chrome younger than the threshold with no connection, a launch still connecting', () => {
+    expect(orphaned()).not.toContain(9301);
+  });
+
+  it('takes a Chrome past the threshold that no connection uses', () => {
+    expect(orphaned()).toContain(9302);
+  });
+
+  it('leaves a Chrome a connection uses, whatever its age', () => {
+    expect(orphaned()).not.toContain(9303);
+  });
+
+  it('takes a Chrome with no spawn time recorded and no connection', () => {
+    expect(orphaned()).toContain(9304);
   });
 });

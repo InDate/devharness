@@ -50,9 +50,10 @@ const cursor = () => Number(readFileSync(join(dir, 'events', `${SESSION}.cursor`
 const append = (text: string) => appendFileSync(stream(), text);
 
 function start(args: string[], env: Record<string, string | undefined> = {}): { child: ChildProcess; output: () => string; exited: Promise<number | null> } {
-  const childEnv: Record<string, string | undefined> = { ...process.env, DEVHARNESS_DIR: dir, ...env };
+  const childEnv: Record<string, string | undefined> = { ...process.env, DEVHARNESS_DIR: dir };
   delete childEnv.CLAUDE_CODE_SESSION_ID;
   delete childEnv.CLAUDE_CODE_MESSAGING_SOCKET;
+  Object.assign(childEnv, env);
   const child = spawn(process.execPath, [cli, 'watch', ...args], { env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '';
   child.stdout!.on('data', chunk => { out += chunk; });
@@ -134,6 +135,46 @@ describe('devharness watch', () => {
     const watch = start([]);
     expect(await watch.exited).toBe(1);
   });
+
+  it('exits on start while a watch from the same Claude process reads the stream', async () => {
+    writeFileSync(stream(), '');
+    const client = { CLAUDE_CODE_MESSAGING_SOCKET: '/claude/4242.sock' };
+
+    const first = start([`--session=${SESSION}`], client);
+    await running();
+    const second = start([`--session=${SESSION}`], client);
+    expect(await second.exited).toBe(0);
+    expect(second.output()).toContain(`pid ${first.child.pid} already reads stream ${SESSION}`);
+
+    append('{"n":1}\n');
+    expect(await first.exited).toBe(0);
+    expect(eventLines(first.output())).toEqual(['{"n":1}']);
+    expect(eventLines(second.output())).toEqual([]);
+  }, 15000);
+
+  it('runs beside a watch from another Claude process', async () => {
+    writeFileSync(stream(), '');
+
+    const first = start([`--session=${SESSION}`], { CLAUDE_CODE_MESSAGING_SOCKET: '/claude/4242.sock' });
+    await running();
+    const second = start([`--session=${SESSION}`], { CLAUDE_CODE_MESSAGING_SOCKET: '/claude/5353.sock' });
+    await running();
+    append('{"n":1}\n');
+    expect(await first.exited).toBe(0);
+    expect(await second.exited).toBe(0);
+    expect(eventLines(second.output())).toEqual(['{"n":1}']);
+  }, 15000);
+
+  it('runs when the recorded pid does not hold the stream open', async () => {
+    writeFileSync(stream(), '');
+    writeFileSync(join(dir, 'events', `${SESSION}.4242.watch`), JSON.stringify({ pid: process.pid }));
+
+    const watch = start([`--session=${SESSION}`], { CLAUDE_CODE_MESSAGING_SOCKET: '/claude/4242.sock' });
+    await running();
+    append('{"n":1}\n');
+    expect(await watch.exited).toBe(0);
+    expect(eventLines(watch.output())).toEqual(['{"n":1}']);
+  }, 15000);
 
   it('reads a full session id as its short form', async () => {
     writeFileSync(stream(), '{"n":1}\n');

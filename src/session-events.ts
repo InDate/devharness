@@ -42,6 +42,11 @@ export function getEventCursorPath(sessionName: string): string {
   return join(getEventsDir(), `${sessionName}.cursor`);
 }
 
+/** The pid of the plain or --follow watch that last started on the stream from one Claude process. */
+export function getEventWatchPath(sessionName: string, clientPid: number): string {
+  return join(getEventsDir(), `${sessionName}.${clientPid}.watch`);
+}
+
 /** This package's CLI entry, which a session reaches without `devharness` on PATH. */
 const CLI_ENTRY = join(dirname(fileURLToPath(import.meta.url)), 'mcp-supervisor.js');
 

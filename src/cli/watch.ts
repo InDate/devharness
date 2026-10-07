@@ -13,6 +13,12 @@
  * watch killed between the two repeats lines on the next watch and drops none.
  *
  * The file stays open for the life of the watch, so streamReaders counts it.
+ *
+ * One watch runs per stream and Claude process. A rewound conversation drops
+ * the Bash call that started a watch from its history while the task keeps
+ * running, and that task's output still reaches the session, so the
+ * SessionStart instruction starts a second one beside it. Two watches deliver
+ * each burst twice and both write the cursor; the later one exits on start.
  */
 
 /** A stream name: a session's short id or a `pid-` fallback. Anything else could escape the events directory. */
@@ -21,9 +27,10 @@ const STREAM_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const FULL_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f-]+$/i;
 
 import { openSync, fstatSync, readSync, readFileSync, writeFileSync, renameSync, mkdirSync, appendFileSync } from 'fs';
+import { execFileSync } from 'child_process';
 import { dirname } from 'path';
-import { getEventStreamPath, getEventCursorPath } from '../session-events.js';
-import { getClaudeShortId, readCurrentSessionId } from '../session-identity.js';
+import { getEventStreamPath, getEventCursorPath, getEventWatchPath } from '../session-events.js';
+import { getClaudeShortId, getClientPid, readCurrentSessionId } from '../session-identity.js';
 
 const POLL_MS = 500;
 /** A burst ends at this much quiet, so its lines arrive as one notification. */
@@ -70,6 +77,28 @@ function writeCursor(path: string, offset: number): void {
   renameSync(temp, path);
 }
 
+/**
+ * The pid of another watch on this stream started from the same Claude
+ * process, or undefined. The record holds only while its pid has the stream
+ * open, so a pid since reused by another program returns undefined, as does a
+ * host where lsof fails.
+ */
+function runningWatch(name: string, streamPath: string, client: number): number | undefined {
+  let pid: unknown;
+  try {
+    pid = JSON.parse(readFileSync(getEventWatchPath(name, client), 'utf-8'))?.pid;
+  } catch {
+    return undefined;
+  }
+  if (!Number.isInteger(pid) || pid === process.pid) return undefined;
+  try {
+    const holders = execFileSync('lsof', ['-t', streamPath], { encoding: 'utf-8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] });
+    return holders.split('\n').includes(String(pid)) ? pid as number : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** The complete lines in [start, end) of the file, and the offset past the last of them. */
 function readLines(fd: number, start: number, end: number): { text: string; next: number } {
   const buffer = Buffer.alloc(end - start);
@@ -91,6 +120,16 @@ export async function runWatch(follow: boolean, session?: string): Promise<numbe
   const cursorPath = getEventCursorPath(name);
   mkdirSync(dirname(streamPath), { recursive: true });
   appendFileSync(streamPath, '');
+
+  const client = getClientPid();
+  if (client !== undefined) {
+    const running = runningWatch(name, streamPath, client);
+    if (running !== undefined) {
+      await print(`devharness watch: pid ${running} already reads stream ${name} for this Claude process, and its output reaches this session. This watch exits without reading; that one prints the next watch call when it returns.\n`);
+      return 0;
+    }
+    writeFileSync(getEventWatchPath(name, client), JSON.stringify({ pid: process.pid }));
+  }
 
   const fd = openSync(streamPath, 'r');
   const size = () => fstatSync(fd).size;

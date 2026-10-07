@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-07
+
+### Added
+
+- **`input scroll` takes `steps`, `durationMs` and `decay`**: a run of wheel
+  events, each delta `decay` times the last, each sent at its own offset from
+  the first, so a trackpad momentum tail reaches the page as one stream. The
+  reply states the span the events went out over, and the asked span beside it
+  where the two differ by more than one gap.
+- **`replay run { bench: true, envFile }` reads the file**, and every later
+  play in that bench, the pane's Replay button included, resolves
+  `{{env:NAME}}` from it.
+- **`drag`, `swipe`, `tap` and `scroll` at x/y name the element under each
+  point**, or the viewport a point falls outside; `_meta.elements` carries
+  both. A gesture on stale coordinates reads as a miss in its own reply.
+- **`hold release` names the layers it released.**
+
+### Changed
+
+- **`repeat` and `runFromLog` over several indices print each step's reply**:
+  an `inspect` step's reading in full, every other step's first line.
+- **`connection launch` reports the viewport the loaded page measures**,
+  marked where it differs from the size asked for.
+- **`replay export` refuses `filename`.** The file is written under the
+  sequence's own name, and the parameter changed nothing.
+- **A failed auto-connect on `connection launch` is an error response.**
+- **The docs bound "managed servers survive" to restart and rebuild.** Session
+  end and `/reload-plugins` stop the servers the session started.
+
+### Fixed
+
+- **A bench play keeps each step of a two-browser sequence in the browser it
+  names.** Opened on one of the sequence's own browsers, the bench counted one
+  browser and rebound the other's steps onto its tab.
+- **An insert during a paused run goes through.** The insert's own recording
+  cleared the history-viewed flag it checked, so every one answered "Run
+  `replay history` first".
+- **An insert into a new sequence carries every declared field** - browsers,
+  sockets, tags - with step-indexed fields renumbered.
+- **Bench status, start and already-open read a debugger pause**, naming its
+  location and every non-network hold, where a pause read as "Page running".
+- **An armed code hold landing in devharness's timer wrapper lands in the app's
+  callback**, and the resume of that step no longer records a release that
+  dropped the hold.
+- **The orphan-Chrome cleanup leaves a Chrome younger than the inactivity
+  threshold alone**, so a launch still connecting is not killed.
+- **`hold` refuses a connection with nothing attached.**
+- **A second `devharness watch` from the same Claude process exits on start**,
+  so each event arrives once after a rewind.
+- **`ServerManager.close()` ends every port-detection loop and awaits the last
+  write.** A loop outliving a test wrote a dead server's entry into the repo's
+  `.devharness/servers.json`, blocking every devharness call.
+
 ## [0.12.1] - 2026-10-05
 
 ### Fixed

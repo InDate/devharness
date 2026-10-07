@@ -87,7 +87,7 @@ const issuesSchema = z.object({
   keepBrowserOpen: z.boolean().optional()
     .describe('resolve: keep the tab open afterwards (default false)'),
   search: z.string().optional()
-    .describe('list: text in title, body, comments or recording name'),
+    .describe('list: text in title, body, labels, comments or recording name'),
   includeCompleted: z.boolean().optional()
     .describe('list: include fixed/implemented issues (default false)'),
   includeSequence: z.boolean().optional()
@@ -377,6 +377,7 @@ export function createIssuesTools(
                 i.id.toString() === args.search ||
                 i.title.toLowerCase().includes(searchLower) ||
                 i.body.toLowerCase().includes(searchLower) ||
+                i.labels.some(l => l.toLowerCase().includes(searchLower)) ||
                 i.recordingName.toLowerCase().includes(searchLower) ||
                 i.comments.some(c => c.text.toLowerCase().includes(searchLower))
               );

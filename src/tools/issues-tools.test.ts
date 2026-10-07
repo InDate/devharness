@@ -283,6 +283,18 @@ describe('issues list - reading a body', () => {
     expect(result.content[0].text).toContain('A rebind that throws leaves no rollback.');
   });
 
+  it('returns an issue whose label holds the search text, ignoring case', async () => {
+    await addIssue({ type: 'feature', title: 'Swipe actions follow the grant', labels: ['composition', 'Primitive'] });
+    await addIssue({ type: 'feature', title: 'Unlabelled feature' });
+    const { tools } = buildTools();
+
+    const result = await tools.issues.handler({ action: 'list', search: 'prim' } as any, undefined);
+
+    const text = result.content[0].text;
+    expect(text).toContain('Swipe actions follow the grant');
+    expect(text).not.toContain('Unlabelled feature');
+  });
+
   it('omits bodies above the cap and names the call that reads one', async () => {
     await addIssue({ type: 'bug', title: 'First routing bug', body: 'BODY MARKER ONE' });
     await addIssue({ type: 'bug', title: 'Second routing bug', body: 'BODY MARKER TWO' });

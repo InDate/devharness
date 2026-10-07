@@ -579,8 +579,10 @@ export class CommandRecorder {
   async recordCommand(tool: string, params: Record<string, any>, options?: { delay?: number; comment?: string; result?: any; from?: CallChannel; run?: string; runStep?: number; env?: StepEnv }): Promise<void> {
     // Reset history viewed flag when the agent records a command
     // (it must view history again before inserting). A step the bench or a
-    // run adds is not the agent's, and leaves what it viewed standing.
-    if ((options?.from ?? 'mcp') === 'mcp' && options?.run === undefined) this.historyViewedWhilePaused = false;
+    // run adds is not the agent's, and leaves what it viewed standing. A replay
+    // call is recorded before it runs and is never a step insert takes, so it
+    // leaves it standing too; otherwise insert clears the flag it checks.
+    if ((options?.from ?? 'mcp') === 'mcp' && options?.run === undefined && tool !== 'replay') this.historyViewedWhilePaused = false;
 
     const paramsClone = JSON.parse(JSON.stringify(params));
 

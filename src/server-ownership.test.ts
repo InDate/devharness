@@ -16,6 +16,7 @@ import { ServerManager } from './server-manager.js';
 import { ServerClaimsStore } from './server-claims.js';
 import { initializePaths } from './helpers/paths.js';
 import { isProcessAlive } from './helpers/process-liveness.js';
+import { trackedManagers } from './test-support/server-managers.js';
 
 let workDir: string;
 let originalCwd: string;
@@ -24,6 +25,8 @@ let serverScript: string;
 
 /** Pretend process table: pid -> start time. Absent means dead. */
 let live: Map<number, string>;
+
+const managers = trackedManagers();
 
 const OWN_SUPERVISOR = 1001;
 const OTHER_SUPERVISOR = 2002;
@@ -34,6 +37,10 @@ function storeFor(supervisorPid: number) {
     isAlive: (pid) => live.has(pid),
     startTimeReader: (pid) => live.get(pid) ?? '',
   });
+}
+
+function managerFor(supervisorPid: number): ServerManager {
+  return managers.track(new ServerManager(storeFor(supervisorPid)));
 }
 
 async function waitForExit(pid: number, timeoutMs = 8000): Promise<boolean> {
@@ -64,6 +71,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  await managers.closeAll();
   process.chdir(originalCwd);
   if (originalGlobalDir === undefined) delete process.env.CDP_TOOLS_DIR;
   else process.env.CDP_TOOLS_DIR = originalGlobalDir;
@@ -83,7 +91,7 @@ async function startServer(manager: ServerManager, id: string): Promise<number> 
 
 describe('stopOwnedServers', () => {
   it('stops a server no other session claims', async () => {
-    const manager = new ServerManager(storeFor(OWN_SUPERVISOR));
+    const manager = managerFor(OWN_SUPERVISOR);
     const pid = await startServer(manager, 'solo');
 
     const { stopped, keptForOthers } = await manager.stopOwnedServers();
@@ -94,7 +102,7 @@ describe('stopOwnedServers', () => {
   }, 20000);
 
   it('leaves a server another live session is also using', async () => {
-    const manager = new ServerManager(storeFor(OWN_SUPERVISOR));
+    const manager = managerFor(OWN_SUPERVISOR);
     const pid = await startServer(manager, 'shared');
     // A second window in the same project reattached to it.
     await storeFor(OTHER_SUPERVISOR).claim('shared', workDir, false);
@@ -113,7 +121,7 @@ describe('stopOwnedServers', () => {
   }, 20000);
 
   it('stops a server whose other claimant has died', async () => {
-    const manager = new ServerManager(storeFor(OWN_SUPERVISOR));
+    const manager = managerFor(OWN_SUPERVISOR);
     const pid = await startServer(manager, 'was-shared');
     await storeFor(OTHER_SUPERVISOR).claim('was-shared', workDir, false);
 
@@ -126,7 +134,7 @@ describe('stopOwnedServers', () => {
   }, 20000);
 
   it('leaves a server claimed by a session whose pid was recycled', async () => {
-    const manager = new ServerManager(storeFor(OWN_SUPERVISOR));
+    const manager = managerFor(OWN_SUPERVISOR);
     const pid = await startServer(manager, 'shared');
     await storeFor(OTHER_SUPERVISOR).claim('shared', workDir, false);
 
@@ -147,7 +155,7 @@ describe('stopOwnedServers and session presence', () => {
     const other = storeFor(OTHER_SUPERVISOR);
     await other.registerSession(workDir);
 
-    const manager = new ServerManager(storeFor(OWN_SUPERVISOR));
+    const manager = managerFor(OWN_SUPERVISOR);
     const pid = await startServer(manager, 'sibling-window');
 
     const { stopped, keptForOthers } = await manager.stopOwnedServers();
@@ -164,7 +172,7 @@ describe('stopOwnedServers and session presence', () => {
     const other = storeFor(OTHER_SUPERVISOR);
     await other.registerSession(workDir);
 
-    const manager = new ServerManager(storeFor(OWN_SUPERVISOR));
+    const manager = managerFor(OWN_SUPERVISOR);
     const pid = await startServer(manager, 'last-one-out');
     live.delete(OTHER_SUPERVISOR);
 
@@ -181,7 +189,7 @@ describe('recorded pid honesty', () => {
   }
 
   it('drops the pid from servers.json once the session releases the server', async () => {
-    const manager = new ServerManager(storeFor(OWN_SUPERVISOR));
+    const manager = managerFor(OWN_SUPERVISOR);
     const pid = await startServer(manager, 'released');
     expect(persistedServers()[0].pid).toBe(pid);
 
@@ -193,7 +201,7 @@ describe('recorded pid honesty', () => {
   }, 20000);
 
   it('forgets the pid of a server that died on its own', async () => {
-    const manager = new ServerManager(storeFor(OWN_SUPERVISOR));
+    const manager = managerFor(OWN_SUPERVISOR);
     const pid = await startServer(manager, 'crashed');
 
     process.kill(pid, 'SIGKILL'); // died outside devharness; stop() never ran
@@ -209,7 +217,7 @@ describe('recorded pid honesty', () => {
   }, 20000);
 
   it('does not mistake a recycled pid for the original server', async () => {
-    const manager = new ServerManager(storeFor(OWN_SUPERVISOR));
+    const manager = managerFor(OWN_SUPERVISOR);
     await startServer(manager, 'recycled');
 
     // Rewrite persisted state as an older devharness would leave it after a
@@ -221,7 +229,7 @@ describe('recorded pid honesty', () => {
     state.servers[0].pidStartedAt = 'Mon Jan  1 00:00:00 1990';
     writeFileSync(statePath, JSON.stringify(state));
 
-    const fresh = new ServerManager(storeFor(OWN_SUPERVISOR));
+    const fresh = managerFor(OWN_SUPERVISOR);
     const result = await fresh.initialize();
 
     expect(result.recovered).not.toContain('recycled');
@@ -232,11 +240,11 @@ describe('startup collection of abandoned servers', () => {
   it('collects a server whose every claimant is gone', async () => {
     // A previous session started it and then vanished without stopping it -
     // the closed-window leak.
-    const previous = new ServerManager(storeFor(OTHER_SUPERVISOR));
+    const previous = managerFor(OTHER_SUPERVISOR);
     const pid = await startServer(previous, 'left-running');
     live.delete(OTHER_SUPERVISOR);
 
-    const fresh = new ServerManager(storeFor(OWN_SUPERVISOR));
+    const fresh = managerFor(OWN_SUPERVISOR);
     const result = await fresh.initialize();
 
     expect(result.collected).toEqual(['left-running']);
@@ -244,10 +252,10 @@ describe('startup collection of abandoned servers', () => {
   }, 25000);
 
   it('recovers rather than collects a server another live session still claims', async () => {
-    const previous = new ServerManager(storeFor(OTHER_SUPERVISOR));
+    const previous = managerFor(OTHER_SUPERVISOR);
     const pid = await startServer(previous, 'still-used');
 
-    const fresh = new ServerManager(storeFor(OWN_SUPERVISOR));
+    const fresh = managerFor(OWN_SUPERVISOR);
     const result = await fresh.initialize();
 
     expect(result.collected).toEqual([]);
@@ -258,7 +266,7 @@ describe('startup collection of abandoned servers', () => {
   }, 25000);
 
   it('does not collect an abandoned server while another window is in the project', async () => {
-    const previous = new ServerManager(storeFor(OTHER_SUPERVISOR));
+    const previous = managerFor(OTHER_SUPERVISOR);
     const pid = await startServer(previous, 'left-running');
     live.delete(OTHER_SUPERVISOR);
 
@@ -267,7 +275,7 @@ describe('startup collection of abandoned servers', () => {
     live.set(3003, 'start-bystander');
     await bystander.registerSession(workDir);
 
-    const fresh = new ServerManager(storeFor(OWN_SUPERVISOR));
+    const fresh = managerFor(OWN_SUPERVISOR);
     const result = await fresh.initialize();
 
     expect(result.collected).toEqual([]);
@@ -280,12 +288,12 @@ describe('startup collection of abandoned servers', () => {
   it('leaves a server with no claim at all alone', async () => {
     // Started before claims existed, or by something else entirely. Not ours
     // to kill on a guess.
-    const previous = new ServerManager(storeFor(OTHER_SUPERVISOR));
+    const previous = managerFor(OTHER_SUPERVISOR);
     const pid = await startServer(previous, 'unclaimed');
     storeFor(OTHER_SUPERVISOR).release('unclaimed', false);
     live.delete(OTHER_SUPERVISOR);
 
-    const fresh = new ServerManager(storeFor(OWN_SUPERVISOR));
+    const fresh = managerFor(OWN_SUPERVISOR);
     const result = await fresh.initialize();
 
     expect(result.collected).toEqual([]);

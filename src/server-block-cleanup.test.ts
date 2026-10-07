@@ -15,6 +15,7 @@ import { join } from 'path';
 import { ServerManager } from './server-manager.js';
 import { ServerClaimsStore } from './server-claims.js';
 import { initializePaths } from './helpers/paths.js';
+import { trackedManagers } from './test-support/server-managers.js';
 
 let workDir: string;
 let originalCwd: string;
@@ -24,14 +25,16 @@ let diesFast: string;
 
 const OWN_SUPERVISOR = 1001;
 
+const managers = trackedManagers();
+
 function manager(): ServerManager {
-  return new ServerManager(
+  return managers.track(new ServerManager(
     new ServerClaimsStore({
       supervisorPid: OWN_SUPERVISOR,
       isAlive: (pid) => pid === OWN_SUPERVISOR,
       startTimeReader: () => 'start-own',
     })
-  );
+  ));
 }
 
 beforeEach(() => {
@@ -49,6 +52,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  await managers.closeAll();
   process.chdir(originalCwd);
   if (originalGlobalDir === undefined) delete process.env.CDP_TOOLS_DIR;
   else process.env.CDP_TOOLS_DIR = originalGlobalDir;

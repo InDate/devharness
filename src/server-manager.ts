@@ -12,6 +12,7 @@ import * as net from 'net';
 import { debugLog } from './debug-logger.js';
 import { getOutputPath, registerRootBound, unregisterRootBound } from './helpers/paths.js';
 import { atomicWriteFile } from './atomic-write.js';
+import { abortableSleep, isAbortError } from './utils/abort.js';
 import { configManager } from './config.js';
 import { ServerFileWatcher } from './server-watcher.js';
 import { serverClaims, type ServerClaimsStore } from './server-claims.js';
@@ -589,6 +590,14 @@ export class ServerManager {
   private pendingStartups: Map<string, PendingStartup> = new Map();
   /** Mutex to serialize saveState calls - prevents concurrent file writes */
   private saveMutex: Promise<void> = Promise.resolve();
+  /**
+   * Each running port-detection loop. A loop saves state up to 30s after the
+   * call that started it returns, and a save resolves its path at write time,
+   * so a loop outliving its working directory writes into whichever one is
+   * current then. `close()` awaits these.
+   */
+  private readonly portDetections = new Set<Promise<void>>();
+  private readonly closing = new AbortController();
   /** Injected from index.ts - decouples ServerManager from ConnectionManager directly */
   private pauseChecker: ((inspectorPort: number) => boolean) | null = null;
   /** Watch-mode restart coordination, keyed by serverId - see WatchRestartState */
@@ -638,6 +647,7 @@ export class ServerManager {
    * Loads from both local (project) and global (~/.devharness/) storage
    */
   async initialize(): Promise<{ recovered: string[]; started: string[]; failed: string[]; monitoredPorts: number[]; collected: string[] }> {
+    this.refuseWhenClosed('initialize');
     const recovered: string[] = [];
     const started: string[] = [];
     const failed: string[] = [];
@@ -864,7 +874,7 @@ export class ServerManager {
    */
   private resumePortDetection(serverId: string, remainingMs: number): void {
     // Run detection in background (don't await)
-    this.detectPortInBackgroundWithTimeout(serverId, remainingMs);
+    this.trackPortDetection(serverId, remainingMs);
   }
 
   private async loadState(global?: boolean): Promise<{ servers: PersistedRunnerState[]; monitoredPorts: PersistedMonitoredPort[]; pendingStartups: PersistedPendingStartup[] }> {
@@ -1233,6 +1243,8 @@ export class ServerManager {
   async startServer(options: StartServerOptions): Promise<{ id: string; pid: number; runnerType: RunnerType; containerId?: string; autoRestartWarning?: string }> {
     const { command, cwd, id: serverId, autoRun, env, port, monitorPort, global: isGlobal, watch, watchPaths, clearLogs } = options;
 
+    this.refuseWhenClosed(`start ${serverId}`);
+
     // Validate server ID for security (prevents command injection via container names)
     validateServerId(serverId);
 
@@ -1309,7 +1321,7 @@ export class ServerManager {
     });
 
     // Start port detection in background
-    this.detectPortInBackgroundWithTimeout(serverId, timeoutMs);
+    this.trackPortDetection(serverId, timeoutMs);
 
     await this.saveState();
 
@@ -1337,6 +1349,34 @@ export class ServerManager {
   }
 
   /**
+   * A detection loop started after `close()` ends at its first wait, so a
+   * startup run then has its port never detected and its timeout never
+   * reported. The call is refused instead.
+   */
+  private refuseWhenClosed(action: string): void {
+    if (this.closing.signal.aborted) {
+      throw new Error(`Cannot ${action}: this server manager is closed.`);
+    }
+  }
+
+  private trackPortDetection(serverId: string, timeoutMs: number): void {
+    const detection = this.detectPortInBackgroundWithTimeout(serverId, timeoutMs)
+      .catch(err => debugLog('ServerManager', `Port detection for ${serverId} failed: ${err}`))
+      .finally(() => this.portDetections.delete(detection));
+    this.portDetections.add(detection);
+  }
+
+  /**
+   * Ends every port-detection loop and returns once the last state write has
+   * landed. The manager starts no further detection after this.
+   */
+  async close(): Promise<void> {
+    this.closing.abort();
+    await Promise.all(this.portDetections);
+    await this.saveMutex;
+  }
+
+  /**
    * Background port detection with timeout management
    * @param serverId The server to detect port for
    * @param timeoutMs How long to wait before triggering blocking (default 30s)
@@ -1349,7 +1389,12 @@ export class ServerManager {
     const checkInterval = 1000; // Check every second
 
     for (let i = 0; i < iterations; i++) {
-      await new Promise(resolve => setTimeout(resolve, checkInterval));
+      try {
+        await abortableSleep(checkInterval, this.closing.signal);
+      } catch (err) {
+        if (isAbortError(err)) return;
+        throw err;
+      }
 
       const current = this.servers.get(serverId);
       if (!current) {
@@ -1568,6 +1613,7 @@ export class ServerManager {
    * Resets the acknowledged flag and reason, resumes detection
    */
   async extendStartupTimeout(serverId: string): Promise<boolean> {
+    this.refuseWhenClosed(`extend the startup of ${serverId}`);
     const pending = this.pendingStartups.get(serverId);
     if (!pending) {
       return false;
@@ -1599,7 +1645,7 @@ export class ServerManager {
     await debugLog('ServerManager', `Extended startup timeout for ${serverId}`);
 
     // Resume background detection
-    this.detectPortInBackgroundWithTimeout(serverId, timeoutMs);
+    this.trackPortDetection(serverId, timeoutMs);
 
     return true;
   }

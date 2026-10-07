@@ -10,6 +10,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createSequenceDriver } from '../bench-mode/sequence-driver.js';
 import { runRegistry } from './replay-run-registry.js';
+import { ToolError } from '../tool-error.js';
 
 /** A recorder holding two sequences, with one of them mid-run. */
 function recorderWith(runningName: string | null) {
@@ -116,5 +117,22 @@ describe('a run the bench follows', () => {
     end();
 
     expect(driver.active()).toMatchObject({ currentStep: 2 });
+  });
+
+  it('reads a failed step from the reply, with its whole reason', async () => {
+    const { recorder, end } = recorderRunning({ currentStep: 1 });
+    runRegistry.clear();
+    const reason = 'Could not resolve template token {{env:KEEL_PASSWORD}}: KEEL_PASSWORD is not set: no envFile was read and the server\'s environment lacks it - add KEEL_PASSWORD=<value> to .devharness/sequences.env';
+    const driver = createSequenceDriver(recorder, async (_tool: string, args: any) => {
+      if (args.action !== 'step') return { content: [{ type: 'text', text: 'ok' }] };
+      end();
+      throw new ToolError({ isError: true, content: [{ type: 'text', text: `socket-live-lifecycle failed at step 3 of 3 · 2 passed\n\nStep 3: ${reason}` }] });
+    }, () => []);
+    await driver.start('socket-live-lifecycle', 'app');
+
+    const failure = await driver.step();
+
+    expect(failure).toBe(reason);
+    expect(driver.active()).toMatchObject({ currentStep: 2, failedStep: 2 });
   });
 });

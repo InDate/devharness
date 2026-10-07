@@ -83,6 +83,8 @@ export interface SequenceStep {
   captures?: string;
   /** The value it stores, where it stores a fixed one rather than reading the page. */
   stores?: string;
+  /** The value it stores in place of `stores` for a run starting at each origin. */
+  storesByOrigin?: Record<string, string>;
   /** The variables it reads, by the `{{var:name}}` tokens in what it is given. */
   reads?: string[];
   /** The tool it calls and what it is given, for editing a saved step. */
@@ -442,6 +444,20 @@ export interface SequenceRepair {
   matches: number;
 }
 
+/**
+ * A secret a sequence reads as {{env:NAME}}: its value lives in
+ * `.devharness/sequences.env`, never in the sequence file and never here.
+ */
+export interface SecretVariable {
+  name: string;
+  /** The file holds a value for every origin. */
+  plain: boolean;
+  /** The origins the file holds a value of their own for. */
+  origins: string[];
+  /** The steps that read it, by position. */
+  usedBy: number[];
+}
+
 export interface SequenceState {
   /** Names that can be selected - saved on disk, plus anything in memory. */
   available: string[];
@@ -495,6 +511,8 @@ export interface SequenceState {
   withAgent?: boolean;
   /** Values the run is carrying, newest capture last. */
   variables: SequenceVariable[];
+  /** The secrets the sequence reads and the project's env file holds, by name only. */
+  secrets?: SecretVariable[];
   /**
    * A recording going into another sequence: its name, the step the new
    * steps follow, and that sequence's step labels, for the list to show the

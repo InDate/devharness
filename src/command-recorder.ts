@@ -21,7 +21,7 @@ import { asCheckStep } from './tools/check-tools.js';
 import { translateSequence } from './tools/legacy-steps.js';
 import type { Annotation, StepTraffic } from './annotation.js';
 import { substituteCapturedValues, type CaptureEntry } from './tools/interpolation-reverse.js';
-import type { CallChannel } from './call-origin.js';
+import type { CallChannel, StepEnv } from './call-origin.js';
 import type { HoldLayer } from './hold.js';
 import type { ElementFingerprint, ElementRepair } from './element-fingerprint.js';
 
@@ -67,6 +67,11 @@ export interface RecordedCommand {
   pauseBefore?: true;
   /** What that pause point holds: code, ui, network. Every layer when absent, nothing for []. */
   pauseHolds?: HoldLayer[];
+  /**
+   * On a step that stores a variable: the value a run starting at each origin
+   * stores in place of the expression's, which is the value for every other origin.
+   */
+  byOrigin?: Record<string, string>;
 }
 
 export interface CommandSequence {
@@ -275,6 +280,8 @@ export interface HistoryCommand extends RecordedCommand {
   stepFailed?: boolean;
   /** This call's position in `run`, 0-based. */
   runStep?: number;
+  /** The {{env:}} names this step resolved from a file, and that file - never a value. */
+  env?: StepEnv;
   /**
    * When a run's step marked the boundary. The executor marks before the
    * step's call is recorded, so `timestamp` falls a few ms inside the window
@@ -322,6 +329,11 @@ export interface ActiveSequenceState {
    *  paused state so `step`/`finish` resolve per-step connections exactly the
    *  way the original `run` did instead of reverting to raw recorded names. */
   connectionMap?: Record<string, string>;
+  /** The paused run's envFile values and the file they came from, so step and finish resolve {{env:}} as the run did. */
+  runEnv?: Record<string, string>;
+  runEnvFile?: string;
+  /** The origin the paused run started at, which picks per-origin values on resume. */
+  runOrigin?: string;
   /** What the paused step can be repaired to, where it paused on clicking another element. */
   repair?: ElementRepair;
   /** Where the page stopped at a breakpoint the sequence did not set; step and finish resume it before the next step. */
@@ -564,7 +576,7 @@ export class CommandRecorder {
   /**
    * Record a command (always-on, automatic)
    */
-  async recordCommand(tool: string, params: Record<string, any>, options?: { delay?: number; comment?: string; result?: any; from?: CallChannel; run?: string; runStep?: number }): Promise<void> {
+  async recordCommand(tool: string, params: Record<string, any>, options?: { delay?: number; comment?: string; result?: any; from?: CallChannel; run?: string; runStep?: number; env?: StepEnv }): Promise<void> {
     // Reset history viewed flag when the agent records a command
     // (it must view history again before inserting). A step the bench or a
     // run adds is not the agent's, and leaves what it viewed standing.
@@ -606,6 +618,7 @@ export class CommandRecorder {
       from: options?.from ?? 'mcp',
       ...(options?.run !== undefined && { run: options.run }),
       ...(options?.runStep !== undefined && { runStep: options.runStep }),
+      ...(options?.env && { env: options.env }),
     };
 
     this.history.push(command);
@@ -649,13 +662,13 @@ export class CommandRecorder {
   }
 
   /**
-   * Mark the newest call `run` made with `tool` as the step its run stopped
-   * at. A step that failed before its call was recorded matches no newer call
-   * of that tool, and nothing is marked.
+   * Mark the newest call `run` made as the step its run stopped at, where that
+   * call is step `step` (1-based). A step that failed before its call was
+   * recorded leaves the previous step newest, and that step is not marked.
    */
-  markStepFailed(run: string, tool: string): void {
+  markStepFailed(run: string, step: number): void {
     const newest = this.history[this.history.length - 1];
-    if (newest?.run === run && newest.tool === tool) newest.stepFailed = true;
+    if (newest?.run === run && newest.runStep === step - 1) newest.stepFailed = true;
   }
 
   /** Attach `match` to the newest call recorded as step `step` of `run`. */

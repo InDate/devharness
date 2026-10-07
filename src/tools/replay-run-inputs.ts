@@ -12,8 +12,8 @@ import { createdName } from './connection-steps.js';
 import { extractTextVariables } from './replay-formatters.js';
 import { configManager } from '../config.js';
 import { parseEnvFile } from '../helpers/env-file.js';
-import { getProjectDir } from '../helpers/paths.js';
-import { isAbsolute } from 'path';
+import { getOutputPath, getProjectDir } from '../helpers/paths.js';
+import { isAbsolute, relative } from 'path';
 
 /** The sequences a run reaches by name: a check's `{ run }` on either answer, and a `forEach`'s `do`. */
 function reachedByName(commands: RecordedCommand[]): string[] {
@@ -103,6 +103,25 @@ export async function loadRunEnv(
   }
 
   return { values };
+}
+
+/**
+ * The file a run reads its {{env:NAME}} values from when it names no envFile:
+ * `.devharness/sequences.env`. A bench play passes no envFile, so without it a
+ * credential reaches a played sequence only through the server's own
+ * environment, which is fixed when the server starts. Absent, the run reads
+ * the environment alone; malformed, the run fails before its first step, as a
+ * named envFile does.
+ */
+export async function loadDefaultRunEnv(): Promise<{ values: Record<string, string>; file: string } | { error: string } | undefined> {
+  const path = getOutputPath('sequences.env');
+  try {
+    await fs.access(path);
+  } catch {
+    return undefined;
+  }
+  const loaded = await loadRunEnv(path);
+  return 'error' in loaded ? loaded : { values: loaded.values, file: relative(getProjectDir(), path) };
 }
 
 /**

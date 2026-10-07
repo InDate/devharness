@@ -35,6 +35,22 @@ export interface RunReplyInput {
   person?: ExecutionResult['personInput'];
 }
 
+/**
+ * The {{env:}} names the run's steps resolved, by the file each came from. A
+ * value read from a file no call named - `.devharness/sequences.env` - would
+ * otherwise reach the page with nothing in the output to show where it came from.
+ */
+function envLines(rows: Row[]): string[] {
+  const byFile = new Map<string, Set<string>>();
+  for (const row of rows) {
+    if (!row.command.env) continue;
+    const names = byFile.get(row.command.env.file) ?? new Set<string>();
+    for (const name of row.command.env.names) names.add(name);
+    byFile.set(row.command.env.file, names);
+  }
+  return [...byFile].map(([file, names]) => `{{env:}} from ${file}: ${[...names].sort().join(', ')}`);
+}
+
 const ACTED: Record<RunRule['verb'], string> = { ignore: 'ignored', answer: 'answered', block: 'blocked', refuse: 'refused', scope: 'out of scope' };
 
 interface Row {
@@ -182,6 +198,7 @@ export function formatRunReply(recorder: CommandRecorder, input: RunReplyInput):
     left > 0 ? `${left} ${input.paused && failedAt === undefined ? 'remaining' : 'not run'}` : '',
   ].filter(Boolean);
   let reply = [head, ...tally].join(' · ');
+  for (const line of envLines(rows)) reply += `\n${line}`;
   const unrecordedNotes = unrecorded.map(([step, why]) => `Step ${step}: ${why}`);
 
   const pauses = input.pauses ?? new Map<number, Crossing[]>();

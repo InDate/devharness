@@ -730,6 +730,46 @@ export APP_USER="alice"   # export prefix and surrounding quotes are accepted
 - There is **no `$VAR` expansion** inside values. A password containing `$` is
   ordinary, and expanding it would type something else.
 - `runAll` takes it too, applying the same file to every sequence in the suite.
+- A paused run keeps its file: `step` and `finish` resolve `{{env:}}` from the
+  same values the run read.
+- The reply names the file and each name a step resolved from it -
+  `{{env:}} from sequences.env: APP_PASSWORD` - never a value.
+
+#### The project file: `.devharness/sequences.env`
+
+A run that names no `envFile` reads `.devharness/sequences.env` when it
+exists. A bench play passes no `envFile`, so this file is how a credential
+reaches a sequence played from the bench without restarting the server with
+the variable exported. The rules above hold for it: its values win over the
+server's environment, a malformed line fails the run before its first step,
+and the reply names it beside each name it supplied. A named `envFile`
+replaces it for that run. `.devharness/` is ignored by git, so the file stays
+on the machine that holds it.
+
+#### A value that differs by URL
+
+The origin a run starts at - its `baseUrl` or `startUrl`, else the page it
+begins on - picks a per-origin value over the plain one:
+
+```bash
+# .devharness/sequences.env
+APP_PASSWORD=local-pass
+APP_PASSWORD@https://staging.example.com=staging-pass
+```
+
+A property does the same through the step that stores it: its expression
+holds the value for every origin, and `byOrigin` the value for each named one.
+
+```json
+{ "tool": "inspect", "params": { "action": "evaluateExpression", "expression": "\"local-user\"", "saveAs": "user" },
+  "byOrigin": { "https://staging.example.com": "staging-user" } }
+```
+
+The bench's variables fold adds both: a property writes this step, and a
+secret writes the env file lines. Its rows mark each variable a property or a
+secret, `per URL ×N` where origins hold their own value, `set during the
+sequence` where a step captures it, and `changed at step N` where a later
+step sets it again.
 
 **If the sequence contains any typed text and you omit `variables` entirely,
 `run` does not execute** - it returns a prompt listing the substitutable keys

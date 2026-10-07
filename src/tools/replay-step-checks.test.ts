@@ -57,6 +57,13 @@ describe('validateTypedText', () => {
     await expect(validateTypedText(ctx, '#name', 'hello')).rejects.toThrow('Text validation failed');
   });
 
+  it('names lengths, never either text, for a concealed value', async () => {
+    const ctx = ctxWith(tool => tool === 'inspect' ? evaluated('hunter') : undefined);
+    const failure = validateTypedText(ctx, '#password', 'hunter2', false, true);
+    await expect(failure).rejects.toThrow('Text validation failed for #password: expected 7 characters, not shown, got 6 characters, not shown');
+    await expect(validateTypedText(ctx, '#password', 'hunter2', false, true)).rejects.not.toThrow(/hunter/);
+  });
+
   it('passes a selector with quotes and backslashes into the page intact', async () => {
     const ctx = ctxWith(tool => tool === 'inspect' ? evaluated('x') : undefined);
     const selector = `input[name='a\\'b']`;

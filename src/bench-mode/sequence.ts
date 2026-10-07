@@ -1,6 +1,8 @@
 import { debugLog } from '../debug-logger.js';
 import { currentCursor } from '../proxy/registry.js';
-import type { SequenceCard, SequenceState } from '../bench/wire.js';
+import type { SequenceCard, SequenceState, SequenceStep } from '../bench/wire.js';
+import type { EnvEntries } from '../helpers/env-file.js';
+import { secretsFor, writeSecret } from './secrets.js';
 import { appendRun } from '../run-log.js';
 import { evaluateInPage, request, send, setInspectMode } from './cdp.js';
 import { type SequenceDriver } from './driver.js';
@@ -47,6 +49,7 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
       currentStep: steps.length,
       total: steps.length,
       busy: session.sequenceBusy, recording: true, variables: [],
+      secrets: await secretsFor(steps),
       ...(session.recordingInto ? {
         into: {
           name: session.recordingInto.name,
@@ -127,6 +130,7 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
     ...(active.repair ? { repair: active.repair } : {}),
     ...(session.recordingSequence ? { recording: true } : {}),
     variables: active.variables,
+    secrets: await secretsFor(active.steps.map((step, index) => ({ ...step, index } as SequenceStep))),
     ...(active.placements ? { placements: active.placements } : {}),
     ...(session.sequences.baseUrl() ? { baseUrl: session.sequences.baseUrl() } : {}),
     ...(session.sequenceFailure ? { failure: session.sequenceFailure } : {}),
@@ -630,15 +634,28 @@ export async function moveSequenceStep(
   return getSequenceState(connection);
 }
 
+/**
+ * Store a secret in the project env file, replacing what it held for that
+ * name; null removes it. Nothing reaches the sequence or the page: a step
+ * reads it as {{env:NAME}}.
+ */
+export async function setSequenceSecret(connection: string, name: string, entries: EnvEntries | null, keep = false): Promise<SequenceState | undefined> {
+  const session = sessions.get(connection);
+  if (!session?.sequences) return undefined;
+  session.sequenceFailure = await writeSecret(name, entries, keep).then(() => undefined, error => String(error?.message ?? error));
+  return getSequenceState(connection);
+}
+
 /** Define or update a variable the open sequence carries. */
 export async function setSequenceVariable(
   connection: string,
   name: string,
-  value: string
+  value: string,
+  byOrigin?: Record<string, string>
 ): Promise<SequenceState | undefined> {
   const session = sessions.get(connection);
   if (!session?.sequences) return undefined;
-  session.sequenceFailure = await session.sequences.setVariable(name, value).catch(error => String(error));
+  session.sequenceFailure = await session.sequences.setVariable(name, value, byOrigin).catch(error => String(error));
   return getSequenceState(connection);
 }
 

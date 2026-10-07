@@ -317,12 +317,13 @@ export async function addRecordingTimer(connection: string, ms: number): Promise
 }
 
 /** Store a named value into the recording, after the last action; see VariableEvent. */
-export async function addRecordingVariable(connection: string, name: string, value: string): Promise<string | undefined> {
+export async function addRecordingVariable(connection: string, name: string, value: string, byOrigin?: Record<string, string>): Promise<string | undefined> {
   const session = sessions.get(connection);
   if (!session?.recordingSequence) return 'nothing is recording';
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return `"${name}" is not a usable variable name`;
+  const event = { type: 'variable', name, value, ...(byOrigin && Object.keys(byOrigin).length ? { byOrigin } : {}) };
   await evaluateInPage(session,
-    `(globalThis.__cdpRecordingEvents ||= []).push(Object.assign(${JSON.stringify({ type: 'variable', name, value })}, { timestamp: Date.now() }))`)
+    `(globalThis.__cdpRecordingEvents ||= []).push(Object.assign(${JSON.stringify(event)}, { timestamp: Date.now() }))`)
     .catch(() => {});
   return undefined;
 }

@@ -27,7 +27,7 @@ import { getMessage, isElementNotFoundFailure } from '../messages.js';
 import type { CheckOutcome as CheckAction } from './check-tools.js';
 import { assertAsCheck, subjectOf as subjectOfCheck, waitAsCheck } from './check-engine.js';
 import type { CheckOutcome as CheckOutcomeRecord, RanStep } from '../proxy/registry.js';
-import { asStep, atRunStep, originChannel, withinRun } from '../call-origin.js';
+import { asStep, atRunStep, atRunStepEnv, originChannel, withinRun } from '../call-origin.js';
 import { showingPickers } from '../dialog-monitor.js';
 import { addressedConnection, addressesConnection, createsConnection, createdName, isLaunchStep } from './connection-steps.js';
 
@@ -867,7 +867,7 @@ export interface ExecuteStepsOptions {
 export async function executeSteps(options: ExecuteStepsOptions): Promise<ExecutionResult> {
   const execution = await withinRun(options.sequence.name, () => executeStepsWithin(options));
   const last = execution.results[execution.results.length - 1];
-  if (last && !last.success) options.ctx.commandRecorder?.markStepFailed?.(options.sequence.name, last.tool);
+  if (last && !last.success) options.ctx.commandRecorder?.markStepFailed?.(options.sequence.name, last.step);
   return execution;
 }
 
@@ -1167,11 +1167,21 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
 
       // Build params
       let params = { ...cmd.params };
+      // Typed text from an {{env:}} token or a run's `variables` is a credential.
+      let concealText = /\{\{env:/.test(String(cmd.params?.text ?? ''));
 
       // Resolve {{var:name.path}} / {{timestamp}} tokens against the run's
       // variable store. Throws InterpolationError on an unresolvable token -
       // caught by this step's try/catch below, same as any other step failure.
-      params = interpolateParams(params, variableStore, runTimestamp, ctx.runEnv);
+      // A stored variable with a value for the run's origin stores that one.
+      const forOrigin = ctx.runOrigin !== undefined ? cmd.byOrigin?.[ctx.runOrigin] : undefined;
+      if (forOrigin !== undefined) params.expression = JSON.stringify(forOrigin);
+      params = interpolateParams(params, variableStore, runTimestamp, ctx.runEnv, ctx.runEnvFile, ctx.runOrigin);
+      if (ctx.runEnv && ctx.runEnvFile) {
+        const names = [...new Set([...JSON.stringify(cmd.params).matchAll(/\{\{env:([A-Za-z_][A-Za-z0-9_]*)\}\}/g)]
+          .map(([, name]) => name).filter(name => name in ctx.runEnv!))].sort();
+        if (names.length) atRunStepEnv({ file: ctx.runEnvFile, names });
+      }
 
       // Apply variable substitutions. The substituted value is never logged:
       // these steps carry passwords and tokens, and debug.log outlives the run.
@@ -1179,6 +1189,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
         const varName = `var_${i}_${params.selector?.replace(/[^a-zA-Z0-9]/g, '_') || 'text'}`;
         if (activeVariables[varName] !== undefined) {
           params.text = activeVariables[varName];
+          concealText = true;
           debugLog(logPrefix, `Substituted ${varName} (${String(params.text).length} chars)`);
         }
       }
@@ -1765,7 +1776,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
 
       // Post-step async operations (after marking success)
       if (cmd.tool === 'input' && params.action === 'type' && params.selector && stepConnection) {
-        await validateTypedText(stepCtx, params.selector, params.text || '', params.append === true);
+        await validateTypedText(stepCtx, params.selector, params.text || '', params.append === true, concealText);
       }
 
       // Pre-fetch next element after navigation/click. The wait happens where the
@@ -2073,6 +2084,8 @@ export async function executeSequenceWithPause(
       capturedVariables: ctx.variableStore,
       runTimestamp: ctx.runTimestamp,
       ...(ctx.connectionMap && { connectionMap: ctx.connectionMap }),
+      ...(ctx.runEnv && { runEnv: ctx.runEnv, runEnvFile: ctx.runEnvFile }),
+      ...(ctx.runOrigin && { runOrigin: ctx.runOrigin }),
     };
     return result;
   }
@@ -2093,6 +2106,8 @@ export async function executeSequenceWithPause(
         runTimestamp: ctx.runTimestamp,
         // step/finish must resolve per-step connections the way this run did
         ...(ctx.connectionMap && { connectionMap: ctx.connectionMap }),
+        ...(ctx.runEnv && { runEnv: ctx.runEnv, runEnvFile: ctx.runEnvFile }),
+      ...(ctx.runOrigin && { runOrigin: ctx.runOrigin }),
       };
 
       result.pausedAtStep = lastResult.step;

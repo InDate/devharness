@@ -61,7 +61,7 @@ function swapPaneUrl(url: string, connection: string, to: 'token' | 'live'): str
 }
 
 /** The page a recording began on, as its opening step. */
-function navigateFirst(url: string): { tool: string; params: Record<string, any>; comment?: string } {
+function navigateFirst(url: string): { tool: string; params: Record<string, any>; comment?: string; byOrigin?: Record<string, string> } {
   return { tool: 'navigate', params: { action: 'goto', url } };
 }
 
@@ -229,6 +229,7 @@ export function createSequenceDriver(
     signal?: AbortSignal,
   ): Promise<string | undefined> => {
     let text: string;
+    let raised = false;
     try {
       const response = await executeToolCall('replay', args, signal);
       if (response?._meta?.replay?.prompted) return 'the run asked for replacement text and ran no step';
@@ -238,20 +239,24 @@ export function createSequenceDriver(
       if (typeof refused === 'string') return refused.replace(/^Error:\s*/, '').slice(0, 200);
       text = textOf(response);
     } catch (error) {
-      // executeToolCall raises an isError response as a ToolError carrying it.
+      // executeToolCall raises an isError response as a ToolError carrying it,
+      // and a run's failed step replies with its run table, which opens on the
+      // sequence's name rather than on "Error".
       text = textOf(error);
+      raised = true;
     }
 
-    if (!/^\s*(Error|\*\*BLOCKED)/.test(text) && !/\*\*Error:\*\*/.test(text)) return undefined;
+    if (!raised && !/^\s*(Error|\*\*BLOCKED)/.test(text) && !/\*\*Error:\*\*/.test(text)) return undefined;
 
     debugLog('bench', `replay ${args.action} failed: ${text.slice(0, 1200).replace(/\n/g, ' ')}`);
-    // "Failed at step 2 (input)" - the only place the position is reported.
-    const at = text.match(/Failed at step (\d+)/);
+    // "sse-close-stops failed at step 2 of 4" - the only place the position is reported.
+    const at = text.match(/failed at step (\d+)/i);
     failedStep = at ? Number(at[1]) - 1 : null;
     const detail = text.match(/\*\*Error:\*\*\s*([^\n|]+)/)?.[1]
+      ?? (at ? text.match(new RegExp(`^Step ${at[1]}: (.+)$`, 'm'))?.[1] : undefined)
       ?? text.split('\n').map(line => line.trim()).find(line => line && !/^Error: Step failed$/.test(line))
       ?? 'the step did not run';
-    return String(detail).replace(/^Error:\s*/, '').trim().slice(0, 160);
+    return String(detail).replace(/^Error:\s*/, '').trim();
   };
 
   // What has been chosen but not yet started. replay only opens a step-through
@@ -705,6 +710,8 @@ export function createSequenceDriver(
             ...(resolved ? { resolved } : {}),
             ...(typeof command.params?.saveAs === 'string' ? { captures: command.params.saveAs } : {}),
             ...(storedValue(command) !== undefined ? { stores: storedValue(command) } : {}),
+        ...(command.byOrigin ? { storesByOrigin: command.byOrigin } : {}),
+            ...(command.byOrigin ? { storesByOrigin: command.byOrigin } : {}),
         ...(command.pauseBefore ? { pauseBefore: true as const, ...(command.pauseHolds ? { pauseHolds: command.pauseHolds } : {}) } : {}),
             ...(readsOf(command).length ? { reads: readsOf(command) } : {}),
             tool: command.tool,
@@ -1258,6 +1265,7 @@ export function createSequenceDriver(
         ...(command.comment ? { comment: command.comment } : {}),
         ...(typeof command.params?.saveAs === 'string' ? { captures: command.params.saveAs } : {}),
         ...(storedValue(command) !== undefined ? { stores: storedValue(command) } : {}),
+        ...(command.byOrigin ? { storesByOrigin: command.byOrigin } : {}),
         ...((command as { pauseBefore?: true }).pauseBefore ? { pauseBefore: true as const } : {}),
         ...(readsOf(command).length ? { reads: readsOf(command) } : {}),
         tool: command.tool,
@@ -1268,7 +1276,7 @@ export function createSequenceDriver(
       }));
     },
 
-    setVariable: async (name: string, value: string) => {
+    setVariable: async (name: string, value: string, byOrigin?: Record<string, string>) => {
       const sequence = openSequence();
       if (!sequence) return 'no sequence is open';
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return `"${name}" is not a usable variable name`;
@@ -1281,6 +1289,7 @@ export function createSequenceDriver(
           saveAs: name,
         },
         comment: `set ${name}`,
+        ...(byOrigin && Object.keys(byOrigin).length ? { byOrigin } : {}),
       };
       const at = commands.findIndex(c => c.params?.saveAs === name && c.tool === 'inspect');
       if (at >= 0) commands[at] = step;

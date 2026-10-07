@@ -70,6 +70,14 @@ export interface ExecutionContext {
    * the other.
    */
   runEnv?: Record<string, string>;
+  /** The file runEnv was read from: the run's envFile, or `.devharness/sequences.env`. */
+  runEnvFile?: string;
+  /**
+   * The origin the run started at: its baseUrl or startUrl, else the page it
+   * began on. It picks a per-origin value - a `NAME@<origin>` line in the
+   * envFile, or a stored variable's `byOrigin` entry - over the plain one.
+   */
+  runOrigin?: string;
   /**
    * The position this run's steps stamp their traffic under, when it runs
    * inside a step of another: that step's number, and the path of positions

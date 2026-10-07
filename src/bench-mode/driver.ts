@@ -164,11 +164,12 @@ export interface SequenceDriver {
   /** Move `count` steps from `from` on, together, so the first lands at `to`, and write the file back. */
   moveStep: (from: number, to: number, count?: number) => Promise<string | undefined>;
   /**
-   * Define a variable the sequence carries, as a step that sets it. A run has
-   * no way to be handed a literal from outside, so the value lives in the
-   * sequence and travels with it.
+   * Define a variable the sequence carries, as a step that sets it, so the
+   * value is written into the sequence file and travels with it. A value kept
+   * out of the file - a credential - is an {{env:NAME}} token, read from the
+   * run's envFile or `.devharness/sequences.env`.
    */
-  setVariable: (name: string, value: string) => Promise<string | undefined>;
+  setVariable: (name: string, value: string, byOrigin?: Record<string, string>) => Promise<string | undefined>;
   /** What the sequence is for and what it should end up doing. */
   describe: (description: string, expectedOutcome: string) => Promise<string | undefined>;
   /** Why one step is here, against the step. */

@@ -4,7 +4,10 @@
  */
 import { describe, it, expect } from 'vitest';
 import { formatRunReply } from './run-table.js';
-import type { CommandRecorder } from '../command-recorder.js';
+import { CommandRecorder } from '../command-recorder.js';
+import { executeSteps } from './replay-executor.js';
+import { historyPlace } from '../call-origin.js';
+import { productionShaped } from '../test-support/fake-execute-tool-call.js';
 import type { Crossing } from '../bench/step-compare.js';
 import type { RunRules } from './run-rules.js';
 
@@ -58,5 +61,34 @@ describe('a pause in the reply', () => {
     const reply = formatRunReply(recorder(), { name: 'sse', total: 4, since: 2, steps: 'all', rules });
     expect(reply).not.toMatch(/\| after \|/);
     expect(reply).toContain('| /sse price | answer | this sequence | never fired |');
+  });
+});
+
+describe('a step that fails before its call is recorded', () => {
+  it('is the failed step, with its reason, and the step before it, of the same tool, passes', async () => {
+    const history = new CommandRecorder();
+    const executeToolCall = productionShaped(async (tool: string, params: Record<string, any>) => {
+      const result = { content: [{ type: 'text', text: tool === 'input' ? `Clicked element \`${params.selector}\`` : '' }] };
+      const place = historyPlace();
+      if (place) await history.recordCommand(tool, params, { ...place, result });
+      return result;
+    });
+    const sequence = { id: 'seq-env', name: 'env-token-search', createdAt: 1, commands: [
+      { tool: 'input', params: { action: 'click', selector: 'search-shell' } },
+      { tool: 'input', params: { action: 'type', text: '{{env:SOCKET_APP_TOKEN_UNSET}}' } },
+    ] };
+
+    const execution = await executeSteps({
+      sequence, startStep: 0,
+      ctx: { executeToolCall, commandRecorder: history, connection: 'app', variableStore: {}, runEnv: {} } as any,
+    });
+    const reply = formatRunReply(history, {
+      name: 'env-token-search', total: 2, since: -1,
+      failures: new Map(execution.results.filter(r => !r.success).map(r => [r.step, r.error!])),
+    });
+
+    expect(reply.split('\n')[0]).toBe('env-token-search failed at step 2 of 2 · 1 passed');
+    expect(reply).toContain('Step 2: Could not resolve template token {{env:SOCKET_APP_TOKEN_UNSET}}');
+    expect(reply).not.toContain('Clicked element');
   });
 });

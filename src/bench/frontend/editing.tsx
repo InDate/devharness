@@ -10,14 +10,14 @@ import { LabelInput, Row } from './row.js';
 import { RunsPanel, byTag, startRun, useRuns } from './runs.js';
 import { Glyph } from './glyph.js';
 import type {
-  Annotation, BenchView, BoundaryEvent, CaptureRect, CaptureVersion, FactKind, RanStep, RunRow, SequenceCard, SequenceOutline, SequenceStep, SequenceVariable,
+  Annotation, BenchView, BoundaryEvent, CaptureRect, CaptureVersion, FactKind, RanStep, RunRow, SecretVariable, SequenceCard, SequenceOutline, SequenceStep, SequenceVariable,
 } from '../wire.js';
 import { useEscape } from './escape.js';
 import { askSection, useGoToAnyTarget } from './goto.js';
 import { comparisonOf } from '../check-words.js';
 import { keyOf, kindOf, type KindCount } from '../kinds.js';
 import { socketName } from './crossing.js';
-import { useVariablesHidden } from './variables-shown.js';
+import { toggleVariables, useVariablesHidden } from './variables-shown.js';
 import { moveShift, spliceIn, spliceShift, useStepMotion } from './step-motion.js';
 import { EnableProxy } from './enable-proxy.js';
 
@@ -664,6 +664,8 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted, 
 
         {sequence?.name && (
           <VariablesBlock defined={defined} post={post} recording={!!sequence.recording} hidden={variablesHidden}
+            secrets={sequence.secrets ?? []}
+            changedAt={(name) => steps.filter(one => one.captures === name).map(one => one.index).slice(1)}
             captured={steps.filter(step => step.captures && step.stores === undefined)
               .filter((step, k, all) => all.findIndex(one => one.captures === step.captures) === k)
               .map(step => ({
@@ -866,6 +868,8 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted, 
               <ol class="activitycards">
                 <VariableRow name={step.captures} step={step.index} stores={step.stores}
                   usedBy={steps.filter(one => one.reads?.includes(step.captures!)).map(one => one.index)}
+                  kinds={[firstStore.has(step.captures) || steps.findIndex(one => one.captures === step.captures) < step.index
+                    ? 'changes it here' : 'set during the sequence']}
                   variable={(sequence?.variables ?? []).find(one => one.name === step.captures)} />
               </ol>
             )}
@@ -948,9 +952,11 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted, 
  * value is changed in place on the row; a captured object or array opens to
  * its fields.
  */
-function VariableRow({ name, step, variable, stores, onSave, onRemove, usedBy = [] }: {
+function VariableRow({ name, step, variable, stores, onSave, onRemove, usedBy = [], kinds = [] }: {
   name: string;
   step: number;
+  /** What kind of variable it is, each shown as a tag after its value: `property`, `per URL ×2`, `changed at step 5`. */
+  kinds?: string[];
   /** The steps that read it, by position. */
   usedBy?: number[];
   variable?: SequenceVariable;
@@ -981,6 +987,7 @@ function VariableRow({ name, step, variable, stores, onSave, onRemove, usedBy = 
         {editing
           ? <LabelInput value={stores ?? ''} onSave={(next) => onSave?.(next)} onDone={() => setEditing(false)} />
           : <span class="varvalue">{value}</span>}
+        {kinds.map(kind => <span key={kind} class="varkind">{kind}</span>)}
       </span>}
       reading={<span class="meta">{used}</span>}
       slots={onRemove ? { remove: onRemove } : {}}
@@ -1239,16 +1246,23 @@ function NewCheckRow({ options, variables, onSave, onCancel }: {
 }
 
 /**
- * The variables a sequence defines, above its steps: each stored value the
- * first time a step stores it. A step storing it again later is a change
- * partway through, and stays where it runs.
+ * The variables a sequence uses, above its steps, folded as a pause is: a
+ * marker naming them, opening to a marker either side of their rows. A
+ * property is each stored value the first time a step stores it; a step
+ * storing it again later is a change partway through, shown as one here and
+ * where it runs. A secret is listed by name: its value lives in the project
+ * env file, and none of it reaches the bench.
  */
-function VariablesBlock({ defined, captured, post, recording, readers, tallied, passes, hidden }: {
-  /** The rows are hidden, by the footing's variables button; the heading and the steps divider stay. */
+function VariablesBlock({ defined, captured, secrets, changedAt, post, recording, readers, tallied, passes, hidden }: {
+  /** Folded, by its own markers or the footing's variables button; the steps divider stays. */
   hidden: boolean;
   defined: Array<{ name: string; step: SequenceStep }>;
   /** Variables a step captures from the page, listed here too; they change with their step, not here. */
   captured: Array<{ name: string; step: SequenceStep; variable?: SequenceVariable }>;
+  /** The secrets the steps read or the env file holds. */
+  secrets: SecretVariable[];
+  /** The steps after the first that set a name again, by position. */
+  changedAt: (name: string) => number[];
   /** The steps that read a variable, by position. */
   readers: (name: string) => number[];
   post: (path: string, body?: Record<string, unknown>) => Promise<void>;
@@ -1259,64 +1273,71 @@ function VariablesBlock({ defined, captured, post, recording, readers, tallied, 
   /** Runs whose traffic is held for comparison. */
   passes: number;
 }) {
-  const [adding, setAdding] = useState(false);
-  const [name, setName] = useState('');
-  const [value, setValue] = useState('');
-  // Focused as the form opens: `autofocus` is read on page load only, and a
-  // box added later is left without the cursor.
-  const nameBox = useRef<HTMLInputElement>(null);
-  useEffect(() => { if (adding) nameBox.current?.focus(); }, [adding]);
-  // While recording there is no file yet: the value goes into the recording,
-  // and lands above the steps with the rest once it is.
-  const add = () => {
-    if (name.trim()) void post(recording ? '/sequence/record/variable' : '/sequence/var/set', { name: name.trim(), value });
-    setAdding(false); setName(''); setValue('');
-  };
+  const [adding, setAdding] = useState<{ name?: string; kind?: VariableKind; origins?: string[] } | null>(null);
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  const counts = [
+    defined.length ? plural(defined.length, 'property', 'properties') : '',
+    secrets.length ? plural(secrets.length, 'secret', 'secrets') : '',
+    captured.length ? `${captured.length} set during the sequence` : '',
+  ].filter(Boolean).join(' · ');
+  const none = !counts;
+  const changes = (name: string) => changedAt(name).map(at => `changed at step ${at + 1}`);
+  const perUrl = (origins: number) => origins ? [`per URL ×${origins}`] : [];
+  // Pointing at either marker puts the add button in place of its words, as a step marker's tools do.
+  const tools = (
+    <button class="marknote" title={recording ? 'add a variable to the recording' : 'add a variable'}
+      aria-label="add a variable"
+      onClick={(e: Event) => { e.stopPropagation(); setAdding({}); }}
+    ><Glyph of="new" /></button>
+  );
   return (
     <>
-      {/* A + on the heading, shown on pointing as a step's note button is. */}
-      <div class="mark varsmark">
-        <span class="marktext">variables</span>
-        <span class="marktools">
-        <button class="marknote" title="store a named value for the whole sequence"
-          aria-label={adding ? 'close' : 'add a variable'}
-          onClick={(e: Event) => { e.stopPropagation(); setAdding(!adding); }}
-        ><Glyph of={adding ? 'cross' : 'new'} /></button>
-        </span>
-      </div>
-      {!hidden && (defined.length > 0 || captured.length > 0) && (
-        <ol class="activitycards">
-          {captured.map(({ name: named, step, variable }) => (
-            <VariableRow key={`captured|${named}`} name={named} step={step.index} variable={variable}
-              usedBy={readers(named)} />
-          ))}
-          {defined.map(({ name: named, step }) => (
-            <VariableRow key={named} name={named} step={step.index} stores={step.stores}
-              usedBy={readers(named)}
-              {...(recording ? {
-                onSave: (next: string) => void post('/sequence/record/variable/edit', { name: named, value: next }),
-                onRemove: () => void post('/sequence/record/variable/edit', { name: named, remove: true }),
-              } : {
-                onSave: (next: string) => void post('/sequence/var/set', { name: named, value: next }),
-                onRemove: () => void post('/sequence/var/remove', { name: named }),
-              })} />
-          ))}
-        </ol>
-      )}
-      {adding
-        ? <div class="timerline open variable">
-            <span>set</span>
-            <input class="replinput vname" placeholder="name" value={name} ref={nameBox}
-              onInput={(e: Event) => setName((e.target as HTMLInputElement).value)}
-              onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter') add(); if (e.key === 'Escape') setAdding(false); }} />
-            <span>=</span>
-            <input class="replinput vvalue" placeholder="value" value={value}
-              onInput={(e: Event) => setValue((e.target as HTMLInputElement).value)}
-              onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter') add(); if (e.key === 'Escape') setAdding(false); }} />
-            <button class="tool plain" onClick={add}>Add</button>
-            <button class="tool plain" onClick={() => setAdding(false)}>Cancel</button>
-          </div>
-        : null}
+      {hidden
+        ? (
+          <RunMark classes="mark switch runfold varfold" title="open the variables" onClick={toggleVariables} tools={tools}>
+            variables{counts && <><span class="pausedot">·</span>{counts}</>}
+          </RunMark>
+        )
+        : (
+          <>
+            <RunMark classes="mark switch runfold varfold open runstart" title="fold the variables" onClick={toggleVariables} tools={tools}>
+              variables
+            </RunMark>
+            {none
+              ? <p class="hint varnothing">no variables</p>
+              : (
+                <ol class="activitycards">
+                  {defined.map(({ name: named, step }) => (
+                    <VariableRow key={named} name={named} step={step.index} stores={step.stores}
+                      usedBy={readers(named)}
+                      kinds={['property', ...perUrl(Object.keys(step.storesByOrigin ?? {}).length), ...changes(named)]}
+                      {...(recording ? {
+                        onSave: (next: string) => void post('/sequence/record/variable/edit', { name: named, value: next }),
+                        onRemove: () => void post('/sequence/record/variable/edit', { name: named, remove: true }),
+                      } : {
+                        onSave: (next: string) => void post('/sequence/var/set', { name: named, value: next, byOrigin: step.storesByOrigin }),
+                        onRemove: () => void post('/sequence/var/remove', { name: named }),
+                      })} />
+                  ))}
+                  {secrets.map(secret => (
+                    <SecretRow key={`secret|${secret.name}`} secret={secret}
+                      onEdit={() => setAdding({ name: secret.name, kind: 'secret', origins: secret.origins })}
+                      onRemove={() => void post('/sequence/secret/remove', { name: secret.name })} />
+                  ))}
+                  {captured.map(({ name: named, step, variable }) => (
+                    <VariableRow key={`captured|${named}`} name={named} step={step.index} variable={variable}
+                      usedBy={readers(named)} kinds={['set during the sequence', ...changes(named)]} />
+                  ))}
+                </ol>
+              )}
+            {/* With nothing to count, the closing marker is the rule alone. */}
+            <RunMark classes="mark switch runfold varfold open runend" title="fold the variables" onClick={toggleVariables}
+              tools={none ? undefined : tools}>
+              {counts}
+            </RunMark>
+          </>
+        )}
+      {adding && <AddVariable recording={recording} post={post} start={adding} onClose={() => setAdding(null)} />}
       <div class="mark varsmark stepsmark">
         <span class="marktext">
           steps
@@ -1327,6 +1348,151 @@ function VariablesBlock({ defined, captured, post, recording, readers, tallied, 
         </span>
       </div>
     </>
+  );
+}
+
+/** A secret's row: its name, its value masked, which origins hold one, and what reads it. */
+function SecretRow({ secret, onEdit, onRemove }: {
+  secret: SecretVariable;
+  onEdit: () => void;
+  onRemove: () => void;
+}) {
+  const held = secret.plain || secret.origins.length > 0;
+  const used = secret.usedBy.length
+    ? `used by step${secret.usedBy.length === 1 ? '' : 's'} ${secret.usedBy.map(n => n + 1).join(', ')}`
+    : 'not used yet';
+  return (
+    <Row
+      classes={['varrow', 'secretrow', held ? '' : 'waiting']}
+      columns={['remove']}
+      title={held ? 'held in .devharness/sequences.env; a step reads it as {{env:' + secret.name + '}}' : 'no value in .devharness/sequences.env yet: a run reading it fails'}
+      label={<span class="what varline">
+        <span class="varname">{secret.name}</span>
+        <span class="vareq">=</span>
+        <span class="varvalue">{held ? '••••••' : '—'}</span>
+        <span class="varkind">secret</span>
+        {secret.origins.length > 0 && <span class="varkind" title={secret.origins.join('\n')}>per URL ×{secret.origins.length}</span>}
+        {!held && <span class="varkind missing">no value</span>}
+      </span>}
+      reading={<span class="meta">{used}</span>}
+      slots={held ? { remove: onRemove } : {}}
+      titles={{ remove: `remove ${secret.name} from .devharness/sequences.env` }}
+      open={false}
+      onOpen={onEdit}
+    />
+  );
+}
+
+type VariableKind = 'property' | 'secret';
+
+/**
+ * The modal that adds a variable: a name, whether it is a property or a
+ * secret, its value, and where it differs by URL, a value for each origin a
+ * run may start at. Add and Cancel sit in the bottom-right corner; Escape and
+ * the backdrop cancel too. A property writes a step that sets it - into the
+ * recording while one is going - and a secret goes into
+ * `.devharness/sequences.env`, which a step reads as {{env:NAME}}.
+ */
+function AddVariable({ recording, post, start, onClose }: {
+  recording: boolean;
+  post: (path: string, body?: Record<string, unknown>) => Promise<void>;
+  start: { name?: string; kind?: VariableKind; origins?: string[] };
+  onClose: () => void;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const nameBox = useRef<HTMLInputElement>(null);
+  const valueBox = useRef<HTMLInputElement>(null);
+  const [name, setName] = useState(start.name ?? '');
+  const [kind, setKind] = useState<VariableKind>(start.kind ?? 'property');
+  const [value, setValue] = useState('');
+  // A secret already held is changed in place: its URLs are listed, and a value left blank stays as it is.
+  const editing = !!start.name;
+  const [perUrl, setPerUrl] = useState(!!start.origins?.length);
+  const [origins, setOrigins] = useState<Array<{ origin: string; value: string }>>(
+    start.origins?.length ? start.origins.map(origin => ({ origin, value: '' })) : [{ origin: '', value: '' }]);
+  // A variable already named opens on its value; a new one on its name.
+  useEffect(() => { dialog.current?.showModal(); (start.name ? valueBox : nameBox).current?.focus(); }, []);
+  const ORIGIN = /^https?:\/\/[^\s=/]+$/;
+  const usable = /^[A-Za-z_][A-Za-z0-9_]*$/.test(name.trim());
+  const listed = perUrl ? origins.filter(one => one.origin.trim()) : [];
+  const badOrigin = listed.find(one => !ORIGIN.test(one.origin.trim().replace(/\/$/, '')));
+  const ready = usable && !badOrigin;
+  const add = () => {
+    if (!ready) return;
+    const given = editing ? listed.filter(one => one.value !== '') : listed;
+    const byOrigin = given.length
+      ? Object.fromEntries(given.map(one => [one.origin.trim().replace(/\/$/, ''), one.value]))
+      : undefined;
+    const body = editing
+      ? { name: name.trim(), keep: true, ...(value !== '' ? { value } : {}), ...(byOrigin ? { byOrigin } : {}) }
+      : { name: name.trim(), value, ...(byOrigin ? { byOrigin } : {}) };
+    void post(kind === 'secret' ? '/sequence/secret/set' : recording ? '/sequence/record/variable' : '/sequence/var/set', body);
+    dialog.current?.close();
+  };
+  const onKey = (e: KeyboardEvent) => { if (e.key === 'Enter') add(); };
+  const valueType = kind === 'secret' ? 'password' : 'text';
+  return (
+    <dialog ref={dialog} class="varmodal" onClose={onClose}
+      onClick={(e: MouseEvent) => { if (e.target === dialog.current) dialog.current?.close(); }}>
+      <div class="varmodalhead">
+        <h3>{start.name ? `Set ${start.name}` : 'Add a variable'}</h3>
+        {start.kind
+          ? <span class="varkind">{start.kind}</span>
+          : (
+            <div class="varswitch" role="radiogroup" aria-label="kind">
+              {(['property', 'secret'] as const).map(one => (
+                <button key={one} role="radio" aria-checked={kind === one} class={kind === one ? 'on' : ''}
+                  title={one === 'secret'
+                    ? 'kept in .devharness/sequences.env, never in the sequence; a step reads it as {{env:NAME}}'
+                    : `saved in the sequence${recording ? ' when the recording is' : ''}; a step reads it as {{var:NAME}}`}
+                  onClick={() => setKind(one)}>{one}</button>
+              ))}
+            </div>
+          )}
+      </div>
+      {!start.name && (
+        <label class="varfield">
+          <span>Name</span>
+          <input class="varinput vname" placeholder="API_TOKEN" value={name} ref={nameBox} spellcheck={false}
+            onInput={(e: Event) => setName((e.target as HTMLInputElement).value)} onKeyDown={onKey} />
+        </label>
+      )}
+      <label class="varfield">
+        <span>{perUrl ? 'Value for any other URL' : 'Value'}</span>
+        <input class="varinput vvalue" type={valueType} value={value} ref={valueBox} spellcheck={false}
+          placeholder={editing ? 'unchanged' : ''}
+          autocomplete={kind === 'secret' ? 'new-password' : 'off'}
+          onInput={(e: Event) => setValue((e.target as HTMLInputElement).value)} onKeyDown={onKey} />
+      </label>
+      <label class="varcheck">
+        <input type="checkbox" checked={perUrl} onChange={(e: Event) => setPerUrl((e.target as HTMLInputElement).checked)} />
+        Different value per URL
+      </label>
+      {perUrl && (
+        <div class="varorigins">
+          {origins.map((one, k) => (
+            <div class="varorigin" key={k}>
+              <input class="varinput vorigin" placeholder="https://staging.app" value={one.origin} spellcheck={false}
+                onInput={(e: Event) => setOrigins(origins.map((row, j) => j === k ? { ...row, origin: (e.target as HTMLInputElement).value } : row))} />
+              <input class="varinput vvalue" type={valueType} placeholder={editing && one.origin ? 'unchanged' : 'value'} value={one.value} spellcheck={false}
+                onInput={(e: Event) => setOrigins(origins.map((row, j) => j === k ? { ...row, value: (e.target as HTMLInputElement).value } : row))}
+                onKeyDown={onKey} />
+              <button class="varicon" title="drop this origin" aria-label="drop this origin"
+                onClick={() => setOrigins(origins.length > 1 ? origins.filter((_, j) => j !== k) : [{ origin: '', value: '' }])}
+              ><Glyph of="cross" /></button>
+            </div>
+          ))}
+          <button class="varaddorigin" onClick={() => setOrigins([...origins, { origin: '', value: '' }])}>+ Add a URL</button>
+          {badOrigin && <p class="hint varwarn">A URL here is its origin alone, such as https://staging.example.com</p>}
+        </div>
+      )}
+      {name.trim() && !usable && <p class="hint varwarn">Letters, digits and _, not starting with a digit</p>}
+      <div class="varmodalfoot">
+        <button class="varicon" title="cancel" aria-label="cancel" onClick={() => dialog.current?.close()}><Glyph of="cross" /></button>
+        <button class="varicon varadd" title={kind === 'secret' ? 'store the secret' : 'add the variable'} aria-label="add"
+          disabled={!ready} onClick={add}><Glyph of="tick" /></button>
+      </div>
+    </dialog>
   );
 }
 

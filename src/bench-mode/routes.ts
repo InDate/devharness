@@ -22,7 +22,7 @@ import { stepTraffic, tickBench } from './page-hold.js';
 import { addRecordingTimer, addRecordingVariable, cancelRecordingSequence, chooseStepSelector, dropRecordedStep, editRecordingVariable, flagRecordedStep, keepRecordedStep, recordSequence, stopRecordingSequence } from './recording.js';
 import { clearBoundaryRule, hiddenOf, hideKind, nameTarget, namesOf, persistRules, ruleFrom, rulesOf, savePayloadFor, setBoundaryName, setBoundaryRule, setHiddenMode, setHiddenUse, setResponseMode, setResponseUse, unhideKind, useFrom } from './rules.js';
 import { baselineSequence, playHere, playToStep, renameFromHome, runFromHome, runsView, stopRun } from './runs.js';
-import { answerBenchDialog, cancelSequence, commentSequenceStep, describeSequence, dismissSequenceFailure, repairSequenceStep, editSequenceStep, getSequenceState, gotoSequenceStep, insertSequenceCheck, insertSequenceTimer, moveSequenceStep, playSequence, removeSequence, removeSequenceStep, removeSequenceVariable, selectSequence, setSequenceBaseUrl, setSequenceVariable, stepSequence, setPausePoint } from './sequence.js';
+import { answerBenchDialog, cancelSequence, commentSequenceStep, describeSequence, dismissSequenceFailure, repairSequenceStep, editSequenceStep, getSequenceState, gotoSequenceStep, insertSequenceCheck, insertSequenceTimer, moveSequenceStep, playSequence, removeSequence, removeSequenceStep, removeSequenceVariable, selectSequence, setSequenceBaseUrl, setSequenceSecret, setSequenceVariable, stepSequence, setPausePoint } from './sequence.js';
 import { type BenchSession, sessions } from './session.js';
 import { openSequence, openSteps, recordedStepOf, summariseBoundary, writeEvents } from './traffic.js';
 import { openerEntryOf } from '../activity-index.js';
@@ -387,9 +387,9 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
     keepRecordedStep: async () => { await keepRecordedStep(connection); },
     addRecordingTimer: async (ms: number) => { await addRecordingTimer(connection, ms); },
     editRecordingVariable: async (name: string, value: string | null) => { await editRecordingVariable(connection, name, value); },
-    addRecordingVariable: async (name: string, value: string) => {
+    addRecordingVariable: async (name: string, value: string, byOrigin?: Record<string, string>) => {
       const session = sessions.get(connection);
-      const failure = await addRecordingVariable(connection, name, value);
+      const failure = await addRecordingVariable(connection, name, value, byOrigin);
       if (session) session.sequenceFailure = failure;
     },
     chooseStepSelector: async (index: number) => { await chooseStepSelector(connection, index); },
@@ -412,7 +412,8 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
     insertSequenceCheck: async (after: number, params: Record<string, unknown>, comment?: string) => { await insertSequenceCheck(connection, after, params, comment); },
     editSequenceStep: async (index: number, params: unknown) => { await editSequenceStep(connection, index, params); },
     moveSequenceStep: async (from: number, to: number, count: number) => { await moveSequenceStep(connection, from, to, count); },
-    setSequenceVariable: async (name: string, value: string) => { await setSequenceVariable(connection, name, value); },
+    setSequenceVariable: async (name: string, value: string, byOrigin?: Record<string, string>) => { await setSequenceVariable(connection, name, value, byOrigin); },
+    setSequenceSecret: async (name, entries, keep) => { await setSequenceSecret(connection, name, entries, keep); },
     removeSequenceVariable: async (name: string) => { await removeSequenceVariable(connection, name); },
     noteAtStep: async (step: number) => { await noteAtStep(connection, step); },
     moveAnnotation: async (id: string, step: number, after?: string) => {

@@ -2280,19 +2280,6 @@ button.statedisc:hover { box-shadow: 0 0 0 3px color-mix(in srgb, var(--frost) 3
 
 /* Under the last recorded action: a line across the list with what can be
    put there - a timer in the wait colour, a variable in the variable colour. */
-.timerline {
-  display: flex; align-items: center; gap: 8px; width: 100%; margin: 8px 0;
-  color: var(--muted); font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-.timerline:not(.open)::before, .timerline:not(.open)::after { content: ''; flex: 1; height: 1px; background: var(--line); }
-.timerline .timeradd { border: 0; background: none; padding: 0 4px; cursor: pointer; color: var(--muted); font: inherit; }
-.timerline .timeradd:hover { color: var(--wait); }
-.timerline .timeradd.variable:hover { color: var(--variable); }
-.timerline.open.timer { color: var(--wait); }
-.timerline.open.variable { color: var(--variable); }
-.timerline.open .replinput { width: 6ch; }
-.timerline.open .replinput.vname { width: 14ch; }
-.timerline.open .replinput.vvalue { width: 22ch; }
 /* A step's wait, set in the row's own body: a label, a slider taking the
    width, and the value it stands at, one line each. */
 .waitset { display: flex; flex-direction: column; gap: 4px; padding: 6px 4px; }
@@ -2415,6 +2402,60 @@ button.statedisc:hover { box-shadow: 0 0 0 3px color-mix(in srgb, var(--frost) 3
 .timerline.open .tool.plain:hover { color: var(--fg); }
 
 .mark.varsmark .marktext { color: var(--variable); opacity: 1; }
+/* The variables fold: the run fold's shape, in the variable colour. */
+.mark.switch.runfold.varfold { --run-rule: 1px solid color-mix(in srgb, var(--variable) 45%, transparent); }
+.mark.switch.runfold.varfold .marktext { color: var(--variable); }
+.mark.switch.runfold.varfold::before, .mark.switch.runfold.varfold::after { background: var(--variable); }
+/* Adding variables: a modal over the bench, closed by Cancel, Escape or the backdrop. */
+dialog.varmodal {
+  width: min(420px, calc(100vw - 32px)); box-sizing: border-box; padding: 18px 20px 14px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--fg);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.3); font: 13px/1.45 -apple-system, sans-serif;
+}
+dialog.varmodal::backdrop { background: rgba(0, 0, 0, 0.45); }
+.varmodalhead { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.varmodalhead h3 { margin: 0; font-size: 14px; font-weight: 600; color: var(--fg); }
+.varmodalhead .varkind { margin: 0; }
+/* The kind: two halves of one control, the chosen half filled. */
+.varswitch { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.varswitch button {
+  border: 0; padding: 4px 10px; background: none; color: var(--muted); cursor: pointer;
+  font: 500 12px/1.4 -apple-system, sans-serif;
+}
+.varswitch button + button { border-left: 1px solid var(--line); }
+.varswitch button.on { background: color-mix(in srgb, var(--variable) 22%, transparent); color: var(--fg); }
+.varswitch button:focus-visible { outline: 2px solid var(--variable); outline-offset: -2px; }
+/* Each label above its input, the input the dialog's width. */
+.varfield { display: flex; flex-direction: column; gap: 4px; margin: 0 0 12px; }
+.varfield > span { font-size: 11px; font-weight: 500; color: var(--muted); }
+.varinput {
+  width: 100%; box-sizing: border-box; padding: 6px 8px; text-align: left;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--fg);
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.varinput:focus { outline: none; border-color: var(--variable); }
+.varinput::placeholder { color: var(--muted); opacity: 0.6; }
+.varcheck { display: flex; align-items: center; gap: 8px; margin: 2px 0 0; font-size: 12px; color: var(--muted); cursor: pointer; }
+.varorigins { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 0; }
+.varorigin { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr) 28px; gap: 6px; align-items: center; }
+.varaddorigin { align-self: flex-start; border: 0; background: none; padding: 2px 0; color: var(--variable); cursor: pointer; font: inherit; font-size: 12px; }
+.varwarn { color: var(--alert); margin: 6px 0 0; }
+/* Cancel and Add in the bottom-right corner, Add last. */
+.varmodalfoot { display: flex; justify-content: flex-end; gap: 6px; margin-top: 18px; }
+.varicon {
+  display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--muted); cursor: pointer;
+}
+.varicon:hover:not(:disabled) { color: var(--fg); border-color: var(--muted); }
+.varicon.varadd { border-color: color-mix(in srgb, var(--variable) 60%, transparent); color: var(--variable); }
+.varicon.varadd:hover:not(:disabled) { background: color-mix(in srgb, var(--variable) 15%, transparent); color: var(--variable); }
+.varicon:disabled { opacity: 0.35; cursor: default; }
+/* An open fold with nothing in it: the words centred between its markers. */
+.varnothing { text-align: center; margin: 0; padding: 14px 0; }
+/* What kind of variable a row holds, after its value. */
+.varkind { margin-left: 8px; padding: 0 5px; border: 1px solid color-mix(in srgb, var(--variable) 45%, transparent);
+  border-radius: 3px; color: var(--variable); font-size: 10px; line-height: 15px; white-space: nowrap; }
+.varkind.missing { color: var(--alert); border-color: color-mix(in srgb, var(--alert) 45%, transparent); }
 .mark.stepsmark .marktext { color: var(--muted); }
 .mark.stepsmark .tally.mismatch, .mark.stepsmark .tally.missing { color: var(--alert); font-weight: 600; }
 .mark.stepsmark .tally.unexpected { color: var(--own); font-weight: 600; }

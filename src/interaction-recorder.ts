@@ -115,6 +115,8 @@ export interface VariableEvent {
   type: 'variable';
   name: string;
   value: string;
+  /** The value stored in place of `value` for a run starting at each origin. */
+  byOrigin?: Record<string, string>;
   timestamp: number;
 }
 
@@ -1557,17 +1559,17 @@ export interface CommandConversionOptions {
 export function eventsToCommands(
   events: InputEvent[],
   options: CommandConversionOptions = {}
-): Array<{ tool: string; params: Record<string, any>; delay?: number; comment?: string }> {
+): Array<{ tool: string; params: Record<string, any>; delay?: number; comment?: string; byOrigin?: Record<string, string> }> {
   const { simplify = true, includeHovers = false, preferCoordinates = false, preferSelectors = false, includeDelays = false, startTime, maxDelayMs = 0, timestampsOut } = options;
   const processedEvents = simplify ? simplifyEvents(events) : events;
-  const commands: Array<{ tool: string; params: Record<string, any>; delay?: number; comment?: string }> = [];
+  const commands: Array<{ tool: string; params: Record<string, any>; delay?: number; comment?: string; byOrigin?: Record<string, string> }> = [];
 
   const baseTime = startTime || (processedEvents.length > 0 ? processedEvents[0].timestamp : 0);
   let lastTimestamp = baseTime;
   // Track the last selector that received typed text (for append mode)
   let lastTypedSelector: string | null = null;
 
-  const addCommand = (cmd: { tool: string; params: Record<string, any> }, eventTimestamp: number) => {
+  const addCommand = (cmd: { tool: string; params: Record<string, any>; byOrigin?: Record<string, string> }, eventTimestamp: number) => {
     timestampsOut?.push(eventTimestamp);
     if (includeDelays) {
       let delay = eventTimestamp - lastTimestamp;
@@ -1602,6 +1604,7 @@ export function eventsToCommands(
       addCommand({
         tool: 'inspect',
         params: { action: 'evaluateExpression', expression: JSON.stringify(event.value), saveAs: event.name },
+        ...(event.byOrigin && Object.keys(event.byOrigin).length ? { byOrigin: event.byOrigin } : {}),
       }, event.timestamp);
       i++;
       continue;

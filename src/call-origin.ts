@@ -22,12 +22,18 @@ export type CallChannel = 'mcp' | 'cli' | 'bench' | 'person';
 interface Place {
   from: CallChannel;
   run?: string;
-  /** The run's step now executing, 0-based; one object shared by every call inside the run. */
-  position?: { step?: number };
+  /**
+   * The run's step now executing, 0-based, and the {{env:}} names that step
+   * resolved from a file; one object shared by every call inside the run.
+   */
+  position?: { step?: number; env?: StepEnv };
   step?: boolean;
   recorded?: boolean;
   inner?: boolean;
 }
+
+/** The {{env:}} names one step resolved from a file, and that file. */
+export interface StepEnv { file: string; names: string[] }
 
 const place = new AsyncLocalStorage<Place>();
 
@@ -45,7 +51,16 @@ export function withinRun<T>(sequence: string, work: () => T): T {
 /** Set the step the current run is executing, which the step's own call is recorded under. */
 export function atRunStep(step: number): void {
   const position = place.getStore()?.position;
-  if (position) position.step = step;
+  if (position) {
+    position.step = step;
+    delete position.env;
+  }
+}
+
+/** Set the {{env:}} names the current step resolved, which its own call is recorded with. */
+export function atRunStepEnv(env: StepEnv): void {
+  const position = place.getStore()?.position;
+  if (position) position.env = env;
 }
 
 /** Run `work` as one step's own call inside the current run. */
@@ -64,7 +79,7 @@ export function unlisted<T>(work: () => T): T {
 }
 
 /** Where the current call belongs in history, or undefined for a call made on another's behalf. */
-export function historyPlace(): { from: CallChannel; run?: string; runStep?: number } | undefined {
+export function historyPlace(): { from: CallChannel; run?: string; runStep?: number; env?: StepEnv } | undefined {
   const here = place.getStore();
   if (!here || here.recorded) return undefined;
   if (here.run !== undefined && !here.step) return undefined;
@@ -72,6 +87,7 @@ export function historyPlace(): { from: CallChannel; run?: string; runStep?: num
     from: here.from,
     ...(here.run !== undefined ? { run: here.run } : {}),
     ...(here.run !== undefined && here.position?.step !== undefined ? { runStep: here.position.step } : {}),
+    ...(here.run !== undefined && here.position?.env ? { env: here.position.env } : {}),
   };
 }
 

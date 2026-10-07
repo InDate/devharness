@@ -352,6 +352,8 @@ export async function handleStep(
     logPrefix: 'step',
     variableStore: activeSeq.capturedVariables ?? (activeSeq.capturedVariables = {}),
     runTimestamp: activeSeq.runTimestamp ?? (activeSeq.runTimestamp = Date.now()),
+    ...(activeSeq.runEnv && { runEnv: activeSeq.runEnv, runEnvFile: activeSeq.runEnvFile }),
+    ...(activeSeq.runOrigin && { runOrigin: activeSeq.runOrigin }),
     // per-step connections resolve exactly as they did in the run that paused
     ...(activeSeq.connectionMap && { connectionMap: activeSeq.connectionMap })
   };
@@ -469,6 +471,8 @@ export async function handleFinish(
     logPrefix: 'finish',
     variableStore: activeSeq.capturedVariables ?? (activeSeq.capturedVariables = {}),
     runTimestamp: activeSeq.runTimestamp ?? (activeSeq.runTimestamp = Date.now()),
+    ...(activeSeq.runEnv && { runEnv: activeSeq.runEnv, runEnvFile: activeSeq.runEnvFile }),
+    ...(activeSeq.runOrigin && { runOrigin: activeSeq.runOrigin }),
     ...(activeSeq.connectionMap && { connectionMap: activeSeq.connectionMap })
   };
 

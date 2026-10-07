@@ -27,6 +27,8 @@
  * strings, so a whole-string {{env:PORT}} yields "3000", not 3000.
  */
 
+import { envValueFor } from '../helpers/env-file.js';
+
 const TOKEN_BODY = String.raw`var:[^}]+|timestamp(?:[+-]\d+)?|env:[A-Za-z_][A-Za-z0-9_]*`;
 const TOKEN_RE = new RegExp(String.raw`\{\{\s*(${TOKEN_BODY})\s*\}\}`, 'g');
 const WHOLE_TOKEN_RE = new RegExp(String.raw`^\{\{\s*(${TOKEN_BODY})\s*\}\}$`);
@@ -79,7 +81,9 @@ function resolveToken(
   token: string,
   store: Record<string, any>,
   runTimestamp: number,
-  runEnv?: Record<string, string>
+  runEnv?: Record<string, string>,
+  envFile?: string,
+  runOrigin?: string
 ): unknown {
   if (token.startsWith('timestamp')) {
     const offsetMatch = token.match(/^timestamp([+-]\d+)?$/);
@@ -93,11 +97,13 @@ function resolveToken(
     // file for this run; a stale variable in the server's own environment
     // shadowing it would substitute a different credential with nothing in the
     // output to say so.
-    const value = runEnv && name in runEnv ? runEnv[name] : process.env[name];
+    const value = (runEnv ? envValueFor(runEnv, name, runOrigin) : undefined) ?? process.env[name];
     // The reason is the variable NAME and its state, never its value: this
     // message reaches the run output and the debug log.
     if (value === undefined) {
-      throw new InterpolationError(token, `${name} is not set${runEnv ? ' in the run\'s envFile or' : ' in'} this process's environment - add it to the envFile, or export it before the run (the sequence file deliberately holds no value for it)`);
+      throw new InterpolationError(token, runEnv
+        ? `${name} is not set in ${envFile ?? 'the run\'s envFile'} or the server's environment - add ${name}=<value> to ${envFile ?? 'that file'} (the sequence file deliberately holds no value for it)`
+        : `${name} is not set: no envFile was read and the server's environment lacks it - add ${name}=<value> to .devharness/sequences.env, which every run reads when it names no envFile (the sequence file deliberately holds no value for it)`);
     }
     if (value === '') {
       throw new InterpolationError(token, `${name} is set but empty - an empty value would be typed or sent as-is, so the step fails here instead`);
@@ -151,11 +157,13 @@ function resolveString(
   value: string,
   store: Record<string, any>,
   runTimestamp: number,
-  runEnv?: Record<string, string>
+  runEnv?: Record<string, string>,
+  envFile?: string,
+  runOrigin?: string
 ): unknown {
   const wholeMatch = value.match(WHOLE_TOKEN_RE);
   if (wholeMatch) {
-    return resolveToken(wholeMatch[1], store, runTimestamp, runEnv);
+    return resolveToken(wholeMatch[1], store, runTimestamp, runEnv, envFile, runOrigin);
   }
 
   TOKEN_RE.lastIndex = 0;
@@ -165,22 +173,22 @@ function resolveString(
   TOKEN_RE.lastIndex = 0;
 
   return value.replace(TOKEN_RE, (_match, token) => {
-    const resolved = resolveToken(token, store, runTimestamp, runEnv);
+    const resolved = resolveToken(token, store, runTimestamp, runEnv, envFile, runOrigin);
     return typeof resolved === 'object' ? JSON.stringify(resolved) : String(resolved);
   });
 }
 
-function walk(value: any, store: Record<string, any>, runTimestamp: number, runEnv?: Record<string, string>): any {
+function walk(value: any, store: Record<string, any>, runTimestamp: number, runEnv?: Record<string, string>, envFile?: string, runOrigin?: string): any {
   if (typeof value === 'string') {
-    return resolveString(value, store, runTimestamp, runEnv);
+    return resolveString(value, store, runTimestamp, runEnv, envFile, runOrigin);
   }
   if (Array.isArray(value)) {
-    return value.map(item => walk(item, store, runTimestamp, runEnv));
+    return value.map(item => walk(item, store, runTimestamp, runEnv, envFile, runOrigin));
   }
   if (value !== null && typeof value === 'object') {
     const result: Record<string, any> = {};
     for (const key of Object.keys(value)) {
-      result[key] = walk(value[key], store, runTimestamp, runEnv);
+      result[key] = walk(value[key], store, runTimestamp, runEnv, envFile, runOrigin);
     }
     return result;
   }
@@ -197,7 +205,11 @@ export function interpolateParams(
   store: Record<string, any>,
   runTimestamp: number,
   /** The run's `envFile` values, checked before process.env by {{env:NAME}}. */
-  runEnv?: Record<string, string>
+  runEnv?: Record<string, string>,
+  /** The file runEnv was read from, named when a token is missing from it. */
+  envFile?: string,
+  /** The origin the run started at, which picks a `NAME@<origin>` value over the plain one. */
+  runOrigin?: string
 ): Record<string, any> {
-  return walk(params, store, runTimestamp, runEnv) as Record<string, any>;
+  return walk(params, store, runTimestamp, runEnv, envFile, runOrigin) as Record<string, any>;
 }

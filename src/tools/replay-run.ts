@@ -49,7 +49,7 @@ import { siteReaderOf } from '../bench-mode/sequence-driver.js';
 import { configManager } from '../config.js';
 import { hasTemplateToken } from './interpolation.js';
 import { snapshotConsole, strictConsoleFailures, snapshotSockets, socketFailures } from './replay-run-health.js';
-import { collectNestedRebindableReferences, loadRunEnv, unmatchedVariableKeys } from './replay-run-inputs.js';
+import { collectNestedRebindableReferences, loadDefaultRunEnv, loadRunEnv, unmatchedVariableKeys } from './replay-run-inputs.js';
 import { connectionsSharingPort, navigatedConnections, ensureDeclaredConnections, closeLaunchedConnections, pendingDeclaredCleanups, cleanupKey } from './replay-run-owned.js';
 import { type ReplayArgs } from './replay-schema.js';
 import { logRun } from './replay-session.js';
@@ -73,6 +73,8 @@ interface PerformRunDeps {
   launchedConnections: Set<string>;
   /** Values read from args.envFile, resolved before process.env by {{env:NAME}}. */
   runEnv?: Record<string, string>;
+  /** The file runEnv was read from, as the run's output names it. */
+  runEnvFile?: string;
 }
 
 /** The longest a `wait: true` run holds its call; see the bound in handleRun. */
@@ -107,11 +109,15 @@ async function runInBench(args: ReplayArgs, recorder: CommandRecorder) {
   }
   const state = await play;
   const rules = rulesForRun(connection);
+  // A step that failed before its call was recorded has no History row, so
+  // its reason reaches the reply only from the bench's own state.
+  const failedAt = state?.steps.find(step => step.failed)?.index ?? state?.currentStep ?? 0;
+  const failures = state?.failure ? new Map([[failedAt + 1, state.failure]]) : undefined;
   return createSuccessResponse('REPLAY_BENCH_PLAYED', {
     name, benchUrl,
     // The bench line is joined here: the template loader keeps one newline
     // between a variable and the line after it, and the reply's blank line would go.
-    steps: `${formatRunReply(recorder, { name, total: state?.total ?? 0, since, ...(args.steps ? { steps: args.steps } : {}), rules, pauses: pausesIn(connection) })}\n\nBench: \`${benchUrl}\``,
+    steps: `${formatRunReply(recorder, { name, total: state?.total ?? 0, since, ...(args.steps ? { steps: args.steps } : {}), ...(failures ? { failures } : {}), rules, pauses: pausesIn(connection) })}\n\nBench: \`${benchUrl}\``,
   });
 }
 
@@ -179,6 +185,7 @@ export async function handleRun(
   // line is a parameter error, not a step failure halfway through a flow that
   // has already logged in.
   let runEnv: Record<string, string> | undefined;
+  let runEnvFile: string | undefined;
   if (args.envFile) {
     const loaded = await loadRunEnv(args.envFile);
     if ('error' in loaded) {
@@ -189,6 +196,20 @@ export async function handleRun(
       });
     }
     runEnv = loaded.values;
+    runEnvFile = args.envFile;
+  } else {
+    const fallback = await loadDefaultRunEnv();
+    if (fallback && 'error' in fallback) {
+      return createErrorResponse('INVALID_PARAMETER', {
+        parameter: 'envFile',
+        value: '.devharness/sequences.env',
+        message: fallback.error,
+      });
+    }
+    if (fallback) {
+      runEnv = fallback.values;
+      runEnvFile = fallback.file;
+    }
   }
 
   // Same rule for the typed-text substitutions, before any side effects. A key
@@ -341,7 +362,7 @@ export async function handleRun(
     sequence, analysis, connection, needsConnection,
     launchedConnections: new Set<string>(),
     ...(connectionMap && { connectionMap }),
-    ...(runEnv && { runEnv }),
+    ...(runEnv && { runEnv, runEnvFile }),
   };
 
   // Connections a strict run watches: the run's own, plus every browser the
@@ -606,7 +627,7 @@ export async function performRun(
 ): Promise<{ response: any; outcome: RunOutcome; results?: any[] }> {
   const { args, recorder, executeToolCall, getPageForConnection,
     sequence, analysis, needsConnection, connectionMap,
-    launchedConnections, runEnv } = deps;
+    launchedConnections, runEnv, runEnvFile } = deps;
   let connection = deps.connection;
   // The run's steps are recorded after this; its reply is read off them.
   const since = recorder.getCurrentHistoryIndex();
@@ -629,7 +650,7 @@ export async function performRun(
     // Held on the context rather than written into process.env: concurrent
     // background runs may name different files, and a global write would let
     // one run's credentials resolve inside the other.
-    ...(runEnv && { runEnv })
+    ...(runEnv && { runEnv, runEnvFile })
   };
 
   // Ensure connection is ready
@@ -773,12 +794,12 @@ export async function performRun(
 
   // The sequence's saved rules, armed as opening it in the bench arms them,
   // so a run outside the bench answers, ignores and refuses what one inside does.
+  // The page's own origin where the sequence names none, as the bench reads it.
+  // It arms the site's rules and picks each per-origin variable value.
+  ctx.runOrigin = originOf(args.baseUrl ?? sequence.startUrl)
+    ?? (ctx.connection ? originOf(await getPageForConnection(ctx.connection).then(page => page?.url?.()).catch(() => undefined)) : undefined);
   const release = ctx.connection
-    ? await armForRun(ctx.connection, sequence,
-      // The page's own origin where the sequence names none, as the bench reads it.
-      originOf(args.baseUrl ?? sequence.startUrl)
-        ?? originOf(await getPageForConnection(ctx.connection).then(page => page?.url?.()).catch(() => undefined)),
-      siteReaderOf(recorder)).catch(() => async () => {})
+    ? await armForRun(ctx.connection, sequence, ctx.runOrigin, siteReaderOf(recorder)).catch(() => async () => {})
     : async () => {};
   const keepArmed = () => { if (runId) keepArmedForRun(runId, release); else void release(); };
 
@@ -837,6 +858,8 @@ export async function performRun(
       runTimestamp: ctx.runTimestamp,
       capturedVariables: ctx.variableStore,
       ...(connectionMap && { connectionMap }),
+      ...(ctx.runEnv && { runEnv: ctx.runEnv, runEnvFile: ctx.runEnvFile }),
+      ...(ctx.runOrigin && { runOrigin: ctx.runOrigin }),
       breakpointHit: { url: execResult.breakpointHit.url, lineNumber: execResult.breakpointHit.lineNumber },
       ...(execResult.openStep ? { openStep: execResult.openStep } : {}),
     });
@@ -874,6 +897,8 @@ export async function performRun(
       capturedVariables: ctx.variableStore,
       // step/finish must resolve per-step connections the way this run did
       ...(connectionMap && { connectionMap }),
+      ...(ctx.runEnv && { runEnv: ctx.runEnv, runEnvFile: ctx.runEnvFile }),
+      ...(ctx.runOrigin && { runOrigin: ctx.runOrigin }),
       ...(execResult.clickValidationFailure.repair && { repair: execResult.clickValidationFailure.repair }),
     };
     recorder.setActiveSequence(activeState);

@@ -329,13 +329,17 @@ export async function waitForElement(
 }
 
 /**
- * Validate typed text was entered correctly
+ * Validate typed text was entered correctly. A `concealed` value - one from an
+ * {{env:}} token or a run's `variables` - is a credential, and the field holds
+ * it too, so the failure and the log name lengths and never either text: both
+ * reach the run's reply and debug.log, which outlives the run.
  */
 export async function validateTypedText(
   ctx: ExecutionContext,
   selector: string,
   expectedText: string,
-  append: boolean = false
+  append: boolean = false,
+  concealed: boolean = false
 ): Promise<void> {
   const { executeToolCall, connection, logPrefix = 'executor' } = ctx;
 
@@ -364,19 +368,20 @@ export async function validateTypedText(
 
     // In append mode, check if the field ends with the expected text
     // In replace mode, check for exact match
+    const shown = (text: string) => concealed ? `${text.length} characters, not shown` : `"${text}"`;
     if (append) {
       if (!actualValue.endsWith(expectedText)) {
-        debugLog(logPrefix, `Text validation failed (append): expected to end with "${expectedText}", got "${actualValue}"`);
-        throw new Error(`Text validation failed for ${selector}: expected to end with "${expectedText}", got "${actualValue}"`);
+        debugLog(logPrefix, `Text validation failed (append): expected to end with ${shown(expectedText)}, got ${shown(actualValue)}`);
+        throw new Error(`Text validation failed for ${selector}: expected to end with ${shown(expectedText)}, got ${shown(actualValue)}`);
       }
     } else {
       if (actualValue !== expectedText) {
-        debugLog(logPrefix, `Text validation failed: expected "${expectedText}", got "${actualValue}"`);
-        throw new Error(`Text validation failed for ${selector}: expected "${expectedText}", got "${actualValue}"`);
+        debugLog(logPrefix, `Text validation failed: expected ${shown(expectedText)}, got ${shown(actualValue)}`);
+        throw new Error(`Text validation failed for ${selector}: expected ${shown(expectedText)}, got ${shown(actualValue)}`);
       }
     }
 
-    debugLog(logPrefix, `Text validated: "${actualValue}" ${append ? 'ends with' : 'matches'} expected`);
+    debugLog(logPrefix, `Text validated: ${shown(actualValue)} ${append ? 'ends with' : 'matches'} expected`);
   } catch (error: any) {
     if (error.message?.includes('Text validation failed')) {
       throw error;

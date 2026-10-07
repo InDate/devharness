@@ -34,6 +34,21 @@ import type { ActivityMove, ExpectedValue, KindCount } from './bench/kinds.js';
 
 const FACT_KINDS: FactKind[] = ['events', 'css', 'html', 'a11y'];
 
+
+/**
+ * A request's per-origin values: each `scheme://host[:port]` key with a string
+ * value, at most 20 of them, the value bounded as a plain one is. Anything else
+ * is dropped, so a malformed key never reaches the env file or a step.
+ */
+function originValues(raw: unknown): Record<string, string> | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const kept = Object.entries(raw as Record<string, unknown>)
+    .filter(([origin, value]) => /^https?:\/\/[^\s=/]+$/.test(origin) && typeof value === 'string')
+    .slice(0, 20)
+    .map(([origin, value]) => [origin, (value as string).slice(0, 4000)] as const);
+  return kept.length ? Object.fromEntries(kept) : undefined;
+}
+
 export type { BenchView } from './bench/wire.js';
 
 export interface BenchHandlers {
@@ -163,10 +178,12 @@ export interface BenchHandlers {
   insertSequenceTimer: (after: number, ms: number) => Promise<void>;
   insertSequenceCheck: (after: number, params: Record<string, unknown>, comment?: string) => Promise<void>;
   moveSequenceStep: (from: number, to: number, count: number) => Promise<void>;
-  setSequenceVariable: (name: string, value: string) => Promise<void>;
+  setSequenceVariable: (name: string, value: string, byOrigin?: Record<string, string>) => Promise<void>;
   removeSequenceVariable: (name: string) => Promise<void>;
+  /** Store a secret's values in the project env file, or with null remove them; `keep` leaves values not given as they are. */
+  setSequenceSecret: (name: string, entries: { value?: string; byOrigin?: Record<string, string> } | null, keep?: boolean) => Promise<void>;
   /** Store a named value after the last recorded action, for later steps to read. */
-  addRecordingVariable: (name: string, value: string) => Promise<void>;
+  addRecordingVariable: (name: string, value: string, byOrigin?: Record<string, string>) => Promise<void>;
   /** Change a variable the recording stores, or with null drop it. */
   editRecordingVariable: (name: string, value: string | null) => Promise<void>;
   /** Put a fixed pause of `ms` after the last recorded action. */
@@ -618,7 +635,16 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
               await handlers.removeSequenceStep(Math.max(0, Number(body.index) || 0));
               break;
             case '/sequence/var/set':
-              await handlers.setSequenceVariable(String(body.name ?? ''), String(body.value ?? ''));
+              await handlers.setSequenceVariable(String(body.name ?? ''), String(body.value ?? '').slice(0, 4000), originValues(body.byOrigin));
+              break;
+            case '/sequence/secret/set':
+              await handlers.setSequenceSecret(String(body.name ?? '').trim(), {
+                ...(typeof body.value === 'string' ? { value: body.value.slice(0, 4000) } : {}),
+                ...(originValues(body.byOrigin) ? { byOrigin: originValues(body.byOrigin) } : {}),
+              }, body.keep === true);
+              break;
+            case '/sequence/secret/remove':
+              await handlers.setSequenceSecret(String(body.name ?? '').trim(), null);
               break;
             case '/sequence/var/remove':
               await handlers.removeSequenceVariable(String(body.name ?? ''));
@@ -636,7 +662,7 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
                 body.remove === true ? null : String(body.value ?? '').slice(0, 4000));
               break;
             case '/sequence/record/variable':
-              await handlers.addRecordingVariable(String(body.name ?? '').trim(), String(body.value ?? '').slice(0, 4000));
+              await handlers.addRecordingVariable(String(body.name ?? '').trim(), String(body.value ?? '').slice(0, 4000), originValues(body.byOrigin));
               break;
             case '/sequence/record/timer':
               await handlers.addRecordingTimer(Math.min(600000, Math.max(0, Number(body.ms) || 0)));

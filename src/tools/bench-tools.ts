@@ -133,7 +133,7 @@ async function readSequenceAnnotations(commandRecorder: CommandRecorder): Promis
  * hold, else running. The bench's flag alone reads a pause another surface
  * took as running.
  */
-function pageStanding(connection: string, cdpManager: { pausedAt(): { url: string; line: number } | undefined } | undefined, frozen: boolean): string {
+export function pageStanding(connection: string, cdpManager: { pausedAt(): { url: string; line: number } | undefined } | undefined, frozen: boolean): string {
   const pausedAt = cdpManager?.pausedAt();
   if (pausedAt) return `paused in the debugger at ${pausedAt.url}:${pausedAt.line}`;
   const held = holdReading(connection).held.filter(one => one.layer !== 'network');

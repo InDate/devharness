@@ -74,3 +74,71 @@ describe('the DOM change observer', () => {
     expect(domChangeMonitor.isObserving('observer-left-check')).toBe(false);
   });
 });
+
+/**
+ * A page whose evaluate answers by what each read asks for: the viewport,
+ * the scroll position, or the element under a point. `elements` maps "x,y"
+ * to the fingerprint there; a point not in it reads as the bare body.
+ */
+function pageWithViewport(viewport: { width: number; height: number }, elements: Record<string, Record<string, unknown>> = {}) {
+  return {
+    evaluate: vi.fn(async (fn: unknown, target?: { x: number; y: number }) => {
+      if (target && typeof target.x === 'number') return elements[`${target.x},${target.y}`] ?? { tag: 'body' };
+      const source = String(fn);
+      if (source.includes('scrollX')) return { scrollX: 0, scrollY: 0, maxScrollX: 0, maxScrollY: 0 };
+      if (source.includes('innerWidth')) return viewport;
+      return undefined;
+    }),
+  };
+}
+
+describe('the element a gesture lands on', () => {
+  const button = { tag: 'button', id: 'target', text: 'Remove' };
+
+  it('names the element under a drag\'s start and the bare page under its end', async () => {
+    const { input } = makeInput(pageWithViewport({ width: 500, height: 700 }, { '100,50': button }));
+
+    const result: any = await input.handler({ ...on, action: 'drag', from: { x: 100, y: 50 }, to: { x: 300, y: 400 } });
+
+    expect(result.content[0].text).toContain('Dragged from (100, 50) on button #target "Remove" to (300, 400) on no element');
+    expect(result._meta.elements).toEqual({ from: button, to: { tag: 'body' } });
+  });
+
+  it('names the viewport a scroll point falls outside, which no wheel event reaches', async () => {
+    const { input } = makeInput(pageWithViewport({ width: 572, height: 342 }));
+
+    const result: any = await input.handler({ ...on, action: 'scroll', x: 600, y: 400, deltaY: -200 });
+
+    expect(result.content[0].text).toContain('Scrolled up 200px at (600, 400) on nothing: outside the 572x342 viewport');
+    expect(result._meta.outsideViewport).toEqual({ viewport: { width: 572, height: 342 } });
+  });
+
+  it('names the viewport a drag point falls outside', async () => {
+    const { input } = makeInput(pageWithViewport({ width: 500, height: 700 }, { '100,50': button }));
+
+    const result: any = await input.handler({ ...on, action: 'drag', from: { x: 100, y: 50 }, to: { x: 900, y: 50 } });
+
+    expect(result.content[0].text).toContain('to (900, 50) on nothing: outside the 500x700 viewport');
+    expect(result._meta.outsideViewport).toMatchObject({ from: false, to: true });
+  });
+});
+
+describe('a scroll as a run of wheel events', () => {
+  it('sends one wheel event by default', async () => {
+    const { input, page } = makeInput(pageWithViewport({ width: 500, height: 700 }));
+
+    await input.handler({ ...on, action: 'scroll', deltaY: -120 });
+
+    expect(page.mouse.wheel).toHaveBeenCalledTimes(1);
+    expect(page.mouse.wheel).toHaveBeenCalledWith({ deltaX: 0, deltaY: -120 });
+  });
+
+  it('sends steps events, each delta decay times the last, as a momentum tail', async () => {
+    const { input, page } = makeInput(pageWithViewport({ width: 500, height: 700 }));
+
+    const result: any = await input.handler({ ...on, action: 'scroll', deltaY: -100, steps: 3, durationMs: 0, decay: 0.5 });
+
+    expect(page.mouse.wheel.mock.calls.map((call: any[]) => call[0].deltaY)).toEqual([-100, -50, -25]);
+    expect(result.content[0].text).toContain('as the first of 3 wheel events');
+  });
+});

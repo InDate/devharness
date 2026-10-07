@@ -1487,13 +1487,30 @@ export function createInputTools(
                       await mouse.move(x, y);
                     }
 
+                    // Chrome acknowledges a wheel event only after the renderer
+                    // has handled it, ~14ms on an idle page; an await per event
+                    // adds that to every gap. Each event goes out at its own
+                    // offset from the first, and the acknowledgements are
+                    // awaited together.
+                    const sent: Promise<void>[] = [];
+                    const sentAt: number[] = [];
                     let scale = 1;
-                    for (let i = 0; i < events; i++) {
-                      throwIfAborted(abortSignal);
-                      await mouse.wheel({ deltaX: deltaX * scale, deltaY: deltaY * scale });
-                      scale *= decay;
-                      if (i < events - 1 && spacingMs > 0) await abortableSleep(spacingMs, abortSignal);
+                    try {
+                      const startedAt = Date.now();
+                      for (let i = 0; i < events; i++) {
+                        throwIfAborted(abortSignal);
+                        const wait = startedAt + i * spacingMs - Date.now();
+                        if (wait > 0) await abortableSleep(wait, abortSignal);
+                        sentAt.push(Date.now());
+                        sent.push(mouse.wheel({ deltaX: deltaX * scale, deltaY: deltaY * scale }));
+                        scale *= decay;
+                      }
+                    } finally {
+                      const settled = await Promise.allSettled(sent);
+                      const failed = settled.find((outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected');
+                      if (failed) throw failed.reason;
                     }
+                    const spanMs = sentAt.length > 1 ? sentAt[sentAt.length - 1] - sentAt[0] : 0;
 
                     // Get current scroll position
                     const scrollPosition = await page.evaluate(() => ({
@@ -1508,6 +1525,7 @@ export function createInputTools(
                       deltaY,
                       position: x !== undefined && y !== undefined ? { x, y } : undefined,
                       scrollPosition,
+                      spanMs,
                     };
                   });
                 },
@@ -1534,10 +1552,10 @@ export function createInputTools(
                 content: [
                   {
                     type: 'text',
-                    text: `Scrolled ${directionParts.join(' and ')}${positionInfo}${events > 1 ? ` as the first of ${events} wheel events, ${Math.round(spacingMs)}ms apart, each delta ×${decay} the last` : ''}\n**Page position:** (${scrollResult?.scrollPosition.scrollX}, ${scrollResult?.scrollPosition.scrollY}) of (${scrollResult?.scrollPosition.maxScrollX}, ${scrollResult?.scrollPosition.maxScrollY})`,
+                    text: `Scrolled ${directionParts.join(' and ')}${positionInfo}${events > 1 ? ` as the first of ${events} wheel events sent over ${scrollResult?.spanMs}ms${scrollResult && Math.abs(scrollResult.spanMs - spacingMs * (events - 1)) > spacingMs ? ` (asked ${Math.round(spacingMs * (events - 1))}ms)` : ''}, each delta ×${decay} the last` : ''}\n**Page position:** (${scrollResult?.scrollPosition.scrollX}, ${scrollResult?.scrollPosition.scrollY}) of (${scrollResult?.scrollPosition.maxScrollX}, ${scrollResult?.scrollPosition.maxScrollY})`,
                   },
                 ],
-                _meta: { tool: 'input', action: 'scroll', timestamp: Date.now(), ...(scrollPoint ? { element: scrollPoint.fingerprint ?? null } : {}), ...(scrollPoint?.outside ? { outsideViewport: { viewport: scrollPoint.outside } } : {}) },
+                _meta: { tool: 'input', action: 'scroll', timestamp: Date.now(), ...(events > 1 ? { wheel: { events, spanMs: scrollResult?.spanMs, askedMs: Math.round(spacingMs * (events - 1)) } } : {}), ...(scrollPoint ? { element: scrollPoint.fingerprint ?? null } : {}), ...(scrollPoint?.outside ? { outsideViewport: { viewport: scrollPoint.outside } } : {}) },
               };
             }
 

@@ -419,8 +419,9 @@ export function createIssuesTools(
             // Check if sequence should be included (default: true)
             const includeSequence = args.includeSequence !== false;
 
-            // Reject about:blank as user-provided startUrl (reserved as sentinel for includeSequence: false)
-            if (args.startUrl === 'about:blank') {
+            // about:blank is the stored marker for an issue with no sequence; refused only
+            // where a sequence is recorded, since without one it is what gets stored anyway.
+            if (args.startUrl === 'about:blank' && includeSequence) {
               return createErrorResponse('ISSUES_INVALID_START_URL', {
                 message: 'about:blank is not allowed as startUrl. Use includeSequence: false to create an issue without sequence recording.',
               });

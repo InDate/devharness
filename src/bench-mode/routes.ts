@@ -141,7 +141,7 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
       const state = await setPausePoint(connection, index, change);
       const point = state?.steps[index];
       const line = !point?.pauseBefore ? `removed the pause point before step ${index + 1}`
-        : `pause point before step ${index + 1} holds ${point.pauseHolds ? point.pauseHolds.join(', ') || 'nothing' : 'everything'}`;
+        : `pause point before step ${index + 1} holds ${point.pauseHolds ? point.pauseHolds.join(', ') || 'nothing' : 'everything'}${point.pauseNotify ? ', notifies the session' : ''}`;
       await recordBenchCall(connection, 'bench', { action: 'pausePoint', sequence: state?.name, step: index, ...change }, line);
     },
     commentSequenceStep: async (index: number, words: string) => {

@@ -54,6 +54,8 @@ export interface SequenceDriver {
       /** A pause point saved before this step. */
       pauseBefore?: true;
       pauseHolds?: Array<'code' | 'ui' | 'network'>;
+      pauseNotify?: true;
+      pauseNote?: string;
     }>;
     placements?: Record<string, number>;
     variables: SequenceVariable[];
@@ -90,7 +92,7 @@ export interface SequenceDriver {
    * The pause point before step `step`: added, removed, or set to hold
    * `holds`. Absent `on` toggles it.
    */
-  setPause: (step: number, change: { on?: boolean; holds?: Array<'code' | 'ui' | 'network'> }) => Promise<string | undefined>;
+  setPause: (step: number, change: { on?: boolean; holds?: Array<'code' | 'ui' | 'network'>; note?: string; notify?: boolean }) => Promise<string | undefined>;
   /** Re-run from the start up to and including `step` (0-based). */
   goto: (step: number, signal?: AbortSignal) => Promise<string | undefined>;
   /** Swap the origin every absolute URL in the run uses. '' clears it. */

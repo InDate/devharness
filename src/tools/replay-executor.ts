@@ -7,6 +7,8 @@
  * Re-exports replay-types, replay-connections, replay-conditions and
  * replay-step-checks, so callers import the replay machinery from here.
  */
+import { appendEvent } from '../session-events.js';
+import { resolveSessionName } from '../session-identity.js';
 
 import type { StepTraffic } from '../annotation.js';
 import type { CommandRecorder, RecordedCommand, CommandSequence, ActiveSequenceState } from '../command-recorder.js';
@@ -1884,6 +1886,18 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
     pauseHeld = reading?.held.filter(held => held.source === 'sequence').map(held => held.layer);
   }
 
+  const marked = pausedAtMark !== undefined ? (commands[pausedAtMark] as { pauseNote?: string; pauseNotify?: true }) : undefined;
+  const pauseNote = marked?.pauseNote;
+  const pauseNotify = Boolean(marked?.pauseNotify || pauseNote);
+  if (pauseNotify && !ctx.stampUnder) {
+    await appendEvent(resolveSessionName(), 'instruction', {
+      sequence: sequence.name,
+      step: pausedAtMark! + 1,
+      ...(pauseNote ? { note: pauseNote } : {}),
+      resolve: "replay({ action: 'finish' })",
+    });
+  }
+
   const ownDrift = comparesBehaviour
     ? await compareBehaviour(
         sequence.name, commands, stepStartedAt, stepReleasedAt, ctx, proxyRun,
@@ -1900,6 +1914,8 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
     ...(teardownOutcome ? { teardownResults: teardownOutcome.results, teardownFailed: teardownOutcome.failed } : {}),
     ...(pauseHeld?.length ? { pauseHeld } : {}),
     ...(pausedAtMark !== undefined ? { pausedAtMark } : {}),
+    ...(pauseNotify ? { pauseNotify: true as const } : {}),
+    ...(pauseNote ? { pauseNote } : {}),
     ...(personLanded.length ? {
       personInput: { mode: personMode, landed: personLanded, ...(pausedForPerson !== undefined ? { pausedBefore: pausedForPerson } : {}), ...(pauseHeld?.length && pausedForPerson !== undefined ? { held: pauseHeld } : {}) },
     } : {}),

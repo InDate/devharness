@@ -7,7 +7,7 @@ export const replaySchema = z.object({
   action: z.enum([
     'history', 'create', 'list', 'get', 'delete',
     'export', 'load', 'listSaved', 'deleteSaved',
-    'run', 'runAll', 'step', 'finish', 'insert', 'addCheck', 'declare', 'repair', 'copy', 'split', 'adopt', 'search', 'status', 'cancel',
+    'run', 'runAll', 'step', 'finish', 'insert', 'addCheck', 'declare', 'pause', 'repair', 'copy', 'split', 'adopt', 'search', 'status', 'cancel',
     'repeat', 'runFromLog',
     'recordInteraction'
   ]),
@@ -57,6 +57,10 @@ export const replaySchema = z.object({
   insertAfterStep: z.number().optional(),
   check: z.record(z.any()).optional().describe("addCheck: the check step's parameters as the check tool takes them, holds/fails included"),
   comment: z.string().optional().describe('addCheck: note stored on the step'),
+  step: z.number().int().positive().optional().describe('pause: the 1-based step the pause point stands before'),
+  notify: z.boolean().optional().describe('pause: a run stopping there tells the session; false also removes the note'),
+  note: z.string().optional().describe('pause: why the session is told, what it carries out there before resuming; implies notify; "" removes it'),
+  remove: z.boolean().optional().describe('pause: take the pause point away'),
   overwrite: z.boolean().optional(),
   query: z.string().optional().describe('search: a string matched literally in every saved step'),
   element: z.string().optional().describe('search: a selector resolved on the live page; the steps that reached that element'),

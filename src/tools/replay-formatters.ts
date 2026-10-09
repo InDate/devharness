@@ -1113,6 +1113,13 @@ export function formatCheckAdded(info: {
  * replaces its field, so "what does this sequence declare now" is the only
  * question the caller can act on.
  */
+/** What a notifying pause point tells the session: its note, or that none was given. */
+export function formatPauseNote(step: number, note: string | undefined, notify?: boolean): string {
+  if (note) return `\n\n**To carry out before step ${step}:** ${note}\n\nThen resume: \`replay({ action: 'finish' })\``;
+  if (!notify) return '';
+  return `\n\n**This pause point notifies the session before step ${step}, with no reason given.** Ask the person why the run stops here, then resume: \`replay({ action: 'finish' })\``;
+}
+
 export function formatDeclarations(sequence: CommandSequence, persistedTo?: string): string {
   const connections = sequence.requiredConnections ?? [];
   const sockets = sequence.requiredSockets ?? [];

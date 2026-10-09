@@ -738,6 +738,96 @@ export async function handleRepair(args: ReplayArgs, recorder: CommandRecorder) 
 }
 
 /**
+ * Set, change or remove the pause point before a saved step, and the note a
+ * session carries out there.
+ *
+ * The bench sets pause points through its own route; a session reaches the
+ * same field only through this action. A pause point with a note is how a
+ * sequence holds an action that cannot be a step, such as a bench play: the
+ * run stops, the note reaches the event stream and the paused reply, and
+ * `replay finish` resumes once it is done.
+ */
+export async function handlePause(args: ReplayArgs, recorder: CommandRecorder) {
+  if (args.step === undefined) {
+    return createErrorResponse('MISSING_PARAMETER', {
+      action: 'pause',
+      missing: 'step',
+      message: 'The "pause" action needs "step": the 1-based step the pause point stands before.',
+    });
+  }
+  const loadResult = await loadSequence({ name: args.name, sequenceId: args.sequenceId }, recorder);
+  if (!loadResult.success) {
+    return handleLoadSequenceError(loadResult, 'pause');
+  }
+  const sequence = loadResult.sequence;
+  const command = sequence.commands[args.step - 1];
+  if (!command) {
+    return createErrorResponse('INVALID_PARAMETER', {
+      parameter: 'step',
+      value: String(args.step),
+      message: `"${sequence.name}" has ${sequence.commands.length} step${sequence.commands.length === 1 ? '' : 's'}; step ${args.step} is not one of them.`,
+    });
+  }
+  if (args.step === 1) {
+    return createErrorResponse('INVALID_PARAMETER', {
+      parameter: 'step',
+      value: '1',
+      message: 'A run starts at step 1, so there is nothing before it to pause at.',
+    });
+  }
+
+  if (args.remove) {
+    delete command.pauseBefore;
+    delete command.pauseHolds;
+    delete command.pauseNotify;
+    delete command.pauseNote;
+  } else {
+    command.pauseBefore = true;
+    // Every layer is the default and is stored as no list at all, as the bench stores it.
+    if (args.hold !== undefined) {
+      if (args.hold.length < 3) command.pauseHolds = args.hold;
+      else delete command.pauseHolds;
+    }
+    if (args.notify === false) {
+      delete command.pauseNotify;
+      delete command.pauseNote;
+    } else if (args.notify === true) {
+      command.pauseNotify = true;
+    }
+    if (args.note !== undefined && args.notify !== false) {
+      const note = args.note.trim();
+      if (note) {
+        command.pauseNote = note;
+        command.pauseNotify = true;
+      } else delete command.pauseNote;
+    }
+  }
+
+  const persisted = await writeBack(sequence, recorder);
+  const where = persisted ? `Written to \`${persisted}\`.` : `In memory only - save with \`replay({ action: 'export', name: '${sequence.name}' })\`.`;
+  const text = args.remove
+    ? `**Pause point removed** before step ${args.step} of "${sequence.name}".\n\n${where}`
+    : [
+        `**Pause point before step ${args.step}** of "${sequence.name}", holding ${command.pauseHolds ? command.pauseHolds.join(', ') || 'nothing' : 'everything'}.`,
+        command.pauseNote
+          ? `**Notifies the session:** ${command.pauseNote}\n\nA run stopping here writes the note to the event stream as an \`instruction\` and prints it in its reply; \`replay({ action: 'finish' })\` resumes once it is carried out.`
+          : command.pauseNotify
+            ? '**Notifies the session**, with no reason: a run stopping here sends an `instruction` event and its reply asks the session to find out why from the person.'
+            : 'Does not notify: a run stops here silently, as at `stepTo`.',
+        where,
+      ].join('\n\n');
+  return { content: [{ type: 'text', text }] };
+}
+
+/** Write a sequence back to the file it came from; a memory-only one waits for `export`. */
+async function writeBack(sequence: CommandSequence, recorder: CommandRecorder): Promise<string | undefined> {
+  const existingFile = (await recorder.listSavedSequencesOnDisk()).find(s => s.name === sequence.name);
+  if (!existingFile) return undefined;
+  const saved = await recorder.saveSequenceToDisk(sequence.id, existingFile.location === 'global', true);
+  return saved?.success ? saved.filepath : undefined;
+}
+
+/**
  * Set what a sequence DECLARES: the browsers it needs, the sockets its
  * assertions ride on, and what kind of sequence it is.
  *
@@ -843,19 +933,7 @@ export async function handleDeclare(args: ReplayArgs, recorder: CommandRecorder)
     (sequence as any).tags = cleaned.tags.length > 0 ? cleaned.tags : undefined;
   }
 
-  // Write back to the file this came from; a memory-only sequence waits for
-  // `export`, which is where it gets its filename.
-  let persisted: string | undefined;
-  const existingFile = (await recorder.listSavedSequencesOnDisk())
-    .find(s => s.name === sequence.name);
-  if (existingFile) {
-    const saved = await recorder.saveSequenceToDisk(
-      sequence.id,
-      existingFile.location === 'global',
-      true
-    );
-    if (saved?.success) persisted = saved.filepath;
-  }
+  const persisted = await writeBack(sequence, recorder);
 
   return {
     content: [{

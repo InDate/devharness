@@ -6,7 +6,7 @@ import type { CommandRecorder } from '../command-recorder.js';
 import type { ExecuteToolCall } from '../types.js';
 import { createTool } from '../validation-helpers.js';
 import { createErrorResponse, responseWithOnce } from '../messages.js';
-import { handleInsert, handleAddCheck, handleDeclare, handleRepair, handleCopy, handleSplit, handleAdopt } from './replay-edit.js';
+import { handleInsert, handleAddCheck, handleDeclare, handlePause, handleRepair, handleCopy, handleSplit, handleAdopt } from './replay-edit.js';
 import { handleHistory, handleRepeat, handleRunFromLog } from './replay-history.js';
 import { handleCreate, handleList, handleGet, handleDelete, handleExport, handleLoad, handleListSaved, handleDeleteSaved } from './replay-library.js';
 import { handleRecordInteraction } from './replay-record.js';
@@ -74,6 +74,8 @@ export function createReplayTools(
             return responseWithOnce(await handleAddCheck(args, commandRecorder), 'REPLAY_ADD_CHECK_REPLY');
           case 'declare':
             return responseWithOnce(await handleDeclare(args, commandRecorder), 'REPLAY_DECLARE_REPLY');
+          case 'pause':
+            return handlePause(args, commandRecorder);
           case 'repair':
             return handleRepair(args, commandRecorder);
           case 'copy':

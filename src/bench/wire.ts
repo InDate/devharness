@@ -72,6 +72,10 @@ export interface SequenceStep {
   pauseBefore?: true;
   /** What that pause point holds; every layer when absent. */
   pauseHolds?: Array<'code' | 'ui' | 'network'>;
+  /** A run stopping at this pause point tells the session. */
+  pauseNotify?: true;
+  /** Why it is told, set by a session: what it carries out here before resuming. */
+  pauseNote?: string;
   /** The call itself - `input.click [data-testid=order-{{var:id}}] button`. */
   label: string;
   /** What the step is for, which is what someone actually tracks. */

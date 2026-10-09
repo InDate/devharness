@@ -26,8 +26,7 @@ import {
   checkIfPaused,
   analyzeRecordedStepConnections,
   sanitizeConnectionMap,
-  type ExecutionContext,
-} from './replay-executor.js';
+  type ExecutionContext, connectionsOf } from './replay-executor.js';
 import { addressedConnection, createdName } from './connection-steps.js';
 import { sequenceNeedsProxy } from './replay-connections.js';
 import { getProxy } from '../proxy/registry.js';
@@ -41,6 +40,7 @@ import {
   formatClickValidationFailure,
   extractTextVariables,
   formatVariablePrompt,
+  formatPauseNote,
 } from './replay-formatters.js';
 import { formatRunReply } from './run-table.js';
 import { pausesIn, rulesForRun } from './run-rules.js';
@@ -340,21 +340,57 @@ export async function handleRun(
     connection = connectionMap[sanitizeReference(connection)] ?? connection;
   }
 
+  // What was open before the play: a launch that fails beside one of these
+  // may be clashing with it, so the failure names them.
+  const declaredNames = new Set((sequence.requiredConnections ?? []).map(d => sanitizeReference(d.connection)));
+  const openBefore = declaredNames.size
+    ? (connectionsOf(await executeToolCall('connection', { action: 'list' }).catch(() => null)) ?? [])
+        .filter(c => c.connected !== false)
+        .map(c => sanitizeReference(c.reference))
+        .filter(ref => !declaredNames.has(ref) && ref !== (connection ? sanitizeReference(connection) : undefined))
+    : [];
+
   // Bring up any browser the sequence declares before the first step.
   const declaredConns = await ensureDeclaredConnections(sequence, executeToolCall, getPageForConnection, connectionMap);
   if (declaredConns.error) {
     // A declaration that contradicts itself is a bad sequence, not a missing
     // browser - saying "connection not found" would send you looking for one.
-    return declaredConns.invalid
-      ? createErrorResponse('INVALID_PARAMETER', {
-          parameter: 'requiredConnections',
-          value: sequence.name,
-          message: declaredConns.error,
-        })
-      // Not CONNECTION_NOT_FOUND: that template renders a generic "no active
-      // browser connection" and drops the message, which names the browser,
-      // its role and why the launch failed.
-      : createErrorResponse('DECLARED_CONNECTION_FAILED', { message: declaredConns.error });
+    if (declaredConns.invalid) {
+      return createErrorResponse('INVALID_PARAMETER', {
+        parameter: 'requiredConnections',
+        value: sequence.name,
+        message: declaredConns.error,
+      });
+    }
+    // The play owns what it launched, as a finished run does: left up, the next
+    // play reuses one holding this play's state.
+    const closedNote = await closeLaunchedConnections(
+      declaredConns.launched, executeToolCall, getConnectionPort, sequence.name, 'launched before a declared browser failed');
+    const stillOpen = new Set((connectionsOf(await executeToolCall('connection', { action: 'list' }).catch(() => null)) ?? [])
+      .map(c => sanitizeReference(c.reference)));
+    const closed = declaredConns.launched.filter(ref => !stillOpen.has(sanitizeReference(ref)));
+    const standingNote = openBefore.length
+      ? `\n\n**Open before the play:** ${openBefore.join(', ')} - a launch failing beside one of these may be clashing with it.`
+      : '';
+    // Not CONNECTION_NOT_FOUND: that template renders a generic "no active
+    // browser connection" and drops the message, which names the browser,
+    // its role and why the launch failed.
+    const failure = createErrorResponse('DECLARED_CONNECTION_FAILED', { message: declaredConns.error + closedNote + standingNote });
+    return {
+      ...failure,
+      _meta: {
+        tool: 'replay', action: 'run', timestamp: Date.now(),
+        replay: {
+          success: false,
+          declaredLaunch: {
+            failed: declaredConns.failed ?? [],
+            launched: declaredConns.launched,
+            closed,
+            standing: openBefore,
+          },
+        },
+      },
+    };
   }
 
   // Validate startFrom before any side effects, so both modes reject immediately
@@ -946,7 +982,8 @@ export async function performRun(
         ...(ctx.connection ? { rules: rulesForRun(ctx.connection) } : {}),
       })
       : formatPausedResponse(sequence, execResult.results, execResult.pausedAtStep, execResult.durationMs)
-        + (execResult.pauseHeld?.length ? `\n\n**Held while paused:** the page's ${execResult.pauseHeld.join(', ')}; \`step\`, \`finish\` or \`cancel\` releases it.` : '');
+        + (execResult.pauseHeld?.length ? `\n\n**Held while paused:** the page's ${execResult.pauseHeld.join(', ')}; \`step\`, \`finish\` or \`cancel\` releases it.` : '')
+        + formatPauseNote(execResult.pausedAtStep + 1, execResult.pauseNote, execResult.pauseNotify);
     return { outcome: 'paused', results: execResult.results, response: { content: [{ type: 'text', text }],
       _meta: {
         tool: 'replay', action: 'run', timestamp: Date.now(),

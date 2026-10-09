@@ -68,6 +68,18 @@ export interface RecordedCommand {
   /** What that pause point holds: code, ui, network. Every layer when absent, nothing for []. */
   pauseHolds?: HoldLayer[];
   /**
+   * A run stopping at that pause point tells the session: an `instruction`
+   * event and a line in the paused reply. Set from the bench's bell, or by
+   * `replay pause` with `notify`; a `pauseNote` implies it.
+   */
+  pauseNotify?: true;
+  /**
+   * Why the session is told: what it carries out there before resuming, for an
+   * action no step can hold (a bench play). Only a session sets it; without
+   * one, the session asks the person why.
+   */
+  pauseNote?: string;
+  /**
    * On a step that stores a variable: the value a run starting at each origin
    * stores in place of the expression's, which is the value for every other origin.
    */

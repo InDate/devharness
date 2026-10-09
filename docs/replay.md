@@ -574,7 +574,18 @@ window, so it is listed apart:
   carries a paused run on.
 - **Pause points.** A step saved with `pauseBefore` (the bench: the line
   between two steps) stops any run before it, holding the layers in
-  `pauseHolds`, all by default.
+  `pauseHolds`, all by default. `replay({ action: 'pause', name, step, hold?,
+  notify?, note?, remove? })` sets, changes or removes one from a session.
+- **A pause point that notifies.** `pauseNotify` (the bench: the bell on the
+  pause point line) makes a run stopping there tell the session: it appends an
+  `instruction` event (`sequence`, `step`, `resolve: replay({ action: 'finish'
+  })`) and says so in its reply. An optional `pauseNote`, set only by a session,
+  is the reason: what to carry out there, for an action no step can hold (a
+  bench play: a replay call never becomes a step); the event and the reply
+  carry it. With no note, the reply asks the session to find out why from the
+  person. A note implies notify; `notify: false` clears both. Hold nothing
+  (`hold: []`) where the note drives the page, since a held page refuses
+  driving calls.
 - **What a pause records.** A person's input, each hold step - a statement, a
   callback with where it ran, a message let through - and each hold or
   release placed in the bench, in order beside the traffic; the bench's hold

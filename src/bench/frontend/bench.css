@@ -1309,8 +1309,10 @@ textarea.toolargs {
   display: inline-flex; gap: 6px; padding: 0 8px; background: var(--bg);
   visibility: hidden;
 }
-.mark:hover .marktools, .mark .marktools:focus-within { visibility: visible; }
-.mark:has(.marktools):hover .marktext { visibility: hidden; }
+/* Kept up for keyboard focus only: a clicked button keeps focus too, and a
+   focus-within rule left the tools drawn over the returning text. */
+.mark:hover .marktools, .mark .marktools:has(:focus-visible) { visibility: visible; }
+.mark:has(.marktools):hover .marktext, .mark:has(.marktools :focus-visible) .marktext { visibility: hidden; }
 .marknote {
   padding: 2px 4px; border: 0; background: none;
   color: var(--muted); cursor: pointer; display: inline-flex; align-items: center;

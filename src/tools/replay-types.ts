@@ -154,6 +154,10 @@ export interface ExecutionResult {
   pausedAtStep?: number;
   /** The 0-based step a saved pause point stopped the run before. */
   pausedAtMark?: number;
+  /** The step a saved pause point stopped before tells the session (its `pauseNotify`, or a note). */
+  pauseNotify?: true;
+  /** The note on that step: what the session carries out before resuming. */
+  pauseNote?: string;
   /** The layers a pause held on the page, which `step`, `finish` and `cancel` release. */
   pauseHeld?: HoldLayer[];
   /** The step a breakpoint stopped the page inside, left open for the resume to close. */

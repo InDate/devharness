@@ -453,6 +453,22 @@ by a navigation, or hung up by the page, is normal. Match the app's own path,
 not the origin, so the declaration survives `baseUrl`; dev-server sockets (Vite
 HMR) go undeclared and are ignored.
 
+**A step no sequence can hold.** A replay call never becomes a step, so a
+bench play (`run` with `bench: true`) cannot sit inside a sequence. Mark the
+step after it with a pause point and a note instead:
+
+```js
+replay({ action: 'pause', name: 'issue-116-bench-play-repro', step: 4, hold: [],
+         note: "Play issue-116-declared-launch-fails in the bench, then finish." })
+```
+
+A run stops before step 4, appends an `instruction` event carrying the note and
+prints it in its reply; carry it out, then `replay({ action: 'finish' })`.
+`hold: []` because a held page refuses the driving the note asks for; `remove:
+true` takes the pause point away. A person sets notify with the bell on the
+pause point line in the bench, without a reason: the reply then says none was
+given, so ask them why before finishing.
+
 **Replaying one in a different session.** Recorded references are per-session,
 so rebind them:
 

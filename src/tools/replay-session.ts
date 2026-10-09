@@ -10,7 +10,7 @@ import { appendRun } from '../run-log.js';
 import type { StepResult } from './replay-executor.js';
 import type { StepCheck } from '../bench/wire.js';
 import { executeSteps, type ExecutionContext } from './replay-executor.js';
-import { formatActiveStatus, formatClickValidationFailure, failuresOf } from './replay-formatters.js';
+import { formatActiveStatus, formatClickValidationFailure, failuresOf, formatPauseNote } from './replay-formatters.js';
 import { formatRunReply } from './run-table.js';
 import { pausesIn, rulesForRun } from './run-rules.js';
 import { releaseArmedRun } from '../bench-mode/rules.js';
@@ -514,7 +514,8 @@ export async function handleFinish(
       content: [{ type: 'text', text: formatRunReply(recorder, {
         name: sequence.name, total: commands.length, since: activeSeq.runSince ?? since, paused: true,
         ...(args.steps ? { steps: args.steps } : {}), failures: failuresOf(execResult.results), rules, pauses,
-      }) + `\n\n**Paused at the pause point before step ${execResult.pausedAtMark + 1}**${execResult.pauseHeld?.length ? `, holding the page's ${execResult.pauseHeld.join(', ')}` : ''}. \`replay step\` or \`finish\` carries on.` }],
+      }) + `\n\n**Paused at the pause point before step ${execResult.pausedAtMark + 1}**${execResult.pauseHeld?.length ? `, holding the page's ${execResult.pauseHeld.join(', ')}` : ''}. \`replay step\` or \`finish\` carries on.`
+        + formatPauseNote(execResult.pausedAtMark + 1, execResult.pauseNote, execResult.pauseNotify) }],
     };
   }
 

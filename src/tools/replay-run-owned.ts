@@ -69,12 +69,15 @@ export function navigatedConnections(commands: RecordedCommand[], runConnection:
  * A caller's `connections` rebinding wins: the declaration supplies a default
  * browser, it does not override where the caller wants the steps pointed.
  */
+/** A declared browser that would not launch, with the launch's own error. */
+export type DeclaredLaunchFailure = { connection: string; role?: string; error: string };
+
 export async function ensureDeclaredConnections(
   sequence: CommandSequence,
   executeToolCall: ExecuteToolCall,
   getPageForConnection: (connection: string) => Promise<any>,
   connectionMap: Record<string, string> | undefined
-): Promise<{ launched: string[]; error?: string; invalid?: boolean }> {
+): Promise<{ launched: string[]; failed?: DeclaredLaunchFailure[]; error?: string; invalid?: boolean }> {
   const declared = sequence.requiredConnections;
   if (!Array.isArray(declared) || declared.length === 0) return { launched: [] };
 
@@ -82,6 +85,9 @@ export async function ensureDeclaredConnections(
   if (conflict) return { launched: [], error: `"${sequence.name}": ${conflict}`, invalid: true };
 
   const launched: string[] = [];
+  // Every declaration is attempted: stopping at the first failure hides whether
+  // the others would have come up, which is what tells a clash from a bad browser.
+  const failed: DeclaredLaunchFailure[] = [];
   for (const decl of declared) {
     const wanted = sanitizeReference(decl.connection);
     if (!wanted) continue;
@@ -118,13 +124,22 @@ export async function ensureDeclaredConnections(
           if (await getPageForConnection(target)) continue;
         } catch { /* fall through to the error below */ }
       }
-      return {
-        launched,
-        error: `"${sequence.name}" needs the browser "${target}"${decl.role ? ` (${decl.role})` : ''} and launching it failed: ${err?.message || String(err)}`,
-      };
+      failed.push({
+        connection: target,
+        ...(decl.role && { role: decl.role }),
+        // The launch reply's own suggestions are for a direct caller; the play
+        // names the failure, and the error up to them is the failure.
+        error: String(err?.message || err).split('**Suggestions')[0]!.replace(/^Error:\s*/, '').replace(/\s*\n\s*/g, ' ').trim().slice(0, 300),
+      });
     }
   }
-  return { launched };
+  if (failed.length === 0) return { launched };
+  return {
+    launched,
+    failed,
+    error: `"${sequence.name}" needs browsers that would not launch:\n`
+      + failed.map(f => `- "${f.connection}"${f.role ? ` (${f.role})` : ''}: ${f.error}`).join('\n'),
+  };
 }
 
 /**

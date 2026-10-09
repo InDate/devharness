@@ -687,6 +687,7 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted, 
                 would go on pointing. Click either to change it. */}
             {step.index > 0 && !sequence?.recording && (step.pauseBefore
               ? hasPause(step.index) ? null : (
+                <Fragment>
                 <div class="mark pausepoint">
                   <span class="marktext">{pauseWords(step, pausedAt(step.index))}</span>
                   <span class="marktools">
@@ -701,10 +702,22 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted, 
                           })}><Glyph of={layer === 'ui' ? 'screen' : layer} /><span class="pauselabel">{word}</span></button>
                       );
                     })}
+                    {(() => {
+                      const notifying = !!(step.pauseNotify || step.pauseNote);
+                      return (
+                        <button class={notifying ? 'pausechip on' : 'pausechip'} aria-label="notify" aria-pressed={notifying}
+                          title={notifying
+                            ? `stop telling the session when a run stops here${step.pauseNote ? ` (reason: ${step.pauseNote})` : ''}`
+                            : 'tell the session when a run stops here'}
+                          onClick={() => void post('/sequence/step/pause', { step: step.index, notify: !notifying })}>
+                          <Glyph of="notify" /><span class="pauselabel">notify</span></button>
+                      );
+                    })()}
                     <button class="pausecancel" title="remove this pause point" aria-label="remove this pause point"
                       onClick={() => void post('/sequence/step/pause', { step: step.index, on: false })}><Glyph of="cross" /><span class="pauselabel">remove</span></button>
                   </span>
                 </div>
+                </Fragment>
               )
               : (
                 <div class="pausegap" role="button" title="add a pause point before this step"

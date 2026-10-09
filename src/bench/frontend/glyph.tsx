@@ -18,6 +18,8 @@ export function Glyph({ of }: { of: string }) {
     headless: <><path d="M3 2.5l8 4.5-8 4.5z" /><rect x="10.6" y="10.6" width="3.8" height="3.8" rx="0.6" /></>,
     stop: <rect x="4" y="4" width="8" height="8" rx="1" />,
     held: <><path d="M6 4v8" /><path d="M10 4v8" /></>,
+    // A bell: the run tells the session something at this point.
+    notify: <><path d="M4 11.5V7.5a4 4 0 0 1 8 0v4l1.2 1.3H2.8z" /><path d="M6.6 14a1.5 1.5 0 0 0 2.8 0" /></>,
     running: <path d="M5 3l8 5-8 5z" />,
     // A raised open hand, palm out: the gesture for stop and hold.
     hold: <><path d="M5.6 8.4V3.6a1.1 1.1 0 0 1 2.2 0V7.6" /><path d="M7.8 7.4V2.6a1.1 1.1 0 0 1 2.2 0v4.8" /><path d="M10 7.6V4a1.1 1.1 0 0 1 2.2 0v5.2a5 5 0 0 1-5 5h-.5a4 4 0 0 1-3-1.4L1.9 10.3a1.1 1.1 0 0 1 1.6-1.5l2.1 1.8" /></>,

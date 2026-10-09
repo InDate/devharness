@@ -230,6 +230,7 @@ export function createSequenceDriver(
   ): Promise<string | undefined> => {
     let text: string;
     let raised = false;
+    let failedResponse: any;
     try {
       const response = await executeToolCall('replay', args, signal);
       if (response?._meta?.replay?.prompted) return 'the run asked for replacement text and ran no step';
@@ -243,7 +244,25 @@ export function createSequenceDriver(
       // and a run's failed step replies with its run table, which opens on the
       // sequence's name rather than on "Error".
       text = textOf(error);
+      failedResponse = (error as { response?: unknown })?.response;
       raised = true;
+    }
+
+    // A play whose declared browsers would not launch names each one, its
+    // launch error, and what was open beside it; the reply's text carries them
+    // under a one-line summary that the first-line reading below would keep alone.
+    const declared = failedResponse?._meta?.replay?.declaredLaunch as
+      { failed?: Array<{ connection: string; role?: string; error: string }>; launched?: string[]; closed?: string[]; standing?: string[] } | undefined;
+    if (declared?.failed?.length) {
+      failedStep = null;
+      const named = declared.failed.map(f => `${f.connection}${f.role ? ` (${f.role})` : ''}: ${f.error}`).join('; ');
+      const left = (declared.launched ?? []).filter(ref => !(declared.closed ?? []).includes(ref));
+      const closed = [
+        declared.closed?.length ? ` Closed what it launched: ${declared.closed.join(', ')}.` : '',
+        left.length ? ` Launched and still open: ${left.join(', ')}.` : '',
+      ].join('');
+      const standing = declared.standing?.length ? ` Open before the play: ${declared.standing.join(', ')}.` : '';
+      return `A browser the sequence declares would not launch - ${named.replace(/\.$/, '')}.${closed}${standing}`;
     }
 
     if (!raised && !/^\s*(Error|\*\*BLOCKED)/.test(text) && !/\*\*Error:\*\*/.test(text)) return undefined;
@@ -713,7 +732,7 @@ export function createSequenceDriver(
             ...(storedValue(command) !== undefined ? { stores: storedValue(command) } : {}),
         ...(command.byOrigin ? { storesByOrigin: command.byOrigin } : {}),
             ...(command.byOrigin ? { storesByOrigin: command.byOrigin } : {}),
-        ...(command.pauseBefore ? { pauseBefore: true as const, ...(command.pauseHolds ? { pauseHolds: command.pauseHolds } : {}) } : {}),
+        ...(command.pauseBefore ? { pauseBefore: true as const, ...(command.pauseHolds ? { pauseHolds: command.pauseHolds } : {}), ...(command.pauseNotify ? { pauseNotify: true as const } : {}), ...(command.pauseNote ? { pauseNote: command.pauseNote } : {}) } : {}),
             ...(readsOf(command).length ? { reads: readsOf(command) } : {}),
             tool: command.tool,
             params: command.params ?? {},
@@ -773,23 +792,36 @@ export function createSequenceDriver(
       if (held?.length) active.pauseHeld = held;
     },
 
-    setPause: async (step: number, change: { on?: boolean; holds?: Array<'code' | 'ui' | 'network'> }) => {
+    setPause: async (step: number, change: { on?: boolean; holds?: Array<'code' | 'ui' | 'network'>; note?: string; notify?: boolean }) => {
       const sequence = openSequence();
       if (!sequence) return 'no sequence is open';
       const command = sequence.commands?.[step];
       if (!command) return `step ${step + 1} is not in "${sequence.name}"`;
       if (step === 0) return 'a run starts at step 1, so there is nothing before it to pause at';
-      const on = change.on ?? (change.holds ? true : !command.pauseBefore);
+      const on = change.on ?? (change.holds || change.note !== undefined || change.notify !== undefined ? true : !command.pauseBefore);
       if (!on) {
         delete command.pauseBefore;
         delete command.pauseHolds;
+        delete command.pauseNotify;
+        delete command.pauseNote;
         return persist(sequence, `pause point removed before step ${step + 1}`);
       }
       command.pauseBefore = true;
       // Every layer is the default and is stored as no list at all.
       if (change.holds && change.holds.length < 3) command.pauseHolds = change.holds;
       else if (change.holds) delete command.pauseHolds;
-      return persist(sequence, `pause point before step ${step + 1} holds ${command.pauseHolds ? command.pauseHolds.join(', ') || 'nothing' : 'everything'}`);
+      if (change.notify === false) {
+        delete command.pauseNotify;
+        delete command.pauseNote;
+      } else if (change.notify === true) command.pauseNotify = true;
+      if (change.note !== undefined && change.notify !== false) {
+        const note = change.note.trim();
+        if (note) {
+          command.pauseNote = note;
+          command.pauseNotify = true;
+        } else delete command.pauseNote;
+      }
+      return persist(sequence, `pause point before step ${step + 1} holds ${command.pauseHolds ? command.pauseHolds.join(', ') || 'nothing' : 'everything'}${command.pauseNotify ? ', notifies the session' : ''}`);
     },
 
     step: async (signal?: AbortSignal, holdNothing?: boolean) => {
@@ -1270,7 +1302,11 @@ export function createSequenceDriver(
         ...(typeof command.params?.saveAs === 'string' ? { captures: command.params.saveAs } : {}),
         ...(storedValue(command) !== undefined ? { stores: storedValue(command) } : {}),
         ...(command.byOrigin ? { storesByOrigin: command.byOrigin } : {}),
-        ...((command as { pauseBefore?: true }).pauseBefore ? { pauseBefore: true as const } : {}),
+        ...((command as { pauseBefore?: true }).pauseBefore ? {
+          pauseBefore: true as const,
+          ...((command as { pauseNotify?: true }).pauseNotify ? { pauseNotify: true as const } : {}),
+          ...((command as { pauseNote?: string }).pauseNote ? { pauseNote: (command as { pauseNote?: string }).pauseNote } : {}),
+        } : {}),
         ...(readsOf(command).length ? { reads: readsOf(command) } : {}),
         tool: command.tool,
         params: command.params ?? {},

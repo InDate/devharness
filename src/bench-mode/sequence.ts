@@ -152,7 +152,7 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
       ...(step.traffic ? { traffic: step.traffic } : {}),
       ...(step.expected ? { expected: step.expected } : {}),
       ...(step.addedAt !== undefined ? { addedAt: step.addedAt } : {}),
-      ...(step.pauseBefore ? { pauseBefore: true as const, ...(step.pauseHolds ? { pauseHolds: step.pauseHolds } : {}) } : {}),
+      ...(step.pauseBefore ? { pauseBefore: true as const, ...(step.pauseHolds ? { pauseHolds: step.pauseHolds } : {}), ...(step.pauseNotify ? { pauseNotify: true as const } : {}), ...(step.pauseNote ? { pauseNote: step.pauseNote } : {}) } : {}),
       done: index < active.currentStep,
       current: index === active.currentStep,
       ...(active.failedStep === index ? { failed: true } : {}),
@@ -408,7 +408,7 @@ export const stepSequence = (connection: string, holdNothing = false) =>
   driveSequence(connection, (driver, signal) => driver.step(signal, holdNothing));
 
 /** Add, remove or set what the pause point before step `step` of the open sequence holds. */
-export async function setPausePoint(connection: string, step: number, change: { on?: boolean; holds?: Array<'code' | 'ui' | 'network'> }): Promise<SequenceState | undefined> {
+export async function setPausePoint(connection: string, step: number, change: { on?: boolean; holds?: Array<'code' | 'ui' | 'network'>; note?: string; notify?: boolean }): Promise<SequenceState | undefined> {
   const session = sessions.get(connection);
   if (!session?.sequences) return undefined;
   session.sequenceFailure = await session.sequences.setPause(step, change).catch(error => String(error));

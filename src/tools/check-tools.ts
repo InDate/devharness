@@ -48,6 +48,7 @@ export const checkSchema = z.object({
   stepsBack: z.number().int().min(0).optional().describe('traffic: count from the start of the call this many back (default 1, the call before the check; 0, the check itself)'),
   count: z.number().int().min(0).optional().describe('traffic: how many crossings, compared by operator (default gte)'),
   socket: z.string().optional().describe("A socket whose URL carries this, with condition open (default) or closed. Needs proxy: true"),
+  connectionOpen: z.string().optional().describe('A connection of this session by name, with condition present (default: open) or absent'),
   afterMs: z.number().int().min(0).max(600000).optional().describe('Read nothing until this much time has passed; alone, a timer'),
   withinMs: z.number().int().min(0).max(600000).optional().describe('Read again until it holds, for at most this long after afterMs. 0 or omitted reads once'),
   pollMs: z.number().int().min(25).max(5000).optional().describe('Time between reads (default 100)'),
@@ -87,7 +88,7 @@ export function asCheckStep<C extends { tool: string; params: Record<string, any
 
 /** Subjects a check names; more than one is a check that means two things. */
 function subjectsOf(args: CheckArgs): string[] {
-  return (['selector', 'value', 'expression', 'url', 'cookie', 'localStorage', 'indexedDB', 'traffic', 'socket'] as const)
+  return (['selector', 'value', 'expression', 'url', 'cookie', 'localStorage', 'indexedDB', 'traffic', 'socket', 'connectionOpen'] as const)
     .filter(key => key in args && (key === 'value' || args[key] !== undefined));
 }
 
@@ -97,7 +98,7 @@ export function createCheckTools(
 ) {
   return {
     check: createTool(
-      'Check one thing, answering held or failed: an element (selector + condition), a value ({{var:...}} + operator + right), a JS expression, the URL, a cookie, a localStorage key, an IndexedDB record, proxy traffic (traffic + count), a socket, or time alone (afterMs). withinMs reads again until it holds. As a sequence step, holds/fails pick continue, stop or running another sequence.',
+      'Check one thing, answering held or failed: an element (selector + condition), a value ({{var:...}} + operator + right), a JS expression, the URL, a cookie, a localStorage key, an IndexedDB record, proxy traffic (traffic + count), a socket, a connection being open (connectionOpen), or time alone (afterMs). withinMs reads again until it holds. As a sequence step, holds/fails pick continue, stop or running another sequence.',
       checkSchema,
       async (args: CheckArgs, abortSignal?: AbortSignal) => {
         const subjects = subjectsOf(args);

@@ -107,6 +107,11 @@ export interface CheckSpec {
   stepsBack?: number;
   /** A socket whose URL carries this, `condition` `open` (default) or `closed`. */
   socket?: string;
+  /**
+   * A connection of this session, `condition` `present` (default: open) or
+   * `absent`: whether a run left a browser standing, which no page read sees.
+   */
+  connectionOpen?: string;
   /** Presence of a cookie, a localStorage key, or an IndexedDB record (`DB/STORE/KEY`, or `DB/STORE` for any). */
   cookie?: string;
   localStorage?: string;
@@ -119,7 +124,7 @@ export interface CheckSpec {
   pollMs?: number;
 }
 
-export type CheckForm = 'time' | 'value' | 'element' | 'expression' | 'url' | 'cookie' | 'localStorage' | 'indexedDB' | 'traffic' | 'socket';
+export type CheckForm = 'time' | 'value' | 'element' | 'expression' | 'url' | 'cookie' | 'localStorage' | 'indexedDB' | 'traffic' | 'socket' | 'connectionOpen';
 
 /** What an element probe saw. */
 export interface ElementProbe {
@@ -317,6 +322,7 @@ export function formOf(spec: CheckSpec): CheckForm {
   if (spec.indexedDB !== undefined) return 'indexedDB';
   if (spec.traffic !== undefined) return 'traffic';
   if (spec.socket !== undefined) return 'socket';
+  if (spec.connectionOpen !== undefined) return 'connectionOpen';
   return 'time';
 }
 
@@ -342,6 +348,7 @@ export function subjectOf(spec: CheckSpec): string {
       return `traffic ${what || 'any'} count ${spec.operator ?? 'gte'} ${spec.count ?? 1}`;
     }
     case 'socket': return `socket ${spec.socket} ${spec.condition === 'closed' ? 'closed' : 'open'}`;
+    case 'connectionOpen': return `connection ${spec.connectionOpen} ${spec.condition === 'absent' ? 'absent' : 'open'}`;
     case 'time': return `${spec.afterMs ?? 0}ms passed`;
   }
 }
@@ -480,6 +487,18 @@ async function readerFor(
   onRelease: (release: () => void) => void,
 ): Promise<() => Promise<Read>> {
   if (form === 'time') return async () => ({ held: true, found: `${spec.afterMs ?? 0}ms passed` });
+
+  if (form === 'connectionOpen') {
+    const executeToolCall = deps.executeToolCall;
+    if (!executeToolCall) throw new CheckError('a connection check reads the session\'s connection list, and nothing here can call the connection tool', 'invalid');
+    const wantOpen = spec.condition !== 'absent';
+    return async () => {
+      const listed: any = await executeToolCall('connection', { action: 'list' });
+      const rows: Array<{ reference?: string; connected?: boolean }> = listed?._meta?.connections ?? [];
+      const open = rows.some(row => row.reference === spec.connectionOpen && row.connected !== false);
+      return { held: open === wantOpen, found: open ? 'open' : 'not open' };
+    };
+  }
 
   if (form === 'traffic' || form === 'socket') {
     const proxy = deps.connection ? getProxy(deps.connection) : undefined;

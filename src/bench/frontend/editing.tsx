@@ -1126,7 +1126,7 @@ function limitOf(tool: string, params: Record<string, any>): number {
 
 /** Whether a check's settings read anything; a check that reads nothing is a timer. */
 function checkSubject(params: Record<string, any>): boolean {
-  return ['selector', 'value', 'expression', 'url', 'cookie', 'localStorage', 'indexedDB', 'traffic', 'socket'].some(key => params[key] !== undefined);
+  return ['selector', 'value', 'expression', 'url', 'cookie', 'localStorage', 'indexedDB', 'traffic', 'socket', 'connectionOpen'].some(key => params[key] !== undefined);
 }
 
 type CheckAnswer = {

@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-09
+
+### Added
+
+- **A pause point can notify the session.** A step's `pauseNotify` (the bell
+  on the pause point line in the bench) makes a run stopping there append an
+  `instruction` event and say so in its reply; an optional `pauseNote` is the
+  reason, what the session carries out before `replay({ action: 'finish' })`.
+  This is how a sequence holds an action no step can, such as a bench play.
+  `replay({ action: 'pause', name, step, hold?, notify?, note?, remove? })`
+  sets one from a session. (#117)
+- **`check({ connectionOpen, condition: 'present' | 'absent' })`** reads the
+  session's connection list, so a sequence asserts which browsers a run left
+  open. (#121)
+- **`bench start` takes `saveAs`** in a sequence and stores the bench page's
+  address for later steps as `{{var:<name>.url}}`, so a check that drives the
+  bench page replays after the bench restarts. (#120)
+
+### Fixed
+
+- **A bench play whose declared browser will not launch names it.** Every
+  declared browser is attempted; the failure names each one that would not
+  launch with its launch error, closes the browsers the play launched, and
+  lists connections that were open before the play. The bench shows all of it
+  instead of a one-line summary. (#116)
+- **A run no longer navigates to `startUrl` before a launch step creates its
+  connection**, which opened a stray Chrome under that name that the launch
+  then found in its way. (#118)
+- **`issues create` accepts `startUrl: 'about:blank'` with
+  `includeSequence: false`**, the combination its own error recommended. (#119)
+- **The bench's marker tools no longer stay drawn over the line after a
+  click**; they stay up for keyboard focus only.
+
 ## [0.14.0] - 2026-10-07
 
 ### Added

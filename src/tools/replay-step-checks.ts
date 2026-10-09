@@ -217,12 +217,18 @@ export async function navigateToStartUrl(
     return { success: true };
   }
 
+  // The sequence brings up its own browser: navigating first would open one
+  // under that name before the launch step runs, and the launch would then find
+  // the name or its port taken. The launch step carries the URL it was recorded with.
+  if (analysis.createsBeforeUse) {
+    return { success: true };
+  }
+
   const commands = sequence.commands;
   const firstNavigateIndex = commands.findIndex(cmd =>
     cmd.tool === 'navigate' && cmd.params.action === 'goto'
   );
-  const startsWithNavigate = firstNavigateIndex === 0 ||
-    (analysis.createsBeforeUse && firstNavigateIndex === analysis.createIndex + 1);
+  const startsWithNavigate = firstNavigateIndex === 0;
 
   if (startsWithNavigate) {
     return { success: true };

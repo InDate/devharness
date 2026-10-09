@@ -90,6 +90,11 @@ const CAPTURE_SOURCES: Record<string, (meta: any) => { found: boolean; value?: u
   inspect: (meta) => meta?.inspect
     ? { found: true, value: meta.inspect.value }
     : { found: false },
+  // The bench page's address changes with every start, so a step that drives
+  // the bench page reads it as {{var:<name>.url}} rather than a recorded literal.
+  bench: (meta) => meta?.bench?.state?.benchUrl
+    ? { found: true, value: { url: meta.bench.state.benchUrl } }
+    : { found: false },
 };
 
 /** Human-readable list of what supports saveAs, for error messages. */

@@ -68,6 +68,8 @@ const benchSchema = z.object({
     .describe('retake/capture: path of a capture file, any version of its series'),
   against: z.number().int().positive().optional()
     .describe('retake: the version to compare with (default 1)'),
+  saveAs: z.string().optional()
+    .describe('Sequence step only (start): stores { url } of the bench page for later steps as {{var:name.url}}'),
 }).strict();
 
 type BenchArgs = z.infer<typeof benchSchema>;

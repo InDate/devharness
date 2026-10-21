@@ -26,6 +26,7 @@ import { debugLog } from '../debug-logger.js';
 import { validateReference, requireValidReference, sanitizeReference, UNNAMED_CONNECTION } from '../reference-validator.js';
 import { startProxyFor, shareProxy, getProxy } from '../proxy/registry.js';
 import { loadedViewport, sizeWindowToViewport } from '../window-sizing.js';
+import { allowPersonWatch } from '../person-watch.js';
 import type { ToolResponseMeta, PausedAtMeta } from '../tool-response.js';
 
 /**
@@ -123,6 +124,7 @@ const connectionSchema = z.object({
   profile: z.string().optional().describe('launch: named persistent Chrome profile, e.g. "device-a", whose storage survives across runs'),
   proxy: z.boolean().optional().describe('launch: route this browser through an intercepting proxy, so a response or socket frame can be held and served in its place (default: false)'),
   chromeArgs: z.array(z.string()).optional().describe('launch: extra Chrome command-line flags, merged after the managed defaults'),
+  watchInput: z.boolean().optional().describe('launch: record a person\'s clicks and typing in this browser into History and onto the next reply, as the bench\'s RECORD MY INPUT does (default: replay.watchPersonInput)'),
 }).strict();
 
 type ConnectionArgs = z.infer<typeof connectionSchema>;
@@ -1222,7 +1224,11 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
           });
         }
         switch (args.action) {
-          case 'launch': return responseWithOnce(await launch(args), 'CONNECTION_LAUNCH_REPLY');
+          case 'launch': {
+            const reply = await launch(args);
+            if (args.watchInput && !reply.isError) allowPersonWatch(sanitizeReference(args.connection ?? UNNAMED_CONNECTION));
+            return responseWithOnce(reply, 'CONNECTION_LAUNCH_REPLY');
+          }
           case 'attach': return attach(args);
           case 'list': return list();
           case 'switch': return switchTo(args);

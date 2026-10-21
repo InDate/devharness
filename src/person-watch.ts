@@ -4,9 +4,11 @@
  *
  * A page moved by a person and then read by an agent that does not know it
  * was moved gives readings of a state the agent never drove to, and a run
- * carrying on over it fails where the app is fine. So every driven page
- * reports each click, each field typed into, and each Enter, Escape or Tab,
- * and the agent's next call on that connection names them.
+ * carrying on over it fails where the app is fine. So a watched page reports
+ * each click, each field typed into, and each Enter, Escape or Tab, and the
+ * agent's next call on that connection names them. Every driven page is
+ * watched under `replay.watchPersonInput`; with it off, a connection is
+ * watched once launched with `watchInput` or turned on from the bench.
  *
  * A listener in the page reports through a function exposed on it, the moment
  * the input happens. Each report becomes an `input` History entry from the
@@ -48,6 +50,8 @@ export function recordPersonInputInto(commandRecorder: CommandRecorder): void {
 const watching = new Map<string, { page: unknown; off: () => Promise<void> }>();
 /** Connections a person turned the watch off on, from the bench, which a later call leaves off. */
 const turnedOff = new Set<string>();
+/** Connections every later call watches, whatever `replay.watchPersonInput` holds. */
+const turnedOn = new Set<string>();
 /** What a person did on each connection since the agent's last call there read it. */
 const unread = new Map<string, PersonInput[]>();
 /** Every input on each connection, newest last, for a run reading what landed since its step began. */
@@ -117,15 +121,23 @@ export async function watchPersonInput(connection: string, page: any): Promise<v
 
 /** Stop watching `connection`; `byPerson` keeps it off until the person turns it back on. */
 export async function unwatchPersonInput(connection: string, byPerson = false): Promise<void> {
-  if (byPerson) turnedOff.add(connection);
+  if (byPerson) {
+    turnedOff.add(connection);
+    turnedOn.delete(connection);
+  }
   const held = watching.get(connection);
   watching.delete(connection);
   await held?.off().catch(() => {});
 }
 
-/** Let a later call watch `connection` again, after a person turned the watch off. */
+/** Watch `connection` on every later call, clearing a person's earlier turning it off. */
 export function allowPersonWatch(connection: string): void {
   turnedOff.delete(connection);
+  turnedOn.add(connection);
+}
+
+export function isPersonWatchTurnedOn(connection: string): boolean {
+  return turnedOn.has(connection);
 }
 
 export function isWatchingPersonInput(connection: string): boolean {

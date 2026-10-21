@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A launch can turn on the watch of a person's input.**
+  `connection({ action: 'launch', watchInput: true })` records the person's
+  clicks and typing in that browser into History and onto the next reply while
+  `replay.watchPersonInput` is off. RECORD MY INPUT on the bench now holds the
+  watch the same way, across the page being replaced, where it used to watch
+  only the page open when it was pressed.
+
 ## [0.15.0] - 2026-10-09
 
 ### Added

@@ -82,7 +82,7 @@ import { ToolError } from './tool-error.js';
 import type { ServerLog, ServerRow, ToolGroup, ToolValues } from './bench/wire.js';
 import { arriveOn, unlisted, historyPlace, entryChannel, asInnerCall } from './call-origin.js';
 import { markNextCommand, releaseCommand, noteCallStart, newlyIdleProxies, attachEntryToCursor } from './proxy/registry.js';
-import { describePersonInput, recordPersonInputInto, takeUnreadPersonInput, watchPersonInput } from './person-watch.js';
+import { describePersonInput, isPersonWatchTurnedOn, recordPersonInputInto, takeUnreadPersonInput, watchPersonInput } from './person-watch.js';
 import { activitySummary } from './activity-index.js';
 
 /**
@@ -466,10 +466,12 @@ let orchestratorInstance: Orchestrator | null = null;
  */
 async function watchNamedPage(params: Record<string, unknown> | undefined): Promise<void> {
   const named = params?.connection;
-  if (typeof named !== 'string' || !configManager.getReplayConfig().watchPersonInput) return;
+  if (typeof named !== 'string') return;
+  const reference = sanitizeReference(named);
+  if (!configManager.getReplayConfig().watchPersonInput && !isPersonWatchTurnedOn(reference)) return;
   const resolved = await resolveConnectionByName(named).catch(() => null);
   const page = resolved?.puppeteerManager ? await Promise.resolve(resolved.puppeteerManager.getPage()).catch(() => null) : null;
-  if (page) await watchPersonInput(sanitizeReference(named), page).catch(() => {});
+  if (page) await watchPersonInput(reference, page).catch(() => {});
 }
 
 async function resolveConnectionByName(name: string): Promise<{

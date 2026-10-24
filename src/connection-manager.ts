@@ -6,7 +6,7 @@
 import { CDPManager } from './cdp-manager.js';
 import { getProxy } from './proxy/registry.js';
 import { attachLayer, isHeld, recordHeld, recordReleased } from './hold.js';
-import { attachPageTime } from './page-time.js';
+import { attachPageTime, pageTimeOf } from './page-time.js';
 import { PuppeteerManager } from './puppeteer-manager.js';
 import { ConsoleMonitor } from './console-monitor.js';
 import { NetworkMonitor } from './network-monitor.js';
@@ -199,9 +199,16 @@ export class ConnectionManager {
         ? { at: `${frame.url}:${frame.location.lineNumber + 1}`, fn: frame.functionName }
         : { armed: true };
     };
+    // The page's time is driven through the same session that stops its code,
+    // and stops with a code hold: a timer set before the hold fires as though
+    // the hold took no time.
+    const detachTime = attachPageTime(reference, { send: (method, params) => cdp.send(method, params) }, watcher => cdp.watchPause(watcher));
+    const time = pageTimeOf(reference)!;
     const detach = attachLayer(reference, 'code', {
-      engage: async () => { await cdp.pause(); return standing(); },
-      disengage: async () => { if (cdp.isPaused()) await cdp.resume(); else await cdp.disarmPause(); },
+      engage: async () => { await time.pauseClock(); await cdp.pause(); return standing(); },
+      disengage: async () => {
+        if (cdp.isPaused()) { await time.resumeClock(); await cdp.resume(); } else { await cdp.disarmPause(); await time.resumeClock(); }
+      },
       step: async () => { await cdp.stepOver(); return standing(); },
     });
     const unwatch = cdp.watchPause((paused, event) => {
@@ -219,8 +226,6 @@ export class ConnectionManager {
       }
       else recordReleased(reference, 'code');
     });
-    // The page's time is driven through the same session that stops its code.
-    const detachTime = attachPageTime(reference, { send: (method, params) => cdp.send(method, params) });
     this.codeLayers.set(connection.id, () => { unwatch(); detach(); detachTime(); });
   }
 

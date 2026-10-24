@@ -14,6 +14,7 @@
 
 import { CLOCK_KEY } from './page-clock.js';
 import { ownScript } from './utils/own-script.js';
+import { holdReading } from './hold.js';
 
 /** A Chrome session commands are sent through. */
 export interface TimeChannel {
@@ -157,9 +158,35 @@ export function pageTimeOf(connection: string): PageTime | undefined {
   return pageTimes.get(connection);
 }
 
-/** Make the page time of a connection, driven through `channel`; returns its detach. */
-export function attachPageTime(connection: string, channel: TimeChannel): () => void {
+/**
+ * Whether devharness holds the page's code: a code or screen hold of its own.
+ * A stop the hold record names a breakpoint's is someone else's, and page
+ * time runs through it, as the browser's own debugger leaves time running.
+ */
+function heldByDevharness(connection: string): boolean {
+  return holdReading(connection).held.some(held => (held.layer === 'code' || held.layer === 'ui') && held.source !== 'breakpoint');
+}
+
+/**
+ * Make the page time of a connection, driven through `channel`; returns its
+ * detach. With `watchPause`, page time follows the page's stops: it stops
+ * when the page stops under a hold of devharness's, and runs when the page
+ * runs under none - whoever paused or resumed it.
+ */
+export function attachPageTime(
+  connection: string,
+  channel: TimeChannel,
+  watchPause?: (watcher: (paused: boolean) => void) => () => void,
+): () => void {
   const time = new PageTime(connection, channel);
   pageTimes.set(connection, time);
-  return () => { if (pageTimes.get(connection) === time) pageTimes.delete(connection); };
+  const unwatch = watchPause?.(paused => {
+    const held = heldByDevharness(connection);
+    if (paused && held) void time.pauseClock();
+    else if (!paused && !held) void time.resumeClock();
+  });
+  return () => {
+    unwatch?.();
+    if (pageTimes.get(connection) === time) pageTimes.delete(connection);
+  };
 }

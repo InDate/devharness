@@ -12,7 +12,7 @@ import { DESCRIBE_ELEMENT, verifySourceLine } from './annotations.js';
 import { captureBenchScreenshot } from './captures.js';
 import { HIGHLIGHT_CONFIG, setInspectMode } from './cdp.js';
 import { type SequenceDriver } from './driver.js';
-import { attachUiLayer, holdUi, pauseClock, releaseBench, resumeClock } from './page-hold.js';
+import { attachUiLayer, holdUi, releaseBench } from './page-hold.js';
 import { watchAnimations } from './animations.js';
 import { readMotionDetect } from './motion-detect.js';
 import { benchRoutes } from './routes.js';
@@ -91,11 +91,6 @@ export async function startBench(params: {
   // step's log line and a capture to name.
   session.unwatchPause = params.debugger?.watchPause((paused, event) => {
     session.pausedEvent = paused ? event : undefined;
-    // The page's clock stops with every stop a screen hold lands - its own
-    // pause, a frame stop, a callback step - and runs again with any resume
-    // that leaves the screen released, whoever resumed it.
-    if (paused && session.frozen) void pauseClock(session);
-    else if (!paused && !session.frozen) void resumeClock(session);
   });
 
 

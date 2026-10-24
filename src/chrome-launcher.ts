@@ -13,6 +13,7 @@ import { getGlobalBase } from './helpers/paths.js';
 import { getErrorMessage } from './messages.js';
 import type { PortReserver } from './port-reserver.js';
 import { debugLog } from './debug-logger.js';
+import { waitForTerminalDesktop } from './utils/terminal-desktop.js';
 import WebSocket from 'ws';
 
 export type ChromeCloseReason = 'inactivity' | 'manual' | 'crash' | 'external' | 'signal' | 'unknown';
@@ -904,6 +905,7 @@ export class ChromeLauncher {
       chromeProcess.removeListener('error', exitHandler);
 
       if (!headless) {
+        await waitForTerminalDesktop(new Promise(resolve => chromeProcess.once('exit', resolve)));
         await openBackgroundWindow(port, url ?? 'about:blank');
       }
 

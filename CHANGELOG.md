@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Chrome opens on its Terminal's macOS desktop.** A visible launch holds its
+  window until that desktop shows. `CDP_TOOLS_DESKTOP_WAIT=0` disables it.
+
 ## [0.16.0] - 2026-10-21
 
 ### Added

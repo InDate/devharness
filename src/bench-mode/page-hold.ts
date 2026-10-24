@@ -1,12 +1,11 @@
 import { appendEvent } from '../session-events.js';
 import { debugLog } from '../debug-logger.js';
-import { readGroup, releasedRate, seekAnimations } from './animations.js';
+import { readGroup, seekAnimations } from './animations.js';
+import type { NextReading } from '../page-time.js';
 import { applyMotionRules } from './motion-rules.js';
 import { attachLayer, hold, holdReading, isHeld, release, step, type HoldLayer, type HoldSource, type LayerHold, type LayerStanding } from '../hold.js';
 import type { CallbackEntry, TickResult } from '../bench/wire.js';
-import { pageTime, request, send, setInspectMode } from './cdp.js';
-import { ownScript } from '../utils/own-script.js';
-import { CLOCK_KEY } from '../page-clock.js';
+import { pageTime, setInspectMode } from './cdp.js';
 import { dialogMonitorOf } from '../dialog-monitor.js';
 import { type BenchSession, type PageDebugger, MAX_CALLBACK_LOG, sessions } from './session.js';
 
@@ -117,14 +116,11 @@ function debuggerOf(session: BenchSession): PageDebugger {
 async function holdScreen(session: BenchSession): Promise<void> {
   if (session.frozen) return;
   const dbg = debuggerOf(session);
-  await send(session.client, 'Animation.setPlaybackRate', { playbackRate: 0 });
+  await session.time.holdAnimations();
   if (session.frameStopArming) {
     session.frameStopArming = false;
     session.groupSince = Date.now();
-    const { result } = await request(session.client, 'Runtime.evaluate', {
-      expression: ownScript('clock', `globalThis[Symbol.for('${CLOCK_KEY}')]?.holdFrames() === true`), returnByValue: true,
-    }, 1000).catch(() => ({ result: undefined }));
-    session.framesHeld = result?.value === true;
+    session.framesHeld = await session.time.holdFrames();
   } else if (!dbg.isPaused()) {
     // Page time stops with the CSS animations, before the pause: on an idle
     // page the pause only arms, and lands when the page next runs, which can be
@@ -153,7 +149,7 @@ async function releaseScreen(session: BenchSession): Promise<void> {
   if (!session.frozen) return;
   await session.debugger?.clearInstrumentationBreakpoints();
   session.stepBreakpointsSet = false;
-  await send(session.client, 'Animation.setPlaybackRate', { playbackRate: releasedRate(session) });
+  await session.time.releaseAnimations();
   session.frozen = false;
 }
 
@@ -163,24 +159,17 @@ async function releaseScreen(session: BenchSession): Promise<void> {
  * passed while the page is held.
  */
 export async function pauseClock(session: BenchSession): Promise<void> {
-  await request(session.client, 'Runtime.evaluate', {
-    expression: ownScript('clock', `globalThis[Symbol.for('${CLOCK_KEY}')]?.pause()`), returnByValue: true,
-  }, 1000).catch(() => undefined);
+  await session.time.pauseClock();
 }
 
 /** The next timer or held frame a stopped page clock holds, run on the stopped page; none when it holds nothing. */
-async function clockNext(session: BenchSession): Promise<{ kind: string; fn: string; now: number } | undefined> {
-  const { result } = await request(session.client, 'Runtime.evaluate', {
-    expression: ownScript('clock', `globalThis[Symbol.for('${CLOCK_KEY}')]?.next(${FRAME_MS}) ?? null`), returnByValue: true,
-  }, 3000).catch(() => ({ result: undefined }));
-  return result?.value ?? undefined;
+function clockNext(session: BenchSession): Promise<NextReading | undefined> {
+  return session.time.next(FRAME_MS);
 }
 
 /** Run the page's clock on from where it stopped, before the page itself runs again. */
 export async function resumeClock(session: BenchSession): Promise<void> {
-  await request(session.client, 'Runtime.evaluate', {
-    expression: ownScript('clock', `globalThis[Symbol.for('${CLOCK_KEY}')]?.resume()`), returnByValue: true,
-  }, 1000).catch(() => undefined);
+  await session.time.resumeClock();
 }
 
 /**
@@ -353,11 +342,9 @@ export const FRAME_MS = 1000 / 60;
  * so the page's JS and its compositor stay together.
  */
 export async function frameStep(session: BenchSession, ms = FRAME_MS): Promise<{ now: number; ran: number; waiting: number } | undefined> {
-  const { result } = await request(session.client, 'Runtime.evaluate', {
-    expression: ownScript('clock', `globalThis[Symbol.for('${CLOCK_KEY}')]?.frame(${Number(ms)})`), returnByValue: true,
-  }, 3000).catch(() => ({ result: undefined }));
+  const stepped = await session.time.frame(ms);
   await seekAnimations(session, ms);
-  return result?.value;
+  return stepped;
 }
 
 /** Let the oldest crossing kept at the proxy through, and keep the rest held. */

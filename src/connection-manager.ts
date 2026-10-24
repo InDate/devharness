@@ -6,6 +6,7 @@
 import { CDPManager } from './cdp-manager.js';
 import { getProxy } from './proxy/registry.js';
 import { attachLayer, isHeld, recordHeld, recordReleased } from './hold.js';
+import { attachPageTime } from './page-time.js';
 import { PuppeteerManager } from './puppeteer-manager.js';
 import { ConsoleMonitor } from './console-monitor.js';
 import { NetworkMonitor } from './network-monitor.js';
@@ -218,7 +219,9 @@ export class ConnectionManager {
       }
       else recordReleased(reference, 'code');
     });
-    this.codeLayers.set(connection.id, () => { unwatch(); detach(); });
+    // The page's time is driven through the same session that stops its code.
+    const detachTime = attachPageTime(reference, { send: (method, params) => cdp.send(method, params) });
+    this.codeLayers.set(connection.id, () => { unwatch(); detach(); detachTime(); });
   }
 
   /**

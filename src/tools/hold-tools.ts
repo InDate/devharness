@@ -4,7 +4,8 @@ import { createErrorResponse } from '../messages.js';
 import { ALL_LAYERS, hold, holdableLayers, holdReading, release, step, type HoldLayer, type HoldReading } from '../hold.js';
 import { getProxy } from '../proxy/registry.js';
 import { sessions } from '../bench-mode/session.js';
-import { readGroup, seekAnimations, setPlaybackRate } from '../bench-mode/animations.js';
+import { readGroup, seekAnimations } from '../bench-mode/animations.js';
+import { pageTimeOf } from '../page-time.js';
 import { FRAME_MS, frameStep } from '../bench-mode/page-hold.js';
 import { applyMotionRules, changeMotionRules, type MotionRule } from '../bench-mode/motion-rules.js';
 
@@ -145,14 +146,12 @@ export function createHoldTools() {
           }
           case 'rate': {
             if (typeof args.playbackRate !== 'number') return createErrorResponse('INVALID_PARAMS', { message: 'rate needs playbackRate: 1 is real time, 0.2 a fifth of it' });
-            const session = sessions.get(connection);
-            if (!session) return createErrorResponse('INVALID_PARAMS', { message: `No bench on "${connection}"` });
-            await setPlaybackRate(session, args.playbackRate);
-            const reading = holdReading(connection);
-            const held = reading.held.some(layer => layer.layer === 'ui');
+            const time = sessions.get(connection)?.time ?? pageTimeOf(connection);
+            if (!time) return createErrorResponse('INVALID_PARAMS', { message: `No page time on "${connection}": it needs a debugger connection or a bench` });
+            await time.setRate(args.playbackRate);
             return {
-              content: [{ type: 'text', text: `Rate ${args.playbackRate}× for CSS and page clock, ${held ? 'on release' : 'from now'}` }],
-              _meta: { ...meta(reading), playbackRate: args.playbackRate },
+              content: [{ type: 'text', text: `Rate ${args.playbackRate}× for CSS and page clock, ${time.stopped ? 'on release' : 'from now'}` }],
+              _meta: { ...meta(holdReading(connection)), playbackRate: args.playbackRate },
             };
           }
           case 'motion': {

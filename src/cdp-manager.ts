@@ -760,6 +760,12 @@ export class CDPManager {
     await Debugger.pause();
   }
 
+  /** Send one command on this connection's session; refused while not connected. */
+  async send(method: string, params?: Record<string, unknown>): Promise<any> {
+    if (!this.state.connected) throw new Error('Not connected to debugger');
+    return this.client.send(method, params);
+  }
+
   /**
    * Stop the page in front of every callback of these kinds as it is about to
    * run - `setTimeout.callback`, `requestAnimationFrame.callback` - which is

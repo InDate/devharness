@@ -46,7 +46,7 @@ async function discModesOf(name: string): Promise<DiscMode[]> {
     ['traffic', held.some(layer => layer.layer === 'network')],
     ['playing', sequence?.playing === true || (sequence?.busy === true && !sequence?.recording)],
     ['paused', sequence?.paused === true],
-    ['slowed', (sessions.get(name)?.playbackRate ?? 1) !== 1],
+    ['slowed', (sessions.get(name)?.time.playbackRate ?? 1) !== 1],
   ];
   return standing.filter(([, on]) => on).map(([mode]) => mode);
 }

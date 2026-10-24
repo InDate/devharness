@@ -44,6 +44,8 @@ export interface CaptureContext {
 }
 
 /** What the bench drives the page's JS through: the page's debugger connection. */
+import type { PageTime } from '../page-time.js';
+
 export interface PageDebugger {
   pause(): Promise<void>;
   /** Resolves once Chrome confirms the page runs again. */
@@ -269,8 +271,10 @@ export interface BenchSession extends BenchReport {
   framesHeld?: boolean;
   /** When the last frame stop was armed: the animations created after it are the group its input started. */
   groupSince?: number;
-  /** The rate the page's animations run at while released; a release restores it (default 1). */
-  playbackRate?: number;
+  /** The page's time - its clock and its CSS animation rate - which every hold, step and speed goes through. */
+  time: PageTime;
+  /** Drops a page time the bench made on its own session, for a page with no debugger connection. */
+  detachTime?: () => void;
   /** Rules acting on single animations as they start; see motion-rules.ts. */
   motionRules?: MotionRule[];
   /** Animations a rule paused, which run again once no rule holds them. */

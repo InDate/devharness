@@ -13,7 +13,6 @@
 import type { CDPSession } from 'puppeteer-core';
 import type { BenchSession } from './session.js';
 import { request, send } from './cdp.js';
-import { CLOCK_KEY } from '../page-clock.js';
 import { ownScript } from '../utils/own-script.js';
 import { applyMotionRules } from './motion-rules.js';
 
@@ -219,24 +218,9 @@ async function resolveTiming(session: BenchSession, id: string): Promise<Pick<Tr
   }
 }
 
-/**
- * The rate the page's animations run at while the screen is released. A hold
- * sets 0 and a release puts this back, so a settle watched at a fifth speed
- * stays at a fifth speed across a hold.
- */
+/** The page's speed, for its clock and its CSS animations; a hold leaves it as it is. */
 export async function setPlaybackRate(session: BenchSession, playbackRate: number): Promise<void> {
-  session.playbackRate = playbackRate;
-  if (!session.frozen) await send(session.client, 'Animation.setPlaybackRate', { playbackRate });
-  // The page's clock runs at the same rate, so its timers, its frame times and
-  // the JS animations that read them slow with the CSS ones; a held clock
-  // takes the rate up when it runs again.
-  await request(session.client, 'Runtime.evaluate', {
-    expression: ownScript('clock', `globalThis[Symbol.for('${CLOCK_KEY}')]?.rate(${Number(playbackRate)})`), returnByValue: true,
-  }, 1000).catch(() => undefined);
-}
-
-export function releasedRate(session: BenchSession): number {
-  return session.playbackRate ?? 1;
+  await session.time.setRate(playbackRate);
 }
 
 export type { CDPSession };

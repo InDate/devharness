@@ -1,6 +1,7 @@
 import type { Page } from 'puppeteer-core';
 import { debugLog } from '../debug-logger.js';
 import { appendEvent } from '../session-events.js';
+import { PageTime, pageTimeOf } from '../page-time.js';
 import { recordReleased } from '../hold.js';
 import { startBenchServer } from '../bench-control.js';
 import { getProxy } from '../proxy/registry.js';
@@ -50,8 +51,15 @@ export async function startBench(params: {
   await client.send('Runtime.enable');
   await client.send('Animation.enable');
 
+  // The page's own time where the bench was handed its debugger connection;
+  // a bench on a tab of its own drives one through its own session, kept to
+  // itself so it stands in for no other tab's.
+  const time = (params.debugger ? pageTimeOf(connection) : undefined)
+    ?? new PageTime(connection, { send: (method, args) => client.send(method as any, args as any) });
+
   const session: BenchSession = {
     client,
+    time,
     page,
     connection,
     session: sessionName,

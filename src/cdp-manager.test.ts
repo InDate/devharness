@@ -780,3 +780,40 @@ describe('CDPManager.disarmPause() - a pause asked for while no JS ran', () => {
     expect(evaluate).not.toHaveBeenCalled();
   });
 });
+
+describe('CDPManager callback stops - what moves a held page one callback or one frame', () => {
+  function connectedManager(connected = true) {
+    const manager = new CDPManager();
+    (manager as any).state.connected = connected;
+    const send = vi.fn(async () => ({}));
+    (manager as any).client = { send };
+    return { manager, send };
+  }
+
+  it('stops the page in front of each named kind of callback', async () => {
+    const { manager, send } = connectedManager();
+    await manager.setInstrumentationBreakpoints(['setTimeout.callback', 'requestAnimationFrame.callback']);
+    expect(send.mock.calls).toEqual([
+      ['EventBreakpoints.setInstrumentationBreakpoint', { eventName: 'setTimeout.callback' }],
+      ['EventBreakpoints.setInstrumentationBreakpoint', { eventName: 'requestAnimationFrame.callback' }],
+    ]);
+  });
+
+  it('refuses to set stops without a debugger connected', async () => {
+    const { manager, send } = connectedManager(false);
+    await expect(manager.setInstrumentationBreakpoints(['setTimeout.callback'])).rejects.toThrow('Not connected');
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('takes every stop off at once', async () => {
+    const { manager, send } = connectedManager();
+    await manager.clearInstrumentationBreakpoints();
+    expect(send.mock.calls).toEqual([['EventBreakpoints.disable']]);
+  });
+
+  it('clears nothing without a debugger connected, where there is no stop to take off', async () => {
+    const { manager, send } = connectedManager(false);
+    await manager.clearInstrumentationBreakpoints();
+    expect(send).not.toHaveBeenCalled();
+  });
+});

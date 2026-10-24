@@ -162,6 +162,8 @@ export interface ExecutionResult {
   pauseHeld?: HoldLayer[];
   /** The step a breakpoint stopped the page inside, left open for the resume to close. */
   openStep?: { step: number; markedAt: number };
+  /** The step whose hold of the screen still stands, compared once a later pass releases it. */
+  heldStep?: { step: number; markedAt: number };
   activeSequenceState?: ActiveSequenceState;
   breakpointHit?: BreakpointHitInfo;
   /** Click validation failure - sequence paused for inspection/retry */

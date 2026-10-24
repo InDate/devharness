@@ -138,7 +138,7 @@ describe('devharness watch', () => {
 
   it('exits on start while a watch from the same Claude process reads the stream', async () => {
     writeFileSync(stream(), '');
-    const client = { CLAUDE_CODE_MESSAGING_SOCKET: '/claude/4242.sock' };
+    const client = { CLAUDE_CODE_MESSAGING_SOCKET: `/claude/${process.pid}.sock` };
 
     const first = start([`--session=${SESSION}`], client);
     await running();
@@ -155,9 +155,9 @@ describe('devharness watch', () => {
   it('runs beside a watch from another Claude process', async () => {
     writeFileSync(stream(), '');
 
-    const first = start([`--session=${SESSION}`], { CLAUDE_CODE_MESSAGING_SOCKET: '/claude/4242.sock' });
+    const first = start([`--session=${SESSION}`], { CLAUDE_CODE_MESSAGING_SOCKET: `/claude/${process.pid}.sock` });
     await running();
-    const second = start([`--session=${SESSION}`], { CLAUDE_CODE_MESSAGING_SOCKET: '/claude/5353.sock' });
+    const second = start([`--session=${SESSION}`], { CLAUDE_CODE_MESSAGING_SOCKET: `/claude/${process.ppid}.sock` });
     await running();
     append('{"n":1}\n');
     expect(await first.exited).toBe(0);
@@ -167,9 +167,9 @@ describe('devharness watch', () => {
 
   it('runs when the recorded pid does not hold the stream open', async () => {
     writeFileSync(stream(), '');
-    writeFileSync(join(dir, 'events', `${SESSION}.4242.watch`), JSON.stringify({ pid: process.pid }));
+    writeFileSync(join(dir, 'events', `${SESSION}.${process.pid}.watch`), JSON.stringify({ pid: process.pid }));
 
-    const watch = start([`--session=${SESSION}`], { CLAUDE_CODE_MESSAGING_SOCKET: '/claude/4242.sock' });
+    const watch = start([`--session=${SESSION}`], { CLAUDE_CODE_MESSAGING_SOCKET: `/claude/${process.pid}.sock` });
     await running();
     append('{"n":1}\n');
     expect(await watch.exited).toBe(0);

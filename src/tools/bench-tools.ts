@@ -8,6 +8,7 @@
  * this call's response.
  */
 
+import { setMotionDetect, watchingMotion } from '../bench-mode/motion-detect.js';
 import { z } from 'zod';
 import { promises as fs } from 'fs';
 import { basename, join, resolve } from 'path';
@@ -34,7 +35,8 @@ import { sanitizeReference } from '../reference-validator.js';
 import { holdReading } from '../hold.js';
 
 const benchSchema = z.object({
-  action: z.enum(['start', 'stop', 'tick', 'hold', 'release', 'picker', 'list', 'status', 'keepStep', 'dropStep', 'flagStep', 'sweep', 'retake', 'capture']),
+  action: z.enum(['start', 'stop', 'tick', 'hold', 'release', 'picker', 'motion', 'list', 'status', 'keepStep', 'dropStep', 'flagStep', 'sweep', 'retake', 'capture']),
+  on: z.boolean().optional().describe('motion: true records each animation the page starts as a MOTION row under its step, false stops; absent reads it'),
   connection: z.string()
     .describe('The connection, by the name connection launch or attach gave it'),
   steps: z.number().int().positive().max(1000).optional()
@@ -154,7 +156,7 @@ export function createBenchTools(
   serverLog: (id: string, stream: 'stdout' | 'stderr') => Promise<ServerLog> = async () => ({ unavailable: 'no server manager' }),
 ) {
   const bench = createTool(
-      'Open the bench beside a driven app: hold the page still, read what crossed its boundary and what caused each thing, record and step sequences, and collect element-level comments. Actions: start (the page running, the picker idle), hold/release (the whole page, with the bench left open), picker (armed or disarmed), tick (run a held page forward by steps or budgetMs), stop (release the page and close), keepStep/dropStep/flagStep (settle a recorded step), sweep (note captures no sequence cites), retake (a capture\'s region again, compared), capture (a capture file\'s record and element facts), list, status.',
+      'Open the bench beside a driven app: hold the page still, read what crossed its boundary and what caused each thing, record and step sequences, and collect element-level comments. Actions: start (the page running, the picker idle), hold/release (the whole page, with the bench left open), picker (armed or disarmed), motion (record each animation as a MOTION row: on true/false, absent reads it), tick (run a held page forward by steps or budgetMs), stop (release the page and close), keepStep/dropStep/flagStep (settle a recorded step), sweep (note captures no sequence cites), retake (a capture\'s region again, compared), capture (a capture file\'s record and element facts), list, status.',
       benchSchema,
       async (args: BenchArgs) => {
         const { action, connection: named } = args;
@@ -319,6 +321,7 @@ export function createBenchTools(
             }
 
             let page = targetPuppeteerManager.getPage();
+            const ownPage = page;
 
             // A second session on the same tab would drive the first one's
             // page: its navigate moves the other off what it was watching.
@@ -347,6 +350,9 @@ export function createBenchTools(
               connection,
               sessionName,
               sourceMapHandler,
+              // The connection's debugger is attached to its own tab; a bench
+              // moved to a tab of its own has none to pause it through.
+              ...(page === ownPage && resolved.cdpManager ? { debugger: resolved.cdpManager } : {}),
               sequences: createSequenceDriver(commandRecorder, executeToolCall, catalogue, values, servers, serverLog),
               // A window of its own in the same browser. A tab beside the app
               // hides it, and Chrome drops input sent to a hidden tab; a window
@@ -490,6 +496,17 @@ export function createBenchTools(
             return { ...response, _meta: buildMeta(action, { active: true, connection, state }) };
           }
 
+          case 'motion': {
+            if (!getBenchSession(connection)) return createErrorResponse('BENCH_NOT_ACTIVE', { connection, action });
+            if (args.on !== undefined) await setMotionDetect(connection, args.on);
+            const on = watchingMotion(connection);
+            return {
+              content: [{ type: 'text', text: on
+                ? `Motion detection is on for "${connection}": each animation the page starts is recorded as a MOTION row under the step that started it, and kept on across restarts.`
+                : `Motion detection is off for "${connection}": animations are not recorded, and a replay does not compare the MOTION rows a recording holds.` }],
+              _meta: buildMeta('motion', { active: true, motionDetect: on }),
+            };
+          }
           case 'picker': {
             await setPicker(connection, args.armed ?? true);
             const state = getBenchSession(connection);

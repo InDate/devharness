@@ -50,7 +50,7 @@ export function History({ base, onGoTo, entry: focus, onGoToEvent, onGoToStep }:
   // tab reads it, and judged against the open sequence's recording as the
   // Sequence tab judges it.
   const [view, setView] = useState<BenchView | null>(null);
-  const activity = useActivity(base, view?.sequence);
+  const activity = useActivity(base, view?.sequence, view?.motionDetect);
   const [favourites, setFavourites] = useState<ToolFavourite[]>([]);
 
   useEffect(() => {

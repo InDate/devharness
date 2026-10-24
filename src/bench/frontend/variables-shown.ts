@@ -6,7 +6,7 @@
  */
 import { useEffect, useState } from 'preact/hooks';
 
-let hidden = false;
+let hidden = true;
 const listeners = new Set<(hidden: boolean) => void>();
 
 export function toggleVariables(): void {

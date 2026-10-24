@@ -1,5 +1,6 @@
 import type { Page } from 'puppeteer-core';
 import { debugLog } from '../debug-logger.js';
+import { appendEvent } from '../session-events.js';
 import { recordReleased } from '../hold.js';
 import { startBenchServer } from '../bench-control.js';
 import { getProxy } from '../proxy/registry.js';
@@ -8,12 +9,14 @@ import { WriteWatch } from '../write-watch.js';
 import { trackStyleSheets } from '../element-facts.js';
 import { DESCRIBE_ELEMENT, verifySourceLine } from './annotations.js';
 import { captureBenchScreenshot } from './captures.js';
-import { HIGHLIGHT_CONFIG, setInspectMode, inOwnScript } from './cdp.js';
+import { HIGHLIGHT_CONFIG, setInspectMode } from './cdp.js';
 import { type SequenceDriver } from './driver.js';
 import { attachUiLayer, holdUi, releaseBench } from './page-hold.js';
+import { watchAnimations } from './animations.js';
+import { readMotionDetect } from './motion-detect.js';
 import { benchRoutes } from './routes.js';
 import { armSavedRules } from './rules.js';
-import { type BenchReport, type BenchSession, getBenchSession, getStateOf, pageGone, sessions } from './session.js';
+import { type BenchReport, type BenchSession, type PageDebugger, getBenchSession, getStateOf, pageGone, sessions } from './session.js';
 
 export async function startBench(params: {
   page: Page;
@@ -23,6 +26,8 @@ export async function startBench(params: {
   sourceMapHandler?: { registerSourceMap: (scriptUrl: string, sourceMapURL: string) => void; getOriginalContent: (source: string) => Promise<string | null> };
   /** Drives replay's own step-through session; the bench never re-implements it. */
   sequences?: SequenceDriver;
+  /** The page's debugger connection, which every pause, resume and step of the bench goes through. */
+  debugger?: PageDebugger;
   /** Opens the bench tab. Omitted in tests, which drive the handlers directly. */
   openBench?: (url: string) => Promise<Page | undefined>;
 }): Promise<BenchReport> {
@@ -58,10 +63,8 @@ export async function startBench(params: {
     frozen: false,
     benchUrl: '',
     pending: null,
-    pauseRequested: false,
-    heldByOther: false,
     sequenceBusy: false,
-    pauseTaken: false,
+    ...(params.debugger ? { debugger: params.debugger } : {}),
     factChoice: ['events'],
     sequences,
     scripts: new Map(),
@@ -69,29 +72,18 @@ export async function startBench(params: {
     totalSteps: 0,
     callbacks: [],
     stepBreakpointsSet: false,
+    animations: new Map(),
   };
   sessions.set(connection, session);
   attachUiLayer(session);
+  watchAnimations(session);
   // The site's rules answer from the start, before any sequence is opened.
   await armSavedRules(connection).catch(error => debugLog('bench', `site rules not armed: ${error}`));
 
-  client.on('Debugger.resumed', () => { session.pausedEvent = undefined; });
-  client.on('Debugger.paused', (event: any) => {
-    // Stopped in our own read of the page: run it to its end, so the pause
-    // asked for lands in the app's next script and the read does not hang.
-    if (session.pauseRequested && inOwnScript(event)) {
-      void client.send('Debugger.stepOut').catch(() => {});
-      return;
-    }
-    session.pauseTaken = true;
-    session.pausedEvent = event;
-    // A pause we did not ask for is someone else's - a breakpoint, a debugger
-    // statement. Recorded so it can be reported; the bench still releases its
-    // own hold normally, but never attaches a second agent to force theirs.
-    if (!session.pauseRequested) {
-      session.heldByOther = true;
-      debugLog('bench', `page stopped by something else: reason=${event?.reason}`);
-    }
+  // The pause the page stands in, as its debugger connection reports it, for a
+  // step's log line and a capture to name.
+  session.unwatchPause = params.debugger?.watchPause((paused, event) => {
+    session.pausedEvent = paused ? event : undefined;
   });
 
   // Debugger.enable replays scriptParsed for everything already loaded, so this
@@ -129,6 +121,15 @@ export async function startBench(params: {
       await setInspectMode(session, false).catch(() => { session.pickerArmed = false; });
       session.picks++;
       session.pending = target;
+      if (!session.shotArmed && !session.sequences?.active()) {
+        await appendEvent(session.session, 'pick', {
+          connection,
+          selector: target.selector,
+          ...(target.component ? { component: target.component } : {}),
+          ...(target.source?.fileName ? { source: `${target.source.fileName}${target.source.lineNumber ? `:${target.source.lineNumber}` : ''}` } : {}),
+          detail: `picked ${target.tag} ${target.selector} with no sequence open`,
+        });
+      }
 
       // Picked from the capture dialog: the pick is the element to capture,
       // and stays pending so the note written with the capture is about it.
@@ -176,10 +177,12 @@ export async function startBench(params: {
   });
   await client.send('Page.enable');
   // Storage the page writes never reaches the proxy; this is what shows it.
-  session.writeWatch = new WriteWatch(client, page);
+  session.writeWatch = new WriteWatch(client, page, session.connection);
   await session.writeWatch.start().catch((error) => {
     debugLog('bench', `watching storage writes failed: ${error}`);
   });
+  session.writeWatch.setAnimations(await readMotionDetect());
+  session.writeWatch.setCancelFilter(id => session.motionTouched?.has(id) === true);
   // Enabled while the page runs: CSS.enable goes unanswered on a held page,
   // and the element facts read the rules while it is held.
   await trackStyleSheets(client, session.sheets).catch((error) => {

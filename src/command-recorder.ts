@@ -13,7 +13,7 @@ import { debugLog, isHistoryLogEnabled, logToHistoryFile } from './debug-logger.
 import { sanitizeReference } from './reference-validator.js';
 import { getOutputPath, registerRootBound } from './helpers/paths.js';
 import { atomicWriteFile } from './atomic-write.js';
-import type { ExpectedValue } from './bench/kinds.js';
+import type { ExpectedValue, MotionSetting } from './bench/kinds.js';
 import { activityPathFor, mergeActivity, readActivity, splitActivity, writeActivity } from './sequence-activity.js';
 import { getIssueSequencesDir, getIssuesBySequenceFile } from './issue-tracker.js';
 import { captureVariable } from './tools/replay-executor.js';
@@ -53,6 +53,8 @@ export interface RecordedCommand {
   addedAt?: number;
   /** Payloads marked on this step's kinds as having to hold on replay, by kind. */
   expected?: Record<string, ExpectedValue>;
+  /** How each animation under this step behaves when it runs, by its kind. */
+  motion?: Record<string, MotionSetting>;
   /**
    * The history index this step was built from.
    *
@@ -352,6 +354,8 @@ export interface ActiveSequenceState {
   breakpointHit?: { url: string; lineNumber: number };
   /** The step a breakpoint stopped the page inside, left open; step and finish close it on resume. */
   openStep?: { step: number; markedAt: number };
+  /** The step whose hold of the screen stood when the run paused; the resume that releases it compares it. */
+  heldStep?: { step: number; markedAt: number };
   /** History index before the run's first step, so a reply after a resume lists the steps before the pause too. */
   runSince?: number;
   /** The layers a pause held the page on; step, finish and cancel release them. */

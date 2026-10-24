@@ -16,6 +16,7 @@ import { join } from 'path';
 import { request } from 'http';
 import { initializePaths, setWorkingDirOverride } from './helpers/paths.js';
 import { getEventStreamPath } from './session-events.js';
+import { forgetConnection, recordHeld } from './hold.js';
 import {
   setHeld,
   startBench,
@@ -50,6 +51,9 @@ import {
   runningBench,
   type SequenceDriver,
 } from './bench-mode.js';
+import { armFrameStop } from './bench-mode/page-hold.js';
+import { readGroup } from './bench-mode/animations.js';
+import { sessions } from './bench-mode/session.js';
 
 const SESSION = 'aaaaaaaa';
 const CONNECTION = 'app';
@@ -169,6 +173,84 @@ function createFakeClient() {
   return client;
 }
 
+/**
+ * The page's debugger connection, as the bench drives it. It reads the fake
+ * session's switches: `idle` arms a pause rather than taking one, `quiet`
+ * leaves a resume running, and a resume otherwise runs the page's clock to its
+ * next callback and stops there.
+ */
+function createFakeDebugger(client: any) {
+  const watchers = new Set<(paused: boolean, event?: any) => void>();
+  const called: Array<{ method: string; args: unknown[] }> = [];
+  const note = (paused: boolean, event?: any) => {
+    dbg.paused = paused;
+    if (paused) dbg.armed = false;
+    for (const watcher of [...watchers]) watcher(paused, event);
+  };
+  const dbg: any = {
+    paused: false,
+    armed: false,
+    /** Callback stops set: a resume runs to the next callback only with them on. */
+    stops: false,
+    calls: (method: string) => called.filter(call => call.method === method),
+    /** A stop the page took on its own: a breakpoint, a debugger statement. */
+    stop: (event: any = { reason: 'other', callFrames: [] }) => note(true, event),
+    pause: vi.fn(async () => {
+      called.push({ method: 'pause', args: [] });
+      if (dbg.paused) return;
+      if (client.idle) { dbg.armed = true; return; }
+      setTimeout(() => note(true, { reason: 'debugCommand', callFrames: [] }), 0);
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }),
+    resume: vi.fn(async () => {
+      called.push({ method: 'resume', args: [] });
+      if (!dbg.paused) throw new Error('Can only perform operation while paused.');
+      note(false);
+      if (client.quiet || !dbg.stops) return;
+      // Chrome runs to the next scheduled callback and pauses there, naming
+      // what scheduled it and where it is.
+      client.clock += client.stepMs;
+      setTimeout(() => note(true, {
+        reason: 'EventListener',
+        data: { eventName: 'instrumentation:setInterval.callback' },
+        callFrames: [{
+          functionName: 'tickCounter',
+          location: { scriptId: 'script-1', lineNumber: 8, columnNumber: 2 },
+        }],
+      }), 0);
+    }),
+    disarmPause: vi.fn(async () => {
+      called.push({ method: 'disarmPause', args: [] });
+      dbg.armed = false;
+    }),
+    isPaused: () => dbg.paused,
+    waitForPause: (timeoutMs = 1000) => new Promise<void>((resolve, reject) => {
+      if (dbg.paused) return resolve();
+      const timer = setTimeout(() => { stop(); reject(new Error('Timeout waiting for pause')); }, timeoutMs);
+      const stop = dbg.watchPause((paused: boolean) => { if (paused) { clearTimeout(timer); stop(); resolve(); } });
+    }),
+    watchPause: (watcher: (paused: boolean, event?: any) => void) => {
+      watchers.add(watcher);
+      return () => { watchers.delete(watcher); };
+    },
+    setInstrumentationBreakpoints: vi.fn(async (eventNames: readonly string[]) => {
+      called.push({ method: 'setInstrumentationBreakpoints', args: [eventNames] });
+      dbg.stops = true;
+    }),
+    clearInstrumentationBreakpoints: vi.fn(async () => {
+      called.push({ method: 'clearInstrumentationBreakpoints', args: [] });
+      dbg.stops = false;
+    }),
+    scriptUrl: () => undefined,
+  };
+  return dbg;
+}
+
+/** The fake debugger of a fake session, made once and kept on it. */
+function fakeDebuggerOf(client: any) {
+  return client.debugger ??= createFakeDebugger(client);
+}
+
 function createFakePage(client: any) {
   return {
     createCDPSession: async () => {
@@ -250,6 +332,14 @@ function noteSequences() {
     describe: async () => undefined,
     commentStep: async () => undefined,
     listNames: async () => ['orders'],
+    isUnsaved: () => false,
+    saveUnsaved: async () => undefined,
+    discardUnsaved: () => undefined,
+    canUndo: () => false,
+    testCommands: async () => ({ passed: true, summary: '' }),
+    setMotion: async () => undefined,
+    undo: () => undefined,
+    clearUndo: () => {},
     active: () => (open ? { name: 'orders', currentStep: api.at, total: steps.length, steps, variables: [] } : null),
     start: async () => { open = true; return undefined; },
     step: async () => undefined,
@@ -312,6 +402,7 @@ async function startBare(client: any) {
   noteDriver = noteSequences();
   return startBench({
     page: createFakePage(client), connection: CONNECTION, sessionName: SESSION, sequences: noteDriver as any,
+    debugger: fakeDebuggerOf(client),
   });
 }
 
@@ -342,6 +433,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   forgetBenchSession(CONNECTION);
+  forgetConnection(CONNECTION);
   if (previousDir === undefined) delete process.env.DEVHARNESS_DIR;
   else process.env.DEVHARNESS_DIR = previousDir;
   initializePaths();
@@ -353,7 +445,8 @@ describe('startBench', () => {
     const client = createFakeClient();
     await start(client);
 
-    expect(client.calls('Debugger.pause')).toHaveLength(1);
+    expect(client.debugger.calls('pause')).toHaveLength(1);
+    expect(client.debugger.isPaused()).toBe(true);
     expect(client.lastCall('Animation.setPlaybackRate').params).toEqual({ playbackRate: 0 });
   });
 
@@ -361,7 +454,7 @@ describe('startBench', () => {
     const client = createFakeClient();
     await startBare(client);
 
-    expect(client.calls('Debugger.pause')).toHaveLength(0);
+    expect(fakeDebuggerOf(client).calls('pause')).toHaveLength(0);
     expect(client.calls('Animation.setPlaybackRate')).toHaveLength(0);
   });
 
@@ -387,11 +480,12 @@ describe('startBench', () => {
     await start(client);
     await pick(client);
 
-    // Runtime.callFunctionOn describes the picked node, and the only evaluation
-    // is reading the page's clock. Anything else would be UI rendered into a
-    // page that may be too frozen to run it.
+    // Runtime.callFunctionOn describes the picked node, and the only
+    // evaluations are reading the page's clock and the one literal the hold's
+    // pause lands in. Anything else would be UI rendered into a page that may
+    // be too frozen to run it.
     const expressions = client.calls('Runtime.evaluate').map((c: SentCall) => c.params.expression);
-    expect(expressions.every((e: string) => e === 'performance.now()')).toBe(true);
+    expect(expressions.every((e: string) => e === 'performance.now()' || e.startsWith('0\n//# sourceURL=devharness://hold'))).toBe(true);
     expect(client.calls('Runtime.addBinding')).toHaveLength(0);
   });
 
@@ -407,6 +501,7 @@ describe('startBench', () => {
     const opened: string[] = [];
 
     await startBench({
+      debugger: fakeDebuggerOf(client),
       page: createFakePage(client),
       connection: CONNECTION,
       sessionName: SESSION,
@@ -423,7 +518,7 @@ describe('startBench', () => {
 
     await start(client);
 
-    expect(client.calls('Debugger.pause')).toHaveLength(1);
+    expect(client.debugger.calls('pause')).toHaveLength(1);
     expect(new Set(client.inspectModes())).toEqual(new Set(['searchForNode']));
   });
 });
@@ -557,7 +652,7 @@ describe('picking an element', () => {
 
   it('holds the pick when no sequence is open, so selecting one saves it', async () => {
     const client = createFakeClient();
-    await startBench({ page: createFakePage(client), connection: CONNECTION, sessionName: SESSION });
+    await startBench({ page: createFakePage(client), connection: CONNECTION, sessionName: SESSION, debugger: fakeDebuggerOf(client) });
     await pick(client);
 
     expect(await saveAnnotation(CONNECTION, 'nowhere to go')).toBeUndefined();
@@ -736,16 +831,22 @@ describe('a pause that is not the bench\'s', () => {
     const client = createFakeClient();
     await start(client);
 
-    // Someone else's breakpoint lands - the bench never asked for it.
-    await client.emit('Debugger.paused', { reason: 'other', callFrames: [] });
-    const resumesBefore = client.calls('Debugger.resume').length;
+    await setHeld(CONNECTION, false);
+    // Someone else's breakpoint lands - the bench never asked for it - and the
+    // debugger connection records it on the code layer as a breakpoint's.
+    client.debugger.stop({ reason: 'other', callFrames: [] });
+    recordHeld(CONNECTION, 'code', 'breakpoint');
+    // A hold reads a covered layer recorded during its own engage as its own,
+    // so the breakpoint lands a tick before the hold.
+    await new Promise(r => setTimeout(r, 2));
+    await setHeld(CONNECTION, true);
+    const resumesBefore = client.debugger.calls('resume').length;
 
     await stopBench(CONNECTION);
 
-    // Releasing our own hold may resume once; nothing re-attaches to clear
-    // theirs, because that would discard what they stopped to look at.
-    expect(client.repair).toBeUndefined();
-    expect(client.calls('Debugger.resume').length).toBeLessThanOrEqual(resumesBefore + 1);
+    // Resuming it would discard what they stopped to look at.
+    expect(client.debugger.calls('resume')).toHaveLength(resumesBefore);
+    expect(client.debugger.isPaused()).toBe(true);
   });
 
   it('does not re-attach a second agent to force the page on', async () => {
@@ -776,11 +877,11 @@ describe('an idle page, where the pause is armed rather than taken', () => {
 
     await setHeld(CONNECTION, false);
 
-    // Debugger.resume would fail with "Can only perform operation while paused"
-    // and leave the armed pause to stop the page later, with no owner.
-    expect(client.calls('Debugger.resume')).toHaveLength(0);
-    expect(client.calls('Debugger.disable').length).toBeGreaterThan(0);
-    expect(client.calls('Debugger.enable').length).toBeGreaterThan(1);
+    // A resume would fail with "Can only perform operation while paused" and
+    // leave the armed pause to stop the page later, with no owner.
+    expect(client.debugger.calls('resume')).toHaveLength(0);
+    expect(client.debugger.calls('disarmPause')).toHaveLength(1);
+    expect(client.debugger.armed).toBe(false);
     expect(getBenchSession(CONNECTION)).toMatchObject({ frozen: false });
   });
 
@@ -791,8 +892,8 @@ describe('an idle page, where the pause is armed rather than taken', () => {
 
     await stopBench(CONNECTION);
 
-    expect(client.calls('Debugger.resume')).toHaveLength(0);
-    expect(client.calls('Debugger.disable').length).toBeGreaterThan(0);
+    expect(client.debugger.calls('resume')).toHaveLength(0);
+    expect(client.debugger.armed).toBe(false);
     expect(client.detached()).toBe(true);
   });
 
@@ -806,17 +907,17 @@ describe('an idle page, where the pause is armed rather than taken', () => {
     const stepping = tickBench(CONNECTION, { steps: 1 });
     await new Promise(r => setTimeout(r, 5));
     client.clock += 30;
-    await client.emit('Debugger.paused', { reason: 'EventListener', callFrames: [] });
+    client.debugger.stop({ reason: 'EventListener', callFrames: [] });
     const tick = await stepping;
 
-    expect(client.calls('Debugger.resume')).toHaveLength(0);
+    expect(client.debugger.calls('resume')).toHaveLength(0);
     expect(tick).toMatchObject({ steps: 1 });
 
     // That pause is a real one, so the next step does resume - and the fake
     // answers a resume with the next pause, as Chrome would.
     client.idle = false;
     await tickBench(CONNECTION, { steps: 1 });
-    expect(client.calls('Debugger.resume')).toHaveLength(1);
+    expect(client.debugger.calls('resume')).toHaveLength(1);
   });
 });
 
@@ -835,6 +936,7 @@ describe('closing the bench tab', () => {
     const client = createFakeClient();
     const tab = fakeControlTab();
     await startBench({
+      debugger: fakeDebuggerOf(client),
       page: createFakePage(client), connection: CONNECTION, sessionName: SESSION,
       openBench: async () => tab,
     });
@@ -844,9 +946,9 @@ describe('closing the bench tab', () => {
     await new Promise(r => setTimeout(r, 10));
 
     expect(isBenchOpen(CONNECTION)).toBe(false);
-    expect(client.calls('Debugger.resume').length).toBeGreaterThan(0);
+    expect(client.debugger.calls('resume').length).toBeGreaterThan(0);
+    expect(client.debugger.isPaused()).toBe(false);
     expect(client.lastCall('Animation.setPlaybackRate').params).toEqual({ playbackRate: 1 });
-    expect(client.calls('Debugger.disable')).toHaveLength(1);
     expect(client.detached()).toBe(true);
   });
 
@@ -854,6 +956,7 @@ describe('closing the bench tab', () => {
     const client = createFakeClient();
     const tab = fakeControlTab();
     const { benchUrl } = await startBench({
+      debugger: fakeDebuggerOf(client),
       page: createFakePage(client), connection: CONNECTION, sessionName: SESSION,
       openBench: async () => tab,
     });
@@ -869,6 +972,7 @@ describe('closing the bench tab', () => {
     const tab = fakeControlTab();
     const sequences = noteSequences();
     await startBench({
+      debugger: fakeDebuggerOf(client),
       page: createFakePage(client), connection: CONNECTION, sessionName: SESSION,
       openBench: async () => tab,
       sequences: sequences as any,
@@ -888,6 +992,7 @@ describe('closing the bench tab', () => {
     const client = createFakeClient();
     const tab = fakeControlTab();
     await startBench({
+      debugger: fakeDebuggerOf(client),
       page: createFakePage(client), connection: CONNECTION, sessionName: SESSION,
       openBench: async () => tab,
     });
@@ -896,105 +1001,12 @@ describe('closing the bench tab', () => {
     await new Promise(r => setTimeout(r, 10));
 
     // The close handler fires during stop; the session is already gone by then,
-    // so the page is released exactly once.
-    expect(client.calls('Debugger.disable')).toHaveLength(1);
+    // so the bench's own session is let go exactly once.
+    expect(client.detach).toHaveBeenCalledTimes(1);
     expect(isBenchOpen(CONNECTION)).toBe(false);
   });
 });
 
-describe('a step and the rest of devharness', () => {
-  it('takes the debugger out of the way and puts it back', async () => {
-    // Puppeteer's queries block on a paused isolate, and a step finds its
-    // element that way - so a pause landing mid-step reads as a missing
-    // element. The agent detaches for the step and returns afterwards.
-    const client = createFakeClient();
-    const sequences = (() => {
-      const steps = [{ label: 'input.click #save' }];
-      let open: { name: string; currentStep: number } | null = null;
-      return {
-        hosts: () => [],
-    saveBoundaryRules: async () => undefined,
-    siteOf: () => undefined,
-    openSiteRules: async () => [],
-    saveSiteRules: async () => undefined,
-    catalogueRules: async () => [],
-    openSiteHidden: async () => [],
-    openBoundaryRules: () => ({ rules: [], waits: [], refuseWrites: false }),
-    listCatalogue: async () => [],
-    outlineOf: async () => undefined,
-    history: () => [],
-    historyDetail: () => undefined,
-    callLabel: () => undefined,
-    tools: () => [],
-    notes: async () => [],
-    servers: async () => [],
-    serverLog: async () => ({}),
-    running: async () => ({ stream: '', watchCall: '', sequenceDirs: [], connections: [] }),
-    toolValues: async () => ({ connections: [], servers: [], sequences: [], profiles: [] }),
-    callTool: async () => ({ failed: false, result: '' }),
-    describe: async () => undefined,
-    commentStep: async () => undefined,
-    listNames: async () => ['one-step'],
-        active: () => (open ? { name: 'one-step', currentStep: open.currentStep, total: 1, steps, variables: [] } : null),
-        start: async () => { open = { name: 'one-step', currentStep: 0 }; return undefined; },
-        step: async () => {
-          // What the tool sees while the step runs.
-          order.push(...client.sent.slice(-3).map((c: any) => c.method));
-          if (open) open.currentStep += 1;
-          return undefined;
-        },
-        goto: async () => undefined,
-        finish: async () => undefined,
-        halt: async () => {},
-        cancel: async () => { open = null; },
-        remove: async () => undefined,
-        attachAnnotation: async () => undefined,
-        moveAnnotation: async () => undefined,
-        holdPaused: async () => {},
-        setPause: async () => undefined,
-        detachAnnotation: async () => undefined,
-        attachScreenshot: async () => undefined,
-        record: async () => undefined,
-        trafficIn: async () => ({ requests: 0, failed: 0, opened: 0, writes: 0, lines: [] }),
-        saveStepTraffic: async () => undefined,
-        clickFingerprints: () => [],
-        repair: async () => undefined,
-        saveExpected: async () => undefined,
-        saveRecorded: async () => undefined,
-        saveMove: async () => undefined,
-        rewordAnnotation: async () => undefined,
-    stopRecording: async () => {},
-    cancelRecording: async () => {},
-    removeStep: async () => undefined,
-    insertTimer: async () => undefined,
-    insertCheck: async () => undefined,
-    spliceRecording: async () => undefined,
-    labelsOf: () => [],
-    editStep: async () => undefined,
-    setVariable: async () => undefined,
-    removeVariable: async () => undefined,
-    moveStep: async () => undefined,
-    recordedSoFar: () => [],
-        findAnnotation: () => undefined,
-        issue: async () => undefined,
-        setBaseUrl: () => {},
-        baseUrl: () => undefined,
-        setEnvFile: () => {},
-        envFile: () => undefined,
-      };
-    })();
-    const order: string[] = [];
-
-    await startBench({ page: createFakePage(client), connection: CONNECTION, sessionName: SESSION, sequences });
-    await selectSequence(CONNECTION, 'one-step');
-    await stepSequence(CONNECTION);
-
-    expect(order).toContain('Debugger.disable');
-    expect(client.calls('Debugger.setSkipAllPauses').map((c: any) => c.params.skip)).toEqual([true, false, true, false]);
-    expect(client.calls('Debugger.enable').length).toBeGreaterThan(1);
-  });
-
-});
 
 describe('stepping a sequence', () => {
   /** Stands in for replay's step-through session. */
@@ -1054,6 +1066,14 @@ describe('stepping a sequence', () => {
         rewordAnnotation: async () => undefined,
     stopRecording: async () => {},
     cancelRecording: async () => {},
+    isUnsaved: () => false,
+    saveUnsaved: async () => undefined,
+    discardUnsaved: () => undefined,
+    canUndo: () => false,
+    testCommands: async () => ({ passed: true, summary: '' }),
+    setMotion: async () => undefined,
+    undo: () => undefined,
+    clearUndo: () => {},
     removeStep: async () => undefined,
     insertTimer: async () => undefined,
     insertCheck: async () => undefined,
@@ -1104,6 +1124,7 @@ describe('stepping a sequence', () => {
 
   async function startWithSequences(client: any, sequences: SequenceDriver) {
     const state = await startBench({
+      debugger: fakeDebuggerOf(client),
       page: createFakePage(client), connection: CONNECTION, sessionName: SESSION, sequences,
     });
     await setPicker(CONNECTION, true);
@@ -1181,7 +1202,8 @@ describe('stepping a sequence', () => {
     await stepSequence(CONNECTION);
 
     // Input is discarded while V8 is stopped, so the step cannot land frozen.
-    expect(client.calls('Debugger.resume').length).toBeGreaterThan(0);
+    expect(client.debugger.calls('resume').length).toBeGreaterThan(0);
+    expect(client.debugger.calls('pause').length).toBeGreaterThan(1);
     expect(getBenchSession(CONNECTION)).toMatchObject({ frozen: true });
     expect(sequences.calls).toContain('step');
   });
@@ -1403,7 +1425,7 @@ describe('stepping a sequence', () => {
 
   it('reports no sequence state when no driver is wired in', async () => {
     const client = createFakeClient();
-    await startBench({ page: createFakePage(client), connection: CONNECTION, sessionName: SESSION });
+    await startBench({ page: createFakePage(client), connection: CONNECTION, sessionName: SESSION, debugger: fakeDebuggerOf(client) });
 
     expect(await getSequenceState(CONNECTION)).toBeUndefined();
   });
@@ -1627,19 +1649,12 @@ describe('the callback log', () => {
 
   it('falls back to a bare entry when the frame names nothing', async () => {
     const client = createFakeClient();
-    client.send = vi.fn(async (method: string, params?: any) => {
-      client.sent.push({ method, params });
-      if (method === 'Runtime.evaluate') return { result: { value: (client.clock += 0) } };
-      if (method === 'Debugger.pause') {
-        setTimeout(() => client.emit('Debugger.paused', { reason: 'debugCommand', callFrames: [] }), 0);
-      }
-      if (method === 'Debugger.resume') {
-        client.clock += 10;
-        setTimeout(() => client.emit('Debugger.paused', { reason: 'other' }), 0);
-      }
-      return {};
-    });
     await start(client);
+    client.debugger.resume.mockImplementation(async () => {
+      client.debugger.paused = false;
+      client.clock += 10;
+      setTimeout(() => client.debugger.stop({ reason: 'other' }), 0);
+    });
 
     const tick = await tickBench(CONNECTION, { steps: 1 });
 
@@ -1701,7 +1716,8 @@ describe('freeze and picker as independent toggles', () => {
 
     expect(getBenchSession(CONNECTION)).toMatchObject({ frozen: true, pickerArmed: false });
     expect(client.lastCall('Overlay.setInspectMode').params.mode).toBe('none');
-    expect(client.calls('Debugger.resume')).toHaveLength(0);
+    expect(client.debugger.calls('resume')).toHaveLength(0);
+    expect(client.debugger.isPaused()).toBe(true);
   });
 
   it('running + picker idle: the app can be driven, still annotating', async () => {
@@ -1712,8 +1728,8 @@ describe('freeze and picker as independent toggles', () => {
     const state = await setHeld(CONNECTION, false);
 
     expect(state).toMatchObject({ frozen: false, pickerArmed: false });
-    expect(client.calls('Debugger.resume').length).toBeGreaterThan(0);
-    expect(client.calls('EventBreakpoints.disable').length).toBeGreaterThan(0);
+    expect(client.debugger.calls('resume').length).toBeGreaterThan(0);
+    expect(client.debugger.calls('clearInstrumentationBreakpoints').length).toBeGreaterThan(0);
     expect(isBenchOpen(CONNECTION)).toBe(true);
   });
 
@@ -1737,7 +1753,7 @@ describe('freeze and picker as independent toggles', () => {
     const state = await setHeld(CONNECTION, true);
 
     expect(state).toMatchObject({ frozen: true });
-    expect(client.calls('Debugger.pause')).toHaveLength(2);
+    expect(client.debugger.calls('pause')).toHaveLength(2);
   });
 
   it('a step holds the page first, so stepping works from running', async () => {
@@ -1758,7 +1774,7 @@ describe('freeze and picker as independent toggles', () => {
 
     await setHeld(CONNECTION, true);
 
-    expect(client.calls('Debugger.pause')).toHaveLength(1);
+    expect(client.debugger.calls('pause')).toHaveLength(1);
   });
 
   it('stops cleanly from the running state', async () => {
@@ -1769,7 +1785,8 @@ describe('freeze and picker as independent toggles', () => {
     const state = await stopBench(CONNECTION);
 
     expect(state).toMatchObject({ frozen: false });
-    expect(client.calls('Debugger.disable')).toHaveLength(1);
+    expect(client.debugger.isPaused()).toBe(false);
+    expect(client.detached()).toBe(true);
     expect(isBenchOpen(CONNECTION)).toBe(false);
   });
 });
@@ -1848,9 +1865,9 @@ describe('tickBench', () => {
     await tickBench(CONNECTION, { budgetMs: 50 });
     await tickBench(CONNECTION, { budgetMs: 50 });
 
-    const events = client.calls('EventBreakpoints.setInstrumentationBreakpoint')
-      .map((c: SentCall) => c.params.eventName);
-    expect(events).toEqual(['setTimeout.callback', 'setInterval.callback', 'requestAnimationFrame.callback']);
+    const sets = client.debugger.calls('setInstrumentationBreakpoints');
+    expect(sets).toHaveLength(1);
+    expect(sets[0].args[0]).toEqual(['setTimeout.callback', 'setInterval.callback', 'requestAnimationFrame.callback']);
   });
 
   it('accumulates page time across ticks', async () => {
@@ -1895,6 +1912,7 @@ describe('stopBench', () => {
     const client = createFakeClient();
     const closed: string[] = [];
     const state0 = await startBench({
+      debugger: fakeDebuggerOf(client),
       page: createFakePage(client),
       connection: CONNECTION,
       sessionName: SESSION,
@@ -1908,10 +1926,10 @@ describe('stopBench', () => {
 
     const state = await stopBench(CONNECTION);
 
-    expect(client.calls('Debugger.resume').length).toBeGreaterThan(0);
-    expect(client.calls('EventBreakpoints.disable')).toHaveLength(1);
+    expect(client.debugger.calls('resume').length).toBeGreaterThan(0);
+    expect(client.debugger.isPaused()).toBe(false);
+    expect(client.debugger.calls('clearInstrumentationBreakpoints')).toHaveLength(1);
     expect(client.lastCall('Animation.setPlaybackRate').params).toEqual({ playbackRate: 1 });
-    expect(client.calls('Debugger.disable')).toHaveLength(1);
     expect(client.lastCall('Overlay.setInspectMode').params.mode).toBe('none');
     expect(client.detached()).toBe(true);
     expect(closed).toEqual(['tab']);
@@ -2159,6 +2177,14 @@ describe('what a mutation pass found unguarded', () => {
       record: () => new Promise<string | undefined>((resolve) => { release = () => resolve(undefined); }),
       stopRecording: async () => {},
       cancelRecording: async () => {},
+      isUnsaved: () => false,
+      saveUnsaved: async () => undefined,
+      discardUnsaved: () => undefined,
+    canUndo: () => false,
+    testCommands: async () => ({ passed: true, summary: '' }),
+    setMotion: async () => undefined,
+    undo: () => undefined,
+    clearUndo: () => {},
       commentStep: async (index: number, words: string) => { commented.push({ index, words }); return undefined; },
       trafficIn: async () => ({ requests: 2, failed: 1, opened: 0, writes: 0, lines: ['POST /save 500'] }),
       saveExpected: async () => undefined,
@@ -2183,6 +2209,7 @@ describe('what a mutation pass found unguarded', () => {
     let landed = false;
     driver.active = () => (landed ? opened() : null);
     await startBench({
+      debugger: fakeDebuggerOf(client),
       page: createFakePage(client), connection: CONNECTION, sessionName: SESSION, sequences: driver,
     });
     const recording = recordSequence(CONNECTION, 'saving hangs');
@@ -2260,6 +2287,7 @@ describe('what a mutation pass found unguarded', () => {
     const client = createFakeClient();
     const { driver, commented, stop } = recordingDriver();
     await startBench({
+      debugger: fakeDebuggerOf(client),
       page: createFakePage(client), connection: CONNECTION, sessionName: SESSION, sequences: driver,
     });
 
@@ -2280,6 +2308,7 @@ describe('what a mutation pass found unguarded', () => {
     const client = createFakeClient();
     const { driver, saved, stop } = recordingDriver();
     await startBench({
+      debugger: fakeDebuggerOf(client),
       page: createFakePage(client), connection: CONNECTION, sessionName: SESSION, sequences: driver,
     });
 
@@ -2296,5 +2325,117 @@ describe('what a mutation pass found unguarded', () => {
 
     expect(saved.map(entry => entry.index)).toContain(0);
     expect(saved.find(entry => entry.index === 0)?.traffic.lines).toEqual(['POST /save 500']);
+  });
+});
+
+describe('the frame stop - the page held in front of the frame an input schedules', () => {
+  it('arms the next frame in place of pausing the page where it stands', async () => {
+    const client = createFakeClient();
+    await startBare(client);
+    armFrameStop(sessions.get(CONNECTION)!);
+
+    await setHeld(CONNECTION, true);
+
+    expect(client.debugger.calls('pause')).toHaveLength(0);
+    expect(client.debugger.calls('setInstrumentationBreakpoints').map((call: any) => call.args[0]))
+      .toEqual([['requestAnimationFrame.callback']]);
+    expect(client.lastCall('Animation.setPlaybackRate').params).toEqual({ playbackRate: 0 });
+    expect(getBenchSession(CONNECTION)).toMatchObject({ frozen: true });
+  });
+
+  it('resumes the frame stop it landed on, with the frame stops off first', async () => {
+    const client = createFakeClient();
+    await startBare(client);
+    armFrameStop(sessions.get(CONNECTION)!);
+    await setHeld(CONNECTION, true);
+    client.debugger.stop({ reason: 'EventListener', data: { eventName: 'instrumentation:requestAnimationFrame.callback' }, callFrames: [] });
+
+    await setHeld(CONNECTION, false);
+
+    expect(client.debugger.calls('clearInstrumentationBreakpoints')).toHaveLength(1);
+    expect(client.debugger.calls('resume')).toHaveLength(1);
+    expect(client.debugger.isPaused()).toBe(false);
+  });
+
+  it('pauses the page plainly on the hold after it, the arming spent', async () => {
+    const client = createFakeClient();
+    await startBare(client);
+    armFrameStop(sessions.get(CONNECTION)!);
+    await setHeld(CONNECTION, true);
+    await setHeld(CONNECTION, false);
+
+    await setHeld(CONNECTION, true);
+
+    expect(client.debugger.calls('pause')).toHaveLength(1);
+  });
+});
+
+describe('the pause the bench reads - the debugger connection\'s, never a copy of its own', () => {
+  it('follows a stop and a resume the debugger connection reports, whoever caused them', async () => {
+    const client = createFakeClient();
+    await startBare(client);
+    const event = { reason: 'other', callFrames: [{ functionName: 'onClick', location: { scriptId: 's', lineNumber: 4 } }] };
+
+    client.debugger.stop(event);
+    expect(sessions.get(CONNECTION)!.pausedEvent).toBe(event);
+
+    await client.debugger.resume();
+    expect(sessions.get(CONNECTION)!.pausedEvent).toBeUndefined();
+  });
+
+  it('holds by the debugger connection\'s reading: a page already stopped is not paused again', async () => {
+    const client = createFakeClient();
+    await startBare(client);
+    client.debugger.stop();
+
+    await setHeld(CONNECTION, true);
+
+    expect(client.debugger.calls('pause')).toHaveLength(0);
+    expect(getBenchSession(CONNECTION)).toMatchObject({ frozen: true });
+  });
+});
+
+describe('readGroup - the animations an input started, read at the frame stop', () => {
+  /** A session whose animation objects answer with the timing each was given. */
+  function sessionWith(animations: Array<{ id: string; startedAt: number; name: string; element: string; delay: number; duration: number; easing: string }>, groupSince: number | undefined) {
+    const byId = new Map(animations.map(one => [one.id, one]));
+    const send = vi.fn(async (method: string, params?: any) => {
+      if (method === 'Animation.resolveAnimation') return { remoteObject: { objectId: params.animationId } };
+      if (method === 'Runtime.callFunctionOn') {
+        const one = byId.get(params.objectId)!;
+        return { result: { value: { name: one.name, type: 'CSSTransition', duration: one.duration, delay: one.delay, easing: one.easing, element: one.element } } };
+      }
+      // Held before its first frame, a transition reads the timeline's zero as a large negative.
+      if (method === 'Animation.getCurrentTime') return { currentTime: -1e9 };
+      return {};
+    });
+    return {
+      client: { send },
+      groupSince,
+      animations: new Map(animations.map(one => [one.id, { id: one.id, name: one.id, type: 'WebAnimation', startedAt: one.startedAt }])),
+    } as any;
+  }
+
+  it('lists only the animations created since the frame stop was armed, in the order they start', async () => {
+    const session = sessionWith([
+      { id: 'before', startedAt: 900, name: 'opacity', element: '#toast', delay: 0, duration: 400, easing: 'linear' },
+      { id: 'late', startedAt: 1001, name: 'transform', element: 'div.item', delay: 260, duration: 300, easing: 'ease-out' },
+      { id: 'first', startedAt: 1002, name: 'transform', element: '#panel', delay: 0, duration: 420, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' },
+    ], 1000);
+
+    const group = await readGroup(session);
+
+    expect(group).toEqual([
+      { id: 'first', name: 'transform', type: 'CSSTransition', element: '#panel', delayMs: 0, durationMs: 420, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)', currentMs: 0 },
+      { id: 'late', name: 'transform', type: 'CSSTransition', element: 'div.item', delayMs: 260, durationMs: 300, easing: 'ease-out', currentMs: 0 },
+    ]);
+  });
+
+  it('reads no group where no frame stop was armed', async () => {
+    const session = sessionWith([
+      { id: 'any', startedAt: 1001, name: 'opacity', element: '#toast', delay: 0, duration: 400, easing: 'linear' },
+    ], undefined);
+
+    expect(await readGroup(session)).toEqual([]);
   });
 });

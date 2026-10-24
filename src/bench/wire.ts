@@ -7,7 +7,7 @@
  */
 
 import type { Annotation, AnnotationTarget, StepTraffic } from '../annotation.js';
-import type { ExpectedValue } from './kinds.js';
+import type { ExpectedValue, MotionSetting } from './kinds.js';
 
 export type { Annotation, AnnotationTarget, StepTraffic } from '../annotation.js';
 
@@ -68,6 +68,8 @@ export interface RanStep {
 /** A sequence step as the bench shows it. */
 export interface SequenceStep {
   index: number;
+  /** How each animation under this step behaves when it runs, by its kind; set from its MOTION row. */
+  motion?: Record<string, MotionSetting>;
   /** A pause point saved before this step: a run stops and holds the page here. */
   pauseBefore?: true;
   /** What that pause point holds; every layer when absent. */
@@ -343,7 +345,7 @@ export interface ConnectionRow {
 }
 
 /** What the state disc draws, one slice each: recording, the page held, traffic held, a run playing, a run paused. */
-export type DiscMode = 'recording' | 'frozen' | 'traffic' | 'playing' | 'paused';
+export type DiscMode = 'recording' | 'frozen' | 'traffic' | 'playing' | 'paused' | 'slowed';
 
 /**
  * What runs alongside the bench besides its servers: this session's event
@@ -529,6 +531,12 @@ export interface SequenceState {
   baseUrl?: string;
   /** Set while clicks in the page are being recorded into a new sequence. */
   recording?: boolean;
+  /** The sequence lives in memory alone: recorded in the bench and not yet saved; a server restart loses it. */
+  unsaved?: boolean;
+  /** A change to the recording in progress or to the unsaved sequence can be undone. */
+  undoable?: boolean;
+  /** While recording: the last test run of its steps so far, running or how it ended. */
+  test?: { state: 'running' | 'passed' | 'failed'; total: number; summary?: string };
   /** When the recording began, in ms since the epoch: what crossed before it is not the recording's. */
   recordingSince?: number;
   /** The step capture is held on, and whether it needs the person. */
@@ -749,6 +757,48 @@ export interface BenchView {
   factChoice: FactKind[];
   /** Every version of each capture the open sequence cites, keyed by version 1's path. */
   series?: Record<string, CaptureVersion[]>;
+  motion: MotionView;
+  /** The animations the page starts are recorded as rows under their steps, beside the traffic. */
+  motionDetect: boolean;
+  burst?: BurstView;
+  /** Captures kept with no note yet, which join the next note saved. */
+  looseShots: string[];
+  /** Present while recording: the recording takes no steps while true. */
+  recordingPaused?: boolean;
+}
+
+/** An animation on the page and how far through it stands. */
+export interface AnimationView {
+  id: string;
+  name: string;
+  /** The element as the MOTION rows name it, where a rule has named it. */
+  element?: string;
+  delayMs: number;
+  type: 'CSSTransition' | 'CSSAnimation' | 'WebAnimation';
+  currentMs: number;
+  /** The span it runs over now, stretched where a rule slowed it. */
+  durationMs: number;
+  /** Its own duration as the page set it, which positions are read in. */
+  ownDurationMs: number;
+  /** 0 to 1 of the animation's active span. */
+  progress: number;
+}
+
+export interface MotionView {
+  /** The rate the page's animations run at while the screen runs; 1 is real time. */
+  playbackRate: number;
+  /** The animations standing part-way, read while the screen is held; empty while it runs. */
+  animations: AnimationView[];
+}
+
+/** The frames a step filmed from its input, waiting on the person to keep or drop them. */
+export interface BurstView {
+  dir: string;
+  sheet: string;
+  /** The input it was filmed from, as `press ArrowDown`. */
+  trigger: string;
+  forMs: number;
+  frames: Array<{ file: string; atMs: number }>;
 }
 
 /** One thing the proxy saw cross, as the bench receives it. */

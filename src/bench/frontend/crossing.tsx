@@ -1,4 +1,6 @@
 /** @jsxImportSource preact */
+import { SPEED_STEPS, motionWords, postMotion, type MotionRow } from './motion-controls.js';
+import type { MotionSetting } from '../kinds.js';
 import { Fragment } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { BoundaryEvent, BoundaryRule, HiddenKind, RuleCatalogueEntry } from '../wire.js';
@@ -840,6 +842,79 @@ function IgnoreEditor({ event, step, onSave, onCancel }: {
 }
 
 /**
+ * How one animation under a step plays on the next run, set as a rule is:
+ * a line per choice, saved from the foot, marked on the row until changed.
+ * Freezing stops the run there, and the hold strip's Motion line scrubs it.
+ */
+function MotionEditor({ row }: { row: MotionRow }) {
+  const saved = row.setting ?? {};
+  const [speed, setSpeed] = useState(saved.slow ?? 1);
+  const [typing, setTyping] = useState(false);
+  const [off, setOff] = useState(!!saved.off);
+  const [freezeAt, setFreezeAt] = useState<number | undefined>(saved.freezeAt);
+  const [only, setOnly] = useState(!!saved.only);
+  const setting: MotionSetting = {
+    ...(speed !== 1 ? { slow: speed } : {}),
+    ...(off ? { off: true as const } : {}),
+    ...(saved.alone ? { alone: true as const } : {}),
+    ...(freezeAt !== undefined ? { freezeAt, ...(only ? { only: true as const } : {}) } : {}),
+    ...(saved.duration !== undefined ? { duration: saved.duration } : {}),
+    ...(saved.delay !== undefined ? { delay: saved.delay } : {}),
+  };
+  const changed = JSON.stringify(setting) !== JSON.stringify(saved);
+  const save = () => postMotion(row.base, '/motion/setting', {
+    step: row.step, kind: row.kind, setting: Object.keys(setting).length ? setting : null,
+  });
+  // The listed speed next below or above this one; a typed speed between two steps moves to its neighbour.
+  const stepSpeed = (slower: boolean) => {
+    const next = slower ? SPEED_STEPS.find(one => one < speed) : [...SPEED_STEPS].reverse().find(one => one > speed);
+    if (next !== undefined) setSpeed(next);
+  };
+  const half = Math.round(row.duration / 2);
+  return (
+    <div class="replace motioneditor" onClick={(e: MouseEvent) => e.stopPropagation()}>
+      <ScopeRow label="speed">
+        <button class="tool plain" title="slower" aria-label="slower" onClick={() => stepSpeed(true)}>&lt;</button>
+        {typing
+          ? <input class="speedtyped" type="number" min={0.01} max={10} step={0.05} value={speed} autoFocus
+              onBlur={() => setTyping(false)}
+              onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === 'Escape') setTyping(false); }}
+              onInput={(e: Event) => {
+                const typed = Number((e.target as HTMLInputElement).value);
+                if (typed > 0 && typed <= 10) setSpeed(typed);
+              }} />
+          : <button class="tool plain chosen" title="type a speed" onClick={() => setTyping(true)}>{speed}×</button>}
+        <button class="tool plain" title="faster" aria-label="faster" onClick={() => stepSpeed(false)}>&gt;</button>
+      </ScopeRow>
+      <ScopeRow label="off">
+        <Choice on={!off} onPick={() => setOff(false)}>no</Choice>
+        <Choice on={off} onPick={() => setOff(true)} title="jump to its end, as if it had no motion">yes</Choice>
+      </ScopeRow>
+      <ScopeRow label="freeze">
+        <Choice on={freezeAt === undefined} onPick={() => setFreezeAt(undefined)}>none</Choice>
+        <Choice on={freezeAt !== undefined} onPick={() => setFreezeAt(freezeAt ?? half)} title="stop the run with it part-way">
+          at {freezeAt !== undefined
+            ? <input class="freezetyped" type="number" min={0} max={row.duration || undefined} step={10} value={freezeAt}
+                onClick={(e: MouseEvent) => e.stopPropagation()}
+                onInput={(e: Event) => setFreezeAt(Math.max(0, Number((e.target as HTMLInputElement).value) || 0))} />
+            : half}ms
+        </Choice>
+        {freezeAt !== undefined && <>
+          <Choice on={!only} onPick={() => setOnly(false)} title="the whole page holds at that point">whole page</Choice>
+          <Choice on={only} onPick={() => setOnly(true)} title="this animation holds, the rest of the page runs">this one</Choice>
+        </>}
+      </ScopeRow>
+      <BodyFoot summary={changed ? 'not saved' : undefined}>
+        <button class="tool plain" disabled={!row.replayable}
+          title={row.replayable ? 'save, then run the sequence to this step' : 'a play waits for the run or the recording to end'}
+          onClick={async () => { if (changed) await save(); await postMotion(row.base, '/motion/replay', { step: row.step }); }}>Play to this step</button>
+        <button class="tool plain" disabled={!changed} onClick={() => void save()}>Save</button>
+      </BodyFoot>
+    </div>
+  );
+}
+
+/**
  * A body box that grows to what it holds, up to a screen's worth, so what is
  * typed is on screen without a handle to drag.
  */
@@ -1108,8 +1183,10 @@ function attribution(event: BoundaryEvent): string {
  */
 export function CrossingRow({
   event, base, rule, repeats, cadence: every, seen, stale, open, onOpen, actions, extra,
-  onMenu, verdict, moves, hidden, onGoToCause, onGoToTraffic,
+  onMenu, verdict, moves, hidden, onGoToCause, onGoToTraffic, motion,
 }: {
+  /** An animation's row: how it is set to behave under its step, with the controls that set it. */
+  motion?: MotionRow;
   /** Open History on the call this crossed under, where it carries one. */
   onGoToCause?: (entry: number) => void;
   /** Open Traffic on this crossing, for a row listed outside it; takes the place of the History go-to. */
@@ -1180,7 +1257,7 @@ export function CrossingRow({
         event.verdict === 'background' || event.verdict === 'unknown' ? 'ruled' : '',
       ]}
       source={event.kind === 'request' ? (event.method ?? 'GET')
-        : event.kind === 'write' ? event.method
+        : event.kind === 'write' ? (event.method === 'animation' ? 'MOTION' : event.method)
         : socketName(event.url)}
       sourceTitle={event.url}
       way={event.kind === 'frame' ? (event.direction === 'out' ? '→' : '←') : ''}
@@ -1204,6 +1281,7 @@ export function CrossingRow({
                 ? named
                 : event.kind === 'request'
                   ? <><span class="wide">{event.url}</span><span class="lean">{lean(event.url) || '/'}</span></>
+                  : motion ? (event.preview ?? '').replace(/^started /, '').replace(' = ', ' · ')
                   : (event.preview ?? event.url)}
             </span>}
         {(answered || blocked) && (
@@ -1221,6 +1299,9 @@ export function CrossingRow({
           </span>
         )}
         {stale && <span class="stale" title="staged, and this pass has not produced it">not this pass</span>}
+        {motion && motionWords(motion.setting) && (
+          <span class="tag motionset" title="how this animation is set to behave when its step runs">{motionWords(motion.setting)}</span>
+        )}
       </>}
       reading={<>
         {/* A verdict is a person's; how the crossing was attributed is in the
@@ -1242,9 +1323,11 @@ export function CrossingRow({
         )}
         {/* Not `held`: that class is the held-step panel's, and a size sharing
             it was drawn as a bordered panel. */}
-        <span class={`meta ${event.answeredAs || served ? 'served' : ((event.status ?? 0) >= 400 ? 'bad' : '')}`}>
-          {served ?? describe(event, false)}
-        </span>
+        {!motion && (
+          <span class={`meta ${event.answeredAs || served ? 'served' : ((event.status ?? 0) >= 400 ? 'bad' : '')}`}>
+            {served ?? describe(event, false)}
+          </span>
+        )}
       </>}
       slots={{
         ...(onGoToTraffic ? { open: onGoToTraffic } : cause !== undefined && onGoToCause ? { open: () => onGoToCause(cause) } : {}),
@@ -1278,7 +1361,9 @@ export function CrossingRow({
       onMenu={onMenu}
       extra={extra}
     >
-      <CrossingBody event={event} base={base} rule={rule} actions={actions} verdict={verdict} />
+      {motion
+        ? <MotionEditor row={motion} />
+        : <CrossingBody event={event} base={base} rule={rule} actions={actions} verdict={verdict} />}
     </Row>
   );
 }

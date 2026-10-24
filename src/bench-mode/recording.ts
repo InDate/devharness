@@ -3,6 +3,7 @@ import { getMessage } from '../messages.js';
 import type { Annotation, StepTraffic } from '../annotation.js';
 import type { SequenceState, SequenceStep } from '../bench/wire.js';
 import { evaluateInPage, setInspectMode } from './cdp.js';
+import { savedRecordingEvents, trimSavedRecordingEvents } from '../interaction-recorder.js';
 import { holdUi, releaseUi, withPageReleased } from './page-hold.js';
 import { armSiteRules, originOf, persistRules } from './rules.js';
 import { getSequenceState, selectSequence } from './sequence.js';
@@ -17,7 +18,74 @@ export async function recordedSteps(session: BenchSession) {
     // left it, so the recording opens nothing of its own.
     session.recordingInto ? '' : session.recordingStartUrl ?? session.page.url(),
     session.recordingEdits,
+    session.recordingDropped,
   );
+}
+
+/** Shift each key at or above `index` up one, leaving `index` free for the step put back. */
+function openGap<T>(map: Map<number, T> | undefined, index: number): void {
+  if (!map) return;
+  const entries = [...map.entries()].map(([key, value]) => [key >= index ? key + 1 : key, value] as const);
+  map.clear();
+  for (const [key, value] of entries) map.set(key, value);
+}
+
+/** Put back the step taken out of the recording in progress last, with what was written against it. */
+export async function undoRecordingDrop(connection: string): Promise<void> {
+  const session = sessions.get(connection);
+  const taken = session?.recordingUndo?.pop();
+  if (!session?.recordingSequence || !taken) return;
+  session.recordingDropped = (session.recordingDropped ?? []).filter(full => full !== taken.full);
+  openGap(session.recordingEdits, taken.index);
+  openGap(session.recordingNotes, taken.index);
+  openGap(session.recordingAnnotations, taken.index);
+  openGap(session.stepTraffic, taken.index);
+  openGap(session.recordingMotion, taken.index);
+  if (taken.edit) (session.recordingEdits ??= new Map()).set(taken.index, taken.edit);
+  if (taken.note) (session.recordingNotes ??= new Map()).set(taken.index, taken.note);
+  if (taken.annotations) (session.recordingAnnotations ??= new Map()).set(taken.index, taken.annotations);
+  if (taken.traffic) (session.stepTraffic ??= new Map()).set(taken.index, taken.traffic);
+  if (taken.motion) (session.recordingMotion ??= new Map()).set(taken.index, taken.motion);
+}
+
+/** Shift each key above `index` down one, the key at `index` gone with its step. */
+function closeGap<T>(map: Map<number, T> | undefined, index: number): void {
+  if (!map) return;
+  const entries = [...map.entries()].filter(([key]) => key !== index).map(([key, value]) => [key > index ? key - 1 : key, value] as const);
+  map.clear();
+  for (const [key, value] of entries) map.set(key, value);
+}
+
+/**
+ * Take a step out of the recording in progress. The step is marked dropped
+ * by its position in the full list, which the shown list leaves out from now
+ * on and the save removes; what was written against later steps moves up one.
+ */
+export async function dropRecordingStep(connection: string, index: number): Promise<void> {
+  const session = sessions.get(connection);
+  if (!session?.recordingSequence || session.pendingStep) return;
+  const dropped = session.recordingDropped ??= [];
+  let full = -1;
+  for (let shown = -1; shown < index;) {
+    full++;
+    if (!dropped.includes(full)) shown++;
+  }
+  const steps = await recordedSteps(session);
+  if (index < 0 || index >= steps.length) return;
+  dropped.push(full);
+  (session.recordingUndo ??= []).push({
+    full, index,
+    ...(session.recordingEdits?.has(index) ? { edit: session.recordingEdits.get(index) } : {}),
+    ...(session.recordingNotes?.has(index) ? { note: session.recordingNotes.get(index) } : {}),
+    ...(session.recordingAnnotations?.has(index) ? { annotations: session.recordingAnnotations.get(index) } : {}),
+    ...(session.stepTraffic?.has(index) ? { traffic: session.stepTraffic.get(index) } : {}),
+    ...(session.recordingMotion?.has(index) ? { motion: session.recordingMotion.get(index) } : {}),
+  });
+  closeGap(session.recordingEdits, index);
+  closeGap(session.recordingNotes, index);
+  closeGap(session.recordingAnnotations, index);
+  closeGap(session.stepTraffic, index);
+  closeGap(session.recordingMotion, index);
 }
 
 /**
@@ -77,8 +145,13 @@ export async function recordSequence(
     session.stepTraffic = new Map();
     session.recordingNotes = new Map();
     session.recordingEdits = new Map();
+    session.recordingMotion = new Map();
+    session.recordingDropped = [];
+    session.recordingUndo = [];
+    session.recordingTest = undefined;
     session.recordingAnnotations = new Map();
     session.recordingSequence = true;
+    session.recordingPaused = false;
     session.recordingName = name;
     session.recordingWithAgent = withAgent;
     session.announcedSteps = 0;
@@ -96,6 +169,7 @@ export async function recordSequence(
     session.sequenceFailure = String(error);
   } finally {
     session.recordingSequence = false;
+    session.recordingPaused = false;
     session.recordingEndedAt = Date.now();
     session.recordedName = cancelled ? undefined : name;
     session.recordingWithAgent = false;
@@ -104,6 +178,16 @@ export async function recordSequence(
     session.sequenceBusy = false;
   }
 
+  // Steps taken out while it recorded: the file holds every step its events
+  // made, so these come out before anything keyed by position is written.
+  if (!cancelled) {
+    for (const full of [...(session.recordingDropped ?? [])].sort((a, b) => b - a)) {
+      const failure = await session.sequences.removeStep(full).catch(error => String(error));
+      if (failure) session.sequenceFailure = failure;
+    }
+  }
+  session.recordingDropped = undefined;
+  session.recordingUndo = undefined;
   if (!cancelled) await flushRecordingNotes(session);
   // Rules made while recording were held on the session, since the sequence
   // had no file; it has one now, and is the one selected.
@@ -118,6 +202,17 @@ export async function recordSequence(
     }
   }
   session.recordingEdits = undefined;
+  if (!cancelled) {
+    for (const [index, motion] of session.recordingMotion ?? []) {
+      for (const [kind, setting] of Object.entries(motion)) {
+        const failure = await session.sequences.setMotion(index, kind, setting).catch(error => String(error));
+        if (failure) session.sequenceFailure = failure;
+      }
+    }
+  }
+  session.recordingMotion = undefined;
+  // The removals and edits above made the sequence from its recording; they are not changes to undo.
+  session.sequences.clearUndo(name);
   if (withAgent) await announceRecording(session, connection, name, cancelled);
   // Recorded into another sequence: its steps go there, after the step the
   // run stood on, and that sequence is the one open again.
@@ -281,7 +376,7 @@ export async function gateNewStep(
   }
 
   session.pendingStep = { index, label: steps[index].label, verdict: 'validating' };
-  await setCapturePaused(session, true);
+  await applyCapturePaused(session);
   // The page is held as well as the capture: left running, it re-renders while
   // the step is read, and the element the step names moves underneath it.
   session.heldForStep = !session.frozen;
@@ -297,8 +392,13 @@ export async function gateNewStep(
   });
 }
 
-/** Stop or resume the page's own capture, which the recorder checks per event. */
-async function setCapturePaused(session: BenchSession, paused: boolean): Promise<void> {
+/**
+ * Stop or resume the page's own capture, which the recorder checks per event.
+ * Capture stands stopped while a step waits for review or the person paused
+ * the recording, and runs only once neither holds.
+ */
+async function applyCapturePaused(session: BenchSession): Promise<void> {
+  const paused = session.pendingStep != null || session.recordingPaused === true;
   await evaluateInPage(session, `globalThis.__cdpRecordingPaused = ${paused ? 'true' : 'false'}`)
     .catch(() => {});
 }
@@ -313,6 +413,60 @@ export async function addRecordingTimer(connection: string, ms: number): Promise
   if (!session?.recordingSequence || !(ms > 0)) return;
   await evaluateInPage(session,
     `(globalThis.__cdpRecordingEvents ||= []).push({ type: 'timer', ms: ${Math.round(ms)}, timestamp: Date.now() })`)
+    .catch(() => {});
+}
+
+/**
+ * Run the recording's steps so far against the page, without ending it.
+ *
+ * The run drives the page, and the page's recorder would take each of its
+ * inputs as a new step. So capture is paused for the run, and since a page
+ * load inside the run puts the recorder back unpaused until the next poll,
+ * every event stamped after the run began is dropped once it ends, from the
+ * page and from what the server kept across the run's page loads. The recording is left paused, on the page the run left.
+ */
+export async function testRecording(connection: string): Promise<void> {
+  const session = sessions.get(connection);
+  if (!session?.sequences || !session.recordingSequence || session.pendingStep || session.recordingTest?.state === 'running') return;
+  const recorded = await recordedSteps(session);
+  // A step that freezes the screen ends the test there, frozen for the hold
+  // strip's seek, as a play stops on it: the next input would meet a held page.
+  const freezes = recorded.findIndex(step => Array.isArray(step.params?.hold) && (step.params!.hold as string[]).includes('ui'));
+  const steps = freezes >= 0 ? recorded.slice(0, freezes + 1) : recorded;
+  if (!steps.length) return;
+  const startedAt = Date.now();
+  session.recordingPaused = true;
+  await applyCapturePaused(session);
+  session.recordingTest = { state: 'running', total: steps.length };
+  try {
+    const result = await withPageReleased(session, () => session.sequences!.testCommands(
+      session.recordingName ?? 'recording',
+      steps.flatMap(step => (step.tool ? [{ tool: step.tool, params: step.params ?? {} }] : [])),
+      connection,
+    ));
+    session.recordingTest = {
+      state: result.passed ? 'passed' : 'failed', total: steps.length,
+      summary: freezes >= 0 && result.passed ? `stopped frozen after step ${freezes + 1}, which freezes the screen` : result.summary,
+    };
+  } catch (error) {
+    session.recordingTest = { state: 'failed', total: steps.length, summary: String(error) };
+  } finally {
+    trimSavedRecordingEvents(session.connection, startedAt);
+    await evaluateInPage(session, `(() => {
+      const events = globalThis.__cdpRecordingEvents;
+      if (Array.isArray(events)) globalThis.__cdpRecordingEvents = events.filter(event => event.timestamp < ${startedAt});
+    })()`).catch(() => {});
+    await applyCapturePaused(session);
+  }
+}
+
+/** Put a check into the recording, after the last action; see CheckEvent. */
+export async function addRecordingCheck(connection: string, params: Record<string, unknown>, comment?: string): Promise<void> {
+  const session = sessions.get(connection);
+  if (!session?.recordingSequence) return;
+  const event = { type: 'check', params, ...(comment ? { comment } : {}) };
+  await evaluateInPage(session,
+    `(globalThis.__cdpRecordingEvents ||= []).push(Object.assign(${JSON.stringify(event)}, { timestamp: Date.now() }))`)
     .catch(() => {});
 }
 
@@ -344,9 +498,21 @@ export async function editRecordingVariable(connection: string, name: string, va
 }
 
 /** The raw events the page has buffered, as JSON. */
+/**
+ * Every event the recording has taken: those the server kept from earlier
+ * pages, and those the page in front holds, merged in timestamp order as the
+ * stop merges them, so a step's position here is its position in the file.
+ */
 async function readCapturedEvents(session: BenchSession): Promise<string> {
-  return (await evaluateInPage(session, 'JSON.stringify(globalThis.__cdpRecordingEvents || [])')
+  const here = (await evaluateInPage(session, 'JSON.stringify(globalThis.__cdpRecordingEvents || [])')
     .catch(() => '[]')) ?? '[]';
+  let inPage: Array<{ timestamp: number }> = [];
+  try {
+    const parsed = JSON.parse(here);
+    if (Array.isArray(parsed)) inPage = parsed;
+  } catch { inPage = []; }
+  const kept = savedRecordingEvents(session.connection) as Array<{ timestamp: number }>;
+  return JSON.stringify([...kept, ...inPage].sort((a, b) => a.timestamp - b.timestamp));
 }
 
 /** How many raw events the page holds, which a drop rewinds to. */
@@ -405,7 +571,7 @@ export async function keepRecordedStep(
   session.keptEvents = await capturedEventCount(session);
   session.pendingStep = null;
   await releaseForStep(session);
-  await setCapturePaused(session, false);
+  await applyCapturePaused(session);
   await announceSettled(session, connection, held.index, settledAs ?? `kept as ${held.label}`);
   return getSequenceState(connection);
 }
@@ -458,7 +624,7 @@ export async function dropRecordedStep(connection: string): Promise<SequenceStat
   const dropped = session.pendingStep.index;
   session.pendingStep = null;
   await releaseForStep(session);
-  await setCapturePaused(session, false);
+  await applyCapturePaused(session);
   await announceSettled(session, connection, dropped, 'dropped');
   return getSequenceState(connection);
 }
@@ -499,6 +665,22 @@ export async function stopRecordingSequence(connection: string): Promise<void> {
   // The purpose and the notes are written by recordSequence once the record
   // call returns, which is the point the file exists and is selected.
   await session.sequences.stopRecording(connection).catch(() => {});
+}
+
+/**
+ * Pause or resume the recording in progress. The page's recorder drops every
+ * input while its flag is set, and a page load puts the recorder back with
+ * the flag clear, so the flag is set again from the session on each poll.
+ */
+export async function pauseRecording(connection: string, paused: boolean): Promise<void> {
+  const session = sessions.get(connection);
+  if (!session?.recordingSequence) return;
+  session.recordingPaused = paused;
+  await applyCapturePaused(session);
+}
+
+export async function keepRecordingPaused(session: BenchSession): Promise<void> {
+  if (session.recordingSequence) await applyCapturePaused(session);
 }
 
 /** Abandon the recording in progress, saving nothing. */

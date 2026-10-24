@@ -1162,20 +1162,20 @@ textarea.toolargs {
 /* Naming a sequence.
    The card sits on the column's centre line; its contents stay ranged left, so
    the prose keeps one edge to read down while the card holds the middle. */
-.startbox {
+.savedialog {
   max-width: 46ch; margin: 34px auto 0;
   padding: 22px 24px 20px;
   border: 1px solid var(--line); border-radius: 12px; background: var(--panel);
 }
-.startbox h2 { margin: 0; font: 600 15px/1.4 system-ui, sans-serif; }
+.savedialog h2 { margin: 0; font: 600 15px/1.4 system-ui, sans-serif; }
 /* Under the button it undoes, and carrying none of its weight: a second
    filled button beside the first reads as a second way to start. */
-.startbox .cancel {
+.savedialog .cancel {
   display: block; width: 100%; margin-top: 8px; padding: 8px 12px;
   border: 0; background: none; color: var(--muted); cursor: pointer;
   font: 500 12px/1.4 -apple-system, sans-serif;
 }
-.startbox .cancel:hover { color: var(--fg); }
+.savedialog .cancel:hover { color: var(--fg); }
 .lede { margin: 6px 0 20px; font-size: 12px; line-height: 1.6; color: var(--muted); }
 .namebox {
   width: 100%; margin: 0 0 20px; padding: 9px 11px;
@@ -1183,29 +1183,8 @@ textarea.toolargs {
   font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .namebox:focus { outline: none; border-color: var(--accent); }
-.startbox textarea.why { margin-bottom: 20px; }
-.startbox textarea.why:focus { outline: none; border-color: var(--accent); }
-
-.whowatches { margin: 0 0 18px; padding: 0; border: 0; }
-.whowatches .asklabel { padding: 0; }
-
-/* Each way to record carries what it costs, so the choice is made on the
-   consequence rather than on the label. */
-.choice {
-  display: flex; gap: 10px; align-items: flex-start; width: 100%;
-  margin-top: 8px; padding: 10px 12px; text-align: left; cursor: pointer;
-  border: 1px solid var(--line); border-radius: 9px; background: var(--bg); color: var(--fg);
-}
-.choice:hover { border-color: var(--accent); }
-.choice.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, var(--bg)); }
-.pip {
-  flex: none; width: 13px; height: 13px; margin-top: 2px; border-radius: 50%;
-  border: 1px solid var(--line); background: var(--bg);
-}
-.choice.on .pip { border-color: var(--accent); box-shadow: inset 0 0 0 3px var(--accent); }
-.choicebody { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.choicetitle { font: 600 12px/1.4 system-ui, sans-serif; }
-.choicesaid { font-size: 11px; line-height: 1.55; color: var(--muted); }
+.savedialog textarea.why { margin-bottom: 20px; }
+.savedialog textarea.why:focus { outline: none; border-color: var(--accent); }
 
 .go { width: 100%; padding: 10px 12px; }
 .go:disabled { opacity: 0.45; cursor: default; }
@@ -1219,7 +1198,7 @@ textarea.toolargs {
 
 .purpose { margin: 14px 0 18px; }
 .purpose textarea.why,
-.startbox textarea.why {
+.savedialog textarea.why {
   width: 100%; margin-bottom: 12px; padding: 9px 11px; resize: vertical;
   border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg);
   font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -2746,3 +2725,88 @@ dialog.varmodal::backdrop { background: rgba(0, 0, 0, 0.45); }
 .runsteps .fullcheck.check-passed-over { color: var(--muted); }
 .runsteps .fullcheck.check-stopped, .runsteps .fullcheck.ranfailed { color: var(--alert); font-weight: 600; }
 .runsteps .tally.check:hover + .fullcheck, .runsteps .fullcheck:hover { display: block; }
+
+/* The Motion rows under Screen: the speed and the seek as chips on one line; each animation part-way as a bar in the hold's colour.
+   A speed other than real time takes the wait colour, as the disc does. */
+.holdrow.row-motion { --hold-tone: var(--frost); }
+.holdrow.row-motion.slowed { --hold-tone: var(--wait); }
+.holdrow.row-motion.slowed .layername { color: var(--wait); }
+.motionctl { flex: 1 1 auto; min-width: 0; display: flex; gap: 14px; align-items: center; overflow: hidden; white-space: nowrap; }
+.ctlgroup { display: inline-flex; gap: 3px; align-items: center; }
+.ctlname { font-size: 10px; color: var(--muted); margin-right: 3px; text-transform: lowercase; }
+.ctlchip {
+  padding: 0 6px; height: 18px; border: 1px solid var(--line); border-radius: 9px; background: none;
+  font: 10px/16px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); cursor: pointer;
+}
+.ctlchip:hover:not(.off) { border-color: var(--accent); color: var(--accent); }
+.ctlchip.on { border-color: var(--hold-tone); color: var(--hold-tone); }
+.ctlchip.off { opacity: .35; cursor: help; }
+.ctlwarn { font-size: 10px; color: var(--wait); margin-left: 4px; }
+.ctlnote { font-size: 10px; color: var(--muted); margin-left: 4px; }
+.holdrow.row-anim { height: 20px; border-bottom-style: dotted; }
+.animname { flex: 0 0 120px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--fg); }
+.animbar { position: relative; flex: 1 1 auto; height: 8px; border-radius: 4px; background: var(--line); cursor: ew-resize; touch-action: none; }
+.animknob { position: absolute; top: -3px; width: 4px; height: 14px; margin-left: -2px; border-radius: 2px; background: var(--hold-tone); pointer-events: none; }
+.animfill { display: block; height: 100%; border-radius: 4px; background: var(--hold-tone); pointer-events: none; }
+
+/* The burst sheet: every frame filmed from the person's input, in order,
+   its time from the input under it. A click opens the frame at full size. */
+.burstscrim { position: fixed; inset: 0; z-index: 70; background: color-mix(in srgb, var(--fg) 30%, transparent); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.burstdialog { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; width: min(960px, 100%); max-height: calc(100vh - 32px); display: flex; flex-direction: column; }
+.bursthead { display: flex; gap: 8px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.bursthead h2 { margin: 0; font-size: 13px; flex: 1 1 auto; }
+.burstgrid { overflow: auto; padding: 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.burstframe { display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--line); border-radius: 4px; padding: 3px; background: none; cursor: zoom-in; }
+.burstframe:hover { border-color: var(--accent); }
+.burstframe img { width: 100%; display: block; background: var(--panel); }
+.burstframe span { font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); text-align: left; }
+.burstframe.before span { color: var(--wait); }
+.burstlarge { padding: 12px; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+.burstlarge img { max-width: 100%; align-self: center; border: 1px solid var(--line); }
+.loosecard { list-style: none; border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin: 0 0 12px; display: flex; flex-direction: column; gap: 6px; }
+.loosecard .looserow { display: flex; gap: 8px; align-items: center; font-size: 12px; min-width: 0; }
+.loosecard .looserow code { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.loosecard .loosekind { flex: 0 0 64px; font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.loosecard .loosewhere { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.loosecard .hint { margin: 0; }
+
+/* The recording's toggle: a pause mark while it records, the red disc that
+   starts it again while paused, so the button shows what a click does. */
+.rectoggle { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 22px; padding: 0; margin-right: 6px; border: 1px solid var(--line); border-radius: 11px; background: none; color: var(--muted); cursor: pointer; }
+.rectoggle:hover { border-color: var(--accent); color: var(--accent); }
+.rectoggle .recdot { margin: 0; box-shadow: none; }
+.rectoggle.paused:hover { border-color: var(--alert); }
+.recpaused { font-size: 11px; color: var(--muted); margin-right: 8px; }
+.footbar.recbar.paused { border-color: var(--muted); }
+
+/* An unsaved sequence: marked on its bar in the wait colour, since a restart
+   loses it, with its own record-more, save and discard beside the position. */
+.unsavedmark { padding: 0 7px; margin-right: 8px; border: 1px dashed var(--wait); border-radius: 9px; color: var(--wait); font: 10px/1.6 -apple-system, sans-serif; letter-spacing: .03em; }
+.unsavedacts { display: inline-flex; gap: 4px; margin-left: 8px; }
+.footbar .chip-toggle.rec:hover:not([aria-disabled='true']) { color: var(--alert); border-color: var(--alert); }
+.footbar .chip-toggle.bin.sure { color: var(--alert); border-color: var(--alert); }
+.savedialog { width: min(46ch, calc(100vw - 32px)); }
+.savedialog .saveacts { display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
+.savedialog .saveacts .cancel { width: auto; margin: 0; }
+.savedialog .saveacts .go { width: auto; }
+.savefail { color: var(--alert); }
+
+/* A test of the recording so far: running in the run colour, then passed or failed. */
+.rectest { font-size: 11px; margin: 0 8px 0 4px; white-space: nowrap; }
+.rectest.running { color: var(--sequence); }
+.rectest.passed { color: var(--done); }
+.rectest.failed { color: var(--alert); cursor: help; }
+
+
+/* A MOTION row's setting: the editor intercept and ignore use, its typed
+   values in the row's own small monospace; the tag in the frost a held
+   screen carries. */
+.tag.motionset { color: var(--frost); border-color: var(--frost); }
+.motioneditor .speedtyped, .motioneditor .freezetyped {
+  width: 56px; height: 18px; margin: 0 2px; padding: 0 4px; border: 1px solid var(--line); border-radius: 4px;
+  background: var(--bg); color: var(--fg); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+/* A Motion line's reading changes width as it is dragged, so it holds a fixed
+   width and the bar stays under the pointer. */
+.holdrow.row-anim .holdreading { flex: 0 0 104px; max-width: none; justify-content: flex-end; }
+.holdrow.row-anim .animname { flex: 0 0 140px; }

@@ -257,6 +257,13 @@ function takeOpenStep(activeSeq: ActiveSequenceState): ActiveSequenceState['open
   return open;
 }
 
+/** The step whose hold stood at the pause, handed to the resume; the resume hands it back while the hold stands. */
+function takeHeldStep(activeSeq: ActiveSequenceState): ActiveSequenceState['heldStep'] {
+  const held = activeSeq.heldStep;
+  delete activeSeq.heldStep;
+  return held;
+}
+
 /**
  * Release the layers a pause held the run's page on. Only the layers
  * the run itself still holds go: a hold the person or the bench placed since
@@ -359,6 +366,7 @@ export async function handleStep(
   };
 
   const openStep = takeOpenStep(activeSeq);
+  const heldStep = takeHeldStep(activeSeq);
   const execResult = await executeSteps({
     sequence,
     startStep,
@@ -366,6 +374,7 @@ export async function handleStep(
     ctx,
     ...(abortSignal ? { abortSignal } : {}),
     ...(openStep ? { openStep } : {}),
+    ...(heldStep ? { heldStep } : {}),
     resumesSession: true,
     ...(args.playing ? { standsPaused: false } : {}),
     ...(args.hold ?? activeSeq.holdWhilePaused ? { holdWhilePaused: args.hold ?? activeSeq.holdWhilePaused } : {}),
@@ -380,6 +389,7 @@ export async function handleStep(
   const lastExecuted = execResult.results.length > 0 ? execResult.results[execResult.results.length - 1].step : startStep;
   const failed = execResult.results.some(r => !r.success);
   if (execResult.pauseHeld) activeSeq.pauseHeld = execResult.pauseHeld;
+  if (execResult.heldStep) activeSeq.heldStep = execResult.heldStep;
 
   // Update active sequence state
   let closedNote = '';
@@ -477,12 +487,14 @@ export async function handleFinish(
   };
 
   const openStep = takeOpenStep(activeSeq);
+  const heldStep = takeHeldStep(activeSeq);
   const execResult = await executeSteps({
     sequence,
     startStep,
     ctx,
     ...(abortSignal ? { abortSignal } : {}),
     ...(openStep ? { openStep } : {}),
+    ...(heldStep ? { heldStep } : {}),
     resumesSession: true,
   });
   const rules = rulesForRun(activeSeq.connection);
@@ -510,6 +522,7 @@ export async function handleFinish(
   if (execResult.pausedAtMark !== undefined) {
     recorder.updateActiveSequenceStep(execResult.pausedAtMark);
     if (execResult.pauseHeld) activeSeq.pauseHeld = execResult.pauseHeld;
+    if (execResult.heldStep) activeSeq.heldStep = execResult.heldStep;
     return {
       content: [{ type: 'text', text: formatRunReply(recorder, {
         name: sequence.name, total: commands.length, since: activeSeq.runSince ?? since, paused: true,
@@ -522,6 +535,7 @@ export async function handleFinish(
   if (execResult.personInput?.pausedBefore !== undefined) {
     recorder.updateActiveSequenceStep(execResult.personInput.pausedBefore);
     if (execResult.pauseHeld) activeSeq.pauseHeld = execResult.pauseHeld;
+    if (execResult.heldStep) activeSeq.heldStep = execResult.heldStep;
     return {
       content: [{ type: 'text', text: formatRunReply(recorder, {
         name: sequence.name, total: commands.length, since: activeSeq.runSince ?? since, paused: true,

@@ -19,15 +19,12 @@ import {
   executeSequenceWithPause,
   getDebugState,
   setReplayCursorCallbacks,
-  injectReplayCursor,
-  showClickEffect,
-  showKeyPress,
-  removeReplayCursor,
   checkIfPaused,
   analyzeRecordedStepConnections,
   sanitizeConnectionMap,
   type ExecutionContext, connectionsOf } from './replay-executor.js';
 import { addressedConnection, createdName } from './connection-steps.js';
+import { openReplayCursor, type ReplayCursor } from '../replay-cursor.js';
 import { sequenceNeedsProxy } from './replay-connections.js';
 import { getProxy } from '../proxy/registry.js';
 import { PROXIED_WORD } from '../reference-validator.js';
@@ -47,6 +44,7 @@ import { pausesIn, rulesForRun } from './run-rules.js';
 import { armForRun, keepArmedForRun, originOf } from '../bench-mode/rules.js';
 import { siteReaderOf } from '../bench-mode/sequence-driver.js';
 import { configManager } from '../config.js';
+import { blankPageUrl } from '../utils/blank-page.js';
 import { hasTemplateToken } from './interpolation.js';
 import { snapshotConsole, strictConsoleFailures, snapshotSockets, socketFailures } from './replay-run-health.js';
 import { collectNestedRebindableReferences, loadDefaultRunEnv, loadRunEnv, unmatchedVariableKeys } from './replay-run-inputs.js';
@@ -731,7 +729,7 @@ export async function performRun(
       const port = givenRow?.port;
       // A sequence without a startUrl starts on the page the given connection
       // shows; a window opened without it stays blank and the first step finds nothing.
-      const pageUrl = givenRow?.url && givenRow.url !== 'about:blank' ? givenRow.url : undefined;
+      const pageUrl = blankPageUrl(givenRow?.url) ? undefined : givenRow.url;
       try {
         await executeToolCall('connection', {
           action: 'launch', connection: window, newContextWindow: true, proxy: true,
@@ -775,27 +773,22 @@ export async function performRun(
     };
   }
 
-  // Inject cursor if enabled in config
-  let cursorPage: any = null;
+  // The click marks are drawn by Chrome's overlay, above the document, so
+  // nothing of the replay enters the page it reads.
+  let cursor: ReplayCursor | null = null;
   if (configManager.getReplayConfig().showCursor && connection) {
-    cursorPage = await getPageForConnection(connection);
-    if (cursorPage) {
-      await injectReplayCursor(cursorPage);
-      setReplayCursorCallbacks({
-        onClickBefore: async (x: number, y: number, isRightClick: boolean) => {
-          await showClickEffect(cursorPage, x, y, isRightClick);
-        },
-        onKeyPress: async (key: string) => {
-          await showKeyPress(cursorPage, key);
-        }
-      });
+    const cursorPage = await getPageForConnection(connection);
+    cursor = cursorPage ? await openReplayCursor(cursorPage) : null;
+    if (cursor) {
+      const marking = cursor;
+      setReplayCursorCallbacks({ onClickBefore: (x, y, isRightClick) => marking.click(x, y, isRightClick) });
     }
   }
 
   // Show replay overlay if requested (for issue verification)
   let cleanupReplayOverlay: (() => Promise<void>) | undefined;
   if (args.showReplayOverlay && args.issueId && args.issueType && connection) {
-    const overlayPage = cursorPage || await getPageForConnection(connection);
+    const overlayPage = await getPageForConnection(connection);
     if (overlayPage) {
       cleanupReplayOverlay = await showReplayOverlay(
         overlayPage,
@@ -808,14 +801,15 @@ export async function performRun(
 
   // Helper to clean up cursor, overlay, and optionally close tab
   const cleanup = async (closeTab = false) => {
-    // Removing the cursor and the overlay runs page JS, which a page held at a
-    // breakpoint never answers, and the run's report would wait on it. Both
-    // stay until the next run on a running page replaces them.
-    const paused = !!(cursorPage || cleanupReplayOverlay) && !!(await checkIfPaused(ctx));
-    if (cursorPage) {
-      if (!paused) await removeReplayCursor(cursorPage).catch(() => {});
+    // The cursor is the browser's overlay and closes on a paused page too.
+    if (cursor) {
+      await cursor.close();
       setReplayCursorCallbacks({});
     }
+    // Removing the issue overlay runs page JS, which a page held at a
+    // breakpoint never answers, and the run's report would wait on it; it
+    // stays until the next run on a running page replaces it.
+    const paused = !!cleanupReplayOverlay && !!(await checkIfPaused(ctx));
     if (cleanupReplayOverlay && !paused) {
       await cleanupReplayOverlay().catch(() => {});
     }
@@ -905,6 +899,7 @@ export async function performRun(
       ...(ctx.runOrigin && { runOrigin: ctx.runOrigin }),
       breakpointHit: { url: execResult.breakpointHit.url, lineNumber: execResult.breakpointHit.lineNumber },
       ...(execResult.openStep ? { openStep: execResult.openStep } : {}),
+      ...(execResult.heldStep ? { heldStep: execResult.heldStep } : {}),
     });
     keepArmed();
     return { outcome: 'paused', results: execResult.results, response: { content: [{ type: 'text', text: formatBreakpointHit(
@@ -971,6 +966,7 @@ export async function performRun(
     recorder.setActiveSequence({
       ...execResult.activeSequenceState, runId, runSince: since,
       ...(execResult.pauseHeld ? { pauseHeld: execResult.pauseHeld } : {}),
+      ...(execResult.heldStep ? { heldStep: execResult.heldStep } : {}),
       ...(args.hold ? { holdWhilePaused: args.hold } : {}),
     });
     keepArmed();

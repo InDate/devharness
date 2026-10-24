@@ -19,6 +19,9 @@
  * running, and that task's output still reaches the session, so the
  * SessionStart instruction starts a second one beside it. Two watches deliver
  * each burst twice and both write the cursor; the later one exits on start.
+ *
+ * A watch exits once its Claude process exits or `/clear` moves that process
+ * to another session; otherwise it waits on a stream nothing writes.
  */
 
 /** A stream name: a session's short id or a `pid-` fallback. Anything else could escape the events directory. */
@@ -99,6 +102,20 @@ function runningWatch(name: string, streamPath: string, client: number): number 
   }
 }
 
+/** Why the stream no longer reaches a conversation, or undefined while it does. */
+function staleReason(name: string, client: number): string | undefined {
+  try {
+    process.kill(client, 0);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ESRCH') return `Claude process ${client} exited`;
+  }
+  const current = readCurrentSessionId()?.slice(0, 8);
+  if (current !== undefined && current !== name) {
+    return `session moved to ${current}`;
+  }
+  return undefined;
+}
+
 /** The complete lines in [start, end) of the file, and the offset past the last of them. */
 function readLines(fd: number, start: number, end: number): { text: string; next: number } {
   const buffer = Buffer.alloc(end - start);
@@ -138,8 +155,17 @@ export async function runWatch(follow: boolean, session?: string): Promise<numbe
   const stored = readCursor(cursorPath);
   let offset = stored === undefined || stored > size() ? size() : stored;
 
+  const stale = async (): Promise<boolean> => {
+    if (client === undefined) return false;
+    const reason = staleReason(name, client);
+    if (reason === undefined) return false;
+    await print(`devharness watch: ${reason}; stream ${name} closed, do not re-arm.\n`);
+    return true;
+  };
+
   if (follow) {
     for (;;) {
+      if (await stale()) return 0;
       if (size() > offset) {
         const { text, next } = readLines(fd, offset, size());
         if (next > offset) {
@@ -154,7 +180,10 @@ export async function runWatch(follow: boolean, session?: string): Promise<numbe
 
   let text = '';
   while (!text) {
-    while (size() <= offset) await sleep(POLL_MS);
+    while (size() <= offset) {
+      if (await stale()) return 0;
+      await sleep(POLL_MS);
+    }
     const burstStart = Date.now();
     let last = size();
     while (Date.now() - burstStart < BURST_CAP_MS) {

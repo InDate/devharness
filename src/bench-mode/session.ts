@@ -1,10 +1,13 @@
 import type { Page, CDPSession } from 'puppeteer-core';
 import type { BenchServer } from '../bench-control.js';
 import type { Annotation, AnnotationTarget, StepTraffic } from '../annotation.js';
-import type { BoundaryRule, CallbackEntry, HiddenKind, CaptureRecord, FactKind, PendingShot, TickResult } from '../bench/wire.js';
+import type { BoundaryRule, BurstView, CallbackEntry, HiddenKind, CaptureRecord, FactKind, PendingShot, TickResult } from '../bench/wire.js';
 import { WriteWatch } from '../write-watch.js';
 import type { ElementFacts, StyleSheets } from '../element-facts.js';
 import { type SequenceDriver } from './driver.js';
+import type { TrackedAnimation } from './animations.js';
+import type { MotionApplied, MotionRule } from './motion-rules.js';
+import type { MotionSetting } from '../bench/kinds.js';
 
 export interface BenchReport {
   connection: string;
@@ -40,6 +43,21 @@ export interface CaptureContext {
   heldBefore?: boolean;
 }
 
+/** What the bench drives the page's JS through: the page's debugger connection. */
+export interface PageDebugger {
+  pause(): Promise<void>;
+  /** Resolves once Chrome confirms the page runs again. */
+  resume(): Promise<void>;
+  /** Drop a pause asked for that has not landed. */
+  disarmPause(): Promise<void>;
+  isPaused(): boolean;
+  waitForPause(timeoutMs?: number): Promise<void>;
+  watchPause(watcher: (paused: boolean, event?: any) => void): () => void;
+  setInstrumentationBreakpoints(eventNames: readonly string[]): Promise<void>;
+  clearInstrumentationBreakpoints(): Promise<void>;
+  scriptUrl(scriptId: string): string | undefined;
+}
+
 export interface BenchSession extends BenchReport {
   client: CDPSession;
   page: Page;
@@ -67,6 +85,26 @@ export interface BenchSession extends BenchReport {
   recordingSequence?: boolean;
   /** The name the recording was started under, for the pane to show. */
   recordingName?: string;
+  /**
+   * Steps taken out of the recording in progress, by position in the full list
+   * its events convert to. That list only grows at its end, so a position holds
+   * one step for the length of the recording; the save takes these out.
+   */
+  recordingDropped?: number[];
+  /** The last test run of the recording in progress: running, or how it ended. */
+  recordingTest?: { state: 'running' | 'passed' | 'failed'; total: number; summary?: string };
+  /** Each step taken out of the recording in progress, newest last, with what was written against it, for undo to put back. */
+  recordingUndo?: Array<{
+    full: number;
+    index: number;
+    edit?: Record<string, unknown>;
+    note?: { comment: string };
+    annotations?: Annotation[];
+    traffic?: StepTraffic;
+    motion?: Record<string, MotionSetting>;
+  }>;
+  /** The recording in progress takes no steps while set; the page's recorder reads it as `__cdpRecordingPaused`. */
+  recordingPaused?: boolean;
   /**
    * What the recording is for and what it should end up doing.
    *
@@ -119,8 +157,6 @@ export interface BenchSession extends BenchReport {
   keptEvents?: number;
   /** Detaches the bench's UI hold from the hold record when the bench closes. */
   detachUi?: () => void;
-  /** The bench's JS pause, left in place by a screen released on its own, until the code is released. */
-  jsKept?: boolean;
   /** Set when the page was frozen to hold a step, so only that freeze is undone. */
   heldForStep?: boolean;
   /** Drives nested inside the one that brought the app's tab to the front. */
@@ -213,21 +249,45 @@ export interface BenchSession extends BenchReport {
   driving?: AbortController;
   /** Why the last step stopped, when it failed. */
   sequenceFailure?: string;
-  /** True between asking for a pause and releasing it: what makes a pause
-   *  ours. A pause arriving without it belongs to someone else - a breakpoint
-   *  from the breakpoint tool, say - and is never resumed from here. */
-  pauseRequested: boolean;
-  /** Set when the page is stopped by something that is not the bench. */
-  heldByOther: boolean;
-  /** Whether V8 is actually stopped, as opposed to holding an armed pause.
-   *  Debugger.pause on an idle page does not stop anything - there is nothing
-   *  running to stop - it arms a pause that the next callback walks into. The
-   *  page is held either way, but only a taken pause can be resumed. */
-  pauseTaken: boolean;
+  /**
+   * The page's one debugger connection, the debugger tools' own. The page's
+   * JS is paused, resumed and stepped through it alone: a second debugger
+   * agent of the bench's kept its own record of whether the page stood
+   * stopped, and the two records disagreed in the moments between a command
+   * and the event confirming it.
+   */
+  debugger?: PageDebugger;
+  /** Stops following the debugger connection's pauses when the bench closes. */
+  unwatchPause?: () => void;
   /** scriptId -> url, from Debugger.scriptParsed, to name a callback's source. */
   scripts: Map<string, string>;
   /** styleSheetId -> url, from CSS.styleSheetAdded, to name a rule's source. */
   sheets: StyleSheets;
+  /** The animations the Animation domain has reported started and not cancelled, by id. */
+  animations: Map<string, TrackedAnimation>;
+  /** The next screen hold arms a stop in front of the page's next frame in place of pausing it now. */
+  frameStopArming?: boolean;
+  /** When the last frame stop was armed: the animations created after it are the group its input started. */
+  groupSince?: number;
+  /** The rate the page's animations run at while released; a release restores it (default 1). */
+  playbackRate?: number;
+  /** Rules acting on single animations as they start; see motion-rules.ts. */
+  motionRules?: MotionRule[];
+  /** Animations a rule paused, which run again once no rule holds them. */
+  motionPaused?: Set<string>;
+  /**
+   * Animations a rule paused, sought or retimed. Chrome reports each of them
+   * cancelled as the rule acts, though it goes on; their cancels are passed over.
+   */
+  motionTouched?: Set<string>;
+  /** What the rules did, newest last, capped. */
+  motionApplied?: MotionApplied[];
+  /** Settles once a whole-page freeze a step's motion scheduled has landed. */
+  pendingFreeze?: Promise<void>;
+  /** Motion set on the steps of the recording in progress, by step position, written onto the file when it lands. */
+  recordingMotion?: Map<number, Record<string, MotionSetting>>;
+  /** A burst a step filmed, waiting on the person to keep or drop it. */
+  burst?: BurstView;
 }
 
 export const sessions = new Map<string, BenchSession>();
@@ -250,6 +310,12 @@ export function pageHeldElsewhere(page: Page, exceptConnection: string): boolean
     if (reference !== exceptConnection && session.page === page) return true;
   }
   return false;
+}
+
+/** Put a burst a step filmed on the bench open on `connection`, for the person to look through. */
+export function showBenchBurst(connection: string, burst: BurstView): void {
+  const session = sessions.get(connection);
+  if (session) session.burst = burst;
 }
 
 export function getBenchSession(connection: string): BenchReport | undefined {

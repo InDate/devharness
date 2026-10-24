@@ -5,7 +5,6 @@ import { Notice } from './notice.js';
 import { Draft } from './markup.js';
 import { ActivityRows, listedKinds, PauseCrossings, pauseSummary, stepTally, useActivity } from './activity.js';
 import { RecordingRow } from './recorder.js';
-import { Recording } from './recording.js';
 import { LabelInput, Row } from './row.js';
 import { RunsPanel, byTag, startRun, useRuns } from './runs.js';
 import { Glyph } from './glyph.js';
@@ -45,14 +44,10 @@ export interface CardAsk {
   step: number;
 }
 
-export function Editing({ base, onReturn, returnsFromShot, starting, onStarted, card: askedCard }: {
+export function Editing({ base, onReturn, returnsFromShot, card: askedCard }: {
   base: string;
   /** A sequence's card on the home page a go-to asked for, opened with its step marked. */
   card?: CardAsk | null;
-  /** A new sequence has been asked for and not yet started or dropped. */
-  starting: boolean;
-  /** The ask is over: the recording ran and ended, or the form was left. */
-  onStarted: () => void;
   /** Go to the recording's own screen, where its controls are. */
   onReturn: () => void;
   /** Set when a capture was started from another tab, which it goes back to when settled. */
@@ -199,6 +194,9 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted, 
       document.removeEventListener('drop', onDrop);
     };
   });
+  // Unsaved or still recording, nothing of the sequence is on disk, so a step
+  // comes out on one click; a saved one asks twice, since the file is written at once.
+  const scratch = state?.sequence?.recording === true || state?.sequence?.unsaved === true;
   const removeStep = (index: number) => {
     (document.activeElement as HTMLElement | null)?.blur();
     void post('/sequence/step/remove', { index });
@@ -208,15 +206,7 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted, 
     if (!next.delete(index)) next.add(index);
     return next;
   });
-  const activity = useActivity(base, state?.sequence);
-  // A recording that has ended - saved or thrown away - ends the ask for a new
-  // one too; left standing, the form came back with the old name in it.
-  const wasRecording = useRef(false);
-  const recordingNow = state?.sequence?.recording === true;
-  useEffect(() => {
-    if (wasRecording.current && !recordingNow && starting) onStarted();
-    wasRecording.current = recordingNow;
-  }, [recordingNow]);
+  const activity = useActivity(base, state?.sequence, state?.motionDetect);
   useEscape(activity.reading !== null, () => activity.setReading(null));
   useEscape(selection !== null, () => setSelection(null));
 
@@ -427,17 +417,23 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted, 
     const label = standing ? 'paused' : 'paused, then resumed';
     const events = activity.pauses.get(step) ?? [];
     const inputs = (activity.boundary?.pauseActions ?? []).filter(input => input.runId === activity.pass && input.step === step).length;
+    // A saved point a run has stopped at is drawn by these markers in place of its own line, so they carry its remove.
+    const remove = at?.pauseBefore ? (
+      <button class="pausecancel" title="remove this pause point" aria-label="remove this pause point"
+        onClick={(e: MouseEvent) => { e.stopPropagation(); void post('/sequence/step/pause', { step, on: false }); }}>
+        <Glyph of="cross" /><span class="pauselabel">remove</span></button>
+    ) : undefined;
     // Open unless folded by hand: a pause shows its bookends even when nothing happened in it.
     if (openRuns.has(key)) {
       return (
-        <RunMark classes={(standing ? 'mark switch runfold here onit' : 'mark switch runfold') + point} title="open what crossed while the run was paused" onClick={() => toggleRun(key)}>
+        <RunMark classes={(standing ? 'mark switch runfold here onit' : 'mark switch runfold') + point} title="open what crossed while the run was paused" onClick={() => toggleRun(key)} tools={remove}>
           {label}<span class="pausedot">·</span>{pauseSummary(events, inputs)}
         </RunMark>
       );
     }
     return (
       <>
-        <RunMark classes={(standing ? 'mark switch runfold open runstart onit' : 'mark switch runfold open runstart') + point} title="fold what crossed while the run was paused" onClick={() => toggleRun(key)}>
+        <RunMark classes={(standing ? 'mark switch runfold open runstart onit' : 'mark switch runfold open runstart') + point} title="fold what crossed while the run was paused" onClick={() => toggleRun(key)} tools={remove}>
           {label}
         </RunMark>
         <PauseCrossings activity={activity} step={step} base={base} />
@@ -615,14 +611,6 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted, 
       )}
 
 
-      {/* Naming a new sequence, with none recording yet: the open sequence's
-          steps belong to another run, so the form stands alone. */}
-      {starting && !sequence?.recording && (
-        <main class="reel">
-          <Recording base={base} onCancel={onStarted} />
-        </main>
-      )}
-
       {sequence?.recording && <RecordingRow sequence={sequence} post={post} />}
 
       {/* One column, read top to bottom: the run's steps as quiet markers, and
@@ -631,14 +619,18 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted, 
           join up. */}
       {/* A recording on any step is what rows are compared against, and the
           badge column is laid out only then. */}
-      {!(starting && !sequence?.recording) && <main class={steps.some(step => Object.keys(step.traffic?.kinds ?? {}).length > 0) ? 'reel compared' : 'reel'}>
+      <main class={steps.some(step => Object.keys(step.traffic?.kinds ?? {}).length > 0) ? 'reel compared' : 'reel'}>
         {/* A capture or a pick taken with no step standing - nothing selected,
             or the run finished - leads the column. Placed after the catalogue
             it would sit below every tile, off the bottom of the screen, which
             reads as the capture having failed. */}
         {!joins && !steps.some(step => step.current) && draft}
 
-        {!state.shot && state.pending && !steps.some(step => step.current) && (
+        {!sequence?.name && !sequence?.recording && !state.shot && (state.pending || state.looseShots.length > 0) && (
+          <Loose picked={state.pending} shots={state.looseShots} base={base} post={post} />
+        )}
+
+        {sequence?.name && !state.shot && state.pending && !steps.some(step => step.current) && (
           <ol class="activitycards">
             <Picked
               picked={state.pending}
@@ -845,12 +837,17 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted, 
                     disabled={runOf(step.index).start + runOf(step.index).count >= steps.length}
                     onClick={(e: Event) => { e.stopPropagation(); moveStep(step.index, 1); }}
                   ><Glyph of="down" /></button>
+                </>
+              )}
+              {/* While recording, a step comes out of what the save will write; the moves wait for the file. */}
+              {(!sequence?.recording || !sequence.pendingStep) && (
+                <>
                   <button class={removingAt === step.index ? 'marknote markremove sure' : 'marknote markremove'}
-                    title={removingAt === step.index ? 'click again to take this step out of the run' : 'take this step out of the run'}
+                    title={scratch ? 'take this step out' : removingAt === step.index ? 'click again to take this step out of the run' : 'take this step out of the run'}
                     aria-label={removingAt === step.index ? 'confirm removing this step' : 'remove this step'}
                     onClick={(e: Event) => {
                       e.stopPropagation();
-                      if (removingAt !== step.index) { setRemovingAt(step.index); return; }
+                      if (!scratch && removingAt !== step.index) { setRemovingAt(step.index); return; }
                       setRemovingAt(null);
                       removeStep(step.index);
                     }}
@@ -954,7 +951,7 @@ export function Editing({ base, onReturn, returnsFromShot, starting, onStarted, 
           </div>
         )}
 
-      </main>}
+      </main>
     </div>
   );
 }
@@ -1740,6 +1737,50 @@ function checkShapes(crossed: BoundaryEvent[], recorded?: Record<string, KindCou
  * end. A picked element is named under it, and can be dropped to write about
  * the step instead. Enter saves; Escape and Cancel leave nothing behind.
  */
+/**
+ * A pick and the captures kept with no sequence open. A note is stored in the
+ * step it belongs to, so these wait here, and join the next note saved once a
+ * sequence is open or being recorded.
+ */
+function Loose({ picked, shots, base, post }: {
+  picked: BenchView['pending'];
+  shots: string[];
+  base: string;
+  post: (path: string, body?: Record<string, unknown>) => Promise<void>;
+}) {
+  const [copied, setCopied] = useState(false);
+  const where = picked?.source?.fileName
+    ? `${picked.source.fileName.split('/').pop()}${picked.source.lineNumber ? `:${picked.source.lineNumber}` : ''}`
+    : picked?.component;
+  return (
+    <ol class="activitycards">
+      <li class="loosecard">
+        {picked && (
+          <div class="looserow">
+            <span class="loosekind">pick</span>
+            <code title={picked.selector}>{picked.tag} · {picked.selector}</code>
+            {where && <span class="loosewhere" title={picked.source?.fileName ?? picked.component}>{where}</span>}
+            <button class="tool plain" title="copy the selector" onClick={() => {
+              void navigator.clipboard?.writeText(picked.selector).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200); }, () => undefined);
+            }}>{copied ? 'copied' : 'copy selector'}</button>
+            <button class="tool plain" title="capture the picked element, then mark it up"
+              onClick={() => void post('/shot', { selector: picked.selector })}>Capture</button>
+            <button class="tool plain" title="drop the pick" onClick={() => void post('/discard')}>×</button>
+          </div>
+        )}
+        {shots.map(shot => (
+          <div class="looserow" key={shot}>
+            <span class="loosekind">capture</span>
+            <code title={shot}>{shot.split('/').pop()}</code>
+            <a class="tool plain" href={`${base}/shot/img?p=${encodeURIComponent(shot)}`} target="_blank" rel="noopener">open</a>
+          </div>
+        ))}
+        <p class="hint">These join a note once you open or record a sequence.</p>
+      </li>
+    </ol>
+  );
+}
+
 function Picked({ picked, onSave, onShoot, onDrop, onCancel }: {
   picked?: { tag: string; selector: string; text?: string } | null;
   onSave: (words: string) => void;

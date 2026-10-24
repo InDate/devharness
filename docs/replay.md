@@ -564,9 +564,9 @@ window, so it is listed apart:
   default; `stop`, `report`) the run also holds the page's code and network,
   and its screen where a bench is open. `step` and `finish` release the run's
   own hold; `cancel` releases it and ends the run; a hold the person or the
-  bench placed stays. `replay.watchPersonInput: false` turns the watch off;
-  with it off, `connection({ action: 'launch', watchInput: true })` or RECORD
-  MY INPUT on the bench turns it on for one connection.
+  bench placed stays. The watch is off by default: `replay.watchPersonInput:
+  true` turns it on everywhere, and `connection({ action: 'launch', watchInput:
+  true })` or RECORD MY INPUT on the bench turns it on for one connection.
 - **Held page.** A driving call, or a run's step, on a page whose code a hold
   stops returns `PAGE_HELD` at once, naming the hold.
 - **A pause holds the page.** A `stepTo` pause, and a pause point's, hold the

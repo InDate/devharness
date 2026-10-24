@@ -5,6 +5,7 @@
  * tool needs one, that a page has been loaded.
  */
 
+import { blankPageUrl } from './utils/blank-page.js';
 import type { CDPManager } from './cdp-manager.js';
 import type { PuppeteerManager } from './puppeteer-manager.js';
 import type { ChromeLauncher } from './chrome-launcher.js';
@@ -60,7 +61,7 @@ export function checkBrowserAutomation(
   if (requirePageLoad) {
     const page = puppeteerManager.getPage();
     const url = page?.url();
-    if (!url || url === 'about:blank' || url === 'chrome://newtab/' || url === 'chrome://new-tab-page/') {
+    if (blankPageUrl(url)) {
       return createErrorResponse('PAGE_NOT_LOADED', { toolName });
     }
   }

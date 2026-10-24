@@ -30,7 +30,7 @@ import { decodePng, encodePng } from './png.js';
 import { diffPixels, sideBySide } from './pixel-diff.js';
 import type { BenchView, BoundaryState, CaptureKind, CaptureRect, FactKind, RuleCatalogueEntry, SequenceOutline, HistoryEntry, HistoryDetail, ToolGroup, ToolRun, ToolValues, IssueRow, SequenceNote, ToolFavourite, ServerRow, ServerLog, RunningView } from './bench/wire.js';
 import type { RunsView } from './bench/wire.js';
-import type { ActivityMove, ExpectedValue, KindCount } from './bench/kinds.js';
+import type { ActivityMove, ExpectedValue, KindCount, MotionSetting } from './bench/kinds.js';
 
 const FACT_KINDS: FactKind[] = ['events', 'css', 'html', 'a11y'];
 
@@ -51,6 +51,24 @@ function originValues(raw: unknown): Record<string, string> | undefined {
 
 export type { BenchView } from './bench/wire.js';
 
+/** A motion setting as the bench sent it, its fields checked, or null to clear one. */
+function motionSettingOf(raw: unknown): MotionSetting | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const given = raw as Record<string, unknown>;
+  const ms = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined);
+  const slow = typeof given.slow === 'number' && given.slow > 0 && given.slow <= 10 ? given.slow : undefined;
+  const setting: MotionSetting = {
+    ...(slow !== undefined && slow !== 1 ? { slow } : {}),
+    ...(given.off === true ? { off: true as const } : {}),
+    ...(given.alone === true ? { alone: true as const } : {}),
+    ...(ms(given.freezeAt) !== undefined ? { freezeAt: ms(given.freezeAt) } : {}),
+    ...(given.only === true && ms(given.freezeAt) !== undefined ? { only: true as const } : {}),
+    ...(ms(given.duration) !== undefined ? { duration: ms(given.duration) } : {}),
+    ...(ms(given.delay) !== undefined ? { delay: ms(given.delay) } : {}),
+  };
+  return Object.keys(setting).length ? setting : null;
+}
+
 export interface BenchHandlers {
   /** Everything but `primary`, which only the route can decide. */
   getState: () => Promise<Omit<BenchView, 'primary'>>;
@@ -62,6 +80,13 @@ export interface BenchHandlers {
   openDevtools: () => Promise<string>;
   changeHold: (action: 'hold' | 'release' | 'step', layers?: Array<'code' | 'ui' | 'network'>) => Promise<void>;
   setPicker: (armed: boolean) => Promise<void>;
+  seek: (ms: number) => Promise<void>;
+  setRate: (playbackRate: number) => Promise<void>;
+  dismissBurst: (drop: boolean) => Promise<void>;
+  setMotionDetect: (on: boolean) => Promise<void>;
+  setStepMotion: (step: number, kind: string, setting: MotionSetting | null) => Promise<void>;
+  replayMotionStep: (step: number) => Promise<void>;
+  seekOne: (id: string, currentMs: number) => Promise<void>;
   setPersonInput: (on: boolean) => Promise<void>;
   setHeld: (held: boolean, resume?: boolean) => Promise<void>;
   selectSequence: (name: string) => Promise<void>;
@@ -171,6 +196,11 @@ export interface BenchHandlers {
   recordInto: (after: number) => Promise<void>;
   stopRecordingSequence: () => Promise<void>;
   cancelRecordingSequence: () => Promise<void>;
+  pauseRecording: (paused: boolean) => Promise<void>;
+  testRecording: () => Promise<void>;
+  saveUnsaved: (as: string, purpose: { description?: string; expectedOutcome?: string }) => Promise<void>;
+  discardUnsaved: () => Promise<void>;
+  undo: () => Promise<void>;
   removeSequenceStep: (index: number) => Promise<void>;
   /** Replace what a step is given. */
   editSequenceStep: (index: number, params: unknown) => Promise<void>;
@@ -569,6 +599,34 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
               );
               break;
             case '/picker': await handlers.setPicker(!!body.armed); break;
+            case '/motion/seek': {
+              const ms = Number(body.ms);
+              if (Number.isFinite(ms) && ms > 0) await handlers.seek(ms);
+              break;
+            }
+            case '/motion/rate': {
+              const rate = Number(body.playbackRate);
+              if (Number.isFinite(rate) && rate > 0 && rate <= 4) await handlers.setRate(rate);
+              break;
+            }
+            case '/burst/dismiss': await handlers.dismissBurst(body.drop === true); break;
+            case '/motion/detect': await handlers.setMotionDetect(body.on === true); break;
+            case '/motion/setting': {
+              const step = Number(body.step);
+              if (!Number.isInteger(step) || step < 0 || typeof body.kind !== 'string') break;
+              await handlers.setStepMotion(step, body.kind, motionSettingOf(body.setting));
+              break;
+            }
+            case '/motion/replay': {
+              const step = Number(body.step);
+              if (Number.isInteger(step) && step >= 0) await handlers.replayMotionStep(step);
+              break;
+            }
+            case '/motion/seekto': {
+              const at = Number(body.at);
+              if (typeof body.id === 'string' && Number.isFinite(at)) await handlers.seekOne(body.id, at);
+              break;
+            }
             case '/input/person': await handlers.setPersonInput(!!body.on); break;
             case '/hold/page': await handlers.setHeld(!!body.held, body.resume === true); break;
             case '/sequence/select': await handlers.selectSequence(String(body.name ?? '')); break;
@@ -621,6 +679,16 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
               break;
             case '/sequence/record/stop': await handlers.stopRecordingSequence(); break;
             case '/sequence/record/cancel': await handlers.cancelRecordingSequence(); break;
+            case '/sequence/record/pause': await handlers.pauseRecording(body.paused === true); break;
+            case '/sequence/record/test': await handlers.testRecording(); break;
+            case '/sequence/save':
+              await handlers.saveUnsaved(String(body.name ?? ''), {
+                ...(typeof body.description === 'string' ? { description: body.description } : {}),
+                ...(typeof body.expectedOutcome === 'string' ? { expectedOutcome: body.expectedOutcome } : {}),
+              });
+              break;
+            case '/sequence/discard': await handlers.discardUnsaved(); break;
+            case '/sequence/undo': await handlers.undo(); break;
             case '/sequence/step/edit':
               await handlers.editSequenceStep(Math.max(0, Number(body.index) || 0), body.params);
               break;

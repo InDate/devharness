@@ -24,7 +24,7 @@ import { getSessionInfo } from '../tools/dashboard-tools.js';
 import { appendEvent, currentOrigin, getEventStreamPath, runAs, streamReaders, unreadEvents, watchCall } from '../session-events.js';
 import { announceSequenceSaved } from '../sequence-events.js';
 import { activityPathFor, readActivity, readSiteActivity, renumberSteps, siteActivityPath, stepMap, writeSiteActivity } from '../sequence-activity.js';
-import type { ActivityMove, ExpectedValue, KindCount } from '../bench/kinds.js';
+import type { ActivityMove, ExpectedValue, KindCount, MotionSetting } from '../bench/kinds.js';
 import type { SequenceDriver } from './driver.js';
 import { getBenchSession, sessions } from './session.js';
 import type { Annotation, AnnotationTarget } from '../annotation.js';
@@ -481,7 +481,33 @@ export function createSequenceDriver(
     await (by ? runAs(by, announce) : announce());
   };
 
+  /**
+   * Sequences recorded in the bench and not yet saved, by name. They live in
+   * the recorder's memory alone: every change to one is made there and written
+   * nowhere, and a server restart loses them.
+   */
+  const unsaved = new Set<string>();
+
+  /**
+   * Copies of each unsaved sequence taken before each change to it, newest
+   * last, which undo puts back. A saved sequence has its file written on
+   * every change, so it keeps none.
+   */
+  const undoStack = new Map<string, unknown[]>();
+  const UNDO_KEPT = 50;
+  const remember = (sequence: { name: string }) => {
+    if (!unsaved.has(sequence.name)) return;
+    const stack = undoStack.get(sequence.name) ?? [];
+    stack.push(structuredClone(sequence));
+    if (stack.length > UNDO_KEPT) stack.shift();
+    undoStack.set(sequence.name, stack);
+  };
+
   const persist = async (sequence: { id: string; name: string }, change?: string): Promise<string | undefined> => {
+    if (unsaved.has(sequence.name)) {
+      await flushMove();
+      return undefined;
+    }
     const saved = await commandRecorder.saveSequenceToDisk(sequence.id, false, true);
     if (!saved) return `"${sequence.name}" is no longer loaded`;
     if (!saved.success) return saved.error;
@@ -739,6 +765,7 @@ export function createSequenceDriver(
             ...(command.annotations?.length ? { annotations: command.annotations } : {}),
             ...(command.traffic ? { traffic: command.traffic } : {}),
             ...(command.expected ? { expected: command.expected } : {}),
+            ...(command.motion ? { motion: command.motion } : {}),
             ...(command.addedAt !== undefined ? { addedAt: command.addedAt } : {}),
           };
         }),
@@ -795,6 +822,7 @@ export function createSequenceDriver(
     setPause: async (step: number, change: { on?: boolean; holds?: Array<'code' | 'ui' | 'network'>; note?: string; notify?: boolean }) => {
       const sequence = openSequence();
       if (!sequence) return 'no sequence is open';
+      remember(sequence);
       const command = sequence.commands?.[step];
       if (!command) return `step ${step + 1} is not in "${sequence.name}"`;
       if (step === 0) return 'a run starts at step 1, so there is nothing before it to pause at';
@@ -879,7 +907,7 @@ export function createSequenceDriver(
       return undefined;
     },
 
-    goto: async (step: number, signal?: AbortSignal) => {
+    goto: async (step: number, signal?: AbortSignal, holds?: Array<'code' | 'ui' | 'network'>) => {
       // This bench's own selection first: a session belonging to another one
       // would send this browser to a page its sequence never names.
       const name = selected ?? ourRun()?.sequenceName;
@@ -889,6 +917,7 @@ export function createSequenceDriver(
       selected = name;
       return replay({
         action: 'run', name, stepTo: step + 1, wait: true, connection: selectedConnection, variables: recordedText(),
+        ...(holds ? { hold: holds } : {}),
         ...(rebindOnto(name, selectedConnection) ? { connections: rebindOnto(name, selectedConnection) } : {}),
         ...(baseUrl ? { baseUrl } : {}),
         ...(envFile ? { envFile } : {}),
@@ -1029,6 +1058,7 @@ export function createSequenceDriver(
 
       // Recording leaves the sequence in memory; without this it is gone when
       // the server restarts, while the pane lists it as though it were saved.
+      // Kept in memory, unsaved, until the person saves it under a name.
       const recorded = loadedByName(name);
       if (recorded) {
         // The page it began on is the sequence's own first step, so a replay
@@ -1036,11 +1066,87 @@ export function createSequenceDriver(
         if (startUrl && recorded.commands?.[0]?.tool !== 'navigate') {
           recorded.commands = [navigateFirst(swapPaneUrl(startUrl, connection, 'token')), ...(recorded.commands ?? [])];
         }
-        const saved = await commandRecorder.saveSequenceToDisk(recorded.id, false, true);
-        if (!saved) return `"${name}" recorded but is no longer loaded`;
-        if (!saved.success) return `"${name}" recorded but not saved: ${saved.error}`;
-        await announceSequenceSaved(recorded, saved.filepath);
+        unsaved.add(name);
       }
+      return undefined;
+    },
+
+    isUnsaved: (name: string) => unsaved.has(name),
+
+    setMotion: async (index: number, kind: string, setting: MotionSetting | null) => {
+      const sequence = openSequence();
+      if (!sequence) return 'no sequence is open';
+      remember(sequence);
+      const command = sequence.commands?.[index];
+      if (!command) return `step ${index + 1} is not in "${sequence.name}"`;
+      const motion = { ...(command.motion ?? {}) };
+      if (setting && Object.keys(setting).length) motion[kind] = setting;
+      else delete motion[kind];
+      if (Object.keys(motion).length) command.motion = motion;
+      else delete command.motion;
+      return persist(sequence, setting ? `motion of ${kind} set on step ${index + 1}` : `motion of ${kind} cleared on step ${index + 1}`);
+    },
+
+    testCommands: async (name: string, commands: Array<{ tool: string; params: Record<string, unknown> }>, connection: string) => {
+      const sequence = await commandRecorder.createSequenceFromCommands(`${name}-test`, commands as any);
+      try {
+        const response = await executeToolCall('replay', { action: 'run', name: sequence.name, connection, wait: true });
+        return { passed: response?._meta?.replay?.success === true, summary: textOf(response).split('\n').slice(0, 2).join(' ') };
+      } catch (error: any) {
+        return { passed: false, summary: textOf(error).split('\n').slice(0, 2).join(' ') };
+      } finally {
+        commandRecorder.deleteSequence(sequence.id);
+      }
+    },
+
+    canUndo: (name: string) => (undoStack.get(name)?.length ?? 0) > 0,
+
+    undo: () => {
+      const sequence = openSequence();
+      const before = sequence ? undoStack.get(sequence.name)?.pop() : undefined;
+      if (!sequence || !before) return 'nothing to undo';
+      for (const key of Object.keys(sequence)) delete (sequence as unknown as Record<string, unknown>)[key];
+      Object.assign(sequence, before);
+      return undefined;
+    },
+
+    clearUndo: (name: string) => { undoStack.delete(name); },
+
+    saveUnsaved: async (name: string, as: string, purpose?: { description?: string; expectedOutcome?: string }) => {
+      const sequence = loadedByName(name);
+      if (!sequence || !unsaved.has(name)) return `"${name}" is not an unsaved sequence`;
+      const target = as.trim();
+      if (!target) return 'a sequence is saved under a name';
+      if (target !== name) {
+        const onDisk = await commandRecorder.listSavedSequencesOnDisk().catch(() => [] as any[]);
+        const taken = onDisk.some((entry: any) => String(entry?.name ?? entry?.filename ?? '').replace(/\.json$/, '') === target)
+          || commandRecorder.listSequences().some(other => other.name === target && other.id !== sequence.id);
+        if (taken) return `a sequence named "${target}" already exists`;
+      }
+      sequence.name = target;
+      if (purpose?.description !== undefined) sequence.description = purpose.description;
+      if (purpose?.expectedOutcome !== undefined) sequence.expectedOutcome = purpose.expectedOutcome;
+      unsaved.delete(name);
+      undoStack.delete(name);
+      if (selected === name) selected = target;
+      const saved = await commandRecorder.saveSequenceToDisk(sequence.id, false, true);
+      if (!saved || !saved.success) {
+        sequence.name = name;
+        unsaved.add(name);
+        if (selected === target) selected = name;
+        return saved ? `"${target}" not saved: ${saved.error}` : `"${name}" is no longer loaded`;
+      }
+      await announceSequenceSaved(sequence, saved.filepath, 'saved from the bench');
+      return undefined;
+    },
+
+    discardUnsaved: (name: string) => {
+      const sequence = loadedByName(name);
+      if (!sequence || !unsaved.has(name)) return `"${name}" is not an unsaved sequence`;
+      unsaved.delete(name);
+      undoStack.delete(name);
+      commandRecorder.deleteSequence(sequence.id);
+      if (selected === name) selected = null;
       return undefined;
     },
 
@@ -1064,12 +1170,9 @@ export function createSequenceDriver(
       const at = Math.min(Math.max(after + 1, 0), commands.length);
       renumberSteps(target, (old) => (old >= at ? old + steps.length : old));
       target.commands = [...commands.slice(0, at), ...steps, ...commands.slice(at)] as any;
-      // The recording was only ever a carrier: its file and its activity go.
-      const saved = await commandRecorder.saveSequenceToDisk(recorded.id, false, true);
-      if (saved?.success) {
-        await commandRecorder.deleteSequenceFromDisk(saved.filepath);
-        await fs.unlink(activityPathFor(saved.filepath)).catch(() => {});
-      }
+      // The recording was only ever a carrier: it lived in memory alone, and goes.
+      unsaved.delete(recorded.name);
+      commandRecorder.deleteSequence(recorded.id);
       commandRecorder.deleteSequence(recorded.id);
       selected = target.name;
       return persist(target, `${steps.length} recorded step${steps.length === 1 ? '' : 's'} put in after step ${after + 1}`);
@@ -1276,7 +1379,7 @@ export function createSequenceDriver(
       (await countStepTraffic(executeToolCall, connection, from, to))
         ?? { requests: 0, failed: 0, opened: 0, writes: 0, lines: [] },
 
-    recordedSoFar: (eventsJson: string, startUrl: string, edits?: Map<number, Record<string, unknown>>) => {
+    recordedSoFar: (eventsJson: string, startUrl: string, edits?: Map<number, Record<string, unknown>>, dropped?: readonly number[]) => {
       let events: any[] = [];
       try { events = JSON.parse(eventsJson); } catch { events = []; }
       const times: number[] = [];
@@ -1290,11 +1393,14 @@ export function createSequenceDriver(
       const lead = startUrl && converted[0]?.tool !== 'navigate' ? [navigateFirst(startUrl)] : [];
       // A step changed in the bench reads as changed: its label, and the
       // variables it reads, come from what it is given now.
-      const commands = [...lead, ...converted].map((command, index) =>
+      const gone = new Set(dropped ?? []);
+      const kept = [...lead, ...converted].map((command, full) => ({ command, full })).filter(one => !gone.has(one.full));
+      const commands = kept.map(({ command }, index) =>
         (edits?.has(index) ? { ...command, params: edits.get(index)! } : command));
       // The synthesised opening navigate has no source event, so it takes the
       // clock of whatever followed it.
-      const at = [...lead.map(() => times[0]), ...times];
+      const allAt = [...lead.map(() => times[0]), ...times];
+      const at = kept.map(one => allAt[one.full]);
       return commands.map((command, index) => ({
         index,
         label: labelFor(command),
@@ -1385,6 +1491,7 @@ export function createSequenceDriver(
     editStep: async (index: number, params: Record<string, unknown>) => {
       const sequence = openSequence();
       if (!sequence) return 'no sequence is open';
+      remember(sequence);
       const commands = [...(sequence.commands ?? [])];
       if (index < 0 || index >= commands.length) return `step ${index + 1} is not in "${sequence.name}"`;
       commands[index] = { ...commands[index], params } as any;
@@ -1395,6 +1502,7 @@ export function createSequenceDriver(
     insertTimer: async (after: number, ms: number) => {
       const sequence = openSequence();
       if (!sequence) return 'no sequence is open';
+      remember(sequence);
       const commands = [...(sequence.commands ?? [])];
       if (after < 0 || after >= commands.length) return `step ${after + 1} is not in "${sequence.name}"`;
       commands.splice(after + 1, 0, { tool: 'check', params: { afterMs: ms } } as any);
@@ -1406,6 +1514,7 @@ export function createSequenceDriver(
     insertCheck: async (after: number, params: Record<string, unknown>, comment?: string) => {
       const sequence = openSequence();
       if (!sequence) return 'no sequence is open';
+      remember(sequence);
       const commands = [...(sequence.commands ?? [])];
       if (after < 0 || after >= commands.length) return `step ${after + 1} is not in "${sequence.name}"`;
       commands.splice(after + 1, 0, { tool: 'check', params, addedAt: Date.now(), ...(comment ? { comment } : {}) } as any);
@@ -1417,6 +1526,7 @@ export function createSequenceDriver(
     removeStep: async (index: number) => {
       const sequence = openSequence();
       if (!sequence) return 'no sequence is open';
+      remember(sequence);
       const commands = sequence.commands ?? [];
       if (index < 0 || index >= commands.length) return `step ${index + 1} is not in "${sequence.name}"`;
       const kept = commands.filter((_, i) => i !== index);
@@ -1428,6 +1538,7 @@ export function createSequenceDriver(
     moveStep: async (from: number, to: number, count = 1) => {
       const sequence = openSequence();
       if (!sequence) return 'no sequence is open';
+      remember(sequence);
       const commands = [...(sequence.commands ?? [])];
       if (from < 0 || from + count > commands.length) {
         return `steps ${from + 1}–${from + count} are not all in "${sequence.name}"`;
@@ -1439,6 +1550,7 @@ export function createSequenceDriver(
       commands.splice(target, 0, ...run);
       renumberSteps(sequence, stepMap(sequence.commands ?? [], commands));
       sequence.commands = commands;
+      if (unsaved.has(sequence.name)) return undefined;
       const saved = await commandRecorder.saveSequenceToDisk(sequence.id, false, true);
       if (!saved) return `"${sequence.name}" is no longer loaded`;
       if (!saved.success) return saved.error;

@@ -7,10 +7,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A driving call holds the page itself.** `input` with `hold: ['ui']` (or
+  `code`, `network`) on press, click, scroll, drag, tap or swipe takes the hold
+  right after its last event is dispatched, inside any settle or quiet window
+  the page runs after the gesture, where a separate `hold` call lands only
+  after the motion has finished. `holdAfterMs` lets the page run that long
+  first, so a settle is frozen part-way; `_meta.hold` carries the reading. A
+  swipe with `holdBeforeEnd: true` holds with the contact still down, and
+  `input({ action: 'swipe', finish: true })` lifts it after the release.
+- **Frames of a motion, tiled.** `input` with `burst: { forMs, frames, clip }`
+  records the frames the compositor swaps from the dispatch on, through
+  `Page.startScreencast`, each stamped with its swap time, and saves them with
+  a contact sheet (`+<ms>` under each tile) under
+  `.devharness/screenshots/<date>/burst-<ts>/`; `_meta.burst` lists them. With
+  `hold`, the capture ends at the hold. `screenshot({ action: 'burst' })`
+  records the same with nothing dispatched.
+- **A held settle is stepped through.** `hold({ action: 'seek', ms })` moves
+  every CSS transition, CSS animation and web animation the bench has seen
+  start on by `ms` of its own time, the page's JS untouched, and the frame is
+  painted under the hold, so a settle is read and captured at 0, 25, 50, 75
+  and 100 percent. `hold({ action: 'rate', playbackRate })` sets what the
+  animations run at while released, and a release restores it.
+- **One animation at a time.** `hold({ action: 'motion' })` sets rules on
+  single animations as they start, matched by name and element: `slow`,
+  `off` (jump to its end), `alone` (pause every other), `freezeAt` (hold it
+  part-way while the rest run) and `duration`/`delay`. They stand across
+  replays until cleared.
+- **Animations as rows.** The bench's motion toggle, beside the proxy,
+  records each animation the page starts as a MOTION row under the step that
+  caused it, beside its traffic, counted in run tallies and compared with the
+  last run; `bench({ action: 'motion', on })` sets it, and it holds across
+  restarts. A MOTION row sets how that animation plays on the next run -
+  speed, off, a freeze for the whole page or that animation alone - stored on
+  the step under `motion` and applied when the step runs; a play stops on a
+  freeze, and the hold strip's Motion line drags the frozen animation.
+- **Recordings stay in memory until saved.** NEW starts recording at once;
+  stopping keeps the steps as an unsaved sequence, which a play, record-more,
+  save (name, purpose and outcome asked there) or throw-away acts on. A
+  recording pauses and resumes from its bar, plays its steps so far without
+  stopping, and takes a check after its latest step. A step comes out on one
+  click, and undo puts back the last removal or change.
+- **The bench's speed and seek.** The hold strip's Motion row sets the
+  animations' speed and, while the screen is held, seeks them with each one's
+  progress shown; a slowed page is marked on the disc. A burst a step films
+  opens on the bench as a sheet of its frames.
+- **Pick and capture with no sequence open.** The picker and capture buttons
+  work before a sequence is chosen; a pick or capture waits in a loose card
+  for the next note, and a pick is announced on the event stream.
+- **A held page answers reads and captures.** A screen hold on an idle page
+  now stops inside devharness's own script instead of arming a pause the next
+  read walks into and hangs on, and `screenshot` viewport and fullPage run
+  while a page is paused.
+
+### Changed
+
+- **A replay puts nothing into the page.** The replay cursor marks each click
+  with Chrome's overlay, drawn above the document, in place of a pointer and
+  a key badge added to the app's DOM, which the page's own readers took as
+  the app's: an animation row, a capture, an element. A key pressed is named
+  by the bench's step list.
+- **A person's input is recorded only on request.** `replay.watchPersonInput`
+  defaults to `false`, so a launched browser no longer puts its clicks and
+  typing into History or onto the next reply. `true` in config turns the watch
+  on everywhere; `connection({ action: 'launch', watchInput: true })`, or
+  RECORD MY INPUT on the bench, turns it on for one connection. A run pauses on
+  a person's input only while it is on.
+
 ### Fixed
 
 - **Chrome opens on its Terminal's macOS desktop.** A visible launch holds its
   window until that desktop shows. `CDP_TOOLS_DESKTOP_WAIT=0` disables it.
+- **A step that holds the page no longer pauses its run.** The replay read the
+  debugger pause a step's own code hold took as an unexpected breakpoint and
+  paused the run after it.
+- **Recorded steps survive a page load.** The bench listed only the events in
+  the page in front, so a reload emptied the list while the recorder still held
+  the earlier steps.
+- **Stale watches exit.** `devharness watch` exits when its Claude process
+  exits or `/clear` moves it to another session, instead of running forever.
+- **A run that crosses the proxy starts from a fresh tab.** A given connection
+  sitting on Chrome's new-tab page passed that URL as the proxied window's start
+  URL, and the window failed to open with `ERR_INVALID_URL`, failing every
+  `check:sequences` run on Chrome 156. The new-tab page now counts as blank, as
+  `about:blank` did, and the window opens on the sequence's own start.
 
 ## [0.16.0] - 2026-10-21
 

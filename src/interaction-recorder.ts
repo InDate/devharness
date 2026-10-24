@@ -120,7 +120,15 @@ export interface VariableEvent {
   timestamp: number;
 }
 
-export type InputEvent = MouseEvent | KeyboardEvent | PasteEvent | NavigationEvent | CommentEvent | TimerEvent | VariableEvent;
+/** A check the person put into the recording from the bench: a check step with these parameters. */
+export interface CheckEvent {
+  type: 'check';
+  params: Record<string, unknown>;
+  comment?: string;
+  timestamp: number;
+}
+
+export type InputEvent = MouseEvent | KeyboardEvent | PasteEvent | NavigationEvent | CommentEvent | TimerEvent | VariableEvent | CheckEvent;
 
 export interface RecordingOptions {
   showOverlay?: boolean;
@@ -239,6 +247,21 @@ export async function stopRecording(connectionReference: string): Promise<boolea
 }
 
 /**
+ * The events a recording keeps on the server: each page's events, sent
+ * before it unloads, and the page loads between them. The page in front
+ * holds the rest; the stop merges the two in timestamp order.
+ */
+export function savedRecordingEvents(connectionReference: string): InputEvent[] {
+  return activeSessions.get(connectionReference)?.events ?? [];
+}
+
+/** Drop the events a recording keeps on the server that are stamped at or after `from`. */
+export function trimSavedRecordingEvents(connectionReference: string, from: number): void {
+  const session = activeSessions.get(connectionReference);
+  if (session) session.events = session.events.filter(event => event.timestamp < from);
+}
+
+/**
  * Cancel all active recordings
  */
 export async function cancelAllRecordings(): Promise<number> {
@@ -271,6 +294,10 @@ export function isTimerEvent(event: InputEvent): event is TimerEvent {
 
 export function isVariableEvent(event: InputEvent): event is VariableEvent {
   return event.type === 'variable';
+}
+
+export function isCheckEvent(event: InputEvent): event is CheckEvent {
+  return event.type === 'check';
 }
 
 export function isCommentEvent(event: InputEvent): event is CommentEvent {
@@ -1474,7 +1501,7 @@ export function simplifyEvents(
 
   for (const event of events) {
     if (isKeyboardEvent(event) || isNavigationEvent(event) || isCommentEvent(event) || isPasteEvent(event)
-      || isTimerEvent(event) || isVariableEvent(event)) {
+      || isTimerEvent(event) || isVariableEvent(event) || isCheckEvent(event)) {
       flushPending();
       simplified.push(event);
       continue;
@@ -1594,6 +1621,12 @@ export function eventsToCommands(
 
     if (isTimerEvent(event)) {
       addCommand({ tool: 'check', params: { afterMs: event.ms } }, event.timestamp);
+      i++;
+      continue;
+    }
+
+    if (isCheckEvent(event)) {
+      addCommand({ tool: 'check', params: event.params, ...(event.comment ? { comment: event.comment } : {}) }, event.timestamp);
       i++;
       continue;
     }

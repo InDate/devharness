@@ -275,6 +275,27 @@ export function missingPushes(recordedSteps: Array<Record<string, KindCount> | u
  * or id beside them differs freely; `value` holds the whole payload, compared
  * as JSON where it parses and as text where it does not.
  */
+/**
+ * How one animation under a step behaves when the step runs, set from its
+ * MOTION row and stored on the step by the animation's kind. Absent fields
+ * leave the page's own behaviour.
+ */
+export interface MotionSetting {
+  /** Run at this multiple of real time: below 1 slower, above 1 faster. */
+  slow?: number;
+  /** Jump to its end as it starts: the element lands where the app put it, with no motion. */
+  off?: true;
+  /** Pause every other animation while this step's settings stand. */
+  alone?: true;
+  /** Freeze this many ms into its active time. */
+  freezeAt?: number;
+  /** With `freezeAt`: freeze this animation alone, the rest of the page running; absent, the whole page holds there. */
+  only?: true;
+  /** Its duration and delay in ms, in place of the page's. */
+  duration?: number;
+  delay?: number;
+}
+
 export interface ExpectedValue {
   value?: string;
   /** Fields whose value has to be the same, by dotted path. */

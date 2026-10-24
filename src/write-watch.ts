@@ -24,6 +24,7 @@
 
 import type { CDPSession, Page, Target, WebWorker } from 'puppeteer-core';
 import { currentCursor, onCursorEnd } from './proxy/registry.js';
+import { watchHolds } from './hold.js';
 import { causeAt, onCauseAdded } from './proxy/cause-timeline.js';
 import type { ProxyCursor } from './proxy/intercept-proxy.js';
 import { describeStructuredValue } from './structured-value.js';
@@ -31,7 +32,7 @@ import { movesPerRun } from './bench/kinds.js';
 
 export type WriteStore =
   | 'localStorage' | 'sessionStorage' | 'cookie' | 'indexedDB'
-  | 'cacheStorage' | 'fileSystem' | 'socket' | 'worker' | 'logpoint';
+  | 'cacheStorage' | 'fileSystem' | 'socket' | 'worker' | 'logpoint' | 'animation';
 
 export type WriteOperation = 'set' | 'changed' | 'removed' | 'cleared' | 'written' | 'started' | 'stopped' | 'closed' | 'logged';
 
@@ -52,8 +53,19 @@ export interface PageWrite {
 }
 
 const MAX_WRITES = 2000;
+/** How long after a command or step returns an animation it reported starting still counts as its doing. */
+const ANIMATION_REACH_MS = 500;
+/** The longest wait for two painted frames after a release; a hidden tab paints none. */
+const FRAMES_CAP_MS = 250;
 const VALUE_CHARS = 2000;
 const COOKIE_POLL_MS = 500;
+
+function sameCursor(a: ProxyCursor | undefined, b: ProxyCursor | undefined): boolean {
+  if (!a || !b || a.kind !== b.kind) return false;
+  if (a.kind === 'command') return a.index === (b as typeof a).index;
+  const other = b as typeof a;
+  return a.runId === other.runId && a.step === other.step && (a.within ?? []).join('.') === (other.within ?? []).join('.');
+}
 const FILE_POLL_MS = 1000;
 /** Records read from one object store or cache; a store holding more is reported as written, not diffed. */
 const RECORD_LIMIT = 200;
@@ -135,8 +147,21 @@ export class WriteWatch {
   private registrations = new Map<string, string>();
   private registrationsSettled = false;
   private detach: Array<() => void> = [];
+  private animationsOn = false;
+  private passCancel?: (id: string) => boolean;
+  /** The command or run step that last finished, and when, for an animation it started to be stamped with. */
+  private lastEnded?: { cursor: ProxyCursor; at: number };
+  /** Each running animation's key, by id, for its cancel to be named by. */
+  private animationKeys = new Map<string, string>();
+  /**
+   * The step that held the screen, and the release that ended its hold. A held
+   * page paints no frame, so Chrome reports the animations its input set off
+   * only when a later read forces a style pass or the release lets a frame
+   * through, both of which run under another step's cursor.
+   */
+  private screenHold?: { cursor: ProxyCursor; releasedBy?: ProxyCursor; releasedAt?: number };
 
-  constructor(private client: CDPSession, private page: Page) {}
+  constructor(private client: CDPSession, private page: Page, private connection?: string) {}
 
   private push(write: Omit<PageWrite, 'id' | 'at' | 'cursor'>, at = Date.now(), cursor = currentCursor()): void {
     // Nothing in flight when it was made: the timeline answers, which holds a
@@ -162,6 +187,21 @@ export class WriteWatch {
   }
 
   async start(): Promise<void> {
+    this.detach.push(onCursorEnd(ending => {
+      this.lastEnded = { cursor: ending, at: Date.now() };
+      const hold = this.screenHold;
+      if (hold?.releasedAt !== undefined && !sameCursor(ending, hold.releasedBy) && !sameCursor(ending, hold.cursor)) this.screenHold = undefined;
+    }));
+    this.detach.push(watchHolds(change => {
+      if (change.connection !== this.connection || !change.layers.includes('ui')) return;
+      if (change.change === 'held') {
+        const ended = this.lastEnded;
+        const cursor = currentCursor() ?? (ended && Date.now() - ended.at <= ANIMATION_REACH_MS ? ended.cursor : undefined);
+        this.screenHold = cursor ? { cursor } : undefined;
+      } else if (change.change === 'released' && this.screenHold) {
+        this.screenHold = { ...this.screenHold, releasedBy: currentCursor(), releasedAt: Date.now() };
+      }
+    }));
     // A cause added after the fact - a person's input - takes the writes made
     // inside its window with nothing in flight.
     this.detach.push(onCauseAdded(window => {
@@ -218,6 +258,37 @@ export class WriteWatch {
     });
     await call(this.client, 'Runtime.enable').catch(() => {});
 
+    // An animation the page starts is a change on screen that no network
+    // carries, taken while the bench's motion detection is on. Its key is what
+    // animates and on which element, so each run's are counted against the last.
+    this.client.on('Animation.animationStarted' as any, (e: any) => {
+      const animation = e?.animation;
+      if (!this.animationsOn || !animation?.id) return;
+      const held = this.heldCursor();
+      this.queue(async (at, inFlight) => {
+        // A transition starts on the frame after the input, and Chrome reports
+        // it after that; the step that sent the input has usually returned by
+        // then, and the animation is its doing.
+        const ended = this.lastEnded;
+        const cursor = held ?? inFlight ?? (ended && at - ended.at <= ANIMATION_REACH_MS ? ended.cursor : undefined);
+        const source = animation.source ?? {};
+        const element = source.backendNodeId ? await elementName(this.client, source.backendNodeId) : undefined;
+        const name = animation.name || animation.cssId || 'animation';
+        const key = element ? `${name} ${element}` : name;
+        this.animationKeys.set(animation.id, key);
+        const kind = animation.type === 'CSSTransition' ? 'transition' : animation.type === 'CSSAnimation' ? 'css animation' : 'web animation';
+        const looping = source.iterations === null || source.iterations === Infinity;
+        const value = `${kind} ${Math.round(source.duration ?? 0)}ms${source.delay ? ` after ${Math.round(source.delay)}ms` : ''}${looping ? ', looping' : ''}`;
+        this.push({ store: 'animation', operation: 'started', key, value }, at, cursor);
+      });
+    });
+    this.client.on('Animation.animationCanceled' as any, (e: any) => {
+      const key = e?.id ? this.animationKeys.get(e.id) : undefined;
+      if (!this.animationsOn || !key || this.passCancel?.(e.id)) return;
+      this.animationKeys.delete(e.id);
+      this.push({ store: 'animation', operation: 'stopped', key });
+    });
+
     this.watchWorkers();
     this.client.on('ServiceWorker.workerRegistrationUpdated' as any, (e: any) => this.registrationsUpdated(e.registrations ?? []));
     await call(this.client, 'ServiceWorker.enable').catch(() => {});
@@ -239,6 +310,47 @@ export class WriteWatch {
     if (!always && this.timedQueued > 0) return;
     this.timedQueued += 1;
     this.timed = this.timed.then(read).catch(() => {}).finally(() => { this.timedQueued -= 1; });
+  }
+
+  /**
+   * The step an animation reported now belongs to by the screen's hold: the
+   * step that took it, while the hold stands and through the step that
+   * released it, until another step runs or the release is past reach.
+   */
+  private heldCursor(): ProxyCursor | undefined {
+    const hold = this.screenHold;
+    if (!hold) return undefined;
+    if (hold.releasedAt === undefined) return hold.cursor;
+    const now = currentCursor();
+    const another = now !== undefined && !sameCursor(now, hold.releasedBy) && !sameCursor(now, hold.cursor);
+    return another || Date.now() - hold.releasedAt > ANIMATION_REACH_MS ? undefined : hold.cursor;
+  }
+
+  /**
+   * Resolves once the animations a release let start have been taken: Chrome
+   * reports them a frame or two after the page paints again, and each is
+   * named by a read queued behind the ones before it. A hidden tab paints no
+   * frame, so the wait for frames is capped.
+   */
+  async animationsReported(): Promise<void> {
+    const frames = this.page.evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))').catch(() => {});
+    await Promise.race([frames, new Promise(resolve => setTimeout(resolve, FRAMES_CAP_MS))]);
+    await this.reads;
+  }
+
+  /** Pass over the cancel Chrome reports for an animation a rule acted on, which goes on. */
+  setCancelFilter(pass: (id: string) => boolean): void {
+    this.passCancel = pass;
+  }
+
+  /** Take the animations the page starts as writes, or stop taking them. */
+  setAnimations(on: boolean): void {
+    this.animationsOn = on;
+    if (!on) this.animationKeys.clear();
+  }
+
+  get animations(): boolean {
+    return this.animationsOn;
   }
 
   stop(): void {
@@ -539,6 +651,27 @@ export function logpointLine(args: Array<{ value?: unknown }>): { key: string; v
   const message = args[1]?.value;
   const value = typeof fields === 'string' ? fields : typeof message === 'string' ? message : '';
   return { key: `${path}:${at[2]}`, value };
+}
+
+/** An element named as `#id`, or its tag and first two classes: enough to tell one animated element from another. */
+export async function elementName(client: CDPSession, backendNodeId: number): Promise<string | undefined> {
+  try {
+    const { object } = await call(client, 'DOM.resolveNode', { backendNodeId });
+    if (!object?.objectId) return undefined;
+    const { result } = await call(client, 'Runtime.callFunctionOn', {
+      objectId: object.objectId,
+      functionDeclaration: `function () {
+        if (this.id) return '#' + this.id;
+        var classes = typeof this.className === 'string' ? this.className.trim().split(/\\s+/).filter(Boolean).slice(0, 2) : [];
+        return this.tagName.toLowerCase() + classes.map(function (c) { return '.' + c; }).join('');
+      }`,
+      returnByValue: true,
+    });
+    await call(client, 'Runtime.releaseObject', { objectId: object.objectId }).catch(() => {});
+    return typeof result?.value === 'string' ? result.value : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function writeLine(write: PageWrite): string {

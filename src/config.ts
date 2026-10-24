@@ -100,9 +100,10 @@ export interface ReplayConfig {
   /**
    * Record a person's clicks, typing and Enter, Escape or Tab in every page
    * devharness drives, into History and onto the next reply on that
-   * connection (default: true). A page moved by a person and read by an agent
-   * that does not know it was moved produces readings of a state the agent
-   * never drove to.
+   * connection (default: false). Off, a page moved by a person and read by an
+   * agent produces readings of a state the agent never drove to, and a run
+   * carries on through that input; `connection launch` with `watchInput`, or
+   * the bench's RECORD MY INPUT, turns it on for one connection.
    */
   watchPersonInput: boolean;
   /**
@@ -362,7 +363,7 @@ const DEFAULT_CONFIG: CdpToolsConfig = {
     stepSettleCapMs: 2000,
     breakpointResumeQuietMs: 300,
     breakpointResumeCapMs: 3000,
-    watchPersonInput: true,
+    watchPersonInput: false,
     personInputDuringRun: 'pause',
   },
   changeDetection: {

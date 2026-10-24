@@ -18,6 +18,8 @@ import { Glyph } from './glyph.js';
 import { ToolGlyph } from './tool-glyph.js';
 import { onRevealResponse, setShowHidden, useShowHidden } from './focus.js';
 import { CaptureDialog } from './capture.js';
+import { BurstSheet } from './burst.js';
+import { SaveDialog } from './save.js';
 import { HoldPanel } from './hold-panel.js';
 import { askSection, goToSection } from './goto.js';
 import { SavedHidden, SavedPayloads, SavedResponses, choicesIn, rearmRule } from './crossing.js';
@@ -97,6 +99,8 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
   /** What this button has asked for and not yet seen confirmed. */
   const [asked, setAsked] = useState<boolean | null>(null);
   const [shooting, setShooting] = useState(false);
+  const [naming, setNaming] = useState(false);
+  const [discarding, setDiscarding] = useState(false);
   /** Which reading is open over whatever tab is showing. */
   const [showing, setShowing] = useState<'about' | 'proxy' | 'hold' | null>(null);
   // A response a traffic row asked to see: the panel opens on it.
@@ -273,6 +277,7 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
     // run to a step drives the page the same way.
     ['playing', state.sequence?.playing === true || (state.sequence?.busy === true && !state.sequence?.recording)],
     ['paused', state.sequence?.paused === true],
+    ['slowed', state.motion.playbackRate !== 1],
   ] as const).filter(([, on]) => on).map(([mode]) => mode);
   // A held layer something is waiting on pulses: the traffic while messages
   // wait at the proxy, the page while its code hold is armed for the next JS.
@@ -309,6 +314,11 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
           onClick={() => setShowing(showing === 'hold' ? null : 'hold')} />,
         slot,
       )}
+      {naming && sequence?.unsaved && (
+        <SaveDialog name={sequence.name ?? ''} description={sequence.description} expectedOutcome={sequence.expectedOutcome}
+          failure={sequence.failure} post={post} onClose={() => setNaming(false)} />
+      )}
+      {state.burst && <BurstSheet burst={state.burst} base={base} post={post} />}
       {state.shotArmed && (
         <CaptureDialog heldBefore={state.shotArmed.heldBefore} facts={state.factChoice} post={post}
           note={state.shotArmed.annotationId
@@ -325,10 +335,35 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
           nothing to replay yet, so its bar carries the recording's own
           controls rather than the run's, which could not act on it. */}
       {sequence?.recording && (
-        <div class="footbar recbar">
+        <div class={state.recordingPaused ? 'footbar recbar paused' : 'footbar recbar'}>
           {/* The name is on the sequence picker below, so this line counts:
               the steps taken, what crossed since it began, what was noted. */}
-          <span class="recdot" title="recording" />
+          <button class={state.recordingPaused ? 'rectoggle paused' : 'rectoggle'}
+            title={state.recordingPaused ? 'paused: what you do in the app is not recorded - click to record again' : 'recording - click to pause'}
+            aria-label={state.recordingPaused ? 'RECORD' : 'PAUSE RECORDING'} aria-pressed={!state.recordingPaused}
+            onClick={() => void post('/sequence/record/pause', { paused: !state.recordingPaused })}>
+            {state.recordingPaused ? <span class="recdot" /> : <Glyph of="held" />}
+          </button>
+          {state.recordingPaused && <span class="recpaused">paused</span>}
+          {(() => {
+            const test = sequence.test;
+            const stop = test?.state === 'running' ? 'testing…' : sequence.total === 0 ? 'nothing recorded yet' : null;
+            return (
+              <>
+                <button class="chip-toggle rectest-go" {...held(stop)}
+                  title={stop ?? 'run the steps so far on the page; the recording pauses for the run and stays paused after it'}
+                  aria-label="test the steps"
+                  onClick={() => { if (!stop) void post('/sequence/record/test'); }}><Glyph of="play" /></button>
+                {test && (
+                  <span class={`rectest ${test.state}`} title={test.summary}>
+                    {test.state === 'running' ? `testing ${test.total} step${test.total === 1 ? '' : 's'}…`
+                      : test.state === 'passed' ? `passed · ${test.total} step${test.total === 1 ? '' : 's'}`
+                      : 'failed'}
+                  </span>
+                )}
+              </>
+            );
+          })()}
           <span class="at">
             {/* Only what has happened: a count of nothing is left off, so a
                 recording that has just begun shows the disc alone. The colours
@@ -346,10 +381,13 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
             ))}
           </span>
           <span class="grow" />
+          <button class="chip-toggle" {...held(sequence.undoable ? null : 'nothing to undo')}
+            title={sequence.undoable ? 'undo the last change' : 'nothing to undo'} aria-label="undo"
+            onClick={() => { if (sequence.undoable) void post('/sequence/undo'); }}><Glyph of="undo" /></button>
           <button class="chip-toggle bin" title="throw this recording away" aria-label="throw it away"
             onClick={() => void post('/sequence/record/cancel')}><Glyph of="clear" /></button>
-          <button class="chip-toggle keep" title="save this recording" aria-label="save"
-            onClick={() => void post('/sequence/record/stop')}><Glyph of="save" /></button>
+          <button class="chip-toggle keep" title="stop recording: the steps stay here, unsaved, until you save them" aria-label="stop recording"
+            onClick={() => void post('/sequence/record/stop')}><Glyph of="stop" /></button>
         </div>
       )}
       {sequence?.name && !sequence.recording && (
@@ -381,6 +419,8 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
               );
             }
             return (
+              <>
+              {sequence.unsaved && <span class="unsavedmark" title="lives in memory alone: a devharness restart loses it">unsaved</span>}
               <span class={sequence.playing ? 'at running' : sequence.paused ? 'at paused' : failed ? 'at runfail' : 'at'}
                 title={failed ? sequence.failure : sequence.heldAt ? `breakpoint at ${sequence.heldAt}` : undefined}>
                 {sequence.playing ? 'running · '
@@ -390,8 +430,31 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
                   : ''}
                 step <b>{Math.min(sequence.currentStep + 1, sequence.total)}</b> of {sequence.total}
               </span>
+              </>
             );
           })()}
+          {sequence.unsaved && (
+            <span class="unsavedacts">
+              <button class="chip-toggle" {...held(sequence.undoable ? null : 'nothing to undo')}
+                title={sequence.undoable ? 'undo the last change' : 'nothing to undo'} aria-label="undo"
+                onClick={() => { if (sequence.undoable) void post('/sequence/undo'); }}><Glyph of="undo" /></button>
+              <button class="chip-toggle rec" {...held(barred({ idle: true }))}
+                title={barred({ idle: true }) ?? 'record more steps onto the end'} aria-label="record more"
+                onClick={() => { if (!barred({ idle: true })) void post('/sequence/record/into', { after: sequence.total - 1 }); }}>
+                <Glyph of="record" /></button>
+              <button class="chip-toggle keep" title="save it to a file, named" aria-label="save"
+                onClick={() => setNaming(true)}><Glyph of="save" /></button>
+              <button class={discarding ? 'chip-toggle bin sure' : 'chip-toggle bin'}
+                title={discarding ? 'click again to throw it away' : 'throw it away: nothing of it was saved'}
+                aria-label={discarding ? 'confirm throwing it away' : 'throw it away'}
+                onMouseLeave={() => setDiscarding(false)}
+                onClick={() => {
+                  if (!discarding) { setDiscarding(true); return; }
+                  setDiscarding(false);
+                  void post('/sequence/discard');
+                }}><Glyph of="clear" /></button>
+            </span>
+          )}
           {/* What this step crossed, not what the run has: a running total
               only climbs, so it states that the run is doing something, while
               the step's own count separates a step that made a call from one
@@ -560,21 +623,25 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
           )}
         {/* Recording writes a sequence that does not exist yet, so this asks
             for one rather than opening anything the selector lists. */}
-        <button class="chip-toggle" title="record a new sequence" aria-label="NEW"
-          onClick={onNew}><Glyph of="new" /></button>
+        <button class="chip-toggle" {...held(barred({ idle: true }))}
+          title={barred({ idle: true }) ?? 'record a new sequence from the page as it stands: it stays unsaved until you save it'}
+          aria-label="NEW"
+          onClick={() => {
+            if (barred({ idle: true })) return;
+            onNew();
+            void post('/sequence/record', { name: '' });
+          }}><Glyph of="new" /></button>
         <span class="rule" />
         <button class={state.pickerArmed ? 'chip-toggle on' : 'chip-toggle'}
-          {...held(barred({ open: true }))}
-          title={barred({ open: true }) ?? 'turn the next click in the app into a pick'}
+          title="turn the next click in the app into a pick"
           aria-label="PICKER"
-          onClick={() => { if (!barred({ open: true })) void post('/picker', { armed: !state.pickerArmed }); }}
+          onClick={() => void post('/picker', { armed: !state.pickerArmed })}
         ><Glyph of="picker" /></button>
-        <button class="chip-toggle" {...held(shooting ? 'capturing…' : barred({ open: true }))}
-          title={shooting ? 'capturing…'
-            : barred({ open: true }) ?? 'hold the page and choose what to capture'}
+        <button class="chip-toggle" {...held(shooting ? 'capturing…' : null)}
+          title={shooting ? 'capturing…' : 'hold the page and choose what to capture'}
           aria-label="CAPTURE"
           onClick={async () => {
-            if (shooting || barred({ open: true })) return;
+            if (shooting) return;
             // Opened before the shot rather than after: the draft lands at the
             // head of that reel, and switching only once it arrives skips past
             // the moment it was taken.
@@ -627,6 +694,14 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
             )}
           </button>
         )}
+        {/* Beside the proxy: the animations the page starts are another thing
+            that crosses under a step, recorded as rows beside its traffic. */}
+        <button class={state.motionDetect ? 'chip-toggle on' : 'chip-toggle'}
+          title={state.motionDetect
+            ? 'recording the animations the page starts, as rows under their steps - click to stop'
+            : 'record the animations the page starts, as rows under their steps'}
+          aria-label="MOTION" aria-pressed={state.motionDetect}
+          onClick={() => void post('/motion/detect', { on: !state.motionDetect })}><Glyph of="pulse" /></button>
         <button
           class={frozen ? 'chip-toggle frozen' : 'chip-toggle'}
           title={frozen
@@ -908,7 +983,6 @@ function Bench() {
   const tab = at.tab;
   // Asked for from the footing, answered on Sequence: a recording produces steps, so
   // it is written where they are read.
-  const [starting, setStarting] = useState(false);
   // The tab a capture was started from, to go back to once it is kept or
   // dropped: every capture opens on Sequence, where the reel it lands in is.
   const [shotFrom, setShotFrom] = useState<Exclude<Tab, 'editing'> | null>(null);
@@ -1057,8 +1131,6 @@ function Bench() {
           base={BASE}
           onReturn={() => { if (shotFrom) goTab(shotFrom); setShotFrom(null); }}
           returnsFromShot={shotFrom !== null}
-          starting={starting}
-          onStarted={() => setStarting(false)}
           card={cardAsk}
         />
       )}
@@ -1102,7 +1174,7 @@ function Bench() {
       <Footing
         base={BASE}
         onSequence={onSequence}
-        onNew={() => { goTab('editing'); setStarting(true); }}
+        onNew={() => goTab('editing')}
         onVariables={() => goTab('editing')}
         onGo={(layer) => {
           if (layer === 'code') { void postTo('/devtools'); return; }
@@ -1111,7 +1183,6 @@ function Bench() {
           if (layer === 'sequence') goToSection('step-here');
         }}
         onShot={() => {
-          setStarting(false);
           if (tab !== 'editing') setShotFrom(tab);
           goTab('editing');
         }}

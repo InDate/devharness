@@ -138,6 +138,8 @@ export function compareStep<T extends Crossing>(input: {
   bodyOf: (event: T) => string | undefined;
   /** A crossing whose payload shape a person ruled background or unknown, which no step owns. */
   ruledOut?: (event: T) => boolean;
+  /** A recorded kind nothing was watching for in this run, so its absence says nothing: animations while motion detection is off. */
+  unwatched?: (kind: string) => boolean;
 }): StepVerdicts<T> {
   const ran = input.ruledOut ? input.ran.filter(event => !input.ruledOut!(event)) : input.ran;
   const observed = countKinds(ran);
@@ -158,9 +160,14 @@ export function compareStep<T extends Crossing>(input: {
     };
   });
   const missing = Object.entries(input.recorded)
-    .filter(([kind]) => !observed[kind] && !input.ignores.some(rule => ignoreCoversKind(rule, kind, input.step)))
+    .filter(([kind]) => !observed[kind] && !input.unwatched?.(kind) && !input.ignores.some(rule => ignoreCoversKind(rule, kind, input.step)))
     .map(([kind, recorded]) => ({ kind, recorded }));
   return { kinds, missing };
+}
+
+/** An animation row's kind, which the bench records only while motion detection is on. */
+export function isAnimationKind(kind: string): boolean {
+  return kind.startsWith('animation ');
 }
 
 /**

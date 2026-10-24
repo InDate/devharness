@@ -1,4 +1,5 @@
 /** @jsxImportSource preact */
+import { durationOf } from './motion-controls.js';
 import { Fragment } from 'preact';
 import type preact from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
@@ -8,7 +9,7 @@ import {
   type RowMoves, type RuleActions, type RuleScope, type RowVerdict,
 } from './crossing.js';
 import { countKinds, kindOf, marksFields, type KindCount } from '../kinds.js';
-import { compareStep, placementOf, passOf, pausesOf } from '../step-compare.js';
+import { compareStep, isAnimationKind, placementOf, passOf, pausesOf } from '../step-compare.js';
 import { Row } from './row.js';
 import { useShowHidden } from './focus.js';
 import type { BoundaryEvent, BoundaryState, SequenceState } from '../wire.js';
@@ -19,7 +20,7 @@ import type { BoundaryEvent, BoundaryState, SequenceState } from '../wire.js';
  * what a row can do. Read by every screen that lists a step's activity, so the
  * rows it shows and the decisions made on them are the same wherever they are.
  */
-export function useActivity(base: string, sequence: SequenceState | undefined) {
+export function useActivity(base: string, sequence: SequenceState | undefined, motionDetect = true) {
   const [boundary, setBoundary] = useState<BoundaryState | null>(null);
   const [reading, setReading] = useState<string | null>(null);
   // Each row's last verdict, kept while the payload of a newer crossing of its
@@ -117,6 +118,7 @@ export function useActivity(base: string, sequence: SequenceState | undefined) {
       recorded, ran, step: step.index, ignores, ...(step.expected ? { expected: step.expected } : {}),
       bodyOf: event => bodies[event.id],
       ruledOut: event => event.verdict === 'background' || event.verdict === 'unknown',
+      unwatched: kind => isAnimationKind(kind) && !motionDetect,
     });
     const byKind = new Map(compared.kinds.map(one => [one.kind, one]));
     for (const row of crossed.get(step.index) ?? []) {
@@ -250,6 +252,10 @@ export function useActivity(base: string, sequence: SequenceState | undefined) {
   return {
     boundary, reading, setReading, ruleFor, isHidden, wasHidden, crossed, stepCount, pass, stability,
     verdicts, missing, tallied, passes, move, actions, pauses,
+    /** How each animation under a step is set to behave, by its kind. */
+    motionAt: (step: number) => sequence?.steps?.[step]?.motion,
+    /** A replay is out of reach while a run drives the page or a recording is open. */
+    replayable: !!sequence?.name && !sequence.busy && !sequence.recording,
   };
 }
 
@@ -458,6 +464,14 @@ export function ActivityRows({ activity, step, base, recording, notesAt, within 
           }}
           verdict={verdicts.get(rowOf(step, event))}
           moves={movesFor(event, kindOf(event))}
+          {...(event.kind === 'write' && event.method === 'animation' && !event.url.endsWith(' stopped') && step < stepCount ? {
+            motion: {
+              base, step, kind: kindOf(event),
+              setting: activity.motionAt(step)?.[kindOf(event)],
+              duration: durationOf(event.preview),
+              replayable: activity.replayable,
+            },
+          } : {})}
         />
         {notesAt?.(kindOf(event))}
       </Fragment>))}

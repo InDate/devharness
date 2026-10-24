@@ -755,6 +755,26 @@ export class CDPManager {
   }
 
   /**
+   * Stop the page in front of every callback of these kinds as it is about to
+   * run - `setTimeout.callback`, `requestAnimationFrame.callback` - which is
+   * what lets a held page be moved on one callback, or one frame, at a time.
+   */
+  async setInstrumentationBreakpoints(eventNames: readonly string[]): Promise<void> {
+    if (!this.state.connected) {
+      throw new Error('Not connected to debugger');
+    }
+    for (const eventName of eventNames) {
+      await this.client.send('EventBreakpoints.setInstrumentationBreakpoint', { eventName });
+    }
+  }
+
+  /** Take every callback stop off, so a released page runs its callbacks through. */
+  async clearInstrumentationBreakpoints(): Promise<void> {
+    if (!this.state.connected) return;
+    await this.client.send('EventBreakpoints.disable').catch(() => {});
+  }
+
+  /**
    * Drop a pause that was asked for and never fired. Chrome has no command that
    * cancels it, and Debugger.resume refuses a page that is not paused, so the
    * armed pause would stop the next callback the page runs - long after the

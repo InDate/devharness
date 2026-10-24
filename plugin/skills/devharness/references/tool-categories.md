@@ -24,9 +24,13 @@ runs against (see the skill's Quick Start).
 **Execution**: `execution` (actions: pause, resume, stepOver, stepInto, stepOut, acknowledge)
 - `pause`/`resume` are the code layer of `hold`. A resume on a page the bench holds releases the whole hold
 
-**Hold**: `hold` (actions: hold, step, release, status)
+**Hold**: `hold` (actions: hold, step, release, status, seek, rate, motion)
 - Stops the app at one moment across its layers: `code` (the debugger), `ui` (code plus CSS animation, needs the bench open), `network` (frames and responses wait at the proxy, needs `proxy: true`). All three by default
 - `step({ layer })` moves one layer on by its unit - a statement, a callback, a message - and stops it again
+- A hold on an idle page stops inside a script of devharness's own (`devharness://hold`), so `inspect` reads and `screenshot` viewport or fullPage captures answer while it is held; `input` with `hold` takes the hold in the driving call itself
+- `seek({ ms })` moves every CSS transition, CSS animation and web animation the bench has seen start on by that much of its own time, the JS untouched, and the compositor paints the new frame under the hold: a 420ms settle held at 0 is read and captured at 105, 210 and 420. `tick` moves the JS clock and leaves the animations where they stand, so a settle is walked with `seek` and a JS-driven follow with `tick`. Needs the bench open; an animation started before it is not seen
+- `rate({ playbackRate })` sets what the animations run at while released - 0.2 shows a settle at a fifth speed in the tab - and a release restores it
+- `motion({ animation?, element?, slow?, off?, alone?, freezeAt?, duration?, delay? })` sets a rule that acts on each matching animation as it starts, matched by its name and its element as the bench's ACTION rows name them: `slow` scales its timing to that multiple of real time, below 1 slower and above 1 faster, `off` jumps it to its end so the element lands where the app put it, `alone` pauses every other animation, `freezeAt` holds it that many ms in while the rest run, `duration`/`delay` replace its timing. Rules stand across replays until `clear: true`; with nothing set it lists them and what they last did. Chrome reports an animation after its first frame, so a rule takes hold a frame or two in. Needs the bench open
 - While the bench or a paused sequence holds a page, a tool that drives it is refused, naming the hold
 
 **Inspection**: `inspect` (actions: getCallStack, getVariables, evaluateExpression, searchCode, searchFunctions, listTargets)
@@ -53,10 +57,13 @@ runs against (see the skill's Quick Start).
 
 **Content**: `content` (actions: extractText, findInteractive, verify, parse)
 
-**Screenshot**: `screenshot` (actions: fullPage, viewport, element, pdf)
+**Screenshot**: `screenshot` (actions: fullPage, viewport, element, pdf, burst)
+- `burst`: the frames the page swaps over `forMs` (default 500) with nothing dispatched, as `input` with `burst` records them around a gesture: a settle let run after `hold release`, a loop that never rests. `viewport` and `fullPage` capture a held page
 
 **Input**: `input` (actions: click, type, press, hover, focus, focusNext, focusPrevious, drag, scroll, mousemove, pinch, tap, swipe)
 - `tap` / `swipe`: real touch events via `Input.dispatchTouchEvent`. Mouse actions never produce touchstart/touchmove, so a component listening only for touch cannot be driven by `click` or `drag`. `tap` takes a selector or x/y; `swipe` takes `from`/`to` and `steps` (default 10) and emits touchstart, N touchmove, touchend
+- `hold: ['ui']` on press, click, scroll, drag, tap or swipe takes the hold in the same call, right after the last event is dispatched, where a second call lands after any settle of a few hundred ms has finished. `holdAfterMs` lets the page run that long first, so a 420ms settle is frozen at 100ms and read with `inspect` or captured with `screenshot`; `hold({ action: 'release' })` lets it run. The ui layer needs the bench open. A swipe with `holdBeforeEnd: true` holds with the contact still down and no touchend; after the release, `input({ action: 'swipe', finish: true })` lifts it
+- `burst: { forMs, frames, clip }` records the frames the compositor swaps from the dispatch on, through `Page.startScreencast`, each stamped with its swap time: a 420ms settle after a press comes back as 28 frames at the page's 16ms cadence, where a loop of screenshots forces its own frames 30 to 60ms apart. The frames and a contact sheet with `+<ms>` under each tile go under `.devharness/screenshots/<date>/burst-<ts>/`, and `_meta.burst` lists them. With `hold`, the capture ends at the hold. A tab in the background swaps no frames
 
 **Modal**: `modal` (actions: detect, dismiss, answer, wait).
 - A browser dialog - alert, confirm, prompt, beforeunload, file picker - stops the call that opened it with DIALOG_OPENED, and calls on that connection are refused with DIALOG_OPEN until it closes: an alert stops the page's scripts, and a picker on screen takes the window's input while Chrome cancels every dialog behind it. `answer` closes it: `accept` (default true) and `promptText` for a JavaScript dialog; `files` (absolute, or relative to the project) or `accept: false` for a picker a call opened, which raises no OS window. `wait` returns once the open dialog closes, however it was answered, with the answer in `_meta.dialogAnswer`. In a sequence, a step that opens a dialog passes when the next step is its `modal answer`; in a run started from the bench, a dialog with no recorded answer opens on screen and the run waits for the person to answer it. A cancelled file picker fails its step; a step carrying `"onCancel": "continue"` passes. A picker a person opened is answered on screen.
@@ -93,7 +100,8 @@ runs against (see the skill's Quick Start).
 - `pullSequence` writes a sequence out of an issue to disk. Nothing is written until you ask, and nothing is ever run automatically: sequence steps are `{tool, params}` for **any** tool, so a sequence in a public issue is a script, not a macro. One authored by a GitHub account other than the one `gh` is logged in as is refused until a **person** has read it and re-run with `confirm: true` - an agent must not confirm on its own. One using `execution`, `server`, `request`, `download`, `browser`, `replay` or `config` is refused unless you pass `allowPrivilegedSteps: true`. Read the step list in the response before you do
 - All of these are blocked while any bug is `pending` - `acknowledge` first
 
-**Bench**: `bench` (actions: start, stop, hold, release, picker, tick, keepStep, dropStep, flagStep, sweep, retake, capture, list, status)
+**Bench**: `bench` (actions: start, stop, hold, release, picker, motion, tick, keepStep, dropStep, flagStep, sweep, retake, capture, list, status)
+- `motion({ on })` records each animation the page starts as a MOTION row under the step that started it, beside its traffic, and keeps the setting across restarts; with `on` absent it reads it. A replay compares a recording's MOTION rows only while it is on. A row's settings - slow, off, alone, freeze at a point, timing - are stored on its step under `motion`, keyed by the animation's kind, and applied when the step runs
 - The panel beside a driven app: it holds the page still, shows what crossed the boundary and what caused each thing, records and steps sequences, and collects element-level comments
 
 - For when describing a UI problem costs more than pointing at it. `start` opens the bench in its own tab with the page still running and Chrome's element picker idle; the person arms the picker, clicks an element in the app tab, types a comment in the bench, saves. Each annotation records the selector, the text, the component name and the JSX source location where a dev build exposes one - so the report carries what the element *is*, not a description of where it sits

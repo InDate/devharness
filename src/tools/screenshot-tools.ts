@@ -13,6 +13,7 @@ import { spawn } from 'child_process';
 import { resolveSelector, isExtendedSelector, cleanupResolvedSelector } from '../utils/selector-resolver.js';
 import { getOutputPath, getTempPath } from '../helpers/paths.js';
 import { throwIfAborted } from '../utils/abort.js';
+import { captureBurst, describeBurst } from '../frame-burst.js';
 
 // WeasyPrint availability cache
 let weasyPrintCache: { available: boolean; version?: string; error?: string; checkedAt: number } | null = null;
@@ -387,7 +388,7 @@ const clipSchema = z.object({
 }).strict();
 
 const screenshotSchema = z.object({
-  action: z.enum(['fullPage', 'viewport', 'element', 'pdf']),
+  action: z.enum(['fullPage', 'viewport', 'element', 'pdf', 'burst']),
   connection: z.string(),
 
   // Screenshot options
@@ -400,6 +401,12 @@ const screenshotSchema = z.object({
 
   // Element
   selector: z.string().optional().describe('CSS selector. Supports :has-text(), :text()'),
+
+  // Burst
+  frames: z.number().int().positive().max(60).optional().describe('burst: frames kept (default 60)'),
+  forMs: z.number().nonnegative().optional().describe('burst: capture window ms (default 500)'),
+  tileWidth: z.number().positive().optional().describe('burst: widest tile on the sheet (default 320)'),
+  columns: z.number().int().positive().optional().describe('burst: sheet columns (default 6)'),
 
   // PDF options
   engine: z.enum(['chrome', 'weasyprint']).optional(),
@@ -450,7 +457,7 @@ export function createScreenshotTools(resolveConnectionByName: (connection: stri
 
   return {
     screenshot: createTool(
-      'Visual verification only. Use extractText for content. Actions: fullPage (full page screenshot), viewport (viewport screenshot), element (element screenshot), pdf (print to PDF with Chrome or WeasyPrint engines)',
+      'Visual verification only. Use extractText for content. Actions: fullPage (full page screenshot), viewport (viewport screenshot), element (element screenshot), pdf (print to PDF with Chrome or WeasyPrint engines), burst (the frames the page swaps over a window, tiled into a contact sheet)',
       screenshotSchema,
       // abortSignal (#110): ENTRY CHECKPOINT ONLY - enough to not START a
       // capture (or, for `pdf`, a multi-second WeasyPrint/Chrome print) after
@@ -482,6 +489,26 @@ export function createScreenshotTools(resolveConnectionByName: (connection: stri
         const page = targetPuppeteerManager.getPage();
 
         switch (action) {
+          case 'burst': {
+            // The frames the compositor swaps over the window, as a page in
+            // motion produces them: a settle let run after a release, a loop
+            // that never rests. Nothing is dispatched; `input` with `burst`
+            // records a gesture.
+            const client = await page.createCDPSession();
+            try {
+              const { burst } = await captureBurst(
+                client,
+                { frames: args.frames, forMs: args.forMs, clip: args.clip, tileWidth: args.tileWidth, columns: args.columns },
+                async () => undefined,
+              );
+              return {
+                content: [{ type: 'text', text: describeBurst(burst) }],
+                _meta: { tool: 'screenshot', action: 'burst', timestamp: Date.now(), burst },
+              };
+            } finally {
+              await client.detach().catch(() => {});
+            }
+          }
           case 'fullPage': {
             const fullPage = args.fullPage ?? true;
             const type = args.type || 'jpeg';

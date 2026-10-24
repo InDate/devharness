@@ -355,10 +355,12 @@ export interface ToolResponseMeta {
 /** Structured result of a bench action. Behaviour reads this, never the
  *  rendered text. */
 export interface BenchToolMeta {
-  action: 'start' | 'stop' | 'tick' | 'hold' | 'release' | 'picker' | 'list' | 'status'
+  action: 'start' | 'stop' | 'tick' | 'hold' | 'release' | 'picker' | 'motion' | 'list' | 'status'
     | 'keepStep' | 'dropStep' | 'flagStep' | 'sweep' | 'retake' | 'capture';
   /** Whether the bench is open on the connection, after this call. */
   active?: boolean;
+  /** motion: whether each animation the page starts is recorded as a MOTION row. */
+  motionDetect?: boolean;
   /** start: the bench was already open, and was answered as it stood. */
   alreadyOpen?: boolean;
   connection?: string;
@@ -627,6 +629,9 @@ const BREAKPOINT_ALLOWED_TOOL_ACTIONS: Record<string, Set<string>> = {
   // A run that reached a page pause holds at that step, and these move or end
   // it; each step the run takes still passes this guard on its own.
   replay: new Set(['status', 'step', 'finish', 'cancel']),
+  // The compositor paints a held page, so a capture of it reads the moment it
+  // stopped on, which is what a hold is taken for.
+  screenshot: new Set(['viewport', 'fullPage']),
 };
 
 /**

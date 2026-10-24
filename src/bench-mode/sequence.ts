@@ -1,6 +1,7 @@
 import { debugLog } from '../debug-logger.js';
 import { currentCursor } from '../proxy/registry.js';
 import type { SequenceCard, SequenceState, SequenceStep } from '../bench/wire.js';
+import type { MotionSetting } from '../bench/kinds.js';
 import type { EnvEntries } from '../helpers/env-file.js';
 import { secretsFor, writeSecret } from './secrets.js';
 import { appendRun } from '../run-log.js';
@@ -10,7 +11,7 @@ import { letGoForRun, stoppedByDialog, withPageReleased } from './page-hold.js';
 import { holdReading } from '../hold.js';
 import { dialogMonitorOf, describeDialog } from '../dialog-monitor.js';
 import type { BenchDialog } from '../bench/wire.js';
-import { addRecordingTimer, attachStepTraffic, gateNewStep, recordedSteps } from './recording.js';
+import { addRecordingCheck, addRecordingTimer, attachStepTraffic, dropRecordingStep, gateNewStep, recordedSteps, undoRecordingDrop } from './recording.js';
 import { armSavedRules } from './rules.js';
 import { type BenchSession, STEP_TIMEOUT_MS, sessions } from './session.js';
 import { benchReadings, stepTimes, withTallies } from './tallies.js';
@@ -34,6 +35,8 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
       if (note?.comment) step.comment = note.comment;
       const findings = session.recordingAnnotations?.get(step.index);
       if (findings?.length) step.annotations = findings;
+      const motion = session.recordingMotion?.get(step.index);
+      if (motion) step.motion = motion;
     }
     await attachStepTraffic(session, connection, steps);
     await gateNewStep(session, connection, steps);
@@ -50,6 +53,8 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
       currentStep: steps.length,
       total: steps.length,
       busy: session.sequenceBusy, recording: true, variables: [],
+      ...(session.recordingUndo?.length ? { undoable: true } : {}),
+      ...(session.recordingTest ? { test: session.recordingTest } : {}),
       secrets: await secretsFor(steps),
       ...(session.recordingInto ? {
         into: {
@@ -106,6 +111,9 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
     ...(issue ? { issue } : {}),
     ...(dialog ? { dialog } : {}),
     name: active.name,
+    ...(session.sequences.isUnsaved(active.name) ? { unsaved: true } : {}),
+    ...(session.recordingSequence ? (session.recordingUndo?.length ? { undoable: true } : {})
+      : session.sequences.canUndo(active.name) ? { undoable: true } : {}),
     ...(active.description ? { description: active.description } : {}),
     ...(active.expectedOutcome ? { expectedOutcome: active.expectedOutcome } : {}),
     currentStep: active.currentStep,
@@ -151,6 +159,7 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
       ...(step.annotations?.length ? { annotations: step.annotations } : {}),
       ...(step.traffic ? { traffic: step.traffic } : {}),
       ...(step.expected ? { expected: step.expected } : {}),
+      ...(step.motion ? { motion: step.motion } : {}),
       ...(step.addedAt !== undefined ? { addedAt: step.addedAt } : {}),
       ...(step.pauseBefore ? { pauseBefore: true as const, ...(step.pauseHolds ? { pauseHolds: step.pauseHolds } : {}), ...(step.pauseNotify ? { pauseNotify: true as const } : {}), ...(step.pauseNote ? { pauseNote: step.pauseNote } : {}) } : {}),
       done: index < active.currentStep,
@@ -415,6 +424,45 @@ export async function setPausePoint(connection: string, step: number, change: { 
   return getSequenceState(connection);
 }
 
+/** Write the open unsaved sequence to disk under `as`, with what it is for. */
+export async function saveUnsavedSequence(connection: string, as: string, purpose: { description?: string; expectedOutcome?: string }): Promise<SequenceState | undefined> {
+  const session = sessions.get(connection);
+  const name = session?.sequences?.active()?.name;
+  if (!session?.sequences || !name) return undefined;
+  session.sequenceFailure = await session.sequences.saveUnsaved(name, as, purpose).catch(error => String(error));
+  return getSequenceState(connection);
+}
+
+/** Undo the last change: a step taken out of the recording in progress, or a change to the open unsaved sequence. */
+export async function undoSequence(connection: string): Promise<SequenceState | undefined> {
+  const session = sessions.get(connection);
+  if (!session?.sequences) return undefined;
+  if (session.recordingSequence) {
+    await undoRecordingDrop(connection);
+    return getSequenceState(connection);
+  }
+  session.sequenceFailure = session.sequences.undo();
+  if (!session.sequenceFailure) await armSavedRules(connection);
+  return getSequenceState(connection);
+}
+
+/** Drop the open unsaved sequence: nothing of it was written, and nothing of it stays. */
+export async function discardUnsavedSequence(connection: string): Promise<SequenceState | undefined> {
+  const session = sessions.get(connection);
+  const name = session?.sequences?.active()?.name;
+  if (!session?.sequences || !name) return undefined;
+  session.sequenceFailure = session.sequences.discardUnsaved(name);
+  return getSequenceState(connection);
+}
+
+/** A name no sequence in memory or on disk holds yet, for a recording started without one. */
+export async function untitledName(connection: string): Promise<string> {
+  const names = new Set(await sessions.get(connection)?.sequences?.listNames().catch(() => []) ?? []);
+  let n = 1;
+  while (names.has(`untitled-${n}`)) n++;
+  return `untitled-${n}`;
+}
+
 /**
  * Put the run back at a step, so an annotation taken there can be seen again.
  *
@@ -425,6 +473,31 @@ export async function setPausePoint(connection: string, step: number, change: { 
  */
 export const gotoSequenceStep = (connection: string, step: number) =>
   driveSequence(connection, (driver, signal) => driver.goto(step, signal));
+
+/**
+ * Run the sequence from the start through `step`, its motion settings in
+ * force, and stand after it holding nothing: the motion the step started
+ * plays on as set, slowed, switched off or frozen.
+ */
+export const replayMotionStep = (connection: string, step: number) =>
+  driveSequence(connection, (driver, signal) => driver.goto(step, signal, []));
+
+/** Set how one animation kind under a step behaves, or clear it with null; while recording, held until it lands. */
+export async function setStepMotion(connection: string, step: number, kind: string, setting: MotionSetting | null): Promise<SequenceState | undefined> {
+  const session = sessions.get(connection);
+  if (!session?.sequences) return undefined;
+  if (session.recordingSequence) {
+    const held = session.recordingMotion ??= new Map();
+    const motion = { ...(held.get(step) ?? {}) };
+    if (setting && Object.keys(setting).length) motion[kind] = setting;
+    else delete motion[kind];
+    if (Object.keys(motion).length) held.set(step, motion);
+    else held.delete(step);
+    return getSequenceState(connection);
+  }
+  session.sequenceFailure = await session.sequences.setMotion(step, kind, setting).catch(error => String(error));
+  return getSequenceState(connection);
+}
 
 /** State what the open sequence is for and what it should do. */
 export async function describeSequence(
@@ -533,6 +606,16 @@ export async function playSequence(connection: string, options: { throughHolds?:
         }
         if (state.currentStep >= state.total) break;
         if (state.currentStep === before) break;
+        // A step that held the screen in its own input, or froze an animation
+        // through its motion, stops the play there, frozen part-way through
+        // the motion it started, for a seek or a scrub to read.
+        if (session.pendingFreeze) await session.pendingFreeze;
+        if (!options.throughHolds && (session.motionPaused?.size
+          || holdReading(connection).held.some(layer => layer.layer === 'ui' && layer.source === 'tool'))) {
+          session.sequencePaused = true;
+          state = await getSequenceState(connection);
+          break;
+        }
         // A pause point saved before the next step: the play stops and holds there.
         if (!options.throughHolds && state.steps[state.currentStep]?.pauseBefore) {
           session.sequencePaused = true;
@@ -570,6 +653,10 @@ export async function playSequence(connection: string, options: { throughHolds?:
 export async function removeSequenceStep(connection: string, index: number): Promise<SequenceState | undefined> {
   const session = sessions.get(connection);
   if (!session?.sequences) return undefined;
+  if (session.recordingSequence) {
+    await dropRecordingStep(connection, index);
+    return getSequenceState(connection);
+  }
   session.sequenceFailure = await session.sequences.removeStep(index).catch(error => String(error));
   if (!session.sequenceFailure) await armSavedRules(connection);
   return getSequenceState(connection);
@@ -600,7 +687,12 @@ export async function editSequenceStep(connection: string, index: number, params
  */
 export async function insertSequenceCheck(connection: string, after: number, params: Record<string, unknown>, comment?: string): Promise<SequenceState | undefined> {
   const session = sessions.get(connection);
-  if (!session?.sequences || session.recordingSequence) return undefined;
+  if (!session?.sequences) return undefined;
+  // A recording takes a check only after its latest action, which is where the bench offers one.
+  if (session.recordingSequence) {
+    await addRecordingCheck(connection, params, comment);
+    return getSequenceState(connection);
+  }
   session.sequenceFailure = await session.sequences.insertCheck(after, params, comment).catch(error => String(error));
   if (!session.sequenceFailure) await armSavedRules(connection);
   return getSequenceState(connection);

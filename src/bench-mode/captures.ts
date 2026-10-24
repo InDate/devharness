@@ -12,6 +12,7 @@ import { diffFacts, readFacts, type ElementFacts } from '../element-facts.js';
 import { DESCRIBE_ELEMENT, heldAnnotation, matchExpression } from './annotations.js';
 import { request, send, setInspectMode } from './cdp.js';
 import { describePause, holdUi, releaseUi } from './page-hold.js';
+import { holdReading } from '../hold.js';
 import { type BenchSession, type CaptureContext, sessions } from './session.js';
 import { ownScript } from '../utils/own-script.js';
 
@@ -62,10 +63,11 @@ async function layoutOf(session: BenchSession): Promise<Layout> {
 /** Where the page's JS stands, for a capture to carry. */
 function pauseOf(session: BenchSession): CapturePause {
   const event = session.pausedEvent;
-  if (!session.pauseTaken || !event) return { taken: false };
+  if (!session.debugger?.isPaused() || !event) return { taken: false };
   const entry = describePause(session, event, 0);
+  const code = holdReading(session.connection).held.find(held => held.layer === 'code');
   const by = event.hitBreakpoints?.length ? 'breakpoint'
-    : session.pauseRequested && !session.heldByOther ? 'bench'
+    : code && code.source !== 'breakpoint' ? 'bench'
     : event.reason === 'other' ? 'debugger statement'
     : String(event.reason ?? 'other');
   return {

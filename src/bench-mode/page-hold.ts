@@ -1,10 +1,11 @@
 import { appendEvent } from '../session-events.js';
 import { debugLog } from '../debug-logger.js';
+import { releasedRate } from './animations.js';
 import { attachLayer, hold, holdReading, isHeld, release, step, type HoldLayer, type HoldSource, type LayerHold, type LayerStanding } from '../hold.js';
 import type { CallbackEntry, TickResult } from '../bench/wire.js';
 import { isRunning, nextPause, pageTime, send, setInspectMode } from './cdp.js';
 import { dialogMonitorOf } from '../dialog-monitor.js';
-import { type BenchSession, MAX_CALLBACK_LOG, sessions } from './session.js';
+import { type BenchSession, type PageDebugger, MAX_CALLBACK_LOG, sessions } from './session.js';
 
 /**
  * Hand the page over for the duration of `work`, then put it back as it was.
@@ -14,8 +15,8 @@ import { type BenchSession, MAX_CALLBACK_LOG, sessions } from './session.js';
  *
  * - the page must be running, because puppeteer's own queries - how a step
  *   finds its element - block on a paused isolate and report it as missing;
- * - no pause of ours may land while it runs, and detaching the agent is the
- *   only thing that cancels one already armed;
+ * - no pause of ours may land while it runs, so one asked for and not landed
+ *   is disarmed, and the callback stops come off;
  * - a pause that is NOT ours is left exactly alone, so a breakpoint someone
  *   set is still there, still stopped, when the step is done.
  */
@@ -24,62 +25,33 @@ export async function withPageReleased<T>(session: BenchSession, work: () => Pro
   // force and every call below would wait out its bound: 3s apiece, which
   // stretched the step that answers a confirm past 20s.
   if (stoppedByDialog(session)) return work();
-  const { client } = session;
-  const wasFrozen = session.frozen;
   // Every layer the step would otherwise drive into a stop: the queue lets
   // held traffic cross during the step, so it lands under the step.
   const restore = holdReading(session.connection).held.filter(stopsDriving);
   if (restore.length) await release(session.connection, { layers: restore.map(held => held.layer) });
-  if (session.heldByOther) {
-    debugLog('bench', 'a pause the bench did not request is in play');
-  }
 
-  // The step instrumentation lives in EventBreakpoints, a domain of its own:
-  // Debugger.disable below leaves it armed. A step that drives the page runs
-  // page.evaluate to resolve its selector, that evaluate schedules a timer, the
-  // armed setTimeout.callback instrumentation stops the page inside the
-  // evaluate, and the evaluate never returns - the step then hangs to its
-  // 30s timeout and reports the selector as the failure. Clearing it here
-  // covers the release that arrives with `frozen` already false, which
-  // releaseScreenHold's own EventBreakpoints.disable never reaches.
-  await send(client, 'EventBreakpoints.disable');
-
-  // Detaching the agent is what cancels a pause of ours that is armed but has
-  // not landed. `pauseRequested` deliberately stays set until the next hold
-  // replaces it: clearing it here would misread our own late-landing pause as
-  // someone else's, and then nothing would ever release it.
-  await send(client, 'Debugger.setSkipAllPauses', { skip: true });
-  await send(client, 'Debugger.disable');
+  // A step that drives the page runs page.evaluate to resolve its selector,
+  // that evaluate schedules a timer, and a callback stop left armed would stop
+  // the page inside the evaluate, which then never returns.
+  await session.debugger?.clearInstrumentationBreakpoints();
   session.stepBreakpointsSet = false;
-  session.pauseTaken = false;
 
-  // Detaching usually drops our pause with it. When it does not, the step would
-  // run against a stopped page and hang on puppeteer's own queries, so it is
-  // worth one more attempt - through our own agent only. A pause someone else
-  // set is reported and left exactly where it is.
-  if (!(await isRunning(client))) {
-    // If the bench was the one holding the page, finishing that release is ours
-    // to do - including a pause of ours that landed late and got recorded as
-    // foreign. Only a page the bench was NOT holding is left alone, which is the
-    // case that would be someone else's breakpoint.
-    if (wasFrozen || !session.heldByOther) {
-      await send(client, 'Debugger.enable');
-      await send(client, 'Debugger.resume');
-      await send(client, 'Debugger.disable');
-      session.heldByOther = false;
-      if (!(await isRunning(client))) {
-        debugLog('bench', 'page is still held going into the step');
-      }
-    } else {
-      debugLog('bench', 'page held by a pause the bench did not take; leaving it alone');
-    }
+  // A pause standing or armed that no hold accounts for is a late one of the
+  // bench's; a breakpoint's is recorded on the code layer and stays.
+  const dbg = session.debugger;
+  const foreign = holdReading(session.connection).held.some(held => held.layer === 'code' && held.source === 'breakpoint');
+  if (dbg && !foreign) {
+    if (dbg.isPaused()) await dbg.resume().catch(() => {});
+    else await dbg.disarmPause().catch(() => {});
+  } else if (foreign) {
+    debugLog('bench', 'page held by a pause the bench did not take; leaving it alone');
   }
 
   try {
     return await work();
   } finally {
-    // A dialog the step opened leaves the agent detached until the next
-    // step's release, which runs once the dialog is answered.
+    // A dialog the step opened leaves the page unheld until the next step's
+    // release, which runs once the dialog is answered.
     if (!stoppedByDialog(session)) await restoreAfterStep(session, restore);
   }
 }
@@ -90,9 +62,6 @@ export function stoppedByDialog(session: BenchSession): boolean {
 }
 
 async function restoreAfterStep(session: BenchSession, restore: LayerHold[]): Promise<void> {
-  const { client } = session;
-  await send(client, 'Debugger.enable');
-  await send(client, 'Debugger.setSkipAllPauses', { skip: false });
   for (const source of new Set(restore.map(held => held.source))) {
     const layers = restore.filter(held => held.source === source).map(held => held.layer);
     await hold(session.connection, { source, layers }).catch(() => {});
@@ -110,7 +79,8 @@ export function describePause(session: BenchSession, event: any, at: number): Ca
   const kind = raw?.replace(/^instrumentation:/, '').replace(/\.callback$/, '');
   // A script parsed before the bench attached - an inline script of the page -
   // is not in the bench's own list; the paused frame carries its URL itself.
-  const url = (frame?.location?.scriptId ? session.scripts.get(frame.location.scriptId) : undefined) || frame?.url || undefined;
+  const scriptId = frame?.location?.scriptId;
+  const url = (scriptId ? session.scripts.get(scriptId) ?? session.debugger?.scriptUrl(scriptId) : undefined) || frame?.url || undefined;
   return {
     index: session.totalSteps + 1,
     at: Math.round(at),
@@ -122,38 +92,42 @@ export function describePause(session: BenchSession, event: any, at: number): Ca
 }
 
 
+/** The page's debugger connection, which a screen hold cannot do without. */
+function debuggerOf(session: BenchSession): PageDebugger {
+  if (!session.debugger) throw new Error(`The screen of "${session.connection}" cannot be held: no debugger is connected to its page.`);
+  return session.debugger;
+}
+
 /**
- * Both clocks stopped: JS via the debugger, CSS animation via playback rate.
+ * Both clocks stopped: JS via the page's debugger connection, CSS animation
+ * via playback rate.
  *
- * An idle page has nothing to stop, so the pause is armed rather than taken and
- * no paused event arrives. The page is held either way - the next callback walks
- * into it - but the two states are released differently, so which one happened
- * has to be remembered.
+ * An idle page has nothing to stop, so the pause is armed rather than taken
+ * and lands on the next script the page runs; the debugger connection tells
+ * the two apart and releases each its own way. A pause already standing - the
+ * code kept stopped after a screen released on its own - is the hold's.
+ *
+ * Armed for a frame stop, the hold pauses nothing yet: the page's next
+ * animation frame stops it, so the input dispatched after the hold runs, and
+ * the frame it schedules stands unpainted with its animations at 0ms.
  */
 async function holdScreen(session: BenchSession): Promise<void> {
   if (session.frozen) return;
-  const { client } = session;
-  // Debugger.pause does nothing against a disabled agent or one set to skip
-  // every pause, and a release leaves it in both of those states.
-  await send(client, 'Debugger.enable');
-  await send(client, 'Debugger.setSkipAllPauses', { skip: false });
-  await send(client, 'Animation.setPlaybackRate', { playbackRate: 0 });
-  session.pauseRequested = true;
-  // The JS is still stopped where a screen was released on its own; a second
-  // pause raises no event, and waiting on one would read the stop as armed.
-  if (session.jsKept) {
-    session.jsKept = false;
-  } else {
-    const paused = nextPause(client, 1000);
-    await send(client, 'Debugger.pause');
-    session.pauseTaken = !!(await paused);
+  const dbg = debuggerOf(session);
+  await send(session.client, 'Animation.setPlaybackRate', { playbackRate: 0 });
+  if (session.frameStopArming) {
+    session.frameStopArming = false;
+    await dbg.setInstrumentationBreakpoints(['requestAnimationFrame.callback']);
+    session.groupSince = Date.now();
+  } else if (!dbg.isPaused()) {
+    await dbg.pause();
   }
   session.frozen = true;
 }
 
 /**
- * Let the page run again without closing the bench. The step breakpoints
- * go first, or the resume would pause on the very next callback.
+ * Let the page run again without closing the bench. The callback stops go
+ * first, or the resume would stop on the very next callback.
  */
 async function releaseScreenHold(session: BenchSession): Promise<void> {
   if (!session.frozen) return;
@@ -162,53 +136,43 @@ async function releaseScreenHold(session: BenchSession): Promise<void> {
 }
 
 /**
- * The screen's half of a release: the step breakpoints come off and CSS
- * animation runs again, and the page's JS stays paused where it stands. The
- * step breakpoints go first, or a later resume would stop on the very next
- * callback.
+ * The screen's half of a release: the callback stops come off and CSS
+ * animation runs again, and the page's JS stays paused where it stands.
  */
 async function releaseScreen(session: BenchSession): Promise<void> {
   if (!session.frozen) return;
-  await send(session.client, 'EventBreakpoints.disable');
+  await session.debugger?.clearInstrumentationBreakpoints();
   session.stepBreakpointsSet = false;
-  await send(session.client, 'Animation.setPlaybackRate', { playbackRate: 1 });
+  await send(session.client, 'Animation.setPlaybackRate', { playbackRate: releasedRate(session) });
   session.frozen = false;
-  session.jsKept = true;
-}
-
-/** The JS half: the bench's pause resumed, or discarded where it was armed and never taken. */
-async function releaseJs(session: BenchSession): Promise<void> {
-  const { client } = session;
-  if (session.pauseTaken) {
-    await send(client, 'Debugger.resume');
-    session.pauseTaken = false;
-  } else {
-    // Nothing is stopped, so there is nothing to resume - the pause is armed and
-    // waiting. Only disabling the debugger discards it; leaving it would stop
-    // the page the next time it did anything, with no one left holding it.
-    await send(client, 'Debugger.disable');
-    await send(client, 'Debugger.enable');
-  }
-  session.pausedEvent = undefined;
-  session.jsKept = false;
 }
 
 /**
- * Leave the page as the bench found it: running, with no agent of ours attached.
+ * The JS half: the pause resumed, or discarded where it was armed and never
+ * landed. A stop recorded as a breakpoint's, which the hold found standing,
+ * is someone else's and stays.
+ */
+async function releaseJs(session: BenchSession): Promise<void> {
+  const dbg = session.debugger;
+  const foreign = holdReading(session.connection).held.some(held => held.layer === 'code' && held.source === 'breakpoint' && !held.via);
+  if (foreign) return;
+  if (dbg?.isPaused()) await dbg.resume();
+  else await dbg?.disarmPause();
+  session.pausedEvent = undefined;
+}
+
+/**
+ * Leave the page as the bench found it: running.
  *
  * Every hold on the connection is released except a breakpoint's. A pause
  * someone else set - a breakpoint from the breakpoint tool, a `debugger`
- * statement - is left stopped, because
- * resuming it would throw away what they stopped to look at and they would have
- * no way to know the bench did it.
+ * statement - is left stopped, because resuming it would throw away what they
+ * stopped to look at and they would have no way to know the bench did it.
  */
 export async function releaseBench(session: BenchSession): Promise<void> {
   await releaseHolds(session.connection);
   session.detachUi?.();
-  if (session.heldByOther) {
-    debugLog('bench', 'leaving a pause that is not ours in place');
-  }
-  await send(session.client, 'Debugger.disable');
+  session.unwatchPause?.();
 }
 
 export function holdUi(session: BenchSession): Promise<unknown> {
@@ -302,6 +266,16 @@ export async function announceHold(session: BenchSession, before: HoldLayer[], h
   });
 }
 
+/**
+ * Arm the next screen hold to stop the page in front of its next animation
+ * frame rather than where it stands. Taken before an input is dispatched, the
+ * hold lets the input run and stops the frame the input scheduled before it
+ * paints; a hold taken after the dispatch can land once that frame has run.
+ */
+export function armFrameStop(session: BenchSession): void {
+  session.frameStopArming = true;
+}
+
 /** Let the oldest crossing kept at the proxy through, and keep the rest held. */
 export async function stepTraffic(connection: string): Promise<void> {
   if (isHeld(connection, 'network')) await step(connection, 'network');
@@ -312,10 +286,21 @@ const STEP_EVENTS = ['setTimeout.callback', 'setInterval.callback', 'requestAnim
 
 async function ensureStepBreakpoints(session: BenchSession): Promise<void> {
   if (session.stepBreakpointsSet) return;
-  for (const eventName of STEP_EVENTS) {
-    await session.client.send('EventBreakpoints.setInstrumentationBreakpoint', { eventName } as any).catch(() => {});
-  }
+  await debuggerOf(session).setInstrumentationBreakpoints(STEP_EVENTS);
   session.stepBreakpointsSet = true;
+}
+
+/** Resolve on the page's next stop, as its debugger connection confirms it, or on timeout. */
+function nextStop(dbg: PageDebugger, timeoutMs: number): Promise<any | null> {
+  return new Promise(resolve => {
+    const timer = setTimeout(() => { stop(); resolve(null); }, timeoutMs);
+    const stop = dbg.watchPause((paused, event) => {
+      if (!paused) return;
+      clearTimeout(timer);
+      stop();
+      resolve(event ?? {});
+    });
+  });
 }
 
 /**
@@ -338,6 +323,7 @@ export async function tickBench(
   const { client } = session;
   // Stepping only means anything against a held page.
   if (!session.frozen) await holdUi(session);
+  const dbg = debuggerOf(session);
   await ensureStepBreakpoints(session);
 
   // Neither given means the smallest possible move: one callback.
@@ -359,22 +345,20 @@ export async function tickBench(
 
   while (!satisfied()) {
     const before = await pageTime(client);
-    const paused = nextPause(client, stepTimeoutMs);
+    const stopped = nextStop(dbg, stepTimeoutMs);
     // An armed pause needs no resume: the page is already running towards it,
     // and the next callback is what it will stop on.
-    if (session.pauseTaken) {
-      session.pauseTaken = false;
-      await client.send('Debugger.resume').catch((error) => {
+    if (dbg.isPaused()) {
+      await dbg.resume().catch((error) => {
         debugLog('bench', `step: resume failed: ${error}`);
       });
     }
-    const event = await paused;
+    const event = await stopped;
     if (!event) {
       // Nothing was scheduled within the window - the page has gone quiet, so
       // there is nothing to step to. Hold again where it stands.
       quiet = true;
-      await client.send('Debugger.pause').catch(() => {});
-      await nextPause(client, stepTimeoutMs);
+      await dbg.pause().catch(() => {});
       break;
     }
     steps++;

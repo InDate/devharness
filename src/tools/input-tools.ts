@@ -17,6 +17,13 @@ import type { ToolResponseMeta, ClickActionMeta } from '../tool-response.js';
 import { abortErrorFor, abortableSleep, isAbortError, throwIfAborted } from '../utils/abort.js';
 import { clickElement } from '../utils/click-element.js';
 import { describeFingerprint, readFingerprint, refuseOtherElement, type ElementFingerprint, type ElementRepair } from '../element-fingerprint.js';
+import { hold, type HoldLayer } from '../hold.js';
+import { LAYER_WORDS, unavailableNote } from './hold-tools.js';
+import { captureBurst, describeBurst } from '../frame-burst.js';
+import { showBenchBurst } from '../bench-mode/session.js';
+import { sanitizeReference } from '../reference-validator.js';
+import { sessions, type BenchSession } from '../bench-mode/session.js';
+import { armFrameStop } from '../bench-mode/page-hold.js';
 
 // Coordinate schema for mouse actions
 const coordinateSchema = z.object({
@@ -75,7 +82,92 @@ const inputToolSchema = z.object({
   // Change detection
   detectChanges: z.boolean().optional(),
   settleTimeout: z.number().optional().describe('DOM settle timeout ms'),
+
+  // A hold taken in the same call, once the events are dispatched
+  hold: z.array(z.enum(['code', 'ui', 'network'])).optional()
+    .describe('Layers held in this call right after the dispatch, so a motion is read part-way: ui freezes the screen (bench open), released by hold release'),
+  holdAfterMs: z.number().optional().describe('hold: ms the page runs after the dispatch before the hold'),
+  holdBeforeFrame: z.boolean().optional().describe('hold with ui: stop in front of the first animation frame the input schedules, armed before the dispatch, so that frame and the animations the input starts are read at 0ms (bench open)'),
+  holdBeforeEnd: z.boolean().optional().describe('swipe with hold: hold with the contact still down, no touchend'),
+  finish: z.boolean().optional().describe('swipe: lift the contact a holdBeforeEnd swipe left down'),
+
+  // Frames of the page around the dispatch
+  burst: z.object({
+    frames: z.number().int().positive().max(60).optional().describe('frames kept (default 60)'),
+    forMs: z.number().nonnegative().optional().describe('capture window from the dispatch (default 500)'),
+    clip: coordinateSchema.extend({ width: z.number(), height: z.number() }).optional().describe('region kept, CSS px'),
+    tileWidth: z.number().positive().optional().describe('widest tile on the sheet (default 320)'),
+    columns: z.number().int().positive().optional().describe('sheet columns (default 6)'),
+  }).strict().optional()
+    .describe('Record the frames the compositor swaps from the dispatch on, saved under .devharness/screenshots with a contact sheet; with hold, the capture ends at the hold'),
 }).strict();
+
+type InputArgs = z.infer<typeof inputToolSchema>;
+
+/**
+ * The CDP session of a swipe that left its contact down, by connection. Touch
+ * points belong to the session that dispatched them, so the touchend `finish`
+ * sends goes out on the same session, and detaching it would lift nothing.
+ */
+const touchesDown = new Map<string, any>();
+
+/** The longest wait for the frame an input scheduled; a hidden tab paints none, and the page is paused where it stands. */
+const FRAME_STOP_WAIT_MS = 250;
+
+/**
+ * The hold taken before the dispatch, armed on the page's next frame: the
+ * input runs, and the frame it scheduled stops the page before it paints.
+ */
+async function driveToFrameStop(
+  bench: BenchSession, args: InputArgs, drive: (args: InputArgs, abortSignal?: AbortSignal) => Promise<any>, abortSignal?: AbortSignal,
+): Promise<any> {
+  armFrameStop(bench);
+  const heldAt = Date.now();
+  const reading = await hold(args.connection, { source: 'tool', layers: args.hold as HoldLayer[] });
+  const response = await drive(args, abortSignal);
+  const dbg = bench.debugger;
+  if (dbg && !dbg.isPaused()) {
+    await dbg.waitForPause(FRAME_STOP_WAIT_MS).catch(() => {});
+    if (!dbg.isPaused()) await dbg.pause().catch(() => {});
+  }
+  if (response?.isError) return response;
+  const held = reading.held.filter(layer => (args.hold as HoldLayer[]).includes(layer.layer) || layer.via);
+  const lines = held.length
+    ? [`**Held:** ${held.map(layer => `${LAYER_WORDS[layer.layer]} (${layer.layer})`).join(', ')} at the first frame after the ${args.action}, before it painted; \`hold({ action: 'group' })\` lists the animations it started, \`hold({ action: 'release' })\` lets it run.`]
+    : [];
+  if (reading.unavailable.length) lines.push(`**Not held:** ${unavailableNote(reading.unavailable)}`);
+  const [first, ...rest] = response.content ?? [];
+  return {
+    ...response,
+    content: [{ ...first, text: `${first?.text ?? ''}\n${lines.join('\n')}` }, ...rest],
+    _meta: { ...response._meta, hold: { ...reading, heldAt, atFrame: true } },
+  };
+}
+
+/**
+ * The hold a driving call asked for, taken once its events are on the wire
+ * and its own reading is done: a round trip between two calls outlasts a
+ * settle of a few hundred ms, where the hold here lands within the call.
+ */
+async function holdAfterInput(args: InputArgs, response: any, abortSignal?: AbortSignal): Promise<any> {
+  const layers = args.hold as HoldLayer[];
+  if (args.holdAfterMs) await abortableSleep(args.holdAfterMs, abortSignal);
+  const heldAt = Date.now();
+  const reading = await hold(args.connection, { source: 'tool', layers });
+  const held = reading.held.filter(layer => layers.includes(layer.layer) || layer.via);
+  const lines: string[] = [];
+  if (held.length) {
+    const when = args.holdAfterMs ? ` ${args.holdAfterMs}ms after the ${args.action}` : ` after the ${args.action}`;
+    lines.push(`**Held:** ${held.map(layer => `${LAYER_WORDS[layer.layer]} (${layer.layer})`).join(', ')}${when}; \`hold({ action: 'release' })\` lets it run.`);
+  }
+  if (reading.unavailable.length) lines.push(`**Not held:** ${unavailableNote(reading.unavailable)}`);
+  const [first, ...rest] = response.content ?? [];
+  return {
+    ...response,
+    content: [{ ...first, text: `${first?.text ?? ''}\n${lines.join('\n')}` }, ...rest],
+    _meta: { ...response._meta, hold: { ...reading, heldAt } },
+  };
+}
 
 /**
  * Why an element the page holds has no point a pointer can reach: the
@@ -332,6 +424,53 @@ export function createInputTools(
       // abort the handler THROWS an abort-shaped error; already-issued
       // dispatches are NOT undone.
       async (args, abortSignal?: AbortSignal) => {
+        if (args.burst) return withBurst(args, abortSignal);
+        return driveThenHold(args, abortSignal);
+      },
+    ),
+  };
+
+  async function driveThenHold(args: InputArgs, abortSignal?: AbortSignal): Promise<any> {
+    const bench = args.holdBeforeFrame && args.hold?.includes('ui') ? sessions.get(sanitizeReference(args.connection)) : undefined;
+    if (bench) return driveToFrameStop(bench, args, drive, abortSignal);
+    const response = await drive(args, abortSignal);
+    return args.hold?.length && !response?.isError ? holdAfterInput(args, response, abortSignal) : response;
+  }
+
+  /** The call recorded by a screencast on a session of its own, from before the dispatch to the end of the window or the hold. */
+  async function withBurst(args: InputArgs, abortSignal?: AbortSignal): Promise<any> {
+    const resolved = await resolveConnectionByName(args.connection);
+    const page = resolved?.puppeteerManager?.getPage?.();
+    if (!page) return driveThenHold(args, abortSignal);
+    const client = await page.createCDPSession();
+    try {
+      let holdTaken: () => void = () => {};
+      const held = new Promise<void>(resolve => { holdTaken = resolve; });
+      const { result: response, burst } = await captureBurst(
+        client, args.burst!,
+        () => driveThenHold(args, abortSignal).finally(holdTaken),
+        args.hold?.length ? held : undefined,
+      );
+      if (response?.isError) return response;
+      if (args.connection) {
+        showBenchBurst(sanitizeReference(args.connection), {
+          dir: burst.dir, sheet: burst.sheet, forMs: burst.forMs,
+          trigger: `${args.action}${args.key ? ` ${args.key}` : ''}`,
+          frames: burst.frames.map(frame => ({ file: frame.file, atMs: frame.atMs })),
+        });
+      }
+      const [first, ...rest] = response.content ?? [];
+      return {
+        ...response,
+        content: [{ ...first, text: `${first?.text ?? ''}\n${describeBurst(burst)}` }, ...rest],
+        _meta: { ...response._meta, burst },
+      };
+    } finally {
+      await client.detach().catch(() => {});
+    }
+  }
+
+  async function drive(args: InputArgs, abortSignal?: AbortSignal): Promise<any> {
         const { action, connection } = args;
 
         throwIfAborted(abortSignal);
@@ -360,7 +499,8 @@ export function createInputTools(
 
         // Determine if change detection is enabled
         const changeConfig = configManager.getChangeDetectionConfig();
-        const shouldDetectChanges = args.detectChanges ?? changeConfig.enabled;
+        // A held page never settles, so a call that holds observes no changes.
+        const shouldDetectChanges = args.hold?.length ? false : (args.detectChanges ?? changeConfig.enabled);
         const settleTimeout = args.settleTimeout ?? changeConfig.settleTimeout;
 
         // Start observing DOM changes before interaction
@@ -1632,6 +1772,42 @@ export function createInputTools(
               // driven by click or drag at all.
               const isSwipe = args.action === 'swipe';
 
+              if (isSwipe && args.finish) {
+                if (!touchesDown.has(connection)) {
+                  return createErrorResponse('INVALID_PARAMETER', {
+                    parameter: 'finish', value: 'true',
+                    message: `No swipe left its contact down on "${connection}": finish lifts the contact of a swipe made with hold and holdBeforeEnd.`,
+                  });
+                }
+                const lifted = await executeWithPauseDetection(
+                  targetCdpManager,
+                  async () => {
+                    const client = touchesDown.get(connection);
+                    try {
+                      return await withReplayBypass(page, async () => {
+                        throwIfAborted(abortSignal);
+                        await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+                        return true;
+                      });
+                    } finally {
+                      touchesDown.delete(connection);
+                      await client.detach().catch(() => {});
+                    }
+                  },
+                  'swipe'
+                );
+                {
+                  const stopped = stoppedResponse(lifted, 'swipe', 'finish');
+                  if (stopped) return stopped;
+                }
+                return {
+                  content: [{ type: 'text', text: 'Lifted the contact the held swipe left down (touchend).' }],
+                  _meta: { tool: 'input', action: 'swipe', timestamp: Date.now(), finish: true },
+                };
+              }
+              // The hold lands with the contact down: the touchend waits for finish.
+              const leaveDown = isSwipe && args.holdBeforeEnd === true && (args.hold?.length ?? 0) > 0;
+
               let start = isSwipe ? args.from : (typeof args.x === 'number' && typeof args.y === 'number' ? { x: args.x, y: args.y } : undefined);
               // A gesture across an element: its geometry is read now, because a
               // row's coordinates move with whatever is above it and a sequence
@@ -1739,11 +1915,16 @@ export function createInputTools(
                         }
                       }
                       // touchEnd carries no points: the contact has lifted.
-                      await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+                      if (!leaveDown) await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
                       return { from: point(start!.x, start!.y), to: point(end.x, end.y), steps: isSwipe ? steps : 0 };
                     });
                   } finally {
-                    await client.detach();
+                    if (leaveDown) {
+                      await touchesDown.get(connection)?.detach().catch(() => {});
+                      touchesDown.set(connection, client);
+                    } else {
+                      await client.detach();
+                    }
                   }
                 },
                 args.action
@@ -1758,10 +1939,10 @@ export function createInputTools(
                 content: [{
                   type: 'text',
                   text: isSwipe
-                    ? `Swiped (touch) from (${r.from.x},${r.from.y}) on ${pointReading(fromPoint)} to (${r.to.x},${r.to.y}) on ${pointReading(toPoint)} in ${r.steps} steps`
+                    ? `Swiped (touch) from (${r.from.x},${r.from.y}) on ${pointReading(fromPoint)} to (${r.to.x},${r.to.y}) on ${pointReading(toPoint)} in ${r.steps} steps${leaveDown ? ', contact still down: `input({ action: \'swipe\', finish: true })` lifts it once released' : ''}`
                     : `Tapped (touch) at (${r.from.x},${r.from.y}) on ${pointReading(fromPoint)}`,
                 }],
-                _meta: { tool: 'input', action: args.action, timestamp: Date.now(), elements: { from: fromPoint.fingerprint ?? null, to: toPoint.fingerprint ?? null }, ...(fromPoint.outside || toPoint.outside ? { outsideViewport: { from: !!fromPoint.outside, to: !!toPoint.outside, viewport: fromPoint.outside ?? toPoint.outside } } : {}) },
+                _meta: { tool: 'input', action: args.action, timestamp: Date.now(), ...(leaveDown ? { contactDown: true } : {}), elements: { from: fromPoint.fingerprint ?? null, to: toPoint.fingerprint ?? null }, ...(fromPoint.outside || toPoint.outside ? { outsideViewport: { from: !!fromPoint.outside, to: !!toPoint.outside, viewport: fromPoint.outside ?? toPoint.outside } } : {}) },
               };
             }
 
@@ -1849,9 +2030,7 @@ export function createInputTools(
             else await domChangeMonitor.stopObserving(connection, { settleTimeout: 0 }).catch(() => {});
           }
         }
-      }
-    ),
-  };
+  }
 }
 
 /**

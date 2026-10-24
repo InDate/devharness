@@ -18,11 +18,14 @@ import { beginCapture, cancelCapture, captureBenchScreenshot, discardBenchScreen
 import { setInspectMode } from './cdp.js';
 import { changeHold, haltSequence, openDevtools, resumePausedRun, setHeld, setPicker } from './controls.js';
 import { setPersonInput } from './person-input.js';
+import { dismissBurst, motionOf, seekBench, seekOne, setBenchRate } from './motion.js';
+import { setMotionDetect } from './motion-detect.js';
 import { stepTraffic, tickBench } from './page-hold.js';
-import { addRecordingTimer, addRecordingVariable, cancelRecordingSequence, chooseStepSelector, dropRecordedStep, editRecordingVariable, flagRecordedStep, keepRecordedStep, recordSequence, stopRecordingSequence } from './recording.js';
+import { addRecordingTimer, addRecordingVariable, cancelRecordingSequence, keepRecordingPaused, pauseRecording, testRecording, chooseStepSelector, dropRecordedStep, editRecordingVariable, flagRecordedStep, keepRecordedStep, recordSequence, stopRecordingSequence } from './recording.js';
 import { clearBoundaryRule, hiddenOf, hideKind, nameTarget, namesOf, persistRules, ruleFrom, rulesOf, savePayloadFor, setBoundaryName, setBoundaryRule, setHiddenMode, setHiddenUse, setResponseMode, setResponseUse, unhideKind, useFrom } from './rules.js';
 import { baselineSequence, playHere, playToStep, renameFromHome, runFromHome, runsView, stopRun } from './runs.js';
-import { answerBenchDialog, cancelSequence, commentSequenceStep, describeSequence, dismissSequenceFailure, repairSequenceStep, editSequenceStep, getSequenceState, gotoSequenceStep, insertSequenceCheck, insertSequenceTimer, moveSequenceStep, playSequence, removeSequence, removeSequenceStep, removeSequenceVariable, selectSequence, setSequenceBaseUrl, setSequenceSecret, setSequenceVariable, stepSequence, setPausePoint } from './sequence.js';
+import type { MotionSetting } from '../bench/kinds.js';
+import { answerBenchDialog, cancelSequence, replayMotionStep, setStepMotion, discardUnsavedSequence, undoSequence, saveUnsavedSequence, untitledName, commentSequenceStep, describeSequence, dismissSequenceFailure, repairSequenceStep, editSequenceStep, getSequenceState, gotoSequenceStep, insertSequenceCheck, insertSequenceTimer, moveSequenceStep, playSequence, removeSequence, removeSequenceStep, removeSequenceVariable, selectSequence, setSequenceBaseUrl, setSequenceSecret, setSequenceVariable, stepSequence, setPausePoint } from './sequence.js';
 import { type BenchSession, sessions } from './session.js';
 import { openSequence, openSteps, recordedStepOf, summariseBoundary, writeEvents } from './traffic.js';
 import { openerEntryOf } from '../activity-index.js';
@@ -43,6 +46,7 @@ async function discModesOf(name: string): Promise<DiscMode[]> {
     ['traffic', held.some(layer => layer.layer === 'network')],
     ['playing', sequence?.playing === true || (sequence?.busy === true && !sequence?.recording)],
     ['paused', sequence?.paused === true],
+    ['slowed', (sessions.get(name)?.playbackRate ?? 1) !== 1],
   ];
   return standing.filter(([, on]) => on).map(([mode]) => mode);
 }
@@ -80,6 +84,7 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
     getState: async (): Promise<Omit<BenchView, 'primary'>> => {
       const sequence = await getSequenceState(connection);
       const series = await seriesOfNotes(sequence);
+      if (session.recordingPaused) await keepRecordingPaused(session);
       return {
         connection,
         pageUrl: page.url(),
@@ -100,8 +105,20 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
         ...(session.shotArmed ? { shotArmed: session.shotArmed } : {}),
         factChoice: session.factChoice,
         ...(series ? { series } : {}),
+        motion: await motionOf(session),
+        motionDetect: session.writeWatch?.animations ?? false,
+        ...(session.burst ? { burst: session.burst } : {}),
+        looseShots: session.pickShots ?? [],
+        ...(session.recordingSequence ? { recordingPaused: session.recordingPaused === true } : {}),
       };
     },
+    seek: async (ms: number) => { await seekBench(connection, ms); },
+    setRate: async (playbackRate: number) => { await setBenchRate(connection, playbackRate); },
+    dismissBurst: async (drop: boolean) => { await dismissBurst(connection, drop); },
+    setMotionDetect: async (on: boolean) => { await setMotionDetect(connection, on); },
+    setStepMotion: async (step: number, kind: string, setting: MotionSetting | null) => { await setStepMotion(connection, step, kind, setting); },
+    replayMotionStep: async (step: number) => { await replayMotionStep(connection, step); },
+    seekOne: async (id: string, currentMs: number) => { await seekOne(connection, id, currentMs); },
     save: async (comment: string) => { await saveAnnotation(connection, comment); },
     discard: async () => { await discardPick(connection); },
     tick: async (request: { steps?: number; budgetMs?: number }) => {
@@ -398,8 +415,11 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
     },
     dropRecordedStep: async () => { await dropRecordedStep(connection); },
     recordSequence: async (name: string, withAgent: boolean, startUrl: string) => {
-      await recordSequence(connection, name, withAgent, startUrl);
+      await recordSequence(connection, name.trim() || await untitledName(connection), withAgent, startUrl);
     },
+    saveUnsaved: async (as: string, purpose: { description?: string; expectedOutcome?: string }) => { await saveUnsavedSequence(connection, as, purpose); },
+    discardUnsaved: async () => { await discardUnsavedSequence(connection); },
+    undo: async () => { await undoSequence(connection); },
     recordInto: async (after: number) => {
       const open = sessions.get(connection)?.sequences?.active()?.name;
       if (!open) return;
@@ -407,6 +427,8 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
     },
     stopRecordingSequence: async () => { await stopRecordingSequence(connection); },
     cancelRecordingSequence: async () => { await cancelRecordingSequence(connection); },
+    pauseRecording: async (paused: boolean) => { await pauseRecording(connection, paused); },
+    testRecording: async () => { void testRecording(connection); },
     removeSequenceStep: async (index: number) => { await removeSequenceStep(connection, index); },
     insertSequenceTimer: async (after: number, ms: number) => { await insertSequenceTimer(connection, after, ms); },
     insertSequenceCheck: async (after: number, params: Record<string, unknown>, comment?: string) => { await insertSequenceCheck(connection, after, params, comment); },

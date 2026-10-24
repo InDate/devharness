@@ -1,4 +1,5 @@
 import { debugLog } from '../debug-logger.js';
+import { clearStepMotion } from './motion-rules.js';
 import { hold, holdReading, isHeld, release, step, type HoldLayer, type HoldSource } from '../hold.js';
 import type { SequenceState } from '../bench/wire.js';
 import { setInspectMode } from './cdp.js';
@@ -114,6 +115,8 @@ export async function changeHold(connection: string, action: 'hold' | 'release' 
     await hold(connection, { source: 'bench', ...(layers ? { layers } : {}) });
   } else {
     await release(connection, layers ? { layers } : {});
+    // A release lets the page run, a step's frozen animation with it.
+    await clearStepMotion(connection);
     await setInspectMode(session, session.pickerArmed).catch(() => {});
   }
   await announceHold(session, before, action === 'hold', 'bench');

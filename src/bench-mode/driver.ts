@@ -2,7 +2,7 @@ import type { ElementFingerprint } from '../element-fingerprint.js';
 import type { SequenceRepair } from '../bench/wire.js';
 import type { Annotation, AnnotationTarget, StepTraffic } from '../annotation.js';
 import type { RuleCatalogueEntry, HistoryDetail, HistoryEntry, SequenceNote, ServerLog, ServerRow, ToolGroup, ToolRun, ToolValues, SequenceCard, SequenceOutline, SequenceStep, SequenceVariable, RunningView } from '../bench/wire.js';
-import type { ActivityMove, ExpectedValue, KindCount } from '../bench/kinds.js';
+import type { ActivityMove, ExpectedValue, KindCount, MotionSetting } from '../bench/kinds.js';
 
 /** What the bench needs from the replay side: read the session, drive the run. */
 export interface SequenceDriver {
@@ -50,6 +50,7 @@ export interface SequenceDriver {
       annotations?: Annotation[];
       traffic?: StepTraffic;
       expected?: Record<string, ExpectedValue>;
+      motion?: Record<string, MotionSetting>;
       addedAt?: number;
       /** A pause point saved before this step. */
       pauseBefore?: true;
@@ -94,7 +95,8 @@ export interface SequenceDriver {
    */
   setPause: (step: number, change: { on?: boolean; holds?: Array<'code' | 'ui' | 'network'>; note?: string; notify?: boolean }) => Promise<string | undefined>;
   /** Re-run from the start up to and including `step` (0-based). */
-  goto: (step: number, signal?: AbortSignal) => Promise<string | undefined>;
+  /** Run from the start through `step`, and stand paused after it holding `holds`, every layer when absent. */
+  goto: (step: number, signal?: AbortSignal, holds?: Array<'code' | 'ui' | 'network'>) => Promise<string | undefined>;
   /** Swap the origin every absolute URL in the run uses. '' clears it. */
   setBaseUrl: (baseUrl: string) => void;
   baseUrl: () => string | undefined;
@@ -154,6 +156,25 @@ export interface SequenceDriver {
   spliceRecording: (recordedName: string, into: string, after: number) => Promise<string | undefined>;
   /** The labels of a loaded sequence's steps, in order. */
   labelsOf: (name: string) => string[];
+  /** Whether a sequence lives in memory alone, recorded in the bench and not yet saved. */
+  isUnsaved: (name: string) => boolean;
+  /** Write an unsaved sequence to disk under `as`, with its purpose. Returns the failure text. */
+  saveUnsaved: (name: string, as: string, purpose?: { description?: string; expectedOutcome?: string }) => Promise<string | undefined>;
+  /**
+   * Run `commands` on `connection` as a sequence held in memory for the length
+   * of the run, then dropped: a test of a recording before it is a sequence.
+   */
+  testCommands: (name: string, commands: Array<{ tool: string; params: Record<string, unknown> }>, connection: string) => Promise<{ passed: boolean; summary: string }>;
+  /** Set how one animation kind under step `index` behaves when it runs, or clear it with null. Returns the failure text. */
+  setMotion: (index: number, kind: string, setting: MotionSetting | null) => Promise<string | undefined>;
+  /** Whether the unsaved sequence `name` has a change to undo. */
+  canUndo: (name: string) => boolean;
+  /** Put the open unsaved sequence back as it stood before its last change. Returns the failure text. */
+  undo: () => string | undefined;
+  /** Forget the changes `name` could undo. */
+  clearUndo: (name: string) => void;
+  /** Drop an unsaved sequence from memory. Returns the failure text. */
+  discardUnsaved: (name: string) => string | undefined;
   /** Finish a recording in progress, from the pane rather than the page. */
   stopRecording: (connection: string) => Promise<void>;
   /** Abandon a recording in progress, saving nothing. */
@@ -261,7 +282,12 @@ export interface SequenceDriver {
    * The events are read by the caller over CDP: Puppeteer's page.evaluate
    * blocks on a paused isolate, and the page is held while a step is judged.
    */
-  recordedSoFar: (eventsJson: string, startUrl: string, edits?: Map<number, Record<string, unknown>>) => SequenceStep[];
+  /**
+   * The recording's steps so far. `dropped` names steps taken out while it
+   * records, by position in the full list the events convert to; `edits` are
+   * keyed by position in the list shown, after the drops.
+   */
+  recordedSoFar: (eventsJson: string, startUrl: string, edits?: Map<number, Record<string, unknown>>, dropped?: readonly number[]) => SequenceStep[];
   /** One note of the open sequence with the step holding it, by id. */
   findAnnotation: (id: string) => { annotation: Annotation; step: number; sequence: string } | undefined;
   /** The tracked issue whose reproduction is the open sequence, when there is one. */

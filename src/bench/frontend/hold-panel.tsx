@@ -1,5 +1,6 @@
 /** @jsxImportSource preact */
-import { useEffect, useRef } from 'preact/hooks';
+import { Fragment } from 'preact';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import type { BenchView, HeldLayerView } from '../wire.js';
 import { LAYER_WORDS, heldWords, waited } from './sequence.js';
 import { Glyph } from './glyph.js';
@@ -84,7 +85,8 @@ export function HoldPanel({ state, post, onClose, onGo }: {
         const tone = held ? 'layer-held' : available ? 'layer-running' : 'layer-absent';
         const said = !available ? needs : !held ? stops : `${whereItStands(layer, held, state)} · ${ago(held.since)}`;
         return (
-          <div class={`holdrow ${tone} row-${layer}`} key={layer}>
+          <Fragment key={layer}>
+          <div class={`holdrow ${tone} row-${layer}`}>
             <b class="layername"><Glyph of={layer === 'ui' ? 'screen' : layer} /> {name}</b>
             <span class="holdbadges">
               {!available ? <span class="badge absent" title={needs}>{lacks}</span>
@@ -97,8 +99,106 @@ export function HoldPanel({ state, post, onClose, onGo }: {
             <LayerSlots layer={layer} held={held} available={available} state={state} change={change} post={post}
               go={available ? { title: GO_TITLES[layer], act: () => onGo(layer) } : { title: needs }} />
           </div>
+          {layer === 'ui' && available && <MotionRows state={state} held={held} post={post} />}
+          </Fragment>
         );
       })}
+    </div>
+  );
+}
+
+const SPEEDS = [1, 0.5, 0.2, 0.1];
+const SEEKS = [16, 50, 100];
+
+/**
+ * The screen's animations: the speed they run at, and while the screen is
+ * held, a seek and each animation's progress. Freezing a motion part-way is a
+ * step's, set on the step that starts it. A speed other than 1 is drawn in its own colour on
+ * the row and on the disc, since a page running slow reads as a slow app.
+ */
+function MotionRows({ state, held, post }: {
+  state: BenchView;
+  held: HeldLayerView | undefined;
+  post: (path: string, body?: Record<string, unknown>) => Promise<void>;
+}) {
+  const { playbackRate, animations } = state.motion;
+  const slowed = playbackRate !== 1;
+  const frozen = held !== undefined;
+  return (
+    <>
+      <div class={`holdrow row-motion${slowed ? ' slowed' : ''}${frozen ? ' layer-held' : ''}`}>
+        <b class="layername"><Glyph of="pulse" /> Motion</b>
+        <span class="holdbadges">
+          {slowed ? <span class="badge holder" title="the page's animations run slower than real time">{playbackRate}×</span>
+            : <span class="badge running">real time</span>}
+        </span>
+        <span class="motionctl">
+          <span class="ctlgroup" role="radiogroup" aria-label="Speed">
+            <span class="ctlname">speed</span>
+            {SPEEDS.map(rate => (
+              <button key={rate} role="radio" aria-checked={rate === playbackRate}
+                class={rate === playbackRate ? 'ctlchip on' : 'ctlchip'}
+                title={rate === 1 ? 'animations at real time' : `animations at ${rate}× real time${frozen ? ', once the screen is released' : ''}`}
+                onClick={() => { if (rate !== playbackRate) void post('/motion/rate', { playbackRate: rate }); }}>{rate}×</button>
+            ))}
+            {slowed && !frozen && <span class="ctlwarn">running at {playbackRate}×</span>}
+            {slowed && frozen && <span class="ctlnote">on release</span>}
+          </span>
+          {frozen && (
+            <span class="ctlgroup" aria-label="Seek">
+              <span class="ctlname">seek</span>
+              {SEEKS.map(ms => (
+                <button key={ms} class={animations.length ? 'ctlchip' : 'ctlchip off'}
+                  title={animations.length ? `move every animation on by ${ms}ms, the page's JS still stopped` : 'no animation is part-way: hold the screen during a motion to seek it'}
+                  aria-label={`Seek ${ms}ms`}
+                  onClick={() => { if (animations.length) void post('/motion/seek', { ms }); }}>+{ms}ms</button>
+              ))}
+            </span>
+          )}
+        </span>
+      </div>
+      {animations.map(animation => <AnimationLine key={animation.id} animation={animation} post={post} />)}
+    </>
+  );
+}
+
+/**
+ * One animation standing part-way, by the screen's hold or a freeze on it
+ * alone: where it stands, and a bar that puts it anywhere in its span as it
+ * is dragged, the rest of the page left where it is.
+ */
+function AnimationLine({ animation, post }: {
+  animation: BenchView['motion']['animations'][number];
+  post: (path: string, body?: Record<string, unknown>) => Promise<void>;
+}) {
+  const [dragged, setDragged] = useState<number | null>(null);
+  const bar = useRef<HTMLSpanElement>(null);
+  const sent = useRef(0);
+  const fraction = dragged ?? animation.progress;
+  const ms = Math.round(fraction * animation.ownDurationMs);
+  const fractionAt = (x: number) => {
+    const box = bar.current!.getBoundingClientRect();
+    return Math.max(0, Math.min(1, (x - box.left) / box.width));
+  };
+  const seek = (at: number, now = false) => {
+    const time = Date.now();
+    if (!now && time - sent.current < 40) return;
+    sent.current = time;
+    void post('/motion/seekto', { id: animation.id, at: animation.delayMs + at * animation.durationMs });
+  };
+  return (
+    <div class="holdrow row-anim layer-held">
+      <b class="layername"><Glyph of="pulse" /> Motion</b>
+      <span class="animname" title={animation.name}>{animation.name}{animation.element ? ` ${animation.element}` : ''}</span>
+      <span class="animbar" ref={bar} role="slider" aria-valuemin={0} aria-valuemax={animation.ownDurationMs} aria-valuenow={ms}
+        title="drag to move this animation"
+        onPointerDown={(e: PointerEvent) => { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); const at = fractionAt(e.clientX); setDragged(at); seek(at, true); }}
+        onPointerMove={(e: PointerEvent) => { if (dragged === null) return; const at = fractionAt(e.clientX); setDragged(at); seek(at); }}
+        onPointerUp={(e: PointerEvent) => { const at = fractionAt(e.clientX); seek(at, true); setDragged(null); }}>
+        <span class="animfill" style={{ width: `${fraction * 100}%` }} />
+        <span class="animknob" style={{ left: `${fraction * 100}%` }} />
+      </span>
+      <span class="holdreading"><span class="n-ms">{ms}ms · {Math.round(fraction * 100)}%</span></span>
     </div>
   );
 }

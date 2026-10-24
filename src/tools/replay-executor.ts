@@ -14,16 +14,20 @@ import type { StepTraffic } from '../annotation.js';
 import type { CommandRecorder, RecordedCommand, CommandSequence, ActiveSequenceState } from '../command-recorder.js';
 import { markNextCommand, releaseCommand, boundarySettled, getProxy, recordCheckOutcome, noteCallStart, standPausedRun, settleProxies } from '../proxy/registry.js';
 import type { ProxyEvent, ShapeRules } from '../proxy/intercept-proxy.js';
-import { compareStep, placePass, type Crossing } from '../bench/step-compare.js';
+import { compareStep, isAnimationKind, placePass, type Crossing } from '../bench/step-compare.js';
+import { watchingMotion } from '../bench-mode/motion-detect.js';
+import { applyStepMotion } from '../bench-mode/motion-rules.js';
+import type { MotionSetting } from '../bench/kinds.js';
 import { writeEvents } from '../bench-mode/traffic.js';
 import { sessions } from '../bench-mode/session.js';
 import type { ExecuteToolCall } from '../types.js';
 import { abortableDelayResult } from '../utils/abort.js';
 import { debugLog } from '../debug-logger.js';
 import { sanitizeReference } from '../reference-validator.js';
+import { observes } from '../observing-tools.js';
 import { configManager } from '../config.js';
 import { describePersonInput, personInputSince } from '../person-watch.js';
-import { hold, type HoldLayer } from '../hold.js';
+import { hold, holdReading, type HoldLayer } from '../hold.js';
 import { interpolateParams } from './interpolation.js';
 import { getMessage, isElementNotFoundFailure } from '../messages.js';
 import type { CheckOutcome as CheckAction } from './check-tools.js';
@@ -34,7 +38,6 @@ import { showingPickers } from '../dialog-monitor.js';
 import { addressedConnection, addressesConnection, createsConnection, createdName, isLaunchStep } from './connection-steps.js';
 
 // Re-export replay cursor functions
-export { injectReplayCursor, showClickEffect, showKeyPress, removeReplayCursor } from '../replay-cursor.js';
 export * from './replay-types.js';
 export * from './replay-connections.js';
 export * from './replay-conditions.js';
@@ -57,7 +60,6 @@ import {
 
 interface ReplayCursorCallbacks {
   onClickBefore?: (x: number, y: number, isRightClick: boolean) => Promise<void>;
-  onKeyPress?: (key: string) => Promise<void>;
 }
 
 let replayCursorCallbacks: ReplayCursorCallbacks = {};
@@ -857,6 +859,12 @@ export interface ExecuteStepsOptions {
    * waits for its quiet under its cursor, then closes it before the next step marks.
    */
   openStep?: { step: number; markedAt: number };
+  /**
+   * The step whose own hold of the screen stood when the last pass paused. A
+   * held page reports the animations that step set off only once released, so
+   * its comparison waits for the pass that releases it.
+   */
+  heldStep?: { step: number; markedAt: number };
   /** Carries on a paused session (`step`, `finish`), whose abort leaves it paused rather than ended. */
   resumesSession?: boolean;
   /** What a pause at `endStep` holds on the page: every layer when absent, nothing for []. */
@@ -999,6 +1007,20 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
     if (from !== undefined) commandRecorder?.noteStepWindow?.(sequence.name, step, from, at);
   };
   let boundaryStep: number | undefined;
+  // A step that holds the screen in its own input sets off animations the held
+  // page reports only once a later step releases it, so its comparison waits
+  // for the release, across passes when the run pauses in between.
+  let heldStep = options.heldStep && !ctx.stampUnder ? options.heldStep : undefined;
+  const screenHeldByStep = () => ctx.connection !== undefined
+    && holdReading(sanitizeReference(ctx.connection)).held.some(layer => layer.layer === 'ui' && layer.source === 'tool');
+  const comparable = async (started: Map<number, number>): Promise<Map<number, number>> => {
+    if (!heldStep) return started;
+    const held = heldStep;
+    if (screenHeldByStep()) return new Map([...started].filter(([step]) => step !== held.step));
+    if (ctx.connection) await sessions.get(sanitizeReference(ctx.connection))?.writeWatch?.animationsReported();
+    heldStep = undefined;
+    return new Map(started).set(held.step, started.get(held.step) ?? held.markedAt);
+  };
 
   // Derived from the pass's own clock rather than minted here: one pass
   // re-enters this function on resume, for a nested sequence, per forEach
@@ -1043,7 +1065,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
       await boundarySettled();
       if (!ctx.stampUnder) await standPausedRun({ ...cursorAt(next), paused: true });
     }
-    const closed = new Map([...stepStartedAt].filter(([step]) => step !== openStep?.step));
+    const closed = await comparable(new Map([...stepStartedAt].filter(([step]) => step !== openStep?.step)));
     const drift = comparesBehaviour && closed.size
       ? await compareBehaviour(
           sequence.name, commands, closed, stepReleasedAt, ctx, proxyRun,
@@ -1051,7 +1073,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
           (sequence as any).shapeRules, (sequence as any).boundaryPlacements)
       : undefined;
     const behaviourDrift = [...(drift ?? []), ...nestedDrift];
-    return { ...result, ...(behaviourDrift.length ? { behaviourDrift } : {}), ...(openStep ? { openStep } : {}) };
+    return { ...result, ...(behaviourDrift.length ? { behaviourDrift } : {}), ...(openStep ? { openStep } : {}), ...(heldStep ? { heldStep } : {}) };
   };
   const nestedUnder = (i: number) => {
     const at = positionOf(i);
@@ -1118,8 +1140,15 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
       if (boundaryStep !== undefined) await releaseStep(boundaryStep);
       if (comparesBehaviour) stepStartedAt.set(i, Date.now());
       stepMarkedAt.set(i, Date.now());
-      await markNextCommand(cursorAt(i));
-      boundaryStep = i;
+      // A step that only reads took no cursor while it was recorded, so what
+      // crossed during it was credited to no step; it takes none here either.
+      const branches = cmd.tool === 'check' && [cmd.params?.holds, cmd.params?.fails].some(action => typeof action === 'object');
+      if (observes(cmd.tool, cmd.params) && !branches) {
+        boundaryStep = undefined;
+      } else {
+        await markNextCommand(cursorAt(i));
+        boundaryStep = i;
+      }
     }
 
     // Check if aborted
@@ -1299,10 +1328,14 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
           };
       /**
        * Where the step's connection is paused, when that pause is not at a
-       * breakpoint this sequence set; null while it runs or when it is.
+       * breakpoint this sequence set; null while it runs or when it is. A code
+       * hold a step took stands paused on purpose, so it returns null too.
        */
       const unexpectedPause = async (): Promise<BreakpointHitInfo | null> => {
         if (!stepConnection) return null;
+        const heldCode = holdReading(sanitizeReference(stepConnection)).held
+          .some(layer => layer.layer === 'code' && layer.source !== 'breakpoint');
+        if (heldCode) return null;
         const at = await checkIfPaused(stepCtx);
         if (!at) return null;
         const key = `${at.url}:${at.lineNumber}`;
@@ -1349,19 +1382,13 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
         }
       }
 
-      // Replay cursor visual feedback
-      if (cmd.tool === 'input') {
-        if (params.action === 'click' && typeof params.x === 'number' && typeof params.y === 'number') {
-          // Coordinate-based click - show cursor effect
-          if (replayCursorCallbacks.onClickBefore) {
-            await replayCursorCallbacks.onClickBefore(params.x, params.y, false);
-          }
-        } else if (params.action === 'press' && params.key) {
-          // Key press - show key indicator
-          if (replayCursorCallbacks.onKeyPress) {
-            await replayCursorCallbacks.onKeyPress(params.key);
-          }
-        }
+      // The motion stored on this step stands from here until the next step
+      // starts; a check or a wait reads the moment the step before it left.
+      if (stepConnection && !['check', 'assert', 'wait'].includes(cmd.tool)) {
+        await applyStepMotion(sanitizeReference(stepConnection), (cmd as { motion?: Record<string, MotionSetting> }).motion);
+      }
+      if (cmd.tool === 'input' && params.action === 'click' && typeof params.x === 'number' && typeof params.y === 'number') {
+        await replayCursorCallbacks.onClickBefore?.(params.x, params.y, false);
       }
 
       // A check reads through the check tool; what it does on the answer is
@@ -1379,7 +1406,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
           getMessage('REPLAY_STEP_TIMEOUT', { step: i + 1, tool: cmd.tool, timeoutMs: remaining, limitSource: 'remaining totalTimeout' }),
           checkAbort
         );
-        await markNextCommand(cursorAt(boundaryStep ?? i));
+        if (boundaryStep !== undefined) await markNextCommand(cursorAt(boundaryStep));
         if (!read.success) {
           results.push({ step: i + 1, tool: cmd.tool, success: false, error: abortSignal?.aborted ? 'Replay aborted by user' : read.error });
           break;
@@ -1775,6 +1802,16 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
       results.push({ step: i + 1, tool: cmd.tool, success: true, ...(heldCheck ? { check: heldCheck } : {}) });
       debugLog(logPrefix, `Step ${i + 1} completed successfully`);
 
+      if (!heldStep && comparesBehaviour && !ctx.stampUnder && screenHeldByStep()) {
+        heldStep = { step: i, markedAt: stepStartedAt.get(i) ?? Date.now() };
+      } else if (cmd.tool === 'input' && comparesBehaviour && ctx.connection && !screenHeldByStep()) {
+        // An input's transitions start on the frame after it and are reported
+        // after that; a run moves to its next step at once, which would take
+        // them as the next step's.
+        const watch = sessions.get(sanitizeReference(ctx.connection))?.writeWatch;
+        if (watch?.animations) await watch.animationsReported();
+      }
+
       // Check if we hit a breakpoint after this step (on the step's own connection)
       const breakpointHit = await unexpectedPause();
       if (breakpointHit) {
@@ -1905,7 +1942,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
 
   const ownDrift = comparesBehaviour
     ? await compareBehaviour(
-        sequence.name, commands, stepStartedAt, stepReleasedAt, ctx, proxyRun,
+        sequence.name, commands, await comparable(stepStartedAt), stepReleasedAt, ctx, proxyRun,
         overrideConnectionReason ?? ctx.connection,
         (sequence as any).shapeRules, (sequence as any).boundaryPlacements)
     : undefined;
@@ -1918,6 +1955,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
     ...(behaviourDrift && behaviourDrift.length > 0 ? { behaviourDrift } : {}),
     ...(teardownOutcome ? { teardownResults: teardownOutcome.results, teardownFailed: teardownOutcome.failed } : {}),
     ...(pauseHeld?.length ? { pauseHeld } : {}),
+    ...(heldStep ? { heldStep } : {}),
     ...(pausedAtMark !== undefined ? { pausedAtMark } : {}),
     ...(pauseNotify ? { pauseNotify: true as const } : {}),
     ...(pauseNote ? { pauseNote } : {}),
@@ -1993,6 +2031,7 @@ async function compareBehaviour(
     }
     const compared = compareStep({
       recorded: traffic.kinds, ran: ranAt(index), step: index, ignores, bodyOf, ruledOut,
+      unwatched: kind => isAnimationKind(kind) && !(ctx.connection && watchingMotion(sanitizeReference(ctx.connection))),
       ...(commands[index].expected ? { expected: commands[index].expected } : {}),
     });
     const unmatched = [

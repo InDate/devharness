@@ -1,9 +1,11 @@
 import { appendEvent } from '../session-events.js';
 import { debugLog } from '../debug-logger.js';
-import { releasedRate } from './animations.js';
+import { releasedRate, seekAnimations } from './animations.js';
 import { attachLayer, hold, holdReading, isHeld, release, step, type HoldLayer, type HoldSource, type LayerHold, type LayerStanding } from '../hold.js';
 import type { CallbackEntry, TickResult } from '../bench/wire.js';
 import { pageTime, request, send, setInspectMode } from './cdp.js';
+import { ownScript } from '../utils/own-script.js';
+import { CLOCK_KEY } from '../page-clock.js';
 import { dialogMonitorOf } from '../dialog-monitor.js';
 import { type BenchSession, type PageDebugger, MAX_CALLBACK_LOG, sessions } from './session.js';
 
@@ -118,6 +120,10 @@ async function holdScreen(session: BenchSession): Promise<void> {
   if (session.frameStopArming) {
     session.frameStopArming = false;
     session.groupSince = Date.now();
+    const { result } = await request(session.client, 'Runtime.evaluate', {
+      expression: ownScript('clock', `globalThis[Symbol.for('${CLOCK_KEY}')]?.holdFrames() === true`), returnByValue: true,
+    }, 1000).catch(() => ({ result: undefined }));
+    session.framesHeld = result?.value === true;
   } else if (!dbg.isPaused()) {
     await dbg.pause();
   }
@@ -147,6 +153,32 @@ async function releaseScreen(session: BenchSession): Promise<void> {
 }
 
 /**
+ * Stop the page's clock where it stands, read on the stopped page: the
+ * timers it holds fire, and Date and performance.now read, as if no time
+ * passed while the page is held.
+ */
+export async function pauseClock(session: BenchSession): Promise<void> {
+  await request(session.client, 'Runtime.evaluate', {
+    expression: ownScript('clock', `globalThis[Symbol.for('${CLOCK_KEY}')]?.pause()`), returnByValue: true,
+  }, 1000).catch(() => undefined);
+}
+
+/** The next timer or held frame a stopped page clock holds, run on the stopped page; none when it holds nothing. */
+async function clockNext(session: BenchSession): Promise<{ kind: string; fn: string; now: number } | undefined> {
+  const { result } = await request(session.client, 'Runtime.evaluate', {
+    expression: ownScript('clock', `globalThis[Symbol.for('${CLOCK_KEY}')]?.next(${FRAME_MS}) ?? null`), returnByValue: true,
+  }, 3000).catch(() => ({ result: undefined }));
+  return result?.value ?? undefined;
+}
+
+/** Run the page's clock on from where it stopped, before the page itself runs again. */
+export async function resumeClock(session: BenchSession): Promise<void> {
+  await request(session.client, 'Runtime.evaluate', {
+    expression: ownScript('clock', `globalThis[Symbol.for('${CLOCK_KEY}')]?.resume()`), returnByValue: true,
+  }, 1000).catch(() => undefined);
+}
+
+/**
  * The JS half: the pause resumed, or discarded where it was armed and never
  * landed. A stop recorded as a breakpoint's, which the hold found standing,
  * is someone else's and stays.
@@ -155,8 +187,14 @@ async function releaseJs(session: BenchSession): Promise<void> {
   const dbg = session.debugger;
   const foreign = holdReading(session.connection).held.some(held => held.layer === 'code' && held.source === 'breakpoint' && !held.via);
   if (foreign) return;
-  if (dbg?.isPaused()) await dbg.resume();
-  else await dbg?.disarmPause();
+  if (dbg?.isPaused()) {
+    await resumeClock(session);
+    await dbg.resume();
+  } else {
+    await dbg?.disarmPause();
+    await resumeClock(session);
+  }
+  session.framesHeld = false;
   session.pausedEvent = undefined;
 }
 
@@ -275,39 +313,38 @@ export function armFrameStop(session: BenchSession): void {
   session.frameStopArming = true;
 }
 
-/** The longest wait for the frame an input scheduled. */
-const FRAME_STOP_WAIT_MS = 250;
+/** Where a frame stop left the page: at the frame the input scheduled, or where it stood on a page with no clock to hold frames. */
+export type FrameStopLanding = 'frame' | 'no clock';
 
 /**
- * Where a frame stop left the page: in front of the frame the input scheduled,
- * paused where it stood because no frame came within the wait, or paused
- * where it stood because the page is hidden and paints no frames at all.
- */
-export type FrameStopLanding = 'frame' | 'no frame' | 'hidden';
-
-/**
- * Stop the page in front of the frame an input scheduled, once the input is
- * delivered. A key press is two dispatches, and a frame stop armed before
- * them can land between the two, leaving the second waiting on a stopped
- * page; armed after, it still lands first, because the page paints that frame
- * only after the input's handlers have run. A hidden page paints no frame, so
- * it is paused where it stands at once.
+ * Stand the page at the frame an input scheduled, once the input is
+ * delivered. The page clock has held the app's frame callbacks since before
+ * the dispatch, with the page's JS left running for the whole input; page
+ * time stops first, so no timer fires between, then the page is paused, with
+ * the first frame's callbacks queued and unrun. A page opened before the clock
+ * was put in has no frames to hold, and is paused where it stands.
  */
 export async function landFrameStop(session: BenchSession): Promise<FrameStopLanding> {
+  await pauseClock(session);
   const dbg = session.debugger;
-  if (!dbg || dbg.isPaused()) return 'frame';
-  const visibility = await request(session.client, 'Runtime.evaluate', {
-    expression: 'document.visibilityState', returnByValue: true,
-  }, 1000).catch(() => undefined);
-  if (visibility?.result?.value === 'hidden') {
-    await dbg.pause().catch(() => {});
-    return 'hidden';
-  }
-  await dbg.setInstrumentationBreakpoints(['requestAnimationFrame.callback']).catch(() => {});
-  await dbg.waitForPause(FRAME_STOP_WAIT_MS).catch(() => {});
-  if (dbg.isPaused()) return 'frame';
-  await dbg.pause().catch(() => {});
-  return 'no frame';
+  if (dbg && !dbg.isPaused()) await dbg.pause().catch(() => {});
+  return session.framesHeld ? 'frame' : 'no clock';
+}
+
+/** One frame, in ms of page time, at 60 frames a second. */
+export const FRAME_MS = 1000 / 60;
+
+/**
+ * Move a held page on one frame: page time and the timers due in it, the
+ * app's queued frame callbacks once, and the CSS animations by the same span,
+ * so the page's JS and its compositor stay together.
+ */
+export async function frameStep(session: BenchSession, ms = FRAME_MS): Promise<{ now: number; ran: number; waiting: number } | undefined> {
+  const { result } = await request(session.client, 'Runtime.evaluate', {
+    expression: ownScript('clock', `globalThis[Symbol.for('${CLOCK_KEY}')]?.frame(${Number(ms)})`), returnByValue: true,
+  }, 3000).catch(() => ({ result: undefined }));
+  await seekAnimations(session, ms);
+  return result?.value;
 }
 
 /** Let the oldest crossing kept at the proxy through, and keep the rest held. */
@@ -379,6 +416,22 @@ export async function tickBench(
 
   while (!satisfied()) {
     const before = await pageTime(client);
+    // A stopped page clock holds the page's timers and its held frames, which
+    // no resume would reach: the next of them runs on the stopped page, page
+    // time moved on to it.
+    const held = dbg.isPaused() ? await clockNext(session) : undefined;
+    if (held) {
+      steps++;
+      elapsed += Math.max(0, held.now - before);
+      const entry: CallbackEntry = {
+        index: session.totalSteps + steps, at: Math.round(session.tickMs + elapsed), kind: held.kind,
+        ...(held.fn ? { fn: held.fn } : {}),
+      };
+      ran.push(entry);
+      session.callbacks.push(entry);
+      if (session.callbacks.length > MAX_CALLBACK_LOG) session.callbacks.splice(0, session.callbacks.length - MAX_CALLBACK_LOG);
+      continue;
+    }
     const stopped = nextStop(dbg, stepTimeoutMs);
     // An armed pause needs no resume: the page is already running towards it,
     // and the next callback is what it will stop on.

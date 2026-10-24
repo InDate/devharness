@@ -60,6 +60,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now stops inside devharness's own script instead of arming a pause the next
   read walks into and hangs on, and `screenshot` viewport and fullPage run
   while a page is paused.
+- **The page reads time from a clock devharness holds.** A script put in
+  before the app's first line answers `setTimeout`, `setInterval`, `Date`,
+  `performance.now`, `Event.timeStamp` and `AbortSignal.timeout`, and hands
+  frame callbacks its time; it runs at wall time until the screen is held, and
+  stops with the hold. A timer set before a hold fires as though the hold took
+  no time, and a sequence replayed faster than it was recorded sees its timers
+  fire at the same page moments. Workers keep wall time.
+- **A press held at the frame it schedules.** `input` with `hold: ['ui']` and
+  `holdBeforeFrame: true` stands the page at the first frame the input
+  schedules: the page clock queues the app's frame callbacks from before the
+  dispatch, so a flash painted on that frame, and the animations the input
+  starts, are read at 0ms.
+- **One frame at a time.** `hold({ action: 'frame', ms? })` moves a held
+  screen one frame on: page time, the timers due in it, the queued frame
+  callbacks once, and the CSS animations by the same span.
+- **The animations an input started.** `hold({ action: 'group' })` lists the
+  animations created since a frame stop, with element, property, delay,
+  duration, easing and position.
 
 ### Changed
 
@@ -74,9 +92,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on everywhere; `connection({ action: 'launch', watchInput: true })`, or
   RECORD MY INPUT on the bench, turns it on for one connection. A run pauses on
   a person's input only while it is on.
+- **The bench pauses the page through its debugger connection.** The bench
+  and the network monitor no longer run debugger agents of their own beside
+  the page's debugger connection, whose records of whether the page stood
+  stopped disagreed in the moments between a command and its event.
+- **Stepping the screen reaches the page clock.** `hold step` on the ui layer
+  runs the clock's next timer or held frame, page time moved on to it, before
+  the page's own next callback. `hold rate` sets the page clock's rate with the
+  CSS animations'.
+- **Motion is no longer on the hold strip.** The speed and seek chips and the
+  line per animation are gone from the bench's hold strip; `hold seek` and
+  `hold rate` remain.
 
 ### Fixed
 
+- **A replay credits a step with what its recording did.** A read-only step
+  claims no traffic, as its recorded call claimed none; an animation a held
+  press set off is credited to the press, read when Chrome creates it rather
+  than when it reports it started; a held step is compared once its hold is
+  released; and a release waits for Chrome to confirm the page runs before a
+  check reads it.
+- **A pause point is removed from its marker** once a run has passed it.
 - **Chrome opens on its Terminal's macOS desktop.** A visible launch holds its
   window until that desktop shows. `CDP_TOOLS_DESKTOP_WAIT=0` disables it.
 - **A step that holds the page no longer pauses its run.** The replay read the

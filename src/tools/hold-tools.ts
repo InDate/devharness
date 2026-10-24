@@ -5,6 +5,7 @@ import { ALL_LAYERS, hold, holdableLayers, holdReading, release, step, type Hold
 import { getProxy } from '../proxy/registry.js';
 import { sessions } from '../bench-mode/session.js';
 import { readGroup, seekAnimations, setPlaybackRate } from '../bench-mode/animations.js';
+import { FRAME_MS, frameStep } from '../bench-mode/page-hold.js';
 import { changeMotionRules, type MotionRule } from '../bench-mode/motion-rules.js';
 
 /** A rule as one line: what it matches, then what it does. */
@@ -24,14 +25,14 @@ function describeRule(rule: MotionRule): string {
 const layerEnum = z.enum(['code', 'ui', 'network']);
 
 const holdSchema = z.object({
-  action: z.enum(['hold', 'step', 'release', 'status', 'seek', 'rate', 'motion', 'group']),
+  action: z.enum(['hold', 'step', 'release', 'status', 'seek', 'rate', 'motion', 'group', 'frame']),
   connection: z.string().describe('The connection, by the name connection launch gave it'),
   layers: z.array(layerEnum).optional()
     .describe('hold/release: which layers; all of them by default. ui carries code with it'),
   layer: layerEnum.optional()
     .describe('step: code moves one statement, ui one callback, network one message'),
   ms: z.number().optional()
-    .describe('seek: move every running CSS transition, CSS animation and web animation on by this much of its own time, JS untouched; needs the bench open'),
+    .describe('seek: move every running CSS transition, CSS animation and web animation on by this much of its own time, JS untouched; needs the bench open. frame: the frame\'s length in page time (default 16.7)'),
   playbackRate: z.number().nonnegative().optional()
     .describe('rate: what the page\'s animations run at while released, 1 real time, 0.2 a fifth; a release restores it'),
   animation: z.string().optional().describe('motion: the animation a rule acts on, by its name or transition property; any when absent'),
@@ -82,7 +83,7 @@ function render(reading: HoldReading): string {
 export function createHoldTools() {
   return {
     hold: createTool(
-      'Stop the driven app at one moment across its layers - code, screen, traffic - step it, and let it run. Actions: hold (stop the layers), step (move one held layer on by its unit), release (let the layers run), status (what is held, where each stands, what waits at the proxy), seek (move the running animations on by ms, held or not), rate (the playback rate of the animations while released), motion (rules on single animations as they start: slow, off, alone, freezeAt, timing; none given lists them)',
+      'Stop the driven app at one moment across its layers - code, screen, traffic - step it, and let it run. A held screen stops the page clock too, so its timers, Date and performance.now stand still with it. Actions: hold (stop the layers), step (move one held layer on by its unit; the screen\'s unit is a callback - the page clock\'s next timer or held frame, else the page\'s next callback), frame (a held screen one frame on: page time, its due timers, the queued frame callbacks once and the CSS animations by ms, default 16.7), group (the animations started since a frame stop, with element, delay, duration, easing, position), release (let the layers run), status (what is held, where each stands, what waits at the proxy), seek (move the running CSS animations on by ms, held or not), rate (the rate of the CSS animations and the page clock while released), motion (rules on single animations as they start: slow, off, alone, freezeAt, timing; none given lists them)',
       holdSchema,
       async (args) => {
         const { connection } = args;
@@ -125,6 +126,17 @@ export function createHoldTools() {
               : [`Moved ${moved.length} animation${moved.length === 1 ? '' : 's'} on by ${args.ms}ms${reading.held.some(layer => layer.layer === 'ui') ? ', the screen still held' : ', the screen running'}:`,
                 ...moved.map(a => `  ${a.type} ${a.name}: ${Math.round(a.fromMs)}ms → ${Math.round(a.toMs)}ms of ${Math.round(a.durationMs)}ms (${Math.round(a.progress * 100)}%)`)];
             return { content: [{ type: 'text', text: lines.join('\n') }], _meta: { ...meta(reading), seek: { ms: args.ms, animations: moved } } };
+          }
+          case 'frame': {
+            const session = sessions.get(connection);
+            if (!session) return createErrorResponse('INVALID_PARAMS', { message: `No bench is open on "${connection}": a frame is stepped through the bench's page clock` });
+            if (!session.frozen) return createErrorResponse('INVALID_PARAMS', { message: `The screen of "${connection}" is not held: a frame steps a held page. Take a frame stop with \`input\` and \`holdBeforeFrame: true\`, or \`hold\` the ui layer` });
+            const ms = typeof args.ms === 'number' && args.ms > 0 ? args.ms : FRAME_MS;
+            const stepped = await frameStep(session, ms);
+            const lines = stepped
+              ? [`Stepped one frame of ${Math.round(ms * 10) / 10}ms on "${connection}": page time ${Math.round(stepped.now)}ms, ${stepped.ran} frame callback${stepped.ran === 1 ? '' : 's'} run, ${stepped.waiting} waiting for the next frame; CSS animations moved on by the same span.`]
+              : [`No page clock on "${connection}": the page was opened before devharness put its clock in. CSS animations moved on by ${Math.round(ms * 10) / 10}ms; the page's JS did not.`];
+            return { content: [{ type: 'text', text: lines.join('\n') }], _meta: { ...meta(holdReading(connection)), frame: stepped ?? null } };
           }
           case 'group': {
             const session = sessions.get(connection);

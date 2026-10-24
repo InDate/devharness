@@ -2726,29 +2726,6 @@ dialog.varmodal::backdrop { background: rgba(0, 0, 0, 0.45); }
 .runsteps .fullcheck.check-stopped, .runsteps .fullcheck.ranfailed { color: var(--alert); font-weight: 600; }
 .runsteps .tally.check:hover + .fullcheck, .runsteps .fullcheck:hover { display: block; }
 
-/* The Motion rows under Screen: the speed and the seek as chips on one line; each animation part-way as a bar in the hold's colour.
-   A speed other than real time takes the wait colour, as the disc does. */
-.holdrow.row-motion { --hold-tone: var(--frost); }
-.holdrow.row-motion.slowed { --hold-tone: var(--wait); }
-.holdrow.row-motion.slowed .layername { color: var(--wait); }
-.motionctl { flex: 1 1 auto; min-width: 0; display: flex; gap: 14px; align-items: center; overflow: hidden; white-space: nowrap; }
-.ctlgroup { display: inline-flex; gap: 3px; align-items: center; }
-.ctlname { font-size: 10px; color: var(--muted); margin-right: 3px; text-transform: lowercase; }
-.ctlchip {
-  padding: 0 6px; height: 18px; border: 1px solid var(--line); border-radius: 9px; background: none;
-  font: 10px/16px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); cursor: pointer;
-}
-.ctlchip:hover:not(.off) { border-color: var(--accent); color: var(--accent); }
-.ctlchip.on { border-color: var(--hold-tone); color: var(--hold-tone); }
-.ctlchip.off { opacity: .35; cursor: help; }
-.ctlwarn { font-size: 10px; color: var(--wait); margin-left: 4px; }
-.ctlnote { font-size: 10px; color: var(--muted); margin-left: 4px; }
-.holdrow.row-anim { height: 20px; border-bottom-style: dotted; }
-.animname { flex: 0 0 120px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--fg); }
-.animbar { position: relative; flex: 1 1 auto; height: 8px; border-radius: 4px; background: var(--line); cursor: ew-resize; touch-action: none; }
-.animknob { position: absolute; top: -3px; width: 4px; height: 14px; margin-left: -2px; border-radius: 2px; background: var(--hold-tone); pointer-events: none; }
-.animfill { display: block; height: 100%; border-radius: 4px; background: var(--hold-tone); pointer-events: none; }
-
 /* The burst sheet: every frame filmed from the person's input, in order,
    its time from the input under it. A click opens the frame at full size. */
 .burstscrim { position: fixed; inset: 0; z-index: 70; background: color-mix(in srgb, var(--fg) 30%, transparent); display: flex; align-items: center; justify-content: center; padding: 16px; }
@@ -2808,5 +2785,3 @@ dialog.varmodal::backdrop { background: rgba(0, 0, 0, 0.45); }
 }
 /* A Motion line's reading changes width as it is dragged, so it holds a fixed
    width and the bar stays under the pointer. */
-.holdrow.row-anim .holdreading { flex: 0 0 104px; max-width: none; justify-content: flex-end; }
-.holdrow.row-anim .animname { flex: 0 0 140px; }

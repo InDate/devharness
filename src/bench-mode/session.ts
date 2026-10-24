@@ -265,6 +265,8 @@ export interface BenchSession extends BenchReport {
   animations: Map<string, TrackedAnimation>;
   /** The next screen hold arms a stop in front of the page's next frame in place of pausing it now. */
   frameStopArming?: boolean;
+  /** The page clock holds the app's frame callbacks, from a frame stop until the release. */
+  framesHeld?: boolean;
   /** When the last frame stop was armed: the animations created after it are the group its input started. */
   groupSince?: number;
   /** The rate the page's animations run at while released; a release restores it (default 1). */

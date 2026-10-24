@@ -55,6 +55,8 @@ export interface PageWrite {
 const MAX_WRITES = 2000;
 /** How long after a command or step returns an animation it reported starting still counts as its doing. */
 const ANIMATION_REACH_MS = 500;
+/** Animations created under a hold and not yet reported started, kept at most. */
+const CREATED_KEPT = 500;
 /** The longest wait for two painted frames after a release; a hidden tab paints none. */
 const FRAMES_CAP_MS = 250;
 const VALUE_CHARS = 2000;
@@ -160,6 +162,8 @@ export class WriteWatch {
    * through, both of which run under another step's cursor.
    */
   private screenHold?: { cursor: ProxyCursor; releasedBy?: ProxyCursor; releasedAt?: number };
+  /** The step a held screen belonged to when each animation was created, by id, until its start is reported. */
+  private createdUnder = new Map<string, ProxyCursor>();
 
   constructor(private client: CDPSession, private page: Page, private connection?: string) {}
 
@@ -263,10 +267,23 @@ export class WriteWatch {
     // An animation the page starts is a change on screen that no network
     // carries, taken while the bench's motion detection is on. Its key is what
     // animates and on which element, so each run's are counted against the last.
+    // An animation a held step set off is created while the screen stands
+    // held - on the frame a frame step runs, say - and reported started only
+    // once the compositor starts it, after the release and the release step's
+    // window can both have passed. The step it belongs to is read at creation.
+    this.client.on('Animation.animationCreated' as any, (e: any) => {
+      if (!this.animationsOn || !e?.id) return;
+      const held = this.heldCursor();
+      if (!held) return;
+      this.createdUnder.set(e.id, held);
+      if (this.createdUnder.size > CREATED_KEPT) this.createdUnder.delete(this.createdUnder.keys().next().value as string);
+    });
     this.client.on('Animation.animationStarted' as any, (e: any) => {
       const animation = e?.animation;
       if (!this.animationsOn || !animation?.id) return;
-      const held = this.heldCursor();
+      const created = this.createdUnder.get(animation.id);
+      this.createdUnder.delete(animation.id);
+      const held = created ?? this.heldCursor();
       this.queue(async (at, inFlight) => {
         // A transition starts on the frame after the input, and Chrome reports
         // it after that; the step that sent the input has usually returned by

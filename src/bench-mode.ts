@@ -6,23 +6,27 @@
  * takes a click on the element in place of the description, and holds time still so
  * a state that only exists mid-interaction is still on screen to be clicked.
  *
- * Holding the screen is two clocks, not one. Debugger.pause stops the page's JS, and with
- * it every timer and rAF callback; CSS animations run on the compositor and
- * keep going until Animation.setPlaybackRate(0) stops them separately.
+ * Holding the screen stops three clocks. Debugger.pause stops the page's JS;
+ * CSS animations run on the compositor and keep going until
+ * Animation.setPlaybackRate(0) stops them separately; and wall time, which a
+ * paused debugger does not stop, would bring every timer due during the hold
+ * and jump every Date and performance.now read by its length, so the page
+ * reads time from a clock of devharness's (`page-clock.ts`) that the hold
+ * stops as well.
  *
- * Stepping runs to the next scheduled callback rather than advancing a clock.
- * Emulation.setVirtualTimePolicy would give exact millisecond steps, but it is
- * a one-way door: it replaces the page's clock with a synthetic one and has no
- * off switch, so the tab can never be handed back working - `advance` runs away
- * at thousands of times real speed, and neither detaching nor reloading clears
- * it. Stepping by callback lands exactly on the boundaries where state actually
- * changes, reports the page time it reached, and releases cleanly.
+ * Emulation.setVirtualTimePolicy would own those clocks from inside Chrome,
+ * but it is a one-way door: it has no off switch, so the tab can never be
+ * handed back working, and `advance` runs away at thousands of times real
+ * speed. The page clock runs at wall time until held, and steps by a callback
+ * or a frame land on the boundaries where state actually changes.
  *
- * Nothing is injected into the page being driven. Picking is Chrome's own
- * picker (Overlay.setInspectMode), which is browser-side and keeps working
- * however hard the page is frozen; the comment box lives in a separate control
- * tab (`bench-control.ts`), because a frozen page cannot accept a keystroke
- * and its DOM should not be edited by the act of writing about it.
+ * Two scripts of devharness's go into the page being driven, both before the
+ * app's first line: the page clock, and the network monitor's send wrapper.
+ * Nothing else is. Picking is Chrome's own picker (Overlay.setInspectMode),
+ * which is browser-side and keeps working however hard the page is frozen;
+ * the comment box lives in a separate control tab (`bench-control.ts`),
+ * because a frozen page cannot accept a keystroke and its DOM should not be
+ * edited by the act of writing about it.
  */
 
 export type { Annotation, AnnotationTarget, StepTraffic } from './annotation.js';

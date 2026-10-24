@@ -1,8 +1,6 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createInputTools } from './input-tools.js';
 import { domChangeMonitor } from '../dom-change-monitor.js';
-import { attachLayer, forgetConnection } from '../hold.js';
-import { sessions } from '../bench-mode/session.js';
 
 function makeInput(page: Record<string, any>) {
   const cdpManager = {
@@ -142,56 +140,5 @@ describe('a scroll as a run of wheel events', () => {
 
     expect(page.mouse.wheel.mock.calls.map((call: any[]) => call[0].deltaY)).toEqual([-100, -50, -25]);
     expect(result.content[0].text).toContain('as the first of 3 wheel events');
-  });
-});
-
-describe('a press held in front of the frame it schedules', () => {
-  afterEach(() => {
-    sessions.delete(on.connection);
-    forgetConnection(on.connection);
-  });
-
-  /** A bench on the connection whose screen layer and debugger record the order things happen in. */
-  function benchWithScreen(landsOnFrame: boolean) {
-    const order: string[] = [];
-    const session: any = { connection: on.connection };
-    session.debugger = {
-      paused: false,
-      isPaused: () => session.debugger.paused,
-      waitForPause: vi.fn(async () => {
-        if (landsOnFrame) { session.debugger.paused = true; order.push('frame stop'); return; }
-        throw new Error('Timeout waiting for pause');
-      }),
-      pause: vi.fn(async () => { order.push('pause'); session.debugger.paused = true; }),
-      setInstrumentationBreakpoints: vi.fn(async () => { order.push('frame stop armed'); }),
-    };
-    sessions.set(on.connection, session);
-    attachLayer(on.connection, 'ui', {
-      covers: ['code'],
-      engage: async () => { order.push(session.frameStopArming ? 'hold armed on the frame' : 'hold'); session.frameStopArming = false; },
-      disengage: async () => {},
-    });
-    return { order, session };
-  }
-
-  it('takes the hold before the key is dispatched and arms the frame stop after it', async () => {
-    const { order, session } = benchWithScreen(true);
-    const { input } = makeInput({ keyboard: { press: vi.fn(async () => { order.push('key'); }) } });
-
-    const result: any = await input.handler({ ...on, action: 'press', key: '2', hold: ['ui'], holdBeforeFrame: true });
-
-    expect(order).toEqual(['hold armed on the frame', 'key', 'frame stop armed', 'frame stop']);
-    expect(session.debugger.pause).not.toHaveBeenCalled();
-    expect(result._meta.hold.atFrame).toBe(true);
-    expect(result.content[0].text).toContain('at the first frame after the press');
-  });
-
-  it('pauses the page where it stands when no frame comes, as in a hidden tab', async () => {
-    const { order } = benchWithScreen(false);
-    const { input } = makeInput({ keyboard: { press: vi.fn(async () => { order.push('key'); }) } });
-
-    await input.handler({ ...on, action: 'press', key: '2', hold: ['ui'], holdBeforeFrame: true });
-
-    expect(order).toEqual(['hold armed on the frame', 'key', 'frame stop armed', 'pause']);
   });
 });

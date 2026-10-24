@@ -87,7 +87,7 @@ const inputToolSchema = z.object({
   hold: z.array(z.enum(['code', 'ui', 'network'])).optional()
     .describe('Layers held in this call right after the dispatch, so a motion is read part-way: ui freezes the screen (bench open), released by hold release'),
   holdAfterMs: z.number().optional().describe('hold: ms the page runs after the dispatch before the hold'),
-  holdBeforeFrame: z.boolean().optional().describe('hold with ui: stop in front of the first animation frame the input schedules, armed before the dispatch, so that frame and the animations the input starts are read at 0ms (bench open)'),
+  holdBeforeFrame: z.boolean().optional().describe('hold with ui: stand the page at the first frame the input schedules - the page clock holds its frame callbacks from before the dispatch, so that frame and the animations the input starts are read at 0ms; hold frame steps on (bench open)'),
   holdBeforeEnd: z.boolean().optional().describe('swipe with hold: hold with the contact still down, no touchend'),
   finish: z.boolean().optional().describe('swipe: lift the contact a holdBeforeEnd swipe left down'),
 
@@ -128,9 +128,8 @@ async function driveToFrameStop(
   const landed = await landFrameStop(bench);
   if (response?.isError) return response;
   const held = reading.held.filter(layer => (args.hold as HoldLayer[]).includes(layer.layer) || layer.via);
-  const where = landed === 'frame' ? `at the first frame after the ${args.action}, before it painted`
-    : landed === 'hidden' ? `where it stood after the ${args.action}: the page is hidden and paints no frames, so the first frame was not caught`
-    : `where it stood after the ${args.action}: no frame came within 250ms, so the first frame was not caught`;
+  const where = landed === 'frame' ? `at the first frame after the ${args.action}, its frame callbacks not yet run; \`hold({ action: 'frame' })\` steps one frame`
+    : `where it stood after the ${args.action}: the page was opened before devharness put its clock in, so its frames were not held`;
   const lines = held.length
     ? [`**Held:** ${held.map(layer => `${LAYER_WORDS[layer.layer]} (${layer.layer})`).join(', ')} ${where}; \`hold({ action: 'group' })\` lists the animations it started, \`hold({ action: 'release' })\` lets it run.`]
     : [];

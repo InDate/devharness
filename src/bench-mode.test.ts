@@ -51,7 +51,7 @@ import {
   runningBench,
   type SequenceDriver,
 } from './bench-mode.js';
-import { armFrameStop, landFrameStop } from './bench-mode/page-hold.js';
+import { armFrameStop, frameStep, landFrameStop } from './bench-mode/page-hold.js';
 import { readGroup } from './bench-mode/animations.js';
 import { sessions } from './bench-mode/session.js';
 
@@ -124,6 +124,8 @@ function createFakeClient() {
         return { result: client.missingNode ? {} : { objectId: 'node-1' } };
       }
       if (method === 'Runtime.callFunctionOn') return { result: { value: DESCRIBED } };
+      // A page with no devharness clock in it: every control reads as absent.
+      if (method === 'Runtime.evaluate' && String(params?.expression ?? '').includes('devharness.clock')) return { result: {} };
       if (method === 'Runtime.evaluate') {
         // The liveness probe: a held page never settles it.
         if (String(params?.expression ?? '').includes('setTimeout')) {
@@ -2330,6 +2332,96 @@ describe('what a mutation pass found unguarded', () => {
   });
 });
 
+/** A fake session whose page has the devharness clock in it, answering each control and logging the calls, in order with the debugger's. */
+function withClock(client: any, answers: Record<string, unknown> = {}) {
+  const order: string[] = [];
+  const send = client.send;
+  client.send = vi.fn(async (method: string, params?: any) => {
+    const expression = String(params?.expression ?? '');
+    const control = method === 'Runtime.evaluate' && /devharness\.clock'\)\]\?\.([a-zA-Z]+)/.exec(expression)?.[1];
+    if (control) {
+      order.push(`clock ${control}`);
+      return { result: { value: answers[control] ?? true } };
+    }
+    return send(method, params);
+  });
+  const pause = client.debugger.pause;
+  client.debugger.pause = vi.fn(async () => { order.push('page pause'); return pause(); });
+  const resume = client.debugger.resume;
+  client.debugger.resume = vi.fn(async () => { order.push('page resume'); return resume(); });
+  return order;
+}
+
+describe('the frame stop on the page clock', () => {
+  it('holds the app\'s frames from before the input, then stops page time before the page', async () => {
+    const client = createFakeClient();
+    await startBare(client);
+    const session = sessions.get(CONNECTION)!;
+    const order = withClock(client);
+    armFrameStop(session);
+    await setHeld(CONNECTION, true);
+
+    expect(await landFrameStop(session)).toBe('frame');
+    // The pause landing stops the clock again, which a stopped clock takes as nothing.
+    expect(order.slice(0, 3)).toEqual(['clock holdFrames', 'clock pause', 'page pause']);
+  });
+
+  it('pauses a page with no clock where it stands, and says so', async () => {
+    const client = createFakeClient();
+    await startBare(client);
+    const session = sessions.get(CONNECTION)!;
+    armFrameStop(session);
+    await setHeld(CONNECTION, true);
+
+    expect(await landFrameStop(session)).toBe('no clock');
+    expect(client.debugger.calls('pause')).toHaveLength(1);
+  });
+
+  it('runs page time on before the page on release, and the held frames with it', async () => {
+    const client = createFakeClient();
+    await startBare(client);
+    const session = sessions.get(CONNECTION)!;
+    armFrameStop(session);
+    await setHeld(CONNECTION, true);
+    const order = withClock(client);
+    await landFrameStop(session);
+    await new Promise(r => setTimeout(r, 5));
+    order.length = 0;
+
+    await setHeld(CONNECTION, false);
+
+    expect(order.slice(0, 2)).toEqual(['clock resume', 'page resume']);
+    expect(getBenchSession(CONNECTION)).toMatchObject({ frozen: false });
+  });
+
+  it('steps a frame through the clock and moves the CSS animations by the same span', async () => {
+    const client = createFakeClient();
+    await start(client);
+    const order = withClock(client, { frame: { now: 1016.7, ran: 1, waiting: 0 } });
+
+    const stepped = await frameStep(sessions.get(CONNECTION)!, 16.7);
+
+    expect(stepped).toEqual({ now: 1016.7, ran: 1, waiting: 0 });
+    expect(order).toEqual(['clock frame']);
+    const frameCall = client.send.mock.calls.find(([method, params]: any[]) => method === 'Runtime.evaluate' && String(params?.expression).includes('.frame('));
+    expect(String(frameCall[1].expression)).toContain('.frame(16.7)');
+  });
+
+  it('steps the screen to the clock\'s next timer before the page\'s own next callback', async () => {
+    const client = createFakeClient();
+    await start(client);
+    const order = withClock(client, { next: { kind: 'setTimeout', fn: '', now: 1700 } });
+    client.clock = 1000;
+
+    const tick = await tickBench(CONNECTION, { steps: 1 });
+
+    expect(order).toContain('clock next');
+    expect(order).not.toContain('page resume');
+    expect(tick).toMatchObject({ steps: 1, actualMs: 700 });
+    expect(tick!.ran[0]).toMatchObject({ kind: 'setTimeout' });
+  });
+});
+
 describe('the frame stop - the page held in front of the frame an input schedules', () => {
   it('holds the animations at 0ms and leaves the page running for the input', async () => {
     const client = createFakeClient();
@@ -2342,50 +2434,6 @@ describe('the frame stop - the page held in front of the frame an input schedule
     expect(client.debugger.calls('setInstrumentationBreakpoints')).toHaveLength(0);
     expect(client.lastCall('Animation.setPlaybackRate').params).toEqual({ playbackRate: 0 });
     expect(getBenchSession(CONNECTION)).toMatchObject({ frozen: true });
-  });
-
-  it('stops in front of the next frame once the input is delivered', async () => {
-    const client = createFakeClient();
-    await startBare(client);
-    const session = sessions.get(CONNECTION)!;
-    armFrameStop(session);
-    await setHeld(CONNECTION, true);
-    setTimeout(() => client.debugger.stop({ reason: 'EventListener', data: { eventName: 'instrumentation:requestAnimationFrame.callback' }, callFrames: [] }), 5);
-
-    expect(await landFrameStop(session)).toBe('frame');
-
-    expect(client.debugger.calls('setInstrumentationBreakpoints').map((call: any) => call.args[0]))
-      .toEqual([['requestAnimationFrame.callback']]);
-    expect(client.debugger.calls('pause')).toHaveLength(0);
-    expect(client.debugger.isPaused()).toBe(true);
-  });
-
-  it('pauses the page where it stands when no frame comes within the wait', async () => {
-    const client = createFakeClient();
-    await startBare(client);
-    const session = sessions.get(CONNECTION)!;
-    armFrameStop(session);
-    await setHeld(CONNECTION, true);
-
-    expect(await landFrameStop(session)).toBe('no frame');
-    expect(client.debugger.calls('pause')).toHaveLength(1);
-  });
-
-  it('pauses a hidden page at once, since it paints no frame to stop in front of', async () => {
-    const client = createFakeClient();
-    await startBare(client);
-    const session = sessions.get(CONNECTION)!;
-    const send = client.send;
-    client.send = vi.fn(async (method: string, params?: any) =>
-      method === 'Runtime.evaluate' && params?.expression === 'document.visibilityState'
-        ? { result: { value: 'hidden' } }
-        : send(method, params));
-    armFrameStop(session);
-    await setHeld(CONNECTION, true);
-
-    expect(await landFrameStop(session)).toBe('hidden');
-    expect(client.debugger.calls('setInstrumentationBreakpoints')).toHaveLength(0);
-    expect(client.debugger.calls('pause')).toHaveLength(1);
   });
 
   it('resumes the frame stop it landed on, with the frame stops off first', async () => {

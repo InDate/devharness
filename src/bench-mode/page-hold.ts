@@ -1,6 +1,7 @@
 import { appendEvent } from '../session-events.js';
 import { debugLog } from '../debug-logger.js';
-import { releasedRate, seekAnimations } from './animations.js';
+import { readGroup, releasedRate, seekAnimations } from './animations.js';
+import { applyMotionRules } from './motion-rules.js';
 import { attachLayer, hold, holdReading, isHeld, release, step, type HoldLayer, type HoldSource, type LayerHold, type LayerStanding } from '../hold.js';
 import type { CallbackEntry, TickResult } from '../bench/wire.js';
 import { pageTime, request, send, setInspectMode } from './cdp.js';
@@ -125,6 +126,10 @@ async function holdScreen(session: BenchSession): Promise<void> {
     }, 1000).catch(() => ({ result: undefined }));
     session.framesHeld = result?.value === true;
   } else if (!dbg.isPaused()) {
+    // Page time stops with the CSS animations, before the pause: on an idle
+    // page the pause only arms, and lands when the page next runs, which can be
+    // long after; page time would run on until then.
+    await pauseClock(session);
     await dbg.pause();
   }
   session.frozen = true;
@@ -328,6 +333,14 @@ export async function landFrameStop(session: BenchSession): Promise<FrameStopLan
   await pauseClock(session);
   const dbg = session.debugger;
   if (dbg && !dbg.isPaused()) await dbg.pause().catch(() => {});
+  // The standing rules act on the group at 0ms: an animation reported created
+  // cannot always be read yet, and its start is reported only after the release.
+  if (session.motionRules?.length) {
+    for (const one of await readGroup(session)) {
+      const applied = await applyMotionRules(session, one.id);
+      if (applied) session.motionApplied = [...(session.motionApplied ?? []), applied].slice(-50);
+    }
+  }
   return session.framesHeld ? 'frame' : 'no clock';
 }
 

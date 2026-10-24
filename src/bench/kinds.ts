@@ -281,9 +281,7 @@ export function missingPushes(recordedSteps: Array<Record<string, KindCount> | u
  * leave the page's own behaviour.
  */
 export interface MotionSetting {
-  /** Run at this multiple of real time: below 1 slower, above 1 faster. */
-  slow?: number;
-  /** Jump to its end as it starts: the element lands where the app put it, with no motion. */
+  /** Jump to its end as it is created: the element lands where the app put it, with no motion. */
   off?: true;
   /** Pause every other animation while this step's settings stand. */
   alone?: true;

@@ -56,9 +56,7 @@ function motionSettingOf(raw: unknown): MotionSetting | null {
   if (!raw || typeof raw !== 'object') return null;
   const given = raw as Record<string, unknown>;
   const ms = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined);
-  const slow = typeof given.slow === 'number' && given.slow > 0 && given.slow <= 10 ? given.slow : undefined;
   const setting: MotionSetting = {
-    ...(slow !== undefined && slow !== 1 ? { slow } : {}),
     ...(given.off === true ? { off: true as const } : {}),
     ...(given.alone === true ? { alone: true as const } : {}),
     ...(ms(given.freezeAt) !== undefined ? { freezeAt: ms(given.freezeAt) } : {}),

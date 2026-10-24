@@ -485,11 +485,11 @@ describe('startBench', () => {
     await pick(client);
 
     // Runtime.callFunctionOn describes the picked node, and the only
-    // evaluations are reading the page's clock and the one literal the hold's
-    // pause lands in. Anything else would be UI rendered into a page that may
-    // be too frozen to run it.
+    // evaluations read the page's time or drive devharness's page clock.
+    // Anything else would be UI rendered into a page that may be too frozen
+    // to run it.
     const expressions = client.calls('Runtime.evaluate').map((c: SentCall) => c.params.expression);
-    expect(expressions.every((e: string) => e === 'performance.now()' || e.startsWith('0\n//# sourceURL=devharness://hold'))).toBe(true);
+    expect(expressions.every((e: string) => e === 'performance.now()' || e.endsWith('//# sourceURL=devharness://clock'))).toBe(true);
     expect(client.calls('Runtime.addBinding')).toHaveLength(0);
   });
 

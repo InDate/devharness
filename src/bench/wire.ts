@@ -789,6 +789,8 @@ export interface MotionView {
   playbackRate: number;
   /** The animations standing part-way, read while the screen is held; empty while it runs. */
   animations: AnimationView[];
+  /** The page clock's reading; absent on a page opened before devharness put its clock in. */
+  clock?: { now: number; behind: number; paused: boolean; rate: number };
 }
 
 /** The frames a step filmed from its input, waiting on the person to keep or drop them. */

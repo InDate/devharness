@@ -9,6 +9,8 @@ import { promises as fs } from 'fs';
 import type { BenchSession } from './session.js';
 import { sessions } from './session.js';
 import { request, send } from './cdp.js';
+import { ownScript } from '../utils/own-script.js';
+import { CLOCK_KEY } from '../page-clock.js';
 import { seekAnimations, setPlaybackRate, releasedRate } from './animations.js';
 import { recordBenchCall } from '../person-watch.js';
 import type { AnimationView, MotionView } from '../bench/wire.js';
@@ -46,10 +48,15 @@ export async function animationsOf(session: BenchSession): Promise<AnimationView
 
 /** The motion part of the bench's view: the speed, and the animations while the screen is held. */
 export async function motionOf(session: BenchSession): Promise<MotionView> {
+  const clock = await request(session.client, 'Runtime.evaluate', {
+    expression: ownScript('clock', `globalThis[Symbol.for('${CLOCK_KEY}')]?.state() ?? null`), returnByValue: true,
+  }, 500).catch(() => undefined);
+  const reading = clock?.result?.value;
   return {
     playbackRate: releasedRate(session),
     // Read while something holds them: the screen, or a rule freezing one animation.
     animations: session.frozen || session.motionPaused?.size ? await animationsOf(session) : [],
+    ...(reading ? { clock: { now: reading.now, behind: Number(reading.behind) || 0, paused: reading.paused, rate: reading.rate } } : {}),
   };
 }
 

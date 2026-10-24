@@ -100,9 +100,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runs the clock's next timer or held frame, page time moved on to it, before
   the page's own next callback. `hold rate` sets the page clock's rate with the
   CSS animations'.
-- **Motion is no longer on the hold strip.** The speed and seek chips and the
-  line per animation are gone from the bench's hold strip; `hold seek` and
-  `hold rate` remain.
+- **Motion is no longer on the hold strip; the page's speed is.** The seek
+  chips and the line per animation are gone from the bench's hold strip, and a
+  Time row takes the speed chips' place: slow down, speed up and back to real
+  time for the page's JS timing and CSS animations together, and where page
+  time stands. A speed off real time frames the bench in the wait colour.
+- **Motion rules act from an animation's first frame, on one animation of
+  several alike.** A rule applies as Chrome creates the animation, and to the
+  group a frame stop holds when set there; `element` is a selector the element
+  matches, such as `div.item:nth-child(4)`. Per-animation speed (`slow`) is
+  gone, from the rules and the MOTION row, since `rate` sets the speed for the
+  whole page including its JS. A whole-page freeze holds the page as the
+  animation is created and sets it to the point, in place of a wall-clock timer.
 
 ### Fixed
 

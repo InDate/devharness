@@ -20,6 +20,6 @@ export function discFill(modes: readonly DiscMode[]): string | undefined {
 /** The states as the disc's title words them, 'idle' where none stands. */
 export function discSaid(modes: readonly DiscMode[]): string {
   return modes.length
-    ? modes.map(mode => (mode === 'frozen' ? 'page held' : mode === 'traffic' ? 'traffic held' : mode === 'slowed' ? 'animations slowed' : mode)).join(' · ')
+    ? modes.map(mode => (mode === 'frozen' ? 'page held' : mode === 'traffic' ? 'traffic held' : mode === 'slowed' ? 'page speed changed' : mode)).join(' · ')
     : 'idle';
 }

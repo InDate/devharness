@@ -108,6 +108,16 @@ describe('the page clock - page time the hold stops', () => {
     expect(run('order')).toEqual(['a', 'c']);
   });
 
+  it('reports how far page time is behind wall time, from holds and slower speeds', () => {
+    const { clock, wait } = pageWithClock();
+    clock.pause();
+    wait(500);
+    clock.resume();
+    clock.rate(0.5);
+    wait(200);
+    expect(clock.state().behind).toBe(600);
+  });
+
   it('keeps an interval to its rhythm in page time across a hold', () => {
     const { clock, wait, run } = pageWithClock();
     run('globalThis.ticks = []; setInterval(() => ticks.push(performance.now()), 100)');

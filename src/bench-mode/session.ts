@@ -282,6 +282,8 @@ export interface BenchSession extends BenchReport {
   motionTouched?: Set<string>;
   /** What the rules did, newest last, capped. */
   motionApplied?: MotionApplied[];
+  /** The timing the page first gave each animation a rule acted on, by id, which a rule applied again works from. */
+  motionBases?: Map<string, { delay: number; duration: number }>;
   /** Settles once a whole-page freeze a step's motion scheduled has landed. */
   pendingFreeze?: Promise<void>;
   /** Motion set on the steps of the recording in progress, by step position, written onto the file when it lands. */

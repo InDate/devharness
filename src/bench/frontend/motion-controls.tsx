@@ -1,13 +1,9 @@
 import type { MotionSetting } from '../kinds.js';
 
-/** The speeds the stepper moves through, fastest first. */
-export const SPEED_STEPS = [4, 2, 1.5, 1, 0.5, 0.25, 0.1, 0.05];
-
 /** What a MOTION row's setting does on the next run, in words; undefined while it plays as the page has it. */
 export function motionWords(setting: MotionSetting | undefined): string | undefined {
   if (!setting) return undefined;
   const words = [
-    setting.slow !== undefined ? (setting.slow < 1 ? `slowed ${setting.slow}×` : `speed ${setting.slow}×`) : '',
     setting.off ? 'off' : '',
     setting.alone ? 'alone' : '',
     setting.freezeAt !== undefined ? `freezes at ${setting.freezeAt}ms${setting.only ? ', this one' : ''}` : '',

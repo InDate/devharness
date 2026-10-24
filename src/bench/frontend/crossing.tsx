@@ -1,5 +1,5 @@
 /** @jsxImportSource preact */
-import { SPEED_STEPS, motionWords, postMotion, type MotionRow } from './motion-controls.js';
+import { motionWords, postMotion, type MotionRow } from './motion-controls.js';
 import type { MotionSetting } from '../kinds.js';
 import { Fragment } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
@@ -844,17 +844,16 @@ function IgnoreEditor({ event, step, onSave, onCancel }: {
 /**
  * How one animation under a step plays on the next run, set as a rule is:
  * a line per choice, saved from the foot, marked on the row until changed.
- * Freezing stops the run there, and the hold strip's Motion line scrubs it.
+ * Freezing stops the run there, where `hold seek` and `hold frame` move it.
+ * Off jumps the animation to its end, so it leaves no point to freeze at:
+ * choosing one clears the other.
  */
 function MotionEditor({ row }: { row: MotionRow }) {
   const saved = row.setting ?? {};
-  const [speed, setSpeed] = useState(saved.slow ?? 1);
-  const [typing, setTyping] = useState(false);
   const [off, setOff] = useState(!!saved.off);
   const [freezeAt, setFreezeAt] = useState<number | undefined>(saved.freezeAt);
   const [only, setOnly] = useState(!!saved.only);
   const setting: MotionSetting = {
-    ...(speed !== 1 ? { slow: speed } : {}),
     ...(off ? { off: true as const } : {}),
     ...(saved.alone ? { alone: true as const } : {}),
     ...(freezeAt !== undefined ? { freezeAt, ...(only ? { only: true as const } : {}) } : {}),
@@ -865,34 +864,16 @@ function MotionEditor({ row }: { row: MotionRow }) {
   const save = () => postMotion(row.base, '/motion/setting', {
     step: row.step, kind: row.kind, setting: Object.keys(setting).length ? setting : null,
   });
-  // The listed speed next below or above this one; a typed speed between two steps moves to its neighbour.
-  const stepSpeed = (slower: boolean) => {
-    const next = slower ? SPEED_STEPS.find(one => one < speed) : [...SPEED_STEPS].reverse().find(one => one > speed);
-    if (next !== undefined) setSpeed(next);
-  };
   const half = Math.round(row.duration / 2);
   return (
     <div class="replace motioneditor" onClick={(e: MouseEvent) => e.stopPropagation()}>
-      <ScopeRow label="speed">
-        <button class="tool plain" title="slower" aria-label="slower" onClick={() => stepSpeed(true)}>&lt;</button>
-        {typing
-          ? <input class="speedtyped" type="number" min={0.01} max={10} step={0.05} value={speed} autoFocus
-              onBlur={() => setTyping(false)}
-              onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === 'Escape') setTyping(false); }}
-              onInput={(e: Event) => {
-                const typed = Number((e.target as HTMLInputElement).value);
-                if (typed > 0 && typed <= 10) setSpeed(typed);
-              }} />
-          : <button class="tool plain chosen" title="type a speed" onClick={() => setTyping(true)}>{speed}×</button>}
-        <button class="tool plain" title="faster" aria-label="faster" onClick={() => stepSpeed(false)}>&gt;</button>
-      </ScopeRow>
       <ScopeRow label="off">
         <Choice on={!off} onPick={() => setOff(false)}>no</Choice>
-        <Choice on={off} onPick={() => setOff(true)} title="jump to its end, as if it had no motion">yes</Choice>
+        <Choice on={off} onPick={() => { setOff(true); setFreezeAt(undefined); }} title="jump to its end, as if it had no motion">yes</Choice>
       </ScopeRow>
       <ScopeRow label="freeze">
         <Choice on={freezeAt === undefined} onPick={() => setFreezeAt(undefined)}>none</Choice>
-        <Choice on={freezeAt !== undefined} onPick={() => setFreezeAt(freezeAt ?? half)} title="stop the run with it part-way">
+        <Choice on={freezeAt !== undefined} onPick={() => { setFreezeAt(freezeAt ?? half); setOff(false); }} title="stop the run with it part-way">
           at {freezeAt !== undefined
             ? <input class="freezetyped" type="number" min={0} max={row.duration || undefined} step={10} value={freezeAt}
                 onClick={(e: MouseEvent) => e.stopPropagation()}

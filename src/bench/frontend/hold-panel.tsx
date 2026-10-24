@@ -99,9 +99,69 @@ export function HoldPanel({ state, post, onClose, onGo }: {
             <LayerSlots layer={layer} held={held} available={available} state={state} change={change} post={post}
               go={available ? { title: GO_TITLES[layer], act: () => onGo(layer) } : { title: needs }} />
           </div>
+          {layer === 'ui' && available && <TimeRow state={state} post={post} />}
           </Fragment>
         );
       })}
+    </div>
+  );
+}
+
+/** Below this, page time reads as keeping up with real time. */
+const BEHIND_SHOWN_MS = 100;
+
+/** A span of ms at the size it has reached: 840ms, 16.3s, 2m 05s. */
+function span(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  const seconds = Math.round(ms / 1000);
+  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`;
+}
+
+/** The page speeds the Time row steps through, slowest first. */
+const SPEEDS = [0.1, 0.25, 0.5, 1, 2, 4];
+
+/**
+ * The page's speed, in the layer rows' columns: the clock that runs its JS
+ * timing and the rate its CSS animations run at, both at once, and where page
+ * time stands. A speed other than 1 bands the whole bench, since a page
+ * running slow reads as a slow app.
+ */
+function TimeRow({ state, post }: {
+  state: BenchView;
+  post: (path: string, body?: Record<string, unknown>) => Promise<void>;
+}) {
+  const rate = state.motion.playbackRate;
+  const clock = state.motion.clock;
+  const slower = [...SPEEDS].reverse().find(speed => speed < rate);
+  const faster = SPEEDS.find(speed => speed > rate);
+  const changed = rate !== 1;
+  const set = (playbackRate: number) => void post('/motion/rate', { playbackRate });
+  // Stopped, a frame step moves page time by 16.7ms, so it reads to the ms;
+  // running, it reads at the size it has reached.
+  const said = clock
+    ? `page ${clock.paused ? `${Math.round(clock.now)}ms` : span(clock.now)} · ${clock.paused ? 'stopped' : 'running'}${clock.behind >= BEHIND_SHOWN_MS ? ` · ${span(clock.behind)} behind real time` : ''}`
+    : 'no page clock: the page was opened before devharness attached, so only CSS follows the speed';
+  return (
+    <div class={`holdrow row-time ${changed ? 'slowed' : 'layer-running'}`}>
+      <b class="layername"><Glyph of="timer" /> Time</b>
+      <span class="holdbadges">
+        {changed ? <span class="badge holder">{rate}×</span> : <span class="badge running">real time</span>}
+      </span>
+      <span class="layerstate" title={said}>{said}</span>
+      <span class="holdreading" />
+      <span class="holdslots">
+        <button class={slower !== undefined ? 'tool' : 'tool off'} aria-label="Slow down"
+          title={slower !== undefined ? `Slow the page to ${slower}×: its JS timing and CSS animations` : 'The page runs at its slowest'}
+          onClick={() => { if (slower !== undefined) set(slower); }}><Glyph of="down" /></button>
+        <button class={faster !== undefined ? 'tool' : 'tool off'} aria-label="Speed up"
+          title={faster !== undefined ? `Speed the page to ${faster}×: its JS timing and CSS animations` : 'The page runs at its fastest'}
+          onClick={() => { if (faster !== undefined) set(faster); }}><Glyph of="up" /></button>
+        <button class={changed ? 'tool' : 'tool off'} aria-label="Real time"
+          title={changed ? 'Back to real time' : 'The page runs at real time'}
+          onClick={() => { if (changed) set(1); }}><Glyph of="play" /></button>
+        <span class="tool slot" />
+      </span>
     </div>
   );
 }

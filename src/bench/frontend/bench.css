@@ -2106,6 +2106,9 @@ button.statedisc:hover { box-shadow: 0 0 0 3px color-mix(in srgb, var(--frost) 3
 .holdrow.row-recording { --hold-tone: var(--alert); }
 .holdrow.row-recording .holdreading .n-step { color: var(--alert); }
 .holdrow.layer-held .layername { color: var(--hold-tone); }
+/* The page's speed off real time takes the wait colour, as the screen's frame does. */
+.holdrow.row-time.slowed { --hold-tone: var(--wait); }
+.holdrow.row-time.slowed .layername { color: var(--wait); }
 /* What holds each area, as the badge a compared row carries after its source:
    the holder in the hold's colour, running quiet, a missing mechanism dashed. */
 .holdbadges { flex: 0 0 76px; display: flex; gap: 4px; min-width: 0; }
@@ -2779,7 +2782,7 @@ dialog.varmodal::backdrop { background: rgba(0, 0, 0, 0.45); }
    values in the row's own small monospace; the tag in the frost a held
    screen carries. */
 .tag.motionset { color: var(--frost); border-color: var(--frost); }
-.motioneditor .speedtyped, .motioneditor .freezetyped {
+.motioneditor .freezetyped {
   width: 56px; height: 18px; margin: 0 2px; padding: 0 4px; border: 1px solid var(--line); border-radius: 4px;
   background: var(--bg); color: var(--fg); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
 }

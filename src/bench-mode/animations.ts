@@ -66,21 +66,30 @@ export interface SeekReading {
  * timing is resolved from the animation object when the start has not been
  * reported.
  */
+/** How long after an unreadable creation report a rule is tried again: a frame. */
+const RULE_RETRY_MS = 16;
+
 export function watchAnimations(session: BenchSession): void {
   const { client } = session;
+  // An animation reported created cannot always be read yet, so one that
+  // reads as nothing is tried again a frame later.
+  const rule = (id: string, retry = true) => {
+    if (!session.motionRules?.length) return;
+    void applyMotionRules(session, id).then(applied => {
+      if (applied) session.motionApplied = [...(session.motionApplied ?? []), applied].slice(-50);
+      else if (retry && !session.motionBases?.has(id)) setTimeout(() => rule(id, false), RULE_RETRY_MS);
+    }).catch(() => {});
+  };
   client.on('Animation.animationCreated', (event: any) => {
     if (!event?.id || session.animations.has(event.id)) return;
     session.animations.set(event.id, { id: event.id, name: event.id, type: 'WebAnimation', startedAt: Date.now() });
+    // Before its first frame, so a rule acts from the animation's 0ms.
+    rule(event.id);
   });
   client.on('Animation.animationStarted', (event: any) => {
     const animation = event?.animation;
     if (!animation?.id) return;
-    if (session.motionRules?.length) {
-      void applyMotionRules(session, animation).then(applied => {
-        if (!applied) return;
-        session.motionApplied = [...(session.motionApplied ?? []), applied].slice(-50);
-      }).catch(() => {});
-    }
+    rule(animation.id);
     session.animations.set(animation.id, {
       id: animation.id,
       name: animation.name || animation.cssId || animation.id,

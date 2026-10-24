@@ -253,7 +253,11 @@ function installPageClock(g: any): void {
     },
     /** Run page time at this multiple of wall time. */
     rate(value: number) { sync(); rate = Math.max(0, Number(value) || 0); schedule(); return rate; },
-    state() { return { now: pageNow(), paused, rate, timers: timers.size, framesHeld, framesWaiting: queuedFrames.size }; },
+    /** Where page time stands, and how far behind wall time holds and slower speeds have left it. */
+    state() {
+      const now = pageNow();
+      return { now, behind: native.perfNow() - now, paused, rate, timers: timers.size, framesHeld, framesWaiting: queuedFrames.size };
+    },
   };
 }
 

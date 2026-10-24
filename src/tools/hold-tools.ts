@@ -6,14 +6,13 @@ import { getProxy } from '../proxy/registry.js';
 import { sessions } from '../bench-mode/session.js';
 import { readGroup, seekAnimations, setPlaybackRate } from '../bench-mode/animations.js';
 import { FRAME_MS, frameStep } from '../bench-mode/page-hold.js';
-import { changeMotionRules, type MotionRule } from '../bench-mode/motion-rules.js';
+import { applyMotionRules, changeMotionRules, type MotionRule } from '../bench-mode/motion-rules.js';
 
 /** A rule as one line: what it matches, then what it does. */
 function describeRule(rule: MotionRule): string {
   const target = [rule.animation ?? 'any animation', rule.element ? `on ${rule.element}` : ''].filter(Boolean).join(' ');
   const acts = [
     rule.off ? 'off, jumps to its end' : '',
-    rule.slow !== undefined ? `speed ${rule.slow}×` : '',
     rule.alone ? 'plays alone' : '',
     rule.freezeAt !== undefined ? `held at ${rule.freezeAt}ms` : '',
     rule.duration !== undefined ? `duration ${rule.duration}ms` : '',
@@ -26,24 +25,19 @@ const layerEnum = z.enum(['code', 'ui', 'network']);
 
 const holdSchema = z.object({
   action: z.enum(['hold', 'step', 'release', 'status', 'seek', 'rate', 'motion', 'group', 'frame']),
-  connection: z.string().describe('The connection, by the name connection launch gave it'),
-  layers: z.array(layerEnum).optional()
-    .describe('hold/release: which layers; all of them by default. ui carries code with it'),
-  layer: layerEnum.optional()
-    .describe('step: code moves one statement, ui one callback, network one message'),
-  ms: z.number().optional()
-    .describe('seek: move every running CSS transition, CSS animation and web animation on by this much of its own time, JS untouched; needs the bench open. frame: the frame\'s length in page time (default 16.7)'),
-  playbackRate: z.number().nonnegative().optional()
-    .describe('rate: what the page\'s animations run at while released, 1 real time, 0.2 a fifth; a release restores it'),
-  animation: z.string().optional().describe('motion: the animation a rule acts on, by its name or transition property; any when absent'),
-  element: z.string().optional().describe('motion: the animated element as the ACTION rows name it, #id or tag.class; any when absent'),
-  slow: z.number().positive().optional().describe('motion: run the matched animation at this multiple of real time, below 1 slower, above 1 faster'),
-  off: z.boolean().optional().describe('motion: jump the matched animation to its end as it starts'),
-  alone: z.boolean().optional().describe('motion: pause every other animation while the rule stands'),
-  freezeAt: z.number().nonnegative().optional().describe('motion: hold the matched animation this many ms in, the rest running'),
-  duration: z.number().nonnegative().optional().describe('motion: the matched animation\'s duration in ms, in place of the page\'s'),
-  delay: z.number().nonnegative().optional().describe('motion: its delay in ms, in place of the page\'s'),
-  clear: z.boolean().optional().describe('motion: remove the rule for this animation and element, or every rule with neither named'),
+  connection: z.string().describe('Connection name'),
+  layers: z.array(layerEnum).optional().describe('hold/release: default all; ui includes code'),
+  layer: layerEnum.optional().describe('step: code, ui or network'),
+  ms: z.number().optional().describe('seek: ms to move CSS animations; frame: frame length (default 16.7)'),
+  playbackRate: z.number().nonnegative().optional().describe('rate: 1 real time, 0.2 a fifth'),
+  animation: z.string().optional().describe('motion: animation name or transition property'),
+  element: z.string().optional().describe('motion: selector the element matches, e.g. #panel, div.item:nth-child(4)'),
+  off: z.boolean().optional().describe('motion: jump to its end when created'),
+  alone: z.boolean().optional().describe('motion: pause the other animations'),
+  freezeAt: z.number().nonnegative().optional().describe('motion: hold it this many ms in'),
+  duration: z.number().nonnegative().optional().describe('motion: its duration ms'),
+  delay: z.number().nonnegative().optional().describe('motion: its delay ms'),
+  clear: z.boolean().optional().describe('motion: remove matching rules, all if none named'),
 }).strict();
 
 export const LAYER_WORDS = { code: 'code', ui: 'screen', network: 'traffic' } as const;
@@ -83,7 +77,7 @@ function render(reading: HoldReading): string {
 export function createHoldTools() {
   return {
     hold: createTool(
-      'Stop the driven app at one moment across its layers - code, screen, traffic - step it, and let it run. A held screen stops the page clock too, so its timers, Date and performance.now stand still with it. Actions: hold (stop the layers), step (move one held layer on by its unit; the screen\'s unit is a callback - the page clock\'s next timer or held frame, else the page\'s next callback), frame (a held screen one frame on: page time, its due timers, the queued frame callbacks once and the CSS animations by ms, default 16.7), group (the animations started since a frame stop, with element, delay, duration, easing, position), release (let the layers run), status (what is held, where each stands, what waits at the proxy), seek (move the running CSS animations on by ms, held or not), rate (the rate of the CSS animations and the page clock while released), motion (rules on single animations as they start: slow, off, alone, freezeAt, timing; none given lists them)',
+      'Stop the app across its layers and step it. Layers: code, ui (screen: JS, CSS animations, page clock), network (proxy). Actions: hold, release, status, step (code a statement; ui the clock\'s next timer or held frame, else next callback; network a message), frame (held screen one frame: page time, due timers, frame callbacks, CSS), group (animations since a frame stop), seek (CSS animations by ms), rate (CSS and page clock speed), motion (rule on one CSS animation: off, alone, freezeAt, duration, delay; none lists rules)',
       holdSchema,
       async (args) => {
         const { connection } = args;
@@ -118,57 +112,57 @@ export function createHoldTools() {
           case 'seek': {
             if (typeof args.ms !== 'number') return createErrorResponse('INVALID_PARAMS', { message: 'seek needs ms: how far the running animations move on' });
             const session = sessions.get(connection);
-            if (!session) return createErrorResponse('INVALID_PARAMS', { message: `No bench is open on "${connection}": the animations are tracked from \`bench({ action: 'start' })\` on, so an animation started before it is not seen` });
+            if (!session) return createErrorResponse('INVALID_PARAMS', { message: `No bench on "${connection}": animations are tracked from bench start` });
             const moved = await seekAnimations(session, args.ms);
             const reading = holdReading(connection);
             const lines = moved.length === 0
-              ? [`No animation is running on "${connection}" that the bench has seen start; a seek moves CSS transitions, CSS animations and web animations started since the bench opened.`]
-              : [`Moved ${moved.length} animation${moved.length === 1 ? '' : 's'} on by ${args.ms}ms${reading.held.some(layer => layer.layer === 'ui') ? ', the screen still held' : ', the screen running'}:`,
-                ...moved.map(a => `  ${a.type} ${a.name}: ${Math.round(a.fromMs)}ms → ${Math.round(a.toMs)}ms of ${Math.round(a.durationMs)}ms (${Math.round(a.progress * 100)}%)`)];
+              ? [`Seek: no animation running on "${connection}" since the bench opened.`]
+              : [`Seek +${args.ms}ms (${reading.held.some(layer => layer.layer === 'ui') ? 'held' : 'running'}):`,
+                ...moved.map(a => `  ${a.name} ${Math.round(a.fromMs)}→${Math.round(a.toMs)}/${Math.round(a.durationMs)}ms ${Math.round(a.progress * 100)}%`)];
             return { content: [{ type: 'text', text: lines.join('\n') }], _meta: { ...meta(reading), seek: { ms: args.ms, animations: moved } } };
           }
           case 'frame': {
             const session = sessions.get(connection);
-            if (!session) return createErrorResponse('INVALID_PARAMS', { message: `No bench is open on "${connection}": a frame is stepped through the bench's page clock` });
-            if (!session.frozen) return createErrorResponse('INVALID_PARAMS', { message: `The screen of "${connection}" is not held: a frame steps a held page. Take a frame stop with \`input\` and \`holdBeforeFrame: true\`, or \`hold\` the ui layer` });
+            if (!session) return createErrorResponse('INVALID_PARAMS', { message: `No bench on "${connection}"` });
+            if (!session.frozen) return createErrorResponse('INVALID_PARAMS', { message: `Screen of "${connection}" not held: hold ui, or input with holdBeforeFrame` });
             const ms = typeof args.ms === 'number' && args.ms > 0 ? args.ms : FRAME_MS;
             const stepped = await frameStep(session, ms);
+            const span = Math.round(ms * 10) / 10;
             const lines = stepped
-              ? [`Stepped one frame of ${Math.round(ms * 10) / 10}ms on "${connection}": page time ${Math.round(stepped.now)}ms, ${stepped.ran} frame callback${stepped.ran === 1 ? '' : 's'} run, ${stepped.waiting} waiting for the next frame; CSS animations moved on by the same span.`]
-              : [`No page clock on "${connection}": the page was opened before devharness put its clock in. CSS animations moved on by ${Math.round(ms * 10) / 10}ms; the page's JS did not.`];
+              ? [`Frame +${span}ms: page ${Math.round(stepped.now)}ms, ${stepped.ran} callback${stepped.ran === 1 ? '' : 's'} ran, ${stepped.waiting} waiting`]
+              : [`Frame +${span}ms: CSS only, no page clock (page opened before devharness attached)`];
             return { content: [{ type: 'text', text: lines.join('\n') }], _meta: { ...meta(holdReading(connection)), frame: stepped ?? null } };
           }
           case 'group': {
             const session = sessions.get(connection);
-            if (!session) return createErrorResponse('INVALID_PARAMS', { message: `No bench is open on "${connection}": a group is the animations an input started at a frame stop, taken by \`input\` with \`hold: ['ui']\` and \`holdBeforeFrame: true\`` });
+            if (!session) return createErrorResponse('INVALID_PARAMS', { message: `No bench on "${connection}"` });
             const group = await readGroup(session);
             const lines = group.length === 0
-              ? [`No group on "${connection}": no animation was created since the last frame stop, or none was armed.`]
-              : [`${group.length} animation${group.length === 1 ? '' : 's'} started by the input at the frame stop:`,
-                ...group.map(a => `  ${a.element ?? '?'} ${a.name}: ${Math.round(a.currentMs)}ms of ${a.delayMs ? `${Math.round(a.delayMs)}ms delay + ` : ''}${Math.round(a.durationMs)}ms, ${a.easing}`)];
+              ? [`No group: no animation created since a frame stop on "${connection}".`]
+              : [`${group.length} animation${group.length === 1 ? '' : 's'} since the frame stop (at/duration, delay, easing):`,
+                ...group.map(a => `  ${a.element ?? '?'} ${a.name} ${Math.round(a.currentMs)}/${Math.round(a.durationMs)}ms${a.delayMs ? ` +${Math.round(a.delayMs)}` : ''} ${a.easing}`)];
             return { content: [{ type: 'text', text: lines.join('\n') }], _meta: { ...meta(holdReading(connection)), group } };
           }
           case 'rate': {
             if (typeof args.playbackRate !== 'number') return createErrorResponse('INVALID_PARAMS', { message: 'rate needs playbackRate: 1 is real time, 0.2 a fifth of it' });
             const session = sessions.get(connection);
-            if (!session) return createErrorResponse('INVALID_PARAMS', { message: `No bench is open on "${connection}": the playback rate is set through its session` });
+            if (!session) return createErrorResponse('INVALID_PARAMS', { message: `No bench on "${connection}"` });
             await setPlaybackRate(session, args.playbackRate);
             const reading = holdReading(connection);
             const held = reading.held.some(layer => layer.layer === 'ui');
             return {
-              content: [{ type: 'text', text: `Animations on "${connection}" run at ${args.playbackRate}× ${held ? 'once the screen is released' : 'from now'}; a hold still stops them, and a release puts this rate back.` }],
+              content: [{ type: 'text', text: `Rate ${args.playbackRate}× for CSS and page clock, ${held ? 'on release' : 'from now'}` }],
               _meta: { ...meta(reading), playbackRate: args.playbackRate },
             };
           }
           case 'motion': {
             const session = sessions.get(connection);
-            if (!session) return createErrorResponse('INVALID_PARAMS', { message: `No bench is open on "${connection}": an animation is seen starting through its session` });
+            if (!session) return createErrorResponse('INVALID_PARAMS', { message: `No bench on "${connection}"` });
             const target = {
               ...(args.animation ? { animation: args.animation } : {}),
               ...(args.element ? { element: args.element } : {}),
             };
             const acts = {
-              ...(args.slow !== undefined ? { slow: args.slow } : {}),
               ...(args.off !== undefined ? { off: args.off } : {}),
               ...(args.alone !== undefined ? { alone: args.alone } : {}),
               ...(args.freezeAt !== undefined ? { freezeAt: args.freezeAt } : {}),
@@ -180,9 +174,16 @@ export function createHoldTools() {
               : Object.keys(acts).length
                 ? await changeMotionRules(session, { rule: { ...target, ...acts } })
                 : session.motionRules ?? [];
-            const applied = (session.motionApplied ?? []).slice(-10);
+            // A rule set while a frame stop holds its group acts on the group now,
+            // where it would otherwise meet only the animations started after it.
+            const group = Object.keys(acts).length && !args.clear && session.frozen ? await readGroup(session) : [];
+            for (const one of group) {
+              const applied = await applyMotionRules(session, one.id, true);
+              if (applied) session.motionApplied = [...(session.motionApplied ?? []), applied].slice(-50);
+            }
+            const applied = (session.motionApplied ?? []).slice(-5);
             const lines = [
-              rules.length ? `${rules.length} motion rule${rules.length === 1 ? '' : 's'} on "${connection}", acting on each matching animation as it starts:` : `No motion rule stands on "${connection}".`,
+              rules.length ? `${rules.length} rule${rules.length === 1 ? '' : 's'}${group.length ? `, applied to the ${group.length} held` : ''}:` : 'No rules.',
               ...rules.map(rule => `  ${describeRule(rule)}`),
               ...(applied.length ? ['Last applied:', ...applied.map(one => `  ${one.animation}${one.element ? ` ${one.element}` : ''}: ${one.did.join(', ')}`)] : []),
             ];

@@ -51,7 +51,7 @@ import {
   runningBench,
   type SequenceDriver,
 } from './bench-mode.js';
-import { armFrameStop } from './bench-mode/page-hold.js';
+import { armFrameStop, landFrameStop } from './bench-mode/page-hold.js';
 import { readGroup } from './bench-mode/animations.js';
 import { sessions } from './bench-mode/session.js';
 
@@ -241,7 +241,9 @@ function createFakeDebugger(client: any) {
       called.push({ method: 'clearInstrumentationBreakpoints', args: [] });
       dbg.stops = false;
     }),
-    scriptUrl: () => undefined,
+    /** Script URLs by id, as the debugger connection records them from scriptParsed. */
+    scripts: new Map<string, string>(),
+    scriptUrl: (scriptId: string) => dbg.scripts.get(scriptId),
   };
   return dbg;
 }
@@ -1589,7 +1591,7 @@ describe('highlighting an annotated element', () => {
 describe('the callback log', () => {
   async function startWithScript(client: any) {
     const state = await start(client);
-    await client.emit('Debugger.scriptParsed', { scriptId: 'script-1', url: 'http://localhost:5173/src/App.tsx' });
+    client.debugger.scripts.set('script-1', 'http://localhost:5173/src/App.tsx');
     return state;
   }
 
@@ -2329,7 +2331,7 @@ describe('what a mutation pass found unguarded', () => {
 });
 
 describe('the frame stop - the page held in front of the frame an input schedules', () => {
-  it('arms the next frame in place of pausing the page where it stands', async () => {
+  it('holds the animations at 0ms and leaves the page running for the input', async () => {
     const client = createFakeClient();
     await startBare(client);
     armFrameStop(sessions.get(CONNECTION)!);
@@ -2337,10 +2339,53 @@ describe('the frame stop - the page held in front of the frame an input schedule
     await setHeld(CONNECTION, true);
 
     expect(client.debugger.calls('pause')).toHaveLength(0);
-    expect(client.debugger.calls('setInstrumentationBreakpoints').map((call: any) => call.args[0]))
-      .toEqual([['requestAnimationFrame.callback']]);
+    expect(client.debugger.calls('setInstrumentationBreakpoints')).toHaveLength(0);
     expect(client.lastCall('Animation.setPlaybackRate').params).toEqual({ playbackRate: 0 });
     expect(getBenchSession(CONNECTION)).toMatchObject({ frozen: true });
+  });
+
+  it('stops in front of the next frame once the input is delivered', async () => {
+    const client = createFakeClient();
+    await startBare(client);
+    const session = sessions.get(CONNECTION)!;
+    armFrameStop(session);
+    await setHeld(CONNECTION, true);
+    setTimeout(() => client.debugger.stop({ reason: 'EventListener', data: { eventName: 'instrumentation:requestAnimationFrame.callback' }, callFrames: [] }), 5);
+
+    expect(await landFrameStop(session)).toBe('frame');
+
+    expect(client.debugger.calls('setInstrumentationBreakpoints').map((call: any) => call.args[0]))
+      .toEqual([['requestAnimationFrame.callback']]);
+    expect(client.debugger.calls('pause')).toHaveLength(0);
+    expect(client.debugger.isPaused()).toBe(true);
+  });
+
+  it('pauses the page where it stands when no frame comes within the wait', async () => {
+    const client = createFakeClient();
+    await startBare(client);
+    const session = sessions.get(CONNECTION)!;
+    armFrameStop(session);
+    await setHeld(CONNECTION, true);
+
+    expect(await landFrameStop(session)).toBe('no frame');
+    expect(client.debugger.calls('pause')).toHaveLength(1);
+  });
+
+  it('pauses a hidden page at once, since it paints no frame to stop in front of', async () => {
+    const client = createFakeClient();
+    await startBare(client);
+    const session = sessions.get(CONNECTION)!;
+    const send = client.send;
+    client.send = vi.fn(async (method: string, params?: any) =>
+      method === 'Runtime.evaluate' && params?.expression === 'document.visibilityState'
+        ? { result: { value: 'hidden' } }
+        : send(method, params));
+    armFrameStop(session);
+    await setHeld(CONNECTION, true);
+
+    expect(await landFrameStop(session)).toBe('hidden');
+    expect(client.debugger.calls('setInstrumentationBreakpoints')).toHaveLength(0);
+    expect(client.debugger.calls('pause')).toHaveLength(1);
   });
 
   it('resumes the frame stop it landed on, with the frame stops off first', async () => {

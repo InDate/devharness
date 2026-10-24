@@ -315,14 +315,6 @@ export class NetworkMonitor {
       const client: any = await (page as any).createCDPSession();
       this.wsClient = client;
       await client.send('Network.enable');
-      // Without a depth, a stack stops at the synchronous frames, so a fetch
-      // from `.then`, `await` or a debounce carries no frame naming what
-      // scheduled it and every one of them reads as plain script. The depth is
-      // a Debugger setting and silently does nothing until that domain is on,
-      // which is why the enable goes first on this session.
-      void client.send('Debugger.enable')
-        .then(() => client.send('Debugger.setAsyncCallStackDepth', { maxDepth: 8 }))
-        .catch(() => { /* no debugger on this target; roots stay synchronous */ });
       this.reportSocketSends(client);
       // The page's own session outlives every navigation, so its sockets are
       // judged on their own close events, never as target teardown.

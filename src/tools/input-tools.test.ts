@@ -163,6 +163,7 @@ describe('a press held in front of the frame it schedules', () => {
         throw new Error('Timeout waiting for pause');
       }),
       pause: vi.fn(async () => { order.push('pause'); session.debugger.paused = true; }),
+      setInstrumentationBreakpoints: vi.fn(async () => { order.push('frame stop armed'); }),
     };
     sessions.set(on.connection, session);
     attachLayer(on.connection, 'ui', {
@@ -173,13 +174,13 @@ describe('a press held in front of the frame it schedules', () => {
     return { order, session };
   }
 
-  it('takes the hold before the key is dispatched, and stands on the frame stop', async () => {
+  it('takes the hold before the key is dispatched and arms the frame stop after it', async () => {
     const { order, session } = benchWithScreen(true);
     const { input } = makeInput({ keyboard: { press: vi.fn(async () => { order.push('key'); }) } });
 
     const result: any = await input.handler({ ...on, action: 'press', key: '2', hold: ['ui'], holdBeforeFrame: true });
 
-    expect(order).toEqual(['hold armed on the frame', 'key', 'frame stop']);
+    expect(order).toEqual(['hold armed on the frame', 'key', 'frame stop armed', 'frame stop']);
     expect(session.debugger.pause).not.toHaveBeenCalled();
     expect(result._meta.hold.atFrame).toBe(true);
     expect(result.content[0].text).toContain('at the first frame after the press');
@@ -191,6 +192,6 @@ describe('a press held in front of the frame it schedules', () => {
 
     await input.handler({ ...on, action: 'press', key: '2', hold: ['ui'], holdBeforeFrame: true });
 
-    expect(order).toEqual(['hold armed on the frame', 'key', 'pause']);
+    expect(order).toEqual(['hold armed on the frame', 'key', 'frame stop armed', 'pause']);
   });
 });

@@ -23,7 +23,7 @@ import { captureBurst, describeBurst } from '../frame-burst.js';
 import { showBenchBurst } from '../bench-mode/session.js';
 import { sanitizeReference } from '../reference-validator.js';
 import { sessions, type BenchSession } from '../bench-mode/session.js';
-import { armFrameStop } from '../bench-mode/page-hold.js';
+import { armFrameStop, landFrameStop } from '../bench-mode/page-hold.js';
 
 // Coordinate schema for mouse actions
 const coordinateSchema = z.object({
@@ -111,36 +111,35 @@ type InputArgs = z.infer<typeof inputToolSchema>;
  */
 const touchesDown = new Map<string, any>();
 
-/** The longest wait for the frame an input scheduled; a hidden tab paints none, and the page is paused where it stands. */
-const FRAME_STOP_WAIT_MS = 250;
-
 /**
- * The hold taken before the dispatch, armed on the page's next frame: the
- * input runs, and the frame it scheduled stops the page before it paints.
+ * The hold taken before the dispatch, the animations held at 0ms: the input
+ * runs, and the frame it scheduled stops the page before it paints.
  */
 async function driveToFrameStop(
   bench: BenchSession, args: InputArgs, drive: (args: InputArgs, abortSignal?: AbortSignal) => Promise<any>, abortSignal?: AbortSignal,
 ): Promise<any> {
+  // A background tab paints no frames, so there would be no frame to stop in
+  // front of; brought forward, it paints the one the input schedules.
+  await bringHiddenPageToFront(bench.page, abortableSleep);
   armFrameStop(bench);
   const heldAt = Date.now();
   const reading = await hold(args.connection, { source: 'tool', layers: args.hold as HoldLayer[] });
   const response = await drive(args, abortSignal);
-  const dbg = bench.debugger;
-  if (dbg && !dbg.isPaused()) {
-    await dbg.waitForPause(FRAME_STOP_WAIT_MS).catch(() => {});
-    if (!dbg.isPaused()) await dbg.pause().catch(() => {});
-  }
+  const landed = await landFrameStop(bench);
   if (response?.isError) return response;
   const held = reading.held.filter(layer => (args.hold as HoldLayer[]).includes(layer.layer) || layer.via);
+  const where = landed === 'frame' ? `at the first frame after the ${args.action}, before it painted`
+    : landed === 'hidden' ? `where it stood after the ${args.action}: the page is hidden and paints no frames, so the first frame was not caught`
+    : `where it stood after the ${args.action}: no frame came within 250ms, so the first frame was not caught`;
   const lines = held.length
-    ? [`**Held:** ${held.map(layer => `${LAYER_WORDS[layer.layer]} (${layer.layer})`).join(', ')} at the first frame after the ${args.action}, before it painted; \`hold({ action: 'group' })\` lists the animations it started, \`hold({ action: 'release' })\` lets it run.`]
+    ? [`**Held:** ${held.map(layer => `${LAYER_WORDS[layer.layer]} (${layer.layer})`).join(', ')} ${where}; \`hold({ action: 'group' })\` lists the animations it started, \`hold({ action: 'release' })\` lets it run.`]
     : [];
   if (reading.unavailable.length) lines.push(`**Not held:** ${unavailableNote(reading.unavailable)}`);
   const [first, ...rest] = response.content ?? [];
   return {
     ...response,
     content: [{ ...first, text: `${first?.text ?? ''}\n${lines.join('\n')}` }, ...rest],
-    _meta: { ...response._meta, hold: { ...reading, heldAt, atFrame: true } },
+    _meta: { ...response._meta, hold: { ...reading, heldAt, atFrame: landed === 'frame', landed } },
   };
 }
 

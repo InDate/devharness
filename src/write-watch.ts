@@ -190,7 +190,9 @@ export class WriteWatch {
     this.detach.push(onCursorEnd(ending => {
       this.lastEnded = { cursor: ending, at: Date.now() };
       const hold = this.screenHold;
-      if (hold?.releasedAt !== undefined && !sameCursor(ending, hold.releasedBy) && !sameCursor(ending, hold.cursor)) this.screenHold = undefined;
+      // The release's own window bounds what the hold set off: a timer the page
+      // runs once released fires on its own clock, however fast the run moved on.
+      if (hold?.releasedAt !== undefined && !sameCursor(ending, hold.cursor)) this.screenHold = undefined;
     }));
     this.detach.push(watchHolds(change => {
       if (change.connection !== this.connection || !change.layers.includes('ui')) return;
@@ -314,8 +316,9 @@ export class WriteWatch {
 
   /**
    * The step an animation reported now belongs to by the screen's hold: the
-   * step that took it, while the hold stands and through the step that
-   * released it, until another step runs or the release is past reach.
+   * step that took it, while the hold stands and through the window of the
+   * step that released it; a release outside any step reaches as far as a
+   * returned step's does.
    */
   private heldCursor(): ProxyCursor | undefined {
     const hold = this.screenHold;

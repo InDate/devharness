@@ -91,8 +91,11 @@ function nodeName(node: { localName?: string; nodeName?: string; attributes?: st
   return `${node.localName || node.nodeName?.toLowerCase() || 'node'}${id ? `#${id}` : ''}${cls ? `.${cls}` : ''}`;
 }
 
+/** A script's URL by its id, as the page's debugger connection recorded it. */
+export type ScriptUrls = (scriptId: string) => string | undefined;
+
 async function readEvents(
-  client: CDPSession, objectId: string, scripts: Map<string, string>,
+  client: CDPSession, objectId: string, scriptUrl: ScriptUrls,
 ): Promise<ListenerFact[]> {
   const found: ListenerFact[] = [];
   let current: string | undefined = objectId;
@@ -109,7 +112,7 @@ async function readEvents(
       found.push({ on, type: types.slice(0, 8).join(' ') + (types.length > 8 ? ' …' : ''), count: listeners.length });
     } else {
       for (const l of listeners) {
-        const url = l.scriptId ? scripts.get(l.scriptId) : undefined;
+        const url = l.scriptId ? scriptUrl(l.scriptId) : undefined;
         const fn = typeof l.handler?.description === 'string'
           ? l.handler.description.split('\n')[0].slice(0, 80) : undefined;
         found.push({
@@ -289,18 +292,18 @@ async function readA11y(client: CDPSession, objectId: string): Promise<A11yFact>
 }
 
 /**
- * Read the facts asked for about the element `objectId` names. `scripts` maps
- * a script id to its URL, which a listener names its handler's script by;
+ * Read the facts asked for about the element `objectId` names. `scriptUrl`
+ * gives a script id's URL, which a listener names its handler's script by;
  * `sheets` does the same for a rule's stylesheet.
  */
 export async function readFacts(
   client: CDPSession, objectId: string, kinds: FactKind[],
-  known: { scripts: Map<string, string>; sheets: StyleSheets },
+  known: { scriptUrl: ScriptUrls; sheets: StyleSheets },
 ): Promise<ElementFacts> {
   const facts: ElementFacts = {};
   const unread: Record<string, string> = {};
   const readers: Record<FactKind, () => Promise<void>> = {
-    events: async () => { facts.events = await readEvents(client, objectId, known.scripts); },
+    events: async () => { facts.events = await readEvents(client, objectId, known.scriptUrl); },
     css: async () => { facts.css = await readCss(client, objectId, known.sheets); },
     html: async () => { facts.html = await readHtml(client, objectId); },
     a11y: async () => { facts.a11y = await readA11y(client, objectId); },

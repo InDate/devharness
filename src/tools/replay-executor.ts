@@ -1011,6 +1011,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
   // page reports only once a later step releases it, so its comparison waits
   // for the release, across passes when the run pauses in between.
   let heldStep = options.heldStep && !ctx.stampUnder ? options.heldStep : undefined;
+  let releaseReported = false;
   const screenHeldByStep = () => ctx.connection !== undefined
     && holdReading(sanitizeReference(ctx.connection)).held.some(layer => layer.layer === 'ui' && layer.source === 'tool');
   const comparable = async (started: Map<number, number>): Promise<Map<number, number>> => {
@@ -1804,12 +1805,14 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
 
       if (!heldStep && comparesBehaviour && !ctx.stampUnder && screenHeldByStep()) {
         heldStep = { step: i, markedAt: stepStartedAt.get(i) ?? Date.now() };
-      } else if (cmd.tool === 'input' && comparesBehaviour && ctx.connection && !screenHeldByStep()) {
-        // An input's transitions start on the frame after it and are reported
-        // after that; a run moves to its next step at once, which would take
-        // them as the next step's.
+      } else if ((cmd.tool === 'input' || (heldStep && !releaseReported)) && comparesBehaviour && ctx.connection && !screenHeldByStep()) {
+        // An input's transitions start on the frame after it, and a held
+        // press's on the frame after the step that releases it; Chrome reports
+        // them after that frame, and a run moves to its next step at once,
+        // which would take them as the next step's.
         const watch = sessions.get(sanitizeReference(ctx.connection))?.writeWatch;
         if (watch?.animations) await watch.animationsReported();
+        if (heldStep) releaseReported = true;
       }
 
       // Check if we hit a breakpoint after this step (on the step's own connection)

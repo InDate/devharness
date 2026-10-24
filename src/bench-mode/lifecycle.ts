@@ -67,7 +67,6 @@ export async function startBench(params: {
     ...(params.debugger ? { debugger: params.debugger } : {}),
     factChoice: ['events'],
     sequences,
-    scripts: new Map(),
     sheets: new Map(),
     totalSteps: 0,
     callbacks: [],
@@ -86,17 +85,6 @@ export async function startBench(params: {
     session.pausedEvent = paused ? event : undefined;
   });
 
-  // Debugger.enable replays scriptParsed for everything already loaded, so this
-  // has to be listening before the enable rather than after it.
-  client.on('Debugger.scriptParsed', (event: any) => {
-    if (event?.scriptId && event?.url) session.scripts.set(event.scriptId, event.url);
-    // Registration is lazy - the map is only fetched if something asks for the
-    // file behind it, which is a pick on an element from that module.
-    if (event?.url && event?.sourceMapURL) {
-      sourceMapHandler?.registerSourceMap(event.url, event.sourceMapURL);
-    }
-  });
-  await client.send('Debugger.enable');
 
   client.on('Overlay.inspectNodeRequested', async (event: any) => {
     try {
@@ -169,7 +157,6 @@ export async function startBench(params: {
       session.totalSteps = 0;
       session.lastTick = undefined;
       session.callbacks = [];
-      session.scripts.clear();
       await setInspectMode(session, session.pickerArmed);
     } catch (error) {
       debugLog('bench', `re-arm after navigation failed: ${error}`);

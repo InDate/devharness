@@ -3,7 +3,7 @@ import { debugLog } from '../debug-logger.js';
 import { releasedRate } from './animations.js';
 import { attachLayer, hold, holdReading, isHeld, release, step, type HoldLayer, type HoldSource, type LayerHold, type LayerStanding } from '../hold.js';
 import type { CallbackEntry, TickResult } from '../bench/wire.js';
-import { isRunning, nextPause, pageTime, send, setInspectMode } from './cdp.js';
+import { pageTime, request, send, setInspectMode } from './cdp.js';
 import { dialogMonitorOf } from '../dialog-monitor.js';
 import { type BenchSession, type PageDebugger, MAX_CALLBACK_LOG, sessions } from './session.js';
 
@@ -80,7 +80,7 @@ export function describePause(session: BenchSession, event: any, at: number): Ca
   // A script parsed before the bench attached - an inline script of the page -
   // is not in the bench's own list; the paused frame carries its URL itself.
   const scriptId = frame?.location?.scriptId;
-  const url = (scriptId ? session.scripts.get(scriptId) ?? session.debugger?.scriptUrl(scriptId) : undefined) || frame?.url || undefined;
+  const url = (scriptId ? session.debugger?.scriptUrl(scriptId) : undefined) || frame?.url || undefined;
   return {
     index: session.totalSteps + 1,
     at: Math.round(at),
@@ -107,9 +107,9 @@ function debuggerOf(session: BenchSession): PageDebugger {
  * the two apart and releases each its own way. A pause already standing - the
  * code kept stopped after a screen released on its own - is the hold's.
  *
- * Armed for a frame stop, the hold pauses nothing yet: the page's next
- * animation frame stops it, so the input dispatched after the hold runs, and
- * the frame it schedules stands unpainted with its animations at 0ms.
+ * Armed for a frame stop, the hold pauses nothing yet: the input dispatched
+ * after it runs with the animations it starts standing at 0ms, and
+ * `landFrameStop` stops the page in front of the frame it scheduled.
  */
 async function holdScreen(session: BenchSession): Promise<void> {
   if (session.frozen) return;
@@ -117,7 +117,6 @@ async function holdScreen(session: BenchSession): Promise<void> {
   await send(session.client, 'Animation.setPlaybackRate', { playbackRate: 0 });
   if (session.frameStopArming) {
     session.frameStopArming = false;
-    await dbg.setInstrumentationBreakpoints(['requestAnimationFrame.callback']);
     session.groupSince = Date.now();
   } else if (!dbg.isPaused()) {
     await dbg.pause();
@@ -274,6 +273,41 @@ export async function announceHold(session: BenchSession, before: HoldLayer[], h
  */
 export function armFrameStop(session: BenchSession): void {
   session.frameStopArming = true;
+}
+
+/** The longest wait for the frame an input scheduled. */
+const FRAME_STOP_WAIT_MS = 250;
+
+/**
+ * Where a frame stop left the page: in front of the frame the input scheduled,
+ * paused where it stood because no frame came within the wait, or paused
+ * where it stood because the page is hidden and paints no frames at all.
+ */
+export type FrameStopLanding = 'frame' | 'no frame' | 'hidden';
+
+/**
+ * Stop the page in front of the frame an input scheduled, once the input is
+ * delivered. A key press is two dispatches, and a frame stop armed before
+ * them can land between the two, leaving the second waiting on a stopped
+ * page; armed after, it still lands first, because the page paints that frame
+ * only after the input's handlers have run. A hidden page paints no frame, so
+ * it is paused where it stands at once.
+ */
+export async function landFrameStop(session: BenchSession): Promise<FrameStopLanding> {
+  const dbg = session.debugger;
+  if (!dbg || dbg.isPaused()) return 'frame';
+  const visibility = await request(session.client, 'Runtime.evaluate', {
+    expression: 'document.visibilityState', returnByValue: true,
+  }, 1000).catch(() => undefined);
+  if (visibility?.result?.value === 'hidden') {
+    await dbg.pause().catch(() => {});
+    return 'hidden';
+  }
+  await dbg.setInstrumentationBreakpoints(['requestAnimationFrame.callback']).catch(() => {});
+  await dbg.waitForPause(FRAME_STOP_WAIT_MS).catch(() => {});
+  if (dbg.isPaused()) return 'frame';
+  await dbg.pause().catch(() => {});
+  return 'no frame';
 }
 
 /** Let the oldest crossing kept at the proxy through, and keep the rest held. */

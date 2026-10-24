@@ -259,8 +259,6 @@ export interface BenchSession extends BenchReport {
   debugger?: PageDebugger;
   /** Stops following the debugger connection's pauses when the bench closes. */
   unwatchPause?: () => void;
-  /** scriptId -> url, from Debugger.scriptParsed, to name a callback's source. */
-  scripts: Map<string, string>;
   /** styleSheetId -> url, from CSS.styleSheetAdded, to name a rule's source. */
   sheets: StyleSheets;
   /** The animations the Animation domain has reported started and not cancelled, by id. */

@@ -389,6 +389,12 @@ export class CDPManager {
       // Enable domains AFTER setting up event listeners
       // This ensures we capture all events including scriptParsed for already-loaded scripts
       await Debugger.enable();
+      // Without a depth, a stack stops at the synchronous frames, so a fetch
+      // from `.then`, `await` or a debounce carries no frame naming what
+      // scheduled it and the network monitor reads every one as plain script.
+      // V8 keeps the deepest depth any session asks for, so the page's one
+      // debugger connection sets it for every reader of a request's initiator.
+      await Debugger.setAsyncCallStackDepth({ maxDepth: 8 }).catch(() => {});
       await Runtime.enable();
       // Enable DOM domain (required for DOMDebugger breakpoints to work)
       // Note: DOM domain is not available in Node.js, only in browsers

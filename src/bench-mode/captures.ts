@@ -60,6 +60,11 @@ async function layoutOf(session: BenchSession): Promise<Layout> {
   };
 }
 
+/** A script's URL by its id, from the page's debugger connection. */
+function scriptUrlOf(session: BenchSession): (scriptId: string) => string | undefined {
+  return scriptId => session.debugger?.scriptUrl(scriptId);
+}
+
 /** Where the page's JS stands, for a capture to carry. */
 function pauseOf(session: BenchSession): CapturePause {
   const event = session.pausedEvent;
@@ -137,7 +142,7 @@ export async function readMoreFacts(connection: string, kinds: FactKind[]): Prom
     return;
   }
   try {
-    const read = await readFacts(session.client, objectId, missing, { scripts: session.scripts, sheets: session.sheets });
+    const read = await readFacts(session.client, objectId, missing, { scriptUrl: scriptUrlOf(session), sheets: session.sheets });
     const { unread, ...found } = read;
     context.facts = {
       ...context.facts, ...found,
@@ -247,7 +252,7 @@ export async function captureBenchScreenshot(
     if (kinds.length && ask.selector) {
       const objectId = await elementObject(session, ask.selector, widen);
       if (objectId) {
-        facts = await readFacts(session.client, objectId, kinds, { scripts: session.scripts, sheets: session.sheets });
+        facts = await readFacts(session.client, objectId, kinds, { scriptUrl: scriptUrlOf(session), sheets: session.sheets });
         await send(session.client, 'Runtime.releaseObject', { objectId });
       }
     }
@@ -582,7 +587,7 @@ export async function retakeCapture(
     if (recipe.facts?.length && element) {
       const objectId = await elementObject(session, element.selector, element.widen);
       if (objectId) {
-        facts = await readFacts(session.client, objectId, recipe.facts, { scripts: session.scripts, sheets: session.sheets });
+        facts = await readFacts(session.client, objectId, recipe.facts, { scriptUrl: scriptUrlOf(session), sheets: session.sheets });
         await send(session.client, 'Runtime.releaseObject', { objectId });
         factChanges = diffFacts((before.facts ?? {}) as ElementFacts, facts);
       }

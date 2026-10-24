@@ -23,22 +23,6 @@ export async function setInspectMode(session: BenchSession, armed: boolean): Pro
 }
 
 /**
- * Does the page execute? A held page still answers anything synchronous, so
- * the only honest test is whether scheduled work runs.
- */
-export async function isRunning(client: CDPSession, timeoutMs = 600): Promise<boolean> {
-  const ran = client
-    .send('Runtime.evaluate', {
-      expression: ownScript('bench-settle', 'new Promise(resolve => setTimeout(() => resolve(true), 20))'),
-      awaitPromise: true,
-      returnByValue: true,
-    } as any)
-    .then(() => true)
-    .catch(() => false);
-  return Promise.race([ran, new Promise<boolean>(r => setTimeout(() => r(false), timeoutMs))]);
-}
-
-/**
  * Every CDP call in the hold path is bounded.
  *
  * A call that rejects is survivable; one that never returns is not - it leaves
@@ -70,30 +54,6 @@ export async function request(client: CDPSession, method: string, params?: any, 
     client.send(method as any, params),
     new Promise((_, reject) => setTimeout(() => reject(new Error(`${method} timed out`)), timeoutMs)),
   ]);
-}
-
-/**
- * Whether a pause stopped in one of devharness's own scripts - a read of the
- * page Puppeteer runs, named pptr:… - rather than in the app. A pause asked
- * for on an idle page stops at whatever script runs next, ours included; the
- * bench steps out of ours, and the pause it asked for lands in the app.
- */
-export function inOwnScript(event: any): boolean {
-  return /^pptr:/.test(event?.callFrames?.[0]?.url ?? '');
-}
-
-/** Resolve on the next Debugger.paused in the app's own code, or on timeout. */
-export function nextPause(client: CDPSession, timeoutMs: number): Promise<any | null> {
-  return new Promise((resolve) => {
-    const done = (event: any | null) => {
-      clearTimeout(timer);
-      client.off('Debugger.paused', handler);
-      resolve(event);
-    };
-    const handler = (event: any) => { if (!inOwnScript(event)) done(event); };
-    const timer = setTimeout(() => done(null), timeoutMs);
-    client.on('Debugger.paused', handler);
-  });
 }
 
 /** The page's own clock. Readable while paused: V8 evaluates on the paused isolate. */

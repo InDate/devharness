@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The saved sequences list prints in full once a session.** The first
+  `replay` `list` or `listSaved` of a session draws every saved sequence; each
+  later one draws only those added (+), gone (−) or changed (~) since the last,
+  or a one-line note when none did. `full: true` draws the whole list again.
+  A rebuild starts the record afresh.
 - **A driving call holds the page itself.** `input` with `hold: ['ui']` (or
   `code`, `network`) on press, click, scroll, drag, tap or swipe takes the hold
   right after its last event is dispatched, inside any settle or quiet window

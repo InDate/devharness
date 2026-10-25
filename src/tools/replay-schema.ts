@@ -62,6 +62,7 @@ export const replaySchema = z.object({
   note: z.string().optional().describe('pause: why the session is told, what it carries out there before resuming; implies notify; "" removes it'),
   remove: z.boolean().optional().describe('pause: take the pause point away'),
   overwrite: z.boolean().optional(),
+  full: z.boolean().optional().describe('list/listSaved: every saved sequence again; after the first listing of a session, only the changes are listed'),
   query: z.string().optional().describe('search: a string matched literally in every saved step'),
   element: z.string().optional().describe('search: a selector resolved on the live page; the steps that reached that element'),
   throughStep: z.number().optional().describe('copy/split/adopt: the last step taken, 1-indexed'),

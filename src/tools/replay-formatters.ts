@@ -500,14 +500,7 @@ export function formatSequenceCreated(sequence: CommandSequence): string {
  * while the sequences dir holds a suite - the disk sections are folded in here
  * so one call covers both.
  */
-export function formatSequenceList(
-  sequences: CommandSequence[],
-  saved: SavedSequenceEntry[] = [],
-  issueSequences: IssueSequenceEntry[] = [],
-  showAll: boolean = false
-): string {
-  const inMemoryNames = new Set(sequences.map(seq => seq.name));
-  const diskSections = formatDiskSequenceSections(saved, issueSequences, showAll, inMemoryNames);
+export function formatSequenceList(sequences: CommandSequence[], diskSections: string = ''): string {
 
   if (sequences.length === 0) {
     if (!diskSections) {
@@ -632,120 +625,101 @@ export type IssueSequenceEntry = SavedSequenceEntry & {
  * A name in `inMemoryNames` is the same sequence as the in-memory entry above
  * it, tagged so the two rows are not counted as two sequences.
  */
-function formatDiskSequenceSections(
+/** One line of a disk listing: the section it stands in, its name, and its line without the number. */
+export interface DiskListingEntry {
+  section: 'Saved' | 'Issues' | 'Completed' | 'Abandoned';
+  name: string;
+  line: string;
+}
+
+const byCreation = (a: SavedSequenceEntry, b: SavedSequenceEntry) =>
+  (parseInt((a.id || '').replace('seq-', ''), 10) || 0) - (parseInt((b.id || '').replace('seq-', ''), 10) || 0);
+
+/**
+ * The disk listing as entries in drawing order, and the count of issue
+ * sequences it leaves out: completed and abandoned ones stand only under
+ * `showAll`.
+ */
+export function diskListingEntries(
   sequences: SavedSequenceEntry[],
-  issueSequences?: IssueSequenceEntry[],
-  showAll: boolean = false,
+  issueSequences: IssueSequenceEntry[] = [],
+  showAll: boolean = false
+): { entries: DiskListingEntry[]; hidden: number } {
+  // No linked issue reads as abandoned; in_progress as active; every other status as completed.
+  const active = issueSequences.filter(seq => seq.issueId && seq.issueStatus === 'in_progress');
+  const completed = issueSequences.filter(seq => seq.issueId && seq.issueStatus !== 'in_progress');
+  const abandoned = issueSequences.filter(seq => !seq.issueId);
+  const issueLine = (seq: IssueSequenceEntry) => `[${seq.issueType} #${seq.issueId} - ${seq.issueStatus}] ${seq.name} (${seq.commandCount})`;
+  const byIssue = (a: IssueSequenceEntry, b: IssueSequenceEntry) => (a.issueId || 0) - (b.issueId || 0);
+
+  const entries: DiskListingEntry[] = [
+    ...[...sequences].sort(byCreation).map(seq => ({
+      section: 'Saved' as const, name: seq.name, line: `${seq.name} (${seq.commandCount})${seq.location === 'global' ? ' [global]' : ''}`,
+    })),
+    ...[...active].sort(byIssue).map(seq => ({ section: 'Issues' as const, name: seq.name, line: issueLine(seq) })),
+    ...(showAll ? [...completed].sort(byIssue).map(seq => ({ section: 'Completed' as const, name: seq.name, line: issueLine(seq) })) : []),
+    ...(showAll ? [...abandoned].sort(byCreation).map(seq => ({ section: 'Abandoned' as const, name: seq.name, line: `${seq.name} (${seq.commandCount})` })) : []),
+  ];
+  return { entries, hidden: showAll ? 0 : completed.length + abandoned.length };
+}
+
+/** The disk listing drawn in full, one numbered list per section. */
+export function formatDiskListing(
+  { entries, hidden }: { entries: DiskListingEntry[]; hidden: number },
   inMemoryNames: Set<string> = new Set()
 ): string {
-  // Categorize issue sequences
-  const activeIssues: typeof issueSequences = [];
-  const completedIssues: typeof issueSequences = [];
-  const abandoned: typeof issueSequences = [];
-
-  if (issueSequences) {
-    for (const seq of issueSequences) {
-      if (!seq.issueId) {
-        // No linked issue - abandoned/orphaned
-        abandoned.push(seq);
-      } else if (seq.issueStatus === 'in_progress') {
-        // Only in_progress issues are shown by default
-        activeIssues.push(seq);
-      } else {
-        // Everything else (pending, acknowledged, fixed, implemented) goes to completed
-        completedIssues.push(seq);
-      }
-    }
-  }
-
-  const hasSequences = sequences.length > 0;
-  const hasActiveIssues = activeIssues.length > 0;
-  const hasCompletedIssues = completedIssues.length > 0;
-  const hasAbandoned = abandoned.length > 0;
-
-  const hasAnythingToShow = hasSequences || hasActiveIssues || (showAll && (hasCompletedIssues || hasAbandoned));
-  if (!hasAnythingToShow) {
-    return '';
-  }
-
   let response = '';
-
-  // Format regular sequences (Saved)
-  if (hasSequences) {
-    const sorted = [...sequences].sort((a, b) => {
-      const tsA = parseInt((a.id || '').replace('seq-', ''), 10) || 0;
-      const tsB = parseInt((b.id || '').replace('seq-', ''), 10) || 0;
-      return tsA - tsB;
-    });
-
-    response = `**Saved** (${sorted.length})\n`;
-    sorted.forEach((seq, idx) => {
-      const locationTag = seq.location === 'global' ? ' [global]' : '';
-      const memoryTag = inMemoryNames.has(seq.name) ? ' [in memory]' : '';
-      response += `${idx + 1}. ${seq.name} (${seq.commandCount})${locationTag}${memoryTag}\n`;
-    });
-  }
-
-  // Format active issue sequences (Issues)
-  if (hasActiveIssues) {
-    const sortedIssues = [...activeIssues].sort((a, b) => (a.issueId || 0) - (b.issueId || 0));
-
+  for (const section of ['Saved', 'Issues', 'Completed', 'Abandoned'] as const) {
+    const lines = entries.filter(entry => entry.section === section);
+    if (lines.length === 0) continue;
     if (response) response += '\n';
-    response += `**Issues** (${sortedIssues.length})\n`;
-
-    sortedIssues.forEach((seq, idx) => {
-      const tag = `[${seq.issueType} #${seq.issueId} - ${seq.issueStatus}]`;
-      response += `${idx + 1}. ${tag} ${seq.name} (${seq.commandCount})\n`;
+    response += `**${section}** (${lines.length})\n`;
+    lines.forEach((entry, idx) => {
+      const memoryTag = section === 'Saved' && inMemoryNames.has(entry.name) ? ' [in memory]' : '';
+      response += `${idx + 1}. ${entry.line}${memoryTag}\n`;
     });
   }
-
-  // Format completed issues (only if showAll)
-  if (showAll && hasCompletedIssues) {
-    const sortedCompleted = [...completedIssues].sort((a, b) => (a.issueId || 0) - (b.issueId || 0));
-
-    if (response) response += '\n';
-    response += `**Completed** (${sortedCompleted.length})\n`;
-
-    sortedCompleted.forEach((seq, idx) => {
-      const tag = `[${seq.issueType} #${seq.issueId} - ${seq.issueStatus}]`;
-      response += `${idx + 1}. ${tag} ${seq.name} (${seq.commandCount})\n`;
-    });
+  if (hidden > 0) {
+    response += `\n_${hidden} other sequence(s) hidden. Use showAll: true to see all._\n`;
   }
-
-  // Format abandoned sequences (only if showAll)
-  if (showAll && hasAbandoned) {
-    const sortedAbandoned = [...abandoned].sort((a, b) => {
-      const tsA = parseInt((a.id || '').replace('seq-', ''), 10) || 0;
-      const tsB = parseInt((b.id || '').replace('seq-', ''), 10) || 0;
-      return tsA - tsB;
-    });
-
-    if (response) response += '\n';
-    response += `**Abandoned** (${sortedAbandoned.length})\n`;
-
-    sortedAbandoned.forEach((seq, idx) => {
-      response += `${idx + 1}. ${seq.name} (${seq.commandCount})\n`;
-    });
-  }
-
-  // Show hint about hidden items
-  if (!showAll && (hasCompletedIssues || hasAbandoned)) {
-    const hiddenCount = completedIssues.length + abandoned.length;
-    response += `\n_${hiddenCount} other sequence(s) hidden. Use showAll: true to see all._\n`;
-  }
-
   return response;
 }
 
+/** The key two listings compare an entry by: its section and its name. */
+export function diskListingKey(entry: DiskListingEntry): string {
+  return `${entry.section}\u0000${entry.name}`;
+}
+
 /**
- * Format saved sequences on disk listing
+ * The disk listing as the lines that differ from an earlier listing of the
+ * same session, whose full text stands earlier in that session's context: an
+ * entry added (+), one gone (−), one whose line changed (~, old → new).
  */
-export function formatSavedSequencesList(
-  sequences: SavedSequenceEntry[],
-  issueSequences?: IssueSequenceEntry[],
-  showAll: boolean = false
-): string {
-  const sections = formatDiskSequenceSections(sequences, issueSequences, showAll);
+export function formatDiskListingChanges(before: Map<string, DiskListingEntry>, entries: DiskListingEntry[]): string {
+  const now = new Map(entries.map(entry => [diskListingKey(entry), entry]));
+  const where = (entry: DiskListingEntry) => (entry.section === 'Saved' ? '' : `${entry.section}: `);
+  const changes: string[] = [];
+  for (const [key, entry] of now) {
+    const earlier = before.get(key);
+    if (!earlier) changes.push(`+ ${where(entry)}${entry.line}`);
+    else if (earlier.line !== entry.line) changes.push(`~ ${where(entry)}${earlier.line} → ${entry.line}`);
+  }
+  for (const [key, entry] of before) {
+    if (!now.has(key)) changes.push(`− ${where(entry)}${entry.line}`);
+  }
+  const counts = (['Saved', 'Issues', 'Completed', 'Abandoned'] as const)
+    .map(section => [section, entries.filter(entry => entry.section === section).length] as const)
+    .filter(([, count]) => count > 0)
+    .map(([section, count]) => `${count} ${section.toLowerCase()}`)
+    .join(', ') || 'none on disk';
+  if (changes.length === 0) {
+    return `**On disk:** ${counts}, unchanged since the full list earlier in this session. \`full: true\` prints it again.\n`;
+  }
+  return `**On disk:** ${counts}. ${changes.length} change(s) since the last listing; the full list stands earlier in this session, and \`full: true\` prints it again.\n${changes.join('\n')}\n`;
+}
+
+/** The saved sequences listing, from its disk sections drawn in full or as changes. */
+export function formatSavedSequencesList(sections: string): string {
   if (!sections) {
     return getFormattedResponse('REPLAY_SAVED_EMPTY', {});
   }

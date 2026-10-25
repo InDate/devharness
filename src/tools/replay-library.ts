@@ -12,7 +12,12 @@ import { announceSequenceSaved } from '../sequence-events.js';
 import type { CommandRecorder, CommandSequence, RecordedCommand } from '../command-recorder.js';
 import { createSuccessResponse, createErrorResponse } from '../messages.js';
 import { loadSequence, commandTakesInjectedConnection, normalizeStepConnections } from './replay-executor.js';
-import { formatSequenceCreated, formatSequenceList, formatSequenceDetails, formatSavedSequencesList } from './replay-formatters.js';
+import {
+  formatSequenceCreated, formatSequenceList, formatSequenceDetails, formatSavedSequencesList,
+  diskListingEntries, diskListingKey, formatDiskListing, formatDiskListingChanges, type DiskListingEntry,
+} from './replay-formatters.js';
+import { replyReturnsToAgent } from '../call-origin.js';
+import { getSessionInfo } from './dashboard-tools.js';
 import { configManager } from '../config.js';
 import { generatePuppeteerCode, generatePlaywrightCode } from './replay-codegen.js';
 import { type ReplayArgs } from './replay-schema.js';
@@ -208,16 +213,40 @@ export function formatConnectionNote(normalized: ReturnType<typeof normalizeStep
   return notes.join('');
 }
 
-export async function handleList(args: ReplayArgs, recorder: CommandRecorder) {
-  const sequences = recorder.listSequences();
+/**
+ * The disk listing each session last returned to its agent, by session and
+ * by `showAll`, held in memory: a restart prints the full list again.
+ */
+const lastListing = new Map<string, Map<string, DiskListingEntry>>();
+
+/**
+ * The saved sequences, drawn in full on a session's first listing and with
+ * `full`, and as the changes since its last listing after that: the full
+ * list already stands in the agent's context, and 70 lines of it again cost
+ * as much as the first time. A reply bound for the bench or another tool
+ * draws in full and leaves the session's record as it was.
+ */
+async function diskListing(args: ReplayArgs, recorder: CommandRecorder, inMemoryNames?: Set<string>): Promise<string> {
   const saved = await recorder.listSavedSequencesOnDisk();
   const issueSequences = await listIssueSequencesOrEmpty(recorder);
-  return {
-    content: [{
-      type: 'text',
-      text: formatSequenceList(sequences, saved, issueSequences, args.showAll ?? false)
-    }]
-  };
+  const listing = diskListingEntries(saved, issueSequences, args.showAll ?? false);
+  if (!replyReturnsToAgent()) return formatDiskListing(listing, inMemoryNames);
+  const key = `${getSessionInfo()?.sessionId ?? ''}\u0000${args.showAll ? 'all' : 'shown'}`;
+  const before = lastListing.get(key);
+  lastListing.set(key, new Map(listing.entries.map(entry => [diskListingKey(entry), entry])));
+  if (!before || args.full || listing.entries.length === 0) return formatDiskListing(listing, inMemoryNames);
+  return formatDiskListingChanges(before, listing.entries);
+}
+
+/** Forget every session's last listing, so the next one draws in full. */
+export function resetDiskListings(): void {
+  lastListing.clear();
+}
+
+export async function handleList(args: ReplayArgs, recorder: CommandRecorder) {
+  const sequences = recorder.listSequences();
+  const diskSections = await diskListing(args, recorder, new Set(sequences.map(seq => seq.name)));
+  return { content: [{ type: 'text', text: formatSequenceList(sequences, diskSections) }] };
 }
 
 /**
@@ -451,10 +480,7 @@ export async function handleLoad(args: ReplayArgs, recorder: CommandRecorder, ge
 }
 
 export async function handleListSaved(args: ReplayArgs, recorder: CommandRecorder) {
-  const savedSequences = await recorder.listSavedSequencesOnDisk();
-  const issueSequences = await listIssueSequencesOrEmpty(recorder);
-  const showAll = args.showAll ?? false;
-  return { content: [{ type: 'text', text: formatSavedSequencesList(savedSequences, issueSequences, showAll) }] };
+  return { content: [{ type: 'text', text: formatSavedSequencesList(await diskListing(args, recorder)) }] };
 }
 
 export async function handleDeleteSaved(args: ReplayArgs, recorder: CommandRecorder) {

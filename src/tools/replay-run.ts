@@ -122,7 +122,7 @@ async function runInBench(args: ReplayArgs, recorder: CommandRecorder) {
     name, benchUrl,
     // The bench line is joined here: the template loader keeps one newline
     // between a variable and the line after it, and the reply's blank line would go.
-    steps: `${formatRunReply(recorder, { name, total: state?.total ?? 0, since, ...(args.steps ? { steps: args.steps } : {}), ...(failures ? { failures } : {}), rules, pauses: pausesIn(connection) })}\n\nBench: \`${benchUrl}\``,
+    steps: `${formatRunReply(recorder, { name, total: state?.total ?? 0, since, ...(args.steps ? { steps: args.steps } : {}), ...(failures ? { failures } : {}), ...(state?.paused ? { paused: true } : {}), rules, pauses: pausesIn(connection) })}\n\nBench: \`${benchUrl}\``,
   });
 }
 

@@ -243,6 +243,12 @@ export function stampedOf(entry: number): Observation[] {
   return [...stamped, ...pushed].sort((a, b) => (arrival.get(a.id) ?? 0) - (arrival.get(b.id) ?? 0));
 }
 
+/** What arrived from `from` up to `to`, whatever entry it stands under, in arrival order. */
+export function observationsIn(from: number, to: number): Observation[] {
+  return [...byKind.values()].flat().filter(one => one.at >= from && one.at < to)
+    .sort((a, b) => (arrival.get(a.id) ?? 0) - (arrival.get(b.id) ?? 0));
+}
+
 /** The proxy event or page write an observation was made of, as its store holds it now. */
 export function recordOf(one: Observation): ProxyEvent | PageWrite | undefined {
   return records.get(one.id);

@@ -13,7 +13,8 @@ import { letGoForRun } from './page-hold.js';
 import { getSequenceState, gotoSequenceStep, playSequence, selectSequence } from './sequence.js';
 import { sessions } from './session.js';
 import { stepTimes, withTallies } from './tallies.js';
-import { RECORDED_BODY_CAP, writeEvents } from './traffic.js';
+import { RECORDED_BODY_CAP } from './traffic.js';
+import { crossingsOf, sliceOf } from '../step-slice.js';
 
 /**
  * Every run going now - each run sequence in the registry and each bench's own
@@ -137,7 +138,6 @@ export async function baselineSequence(connection: string): Promise<SequenceStat
     session.sequenceFailure = 'a baseline keeps what crosses the proxy, and this browser was not launched through one';
     return getSequenceState(connection);
   }
-  const passesBefore = new Set([...proxy.eventsIn(), ...writeEvents(connection)].map(event => event.runId));
   await letGoForRun(session);
   await gotoSequenceStep(connection, 0);
   const played = await playSequence(connection, { throughHolds: true });
@@ -147,14 +147,16 @@ export async function baselineSequence(connection: string): Promise<SequenceStat
     return getSequenceState(connection);
   }
 
-  const all = [...proxy.eventsIn(), ...writeEvents(connection)];
-  const pass = [...all].reverse().find(event => event.runId && !passesBefore.has(event.runId))?.runId;
-  const values = new Map((session.writeWatch?.writes ?? []).map(write => [write.id, write.value]));
+  // Each step is read from the observation log by the History entry of its
+  // newest attempt in this play, the set a replay of it is compared on.
+  const sequenceName = played.name ?? session.sequences.active()?.name;
+  const history = session.sequences.history();
   const at = Date.now();
   const entries = Array.from({ length: played.total }, (_, index) => {
-    const crossed = pass ? all.filter(event => event.runId === pass && event.step === index) : [];
-    const kinds = recordKinds(crossed,
-      event => (event.kind === 'write' ? values.get(event.id) : proxy.bodyOf(event.id)), RECORDED_BODY_CAP);
+    const call = history.find(one => one.run === sequenceName && one.runStep === index);
+    const entry = call?.index;
+    const { crossings: crossed, bodyOf } = entry !== undefined ? crossingsOf(entry, connection) : { crossings: [], bodyOf: () => undefined };
+    const kinds = recordKinds(crossed, bodyOf, RECORDED_BODY_CAP);
     const requests = crossed.filter(event => event.kind === 'request');
     // A transport is a socket upgrade or an event stream, as `countStepTraffic`
     // counts them for a recording: counted by 101 alone, a stream the step
@@ -170,11 +172,11 @@ export async function baselineSequence(connection: string): Promise<SequenceStat
         ...opened.slice(0, 4).map(event => `opened ${event.url}`),
       ],
       kinds,
+      ...(entry !== undefined ? { observations: sliceOf(entry, connection, call!.at, RECORDED_BODY_CAP) } : {}),
       recordedAt: at,
     };
     return { index, traffic };
   });
-  const sequenceName = played.name ?? session.sequences.active()?.name;
   const fingerprints = sequenceName && session.playStepStarts
     ? session.sequences.clickFingerprints(sequenceName, Array.from({ length: played.total }, (_, i) => session.playStepStarts?.[i] ?? at), Date.now())
     : [];

@@ -1,9 +1,9 @@
-import { getProxy } from '../proxy/registry.js';
 import { levelOf, causeOf, type ProxyEvent } from '../proxy/intercept-proxy.js';
 import type { StepTraffic } from '../annotation.js';
 import type { BoundaryEvent, BoundaryTotals } from '../bench/wire.js';
-import { writeKey, writeLine, type PageWrite } from '../write-watch.js';
+import { writeLine } from '../write-watch.js';
 import { recordKinds } from '../bench/step-compare.js';
+import { crossingsIn, sliceIn, writeCrossing } from '../step-slice.js';
 import { type BenchSession, sessions } from './session.js';
 
 /**
@@ -105,19 +105,16 @@ export const RECORDED_BODY_CAP = 64 * 1024;
  */
 export function withWrites(session: BenchSession, traffic: StepTraffic, from: number, to: number): StepTraffic {
   const writes = session.writeWatch?.between(from, to) ?? [];
-  // Counted by kind from what the proxy and the write watch hold for the
-  // window, which is what a replay of the step is compared against.
-  const proxy = getProxy(session.connection);
-  const crossed = (proxy?.eventsIn() ?? []).filter(event => event.at >= from && event.at < to);
-  const written = writeEvents(session.connection).filter(event => event.at >= from && event.at < to);
-  // The proxy holds its bodies in memory for this session only, so the
-  // payload each kind is compared on is stored with the recording.
-  const values = new Map((session.writeWatch?.writes ?? []).map(write => [write.id, write.value]));
-  const kinds = recordKinds([...crossed, ...written],
-    event => (event.kind === 'write' ? values.get(event.id) : proxy?.bodyOf(event.id)), RECORDED_BODY_CAP);
+  // Counted by kind from what the observation log holds for the window, which
+  // is what a replay of the step is compared against. The proxy holds its
+  // bodies in memory for this session only, so the payload each kind is
+  // compared on is stored with the recording, and the window's observations
+  // beside it.
+  const { crossings, bodyOf } = crossingsIn(from, to, session.connection);
+  const kinds = recordKinds(crossings, bodyOf, RECORDED_BODY_CAP);
   // Stored empty too: a step that caused nothing is compared, so traffic it
   // starts causing reads as new rather than as a step with no record.
-  traffic = { ...traffic, kinds };
+  traffic = { ...traffic, kinds, observations: sliceIn(from, to, session.connection, RECORDED_BODY_CAP) };
   if (!writes.length) return traffic;
   // The log's own storage lines say less than the watch's and would list
   // each local or session write twice.
@@ -144,25 +141,6 @@ export function writeEvents(connection: string, after = 0): BoundaryEvent[] {
   });
 }
 
-/** A page write as a row and a comparison read it, stamped with the step its cursor names. */
-export function writeCrossing(write: PageWrite): BoundaryEvent {
-  const row = {
-    id: write.id, at: write.at, kind: 'write' as const, direction: 'out' as const,
-    url: writeKey(write), method: write.store,
-    preview: writeLine(write).slice(write.store.length + 1),
-    size: write.value?.length ?? 0, level: 'unprompted' as const, owned: false,
-  };
-  if (write.cursor?.kind === 'replay') {
-    return {
-      ...row, step: write.cursor.step, runId: write.cursor.runId,
-      ...(write.cursor.within ? { within: write.cursor.within } : {}),
-      ...(write.cursor.entry !== undefined ? { entry: write.cursor.entry } : {}),
-      ...(write.cursor.paused ? { paused: true as const } : {}),
-      owned: true, level: 'positional' as const,
-    };
-  }
-  return { ...row, ...(write.cursor?.kind === 'command' ? { commandIndex: write.cursor.index } : {}) } as BoundaryEvent;
-}
 
 /** The sequence those positions count within. */
 export function openSequence(connection: string): string | undefined {

@@ -1,8 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { forgetObservations, observeEvent, observeWrite } from './observation-log.js';
-import { crossingsOf, kindsOf, sliceOf } from './step-slice.js';
+import { crossingsIn, crossingsOf, kindsOf, sliceIn, sliceOf, writeCrossing } from './step-slice.js';
 import { recordKinds } from './bench/step-compare.js';
-import { writeCrossing } from './bench-mode/traffic.js';
 import { markedNow } from './proxy/cause-timeline.js';
 import type { ProxyEvent } from './proxy/intercept-proxy.js';
 import type { PageWrite } from './write-watch.js';
@@ -47,5 +46,17 @@ describe('a step read from the observation log', () => {
       motion: { type: 'StyleWrites', durationMs: 300, frames: 19, to: '58px', set: false },
       body: 'js style → 58px over 300ms, 19 frames',
     }]);
+  });
+
+  it('reads a recording\'s window by arrival, stamped or not, on its own browser alone', () => {
+    markedNow(undefined, 4000);
+    observeEvent(event({ method: 'GET', url: 'http://localhost:7788/before', status: 200, at: 3990 }), 'socket-app-page');
+    observeEvent(event({ method: 'POST', url: 'http://localhost:7788/draft', status: 200, at: 4010 }), 'socket-app-page');
+    observeWrite(write({ key: 'socket-app:draft', value: 'sent', at: 4020 }), 'socket-app-page');
+    observeEvent(event({ method: 'GET', url: 'http://localhost:7788/inbox', status: 200, at: 4030 }), 'other-browser-page');
+    observeEvent(event({ method: 'GET', url: 'http://localhost:7788/after', status: 200, at: 4100 }), 'socket-app-page');
+
+    expect(crossingsIn(4000, 4100, 'socket-app-page').crossings.map(crossing => crossing.url)).toEqual(['http://localhost:7788/draft', 'localStorage:socket-app:draft']);
+    expect(sliceIn(4000, 4100, 'socket-app-page', 1000).map(one => [one.text, one.atMs])).toEqual([['POST /draft 200', 10], ['localStorage socket-app:draft set', 20]]);
   });
 });

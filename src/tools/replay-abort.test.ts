@@ -299,16 +299,16 @@ describe('replay cancel end to end', () => {
       getCommandsSincePause: vi.fn(() => []),
     } as any;
 
-    const { replay } = createReplayTools(recorder, h.executeToolCall, async () => null, async () => 9222, undefined);
+    const { replay, run } = createReplayTools(recorder, h.executeToolCall, async () => null, async () => 9222, undefined);
 
-    const started = await replay.handler({
-      action: 'run', sequenceId: sequence.id, connection: 'test-conn',
+    const started = await run.handler({
+      action: 'sequence', sequenceId: sequence.id, connection: 'test-conn',
     } as any);
     const runId = started._meta.replay.runId as string;
 
     await waitFor(() => h.getPollCount() >= 3);
     const abortedAt = Date.now();
-    await replay.handler({ action: 'cancel', runId } as any);
+    await run.handler({ action: 'cancel', runId } as any);
 
     await waitFor(() => runRegistry.get(runId)!.status === 'cancelled');
     expect(Date.now() - abortedAt).toBeLessThan(2000); // not 120s

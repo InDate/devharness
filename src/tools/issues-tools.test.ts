@@ -122,7 +122,7 @@ describe('issues resolve - verification replay failures close the browser', () =
     showTestReadyOverlay.mockResolvedValue('begin');
 
     const executeToolCall = vi.fn(async (tool: string, params: Record<string, any>) => {
-      if (tool === 'replay' && params.action === 'run') {
+      if (tool === 'run' && params.action === 'sequence') {
         return {
           content: [{ type: 'text', text: 'Error: Failed at step 2\n\n**Failed:** 1\n' }],
           _meta: { tool: 'replay', action: 'run', timestamp: 0, replay: { success: false, totalSteps: 2, failedSteps: 1 } },
@@ -144,7 +144,7 @@ describe('issues resolve - verification replay failures close the browser', () =
     showTestReadyOverlay.mockResolvedValue('begin');
 
     const executeToolCall = vi.fn(async (tool: string, params: Record<string, any>) => {
-      if (tool === 'replay' && params.action === 'run') {
+      if (tool === 'run' && params.action === 'sequence') {
         throw new ToolError(createErrorResponse('SEQUENCE_NOT_FOUND', { message: 'Chrome refused to launch' }));
       }
       return { content: [{ type: 'text', text: '' }] };
@@ -163,7 +163,7 @@ describe('issues resolve - verification replay failures close the browser', () =
     showTestReadyOverlay.mockResolvedValue('begin');
 
     const executeToolCall = vi.fn(async (tool: string, params: Record<string, any>) => {
-      if (tool === 'replay' && params.action === 'run') throw new ToolError(createErrorResponse('SEQUENCE_NOT_FOUND', { message: 'Chrome refused to launch' }));
+      if (tool === 'run' && params.action === 'sequence') throw new ToolError(createErrorResponse('SEQUENCE_NOT_FOUND', { message: 'Chrome refused to launch' }));
       return { content: [{ type: 'text', text: '' }] };
     });
     const { tools } = buildTools({ executeToolCall });
@@ -191,7 +191,7 @@ describe('issues resolve - verification outcome comes from _meta', () => {
     showTestReadyOverlay.mockResolvedValue('begin');
 
     const executeToolCall = vi.fn(async (tool: string, params: Record<string, any>) => {
-      if (tool === 'replay' && params.action === 'run') {
+      if (tool === 'run' && params.action === 'sequence') {
         return runResponse('reformatted summary, no Failed line', { success: false, totalSteps: 3, failedSteps: 1 });
       }
       return { content: [{ type: 'text', text: '' }] };
@@ -209,7 +209,7 @@ describe('issues resolve - verification outcome comes from _meta', () => {
     showVerificationOverlay.mockResolvedValue('fixed');
 
     const executeToolCall = vi.fn(async (tool: string, params: Record<string, any>) => {
-      if (tool === 'replay' && params.action === 'run') {
+      if (tool === 'run' && params.action === 'sequence') {
         // A step whose own recorded text mentions "**Failed:** 2".
         return runResponse('Completed 3/3\n\nassert: expected "**Failed:** 2"', { success: true, totalSteps: 3, failedSteps: 0 });
       }
@@ -364,7 +364,7 @@ describe('issues and the sequence file they carry', () => {
 
     await issues.handler({ action: 'workOn', id: issue.id } as any);
 
-    expect(calls.find(c => c.tool === 'replay' && c.params.action === 'run')?.params.name).toBe('login-flow');
+    expect(calls.find(c => c.tool === 'run' && c.params.action === 'sequence')?.params.name).toBe('login-flow');
   });
 
   it('resolve closes its tab when the person cancels at "ready to begin?"', async () => {

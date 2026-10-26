@@ -17,7 +17,7 @@ import { AbortError, linkSignals } from './utils/abort.js';
  */
 const DIALOG_PASSING_TOOLS = new Set([
   'modal', 'connection', 'browser', 'console', 'network', 'proxy', 'server', 'config', 'dashboard', 'issues', 'message',
-  'replay',
+  'replay', 'run',
 ]);
 /** Actions that read the bench's own state, not the page, and so run with a dialog open. */
 const DIALOG_PASSING_ACTIONS: Record<string, ReadonlySet<string>> = {

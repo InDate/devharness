@@ -32,7 +32,7 @@ import { NO_TOOL_VALUES, type ServerLog, type ServerRow, type ToolGroup, type To
 import { createSequenceDriver, getSequencesRoot, labelFor } from '../bench-mode/sequence-driver.js';
 import { answerCalls, describeDialog, type OpenDialog } from '../dialog-monitor.js';
 import { sanitizeReference } from '../reference-validator.js';
-import { holdReading } from '../hold.js';
+import { holderWord, holdReading } from '../hold.js';
 
 const benchSchema = z.object({
   action: z.enum(['start', 'stop', 'tick', 'hold', 'release', 'picker', 'motion', 'list', 'status', 'keepStep', 'dropStep', 'flagStep', 'sweep', 'retake', 'capture']),
@@ -141,7 +141,7 @@ export function pageStanding(connection: string, cdpManager: { pausedAt(): { url
   const pausedAt = cdpManager?.pausedAt();
   if (pausedAt) return `paused in the debugger at ${pausedAt.url}:${pausedAt.line}`;
   const held = holdReading(connection).held.filter(one => one.layer !== 'network');
-  if (held.length) return `held (${held.map(one => `${one.layer} by ${one.source}`).join(', ')})`;
+  if (held.length) return `held (${held.map(one => `${one.layer} by ${[...new Set(one.owners.map(holderWord))].join(' and ')}`).join(', ')})`;
   return frozen ? 'held' : 'running';
 }
 
@@ -156,7 +156,7 @@ export function createBenchTools(
   serverLog: (id: string, stream: 'stdout' | 'stderr') => Promise<ServerLog> = async () => ({ unavailable: 'no server manager' }),
 ) {
   const bench = createTool(
-      'Open the bench beside a driven app: hold the page still, read what crossed its boundary and what caused each thing, record and step sequences, and collect element-level comments. Actions: start (the page running, the picker idle), hold/release (the whole page, with the bench left open), picker (armed or disarmed), motion (record each animation as a MOTION row: on true/false, absent reads it), tick (run a held page forward by steps or budgetMs), stop (release the page and close), keepStep/dropStep/flagStep (settle a recorded step), sweep (note captures no sequence cites), retake (a capture\'s region again, compared), capture (a capture file\'s record and element facts), list, status.',
+      'Open the bench beside a driven app: hold the page still, read what crossed its boundary and what caused each thing, record and step sequences, and collect element-level comments.',
       benchSchema,
       async (args: BenchArgs) => {
         const { action, connection: named } = args;
@@ -290,7 +290,7 @@ export function createBenchTools(
             active: state ? 'open' : 'closed',
             detail: lines.join('\n'),
           });
-          return { ...response, _meta: buildMeta('status', { active: !!state, connection, state, pane: sequence, dialog, page: { paused: !!pausedAt, ...(pausedAt ? { pausedAt } : {}), held: held.map(one => ({ layer: one.layer, source: one.source })) } }) };
+          return { ...response, _meta: buildMeta('status', { active: !!state, connection, state, pane: sequence, dialog, page: { paused: !!pausedAt, ...(pausedAt ? { pausedAt } : {}), held: held.map(one => ({ layer: one.layer, source: [...new Set(one.owners.map(holderWord))].join(' and ') })) } }) };
         }
 
         const targetPuppeteerManager = resolved.puppeteerManager;
@@ -481,7 +481,7 @@ export function createBenchTools(
 
           case 'hold':
           case 'release': {
-            const state = await setHeld(connection, action === 'hold');
+            const state = await setHeld(connection, action === 'hold', { kind: 'agent' });
             if (!state) {
               return createErrorResponse('BENCH_NOT_ACTIVE', { connection, action });
             }

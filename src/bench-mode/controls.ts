@@ -1,11 +1,12 @@
 import { debugLog } from '../debug-logger.js';
 import { clearStepMotion } from './motion-rules.js';
-import { hold, holdReading, isHeld, release, step, type HoldLayer, type HoldSource } from '../hold.js';
+import { describeHold, hold, holderWord, holdReading, isHeld, release, step, type HoldCaller, type HoldLayer, type HoldOwner } from '../hold.js';
 import type { SequenceState } from '../bench/wire.js';
 import { setInspectMode } from './cdp.js';
 import { announceHold, releaseHolds } from './page-hold.js';
 import { getSequenceState, playSequence } from './sequence.js';
 import { type BenchReport, type BenchSession, getBenchSession, sessions } from './session.js';
+import { openSession } from '../utils/own-session.js';
 
 /**
  * Whether the bench holds a page a tool would drive, and how to let it go:
@@ -14,7 +15,7 @@ import { type BenchReport, type BenchSession, getBenchSession, sessions } from '
  * recording, which would take the tool's clicks for the person's. Nothing
  * for a page the bench holds in none of these ways, or a connection with no
  * bench; with no connection named, the first bench that holds its page.
- * `resumesRun` passes over the paused run's own hold, which `replay step` and
+ * `resumesRun` passes over the paused run's own hold, which `run step` and
  * `finish` release before they drive the page.
  */
 export function benchHold(connection?: string, resumesRun = false): { connection: string; why: string; release: string } | undefined {
@@ -29,15 +30,16 @@ export function benchHold(connection?: string, resumesRun = false): { connection
     }
     // Held traffic leaves the page drivable: a tool that drives it meets a
     // network that is slow or gone, which is what the hold stands for.
-    const held = holdReading(name).held.filter(layer => !layer.via && layer.layer !== 'network' && HOLDING_SOURCES.has(layer.source)
-      && !(resumesRun && layer.source === 'sequence'));
+    const holding = (owner: HoldOwner) => owner.kind === 'person' || owner.kind === 'bench-op'
+      || (owner.kind === 'run-pause' && !resumesRun);
+    const held = holdReading(name).held.filter(layer => !layer.via && layer.layer !== 'network' && layer.owners.some(holding));
     if (held.length) {
+      const owner = held[0].owners.find(holding)!;
+      const { holder, release } = describeHold(owner, name);
       return {
         connection: name,
-        why: `its ${held.map(layer => layer.layer).join(' and ')} ${held.length > 1 ? 'are' : 'is'} held by the ${held[0].source}`,
-        release: held.every(layer => layer.source === 'sequence')
-          ? `replay({ action: 'finish' }) or replay({ action: 'step' }) carries the paused run on and releases it; replay({ action: 'cancel' }) releases it and ends the run`
-          : `bench({ action: 'release', connection: '${name}' }), or the hold button in the bench`,
+        why: `its ${held.map(layer => layer.layer).join(' and ')} ${held.length > 1 ? 'are' : 'is'} held by ${holder}`,
+        release,
       };
     }
   }
@@ -50,10 +52,10 @@ export function benchHold(connection?: string, resumesRun = false): { connection
  * stopped, so a click reaches nothing - and picking works either way, since
  * Chrome's picker is browser-side. A breakpoint's pause is left where it stopped.
  */
-export async function setHeld(connection: string, frozen: boolean, source: HoldSource = 'bench'): Promise<BenchReport | undefined> {
+export async function setHeld(connection: string, frozen: boolean, as: HoldOwner = { kind: 'person' }): Promise<BenchReport | undefined> {
   const session = sessions.get(connection);
   if (!session) return undefined;
-  if (frozen && source !== 'sequence' && runGoing(session)) {
+  if (frozen && as.kind !== 'run-pause' && runGoing(session)) {
     await haltSequence(connection);
     return getBenchSession(connection);
   }
@@ -62,17 +64,21 @@ export async function setHeld(connection: string, frozen: boolean, source: HoldS
   // reason changeHold sets it there: Chrome's helper would be what the pause stops in.
   if (frozen) {
     await setInspectMode(session, session.pickerArmed).catch(() => {});
-    await hold(connection, { source });
+    await hold(connection, { owner: as });
   } else {
-    await releaseHolds(connection);
+    await releaseHolds(connection, callerOf(as));
     await setInspectMode(session, session.pickerArmed).catch(() => {});
   }
-  await announceHold(session, before, frozen, source);
+  await announceHold(session, before, frozen, holderWord(as));
   return getBenchSession(connection);
 }
 
-/** Holds a tool may not drive through: the person's, a paused sequence's, a trigger's. */
-const HOLDING_SOURCES = new Set<HoldSource>(['bench', 'sequence', 'trigger']);
+/** The release that ends what `owner`'s own hold call took. */
+function callerOf(owner: HoldOwner): HoldCaller {
+  if (owner.kind === 'person') return { kind: 'person' };
+  if (owner.kind === 'run-pause' && owner.run) return { kind: 'run', run: owner.run, pauseOnly: true };
+  return { kind: 'agent' };
+}
 
 /**
  * Whether a run is driving the page. A hold pressed then halts the run first:
@@ -112,14 +118,14 @@ export async function changeHold(connection: string, action: 'hold' | 'release' 
   // rather than in the app.
   if (action === 'hold') {
     await setInspectMode(session, session.pickerArmed).catch(() => {});
-    await hold(connection, { source: 'bench', ...(layers ? { layers } : {}) });
+    await hold(connection, { owner: { kind: 'person' }, ...(layers ? { layers } : {}) });
   } else {
-    await release(connection, layers ? { layers } : {});
+    await release(connection, { by: { kind: 'resume' }, ...(layers ? { layers } : {}) });
     // A release lets the page run, a step's frozen animation with it.
     await clearStepMotion(connection);
     await setInspectMode(session, session.pickerArmed).catch(() => {});
   }
-  await announceHold(session, before, action === 'hold', 'bench');
+  await announceHold(session, before, action === 'hold', 'person');
   if (action === 'release') resumePausedRun(connection);
 }
 
@@ -138,7 +144,7 @@ export function resumePausedRun(connection: string): void {
   const active = session.sequences?.active();
   const paused = session.sequencePaused || (!!active?.live && active.currentStep < active.total);
   if (!paused) return;
-  if (holdReading(connection).held.some(held => held.layer !== 'network' || held.source === 'sequence')) return;
+  if (holdReading(connection).held.some(held => held.layer !== 'network' || held.owners.some(owner => owner.kind === 'run-pause'))) return;
   void playSequence(connection).catch(error => debugLog('bench', `resuming the paused run failed: ${error}`));
 }
 
@@ -159,7 +165,7 @@ export async function openDevtools(connection: string): Promise<string> {
   if (!session) return 'no bench on this connection';
   const targetId = (session.page.target() as unknown as { _targetId?: string })._targetId;
   if (!targetId) return 'the page names no target to open DevTools on';
-  const browserSession = await session.page.browser().target().createCDPSession();
+  const browserSession = await openSession(session.page.browser().target());
   try {
     await browserSession.send('Target.openDevTools' as any, { targetId } as any);
     return 'DevTools opened on the page';
@@ -194,7 +200,8 @@ export async function haltSequence(connection: string): Promise<SequenceState | 
   // for those seconds the screen reports a run that has already stopped.
   session.driving?.abort();
   await session.sequences.halt().catch(() => {});
-  await setHeld(connection, true, 'sequence');
+  const run = session.sequences.runId();
+  await setHeld(connection, true, { kind: 'run-pause', ...(run ? { run } : {}) });
   session.sequenceFailure = undefined;
   return getSequenceState(connection);
 }

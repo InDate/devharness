@@ -47,30 +47,30 @@ function harness() {
     return { content: [{ type: 'text', text: '' }] };
   }));
   const recorder = new CommandRecorder();
-  const { replay } = createReplayTools(recorder, executeToolCall as any, async () => null, async () => null, undefined);
-  return { replay, recorder };
+  const { replay, run } = createReplayTools(recorder, executeToolCall as any, async () => null, async () => null, undefined);
+  return { replay, run, recorder };
 }
 
 const text = (res: any) => res.content.map((part: any) => part.text).join('\n') as string;
 
 describe('repeat over several indices', () => {
   it('prints a read-back step\'s reading under its line', async () => {
-    const { replay, recorder } = harness();
+    const { replay, run, recorder } = harness();
     await recorder.recordCommand('inspect', { action: 'evaluateExpression', expression: '({ width: innerWidth, height: innerHeight })', connection: TAB });
     await recorder.recordCommand('input', { action: 'drag', from: { x: 100, y: 50 }, to: { x: 300, y: 400 }, connection: TAB });
 
-    const reply = text(await replay.handler({ action: 'repeat', indices: [0, 1] } as any));
+    const reply = text(await run.handler({ action: 'repeat', indices: [0, 1] } as any));
 
     expect(reply).toContain('#0. **inspect** ✓\n    Expression evaluated successfully');
     expect(reply).toContain('    {width:500;height:700}');
   });
 
   it('prints an action step\'s first reply line beside its tick', async () => {
-    const { replay, recorder } = harness();
+    const { replay, run, recorder } = harness();
     await recorder.recordCommand('inspect', { action: 'evaluateExpression', expression: '1', connection: TAB });
     await recorder.recordCommand('input', { action: 'drag', from: { x: 100, y: 50 }, to: { x: 300, y: 400 }, connection: TAB });
 
-    const reply = text(await replay.handler({ action: 'repeat', indices: [0, 1] } as any));
+    const reply = text(await run.handler({ action: 'repeat', indices: [0, 1] } as any));
 
     expect(reply).toContain('#1. **input** ✓ - Dragged from (100, 50) on button #target "Remove" to (300, 400) on no element');
     expect(reply).not.toContain('Distance');
@@ -79,16 +79,16 @@ describe('repeat over several indices', () => {
 
 describe('insert into a new sequence', () => {
   async function pausedWith(declarations: Record<string, unknown>) {
-    const { replay, recorder } = harness();
+    const { replay, run, recorder } = harness();
     await recorder.recordCommand('dom', { action: 'querySelector', selector: '#a', connection: TAB });
     await recorder.recordCommand('dom', { action: 'querySelector', selector: '#b', connection: TAB });
     await replay.handler({ action: 'create', name: 'walk', indices: [0, 1] } as any);
     Object.assign(recorder.listSequences().find(s => s.name === 'walk')!, declarations);
-    await replay.handler({ action: 'run', wait: true, name: 'walk', stepTo: 1 } as any);
+    await run.handler({ action: 'sequence', wait: true, name: 'walk', stepTo: 1 } as any);
     await recorder.recordCommand('dom', { action: 'querySelector', selector: '#inserted', connection: TAB });
     const index = recorder.getCurrentHistoryIndex();
     await replay.handler({ action: 'history' } as any);
-    return { replay, recorder, index };
+    return { replay, run, recorder, index };
   }
 
   it('carries requiredConnections and tags into the new sequence', async () => {
@@ -117,7 +117,7 @@ describe('insert into a new sequence', () => {
 
 describe('export with a filename', () => {
   it('refuses the filename and names the routes that write elsewhere', async () => {
-    const { replay, recorder } = harness();
+    const { replay, run, recorder } = harness();
     await recorder.recordCommand('dom', { action: 'querySelector', selector: '#a', connection: TAB });
     await replay.handler({ action: 'create', name: 'walk-modified', indices: [0] } as any);
 

@@ -98,7 +98,7 @@ export function createBreakpointTools(
 ) {
   return {
     breakpoint: createTool(
-      'Manage breakpoints and logpoints. Actions: set (line breakpoint), remove (remove by ID), list (list all), setLogpoint (log without pausing), validate (test expressions), resetCounter (reset logpoint counter), waitForScript (wait for script load), setDOMBreakpoint (pause when element changes), setEventBreakpoint (pause when event fires), setXHRBreakpoint (pause on network requests), await (set breakpoint and wait for hit - user can abort)',
+      'Breakpoints and logpoints.',
       breakpointSchema,
       async (args, abortSignal) => {
         const { action } = args;
@@ -1176,7 +1176,7 @@ export function createBreakpointTools(
 
             // Everything below runs inside a try/finally so the abort listener
             // is detached on EVERY exit (including the early return when
-            // setBreakpoint fails): abortSignal is typically the replay run's
+            // setBreakpoint fails): abortSignal is typically the run sequence's
             // long-lived signal, and a leaked listener per step accumulates
             // for the whole run.
             try {

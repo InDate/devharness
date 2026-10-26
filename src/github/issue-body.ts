@@ -23,7 +23,7 @@ const MAX_STEPS = 500;
  *  history.log lines, local sequences - that the audit cannot see, and
  *  `config` restarts, resets or relocates the server. */
 export const PRIVILEGED_TOOLS: ReadonlySet<string> = new Set([
-  'execution', 'server', 'request', 'download', 'browser', 'replay', 'config',
+  'execution', 'server', 'request', 'download', 'browser', 'replay', 'run', 'config',
 ]);
 
 export interface FencedBlock {

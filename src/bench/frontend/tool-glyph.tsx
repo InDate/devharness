@@ -10,6 +10,7 @@ const SHARED: Record<string, string> = {
   proxy: 'proxy',
   screenshot: 'capture',
   replay: 'replay',
+  run: 'replay',
   wait: 'timer',
   config: 'cog',
 };

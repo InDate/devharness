@@ -5,7 +5,6 @@ import type { BoundaryRule, BurstView, CallbackEntry, HiddenKind, CaptureRecord,
 import { WriteWatch } from '../write-watch.js';
 import type { ElementFacts, StyleSheets } from '../element-facts.js';
 import { type SequenceDriver } from './driver.js';
-import type { TrackedAnimation } from './animations.js';
 import type { MotionApplied, MotionRule } from './motion-rules.js';
 import type { MotionSetting } from '../bench/kinds.js';
 
@@ -159,6 +158,8 @@ export interface BenchSession extends BenchReport {
   keptEvents?: number;
   /** Detaches the bench's UI hold from the hold record when the bench closes. */
   detachUi?: () => void;
+  /** Ends the feed of Chrome's animation reports into the page's animation record. */
+  detachRecord?: () => void;
   /** Set when the page was frozen to hold a step, so only that freeze is undone. */
   heldForStep?: boolean;
   /** Drives nested inside the one that brought the app's tab to the front. */
@@ -263,12 +264,14 @@ export interface BenchSession extends BenchReport {
   unwatchPause?: () => void;
   /** styleSheetId -> url, from CSS.styleSheetAdded, to name a rule's source. */
   sheets: StyleSheets;
-  /** The animations the Animation domain has reported started and not cancelled, by id. */
-  animations: Map<string, TrackedAnimation>;
+  /** Ends the motion rules' watch on the page's animation record. */
+  detachRules?: () => void;
   /** The next screen hold arms a stop in front of the page's next frame in place of pausing it now. */
   frameStopArming?: boolean;
-  /** The page clock holds the app's frame callbacks, from a frame stop until the release. */
+  /** The page clock holds the app's frame callbacks, from a screen hold or frame stop until the release. */
   framesHeld?: boolean;
+  /** The screen hold stopped the page's JS with the debugger: a page with no clock, whose timers nothing else holds. */
+  pausedForScreen?: boolean;
   /** When the last frame stop was armed: the animations created after it are the group its input started. */
   groupSince?: number;
   /** The page's time - its clock and its CSS animation rate - which every hold, step and speed goes through. */

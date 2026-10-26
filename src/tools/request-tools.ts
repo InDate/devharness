@@ -103,7 +103,7 @@ export function createRequestTools(resolveConnectionByName: (connection: string)
         // destination === 'node'
         // Two controllers with different meanings: timeoutController fires on
         // this request's own timeoutMs; the external abortSignal is the
-        // caller's cancel (e.g. `replay cancel`). Both are composed into the
+        // caller's cancel (e.g. `run cancel`). Both are composed into the
         // signal handed to fetch, so EITHER genuinely closes the socket - and
         // the catch below tells them apart by which one fired, never by
         // parsing the error.

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mailroom · Message</title>
+<style>
+  @view-transition { navigation: auto; }
+  body { margin: 0; font: 15px/1.4 system-ui, sans-serif; background: #f4f4f6; color: #222; }
+  main { max-width: 640px; margin: 0 auto; padding: 16px; }
+  article { padding: 16px; border-radius: 8px; background: #fff; }
+</style>
+</head>
+<body>
+<main>
+  <a href="catalog.html" id="back">Back to Mailroom</a>
+  <article><h2>Re: the motion bug</h2><p>The fade lands one frame late on reload.</p></article>
+</main>
+<script>
+  document.addEventListener('keydown', e => { if (e.key === '/') location.href = 'catalog.html'; });
+</script>
+</body>
+</html>

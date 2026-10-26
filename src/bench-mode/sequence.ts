@@ -8,7 +8,7 @@ import { appendRun } from '../run-log.js';
 import { evaluateInPage, request, send, setInspectMode } from './cdp.js';
 import { type SequenceDriver } from './driver.js';
 import { letGoForRun, stoppedByDialog, withPageReleased } from './page-hold.js';
-import { holdReading } from '../hold.js';
+import { drivesPage, holdReading } from '../hold.js';
 import { dialogMonitorOf, describeDialog } from '../dialog-monitor.js';
 import type { BenchDialog } from '../bench/wire.js';
 import { addRecordingCheck, addRecordingTimer, attachStepTraffic, dropRecordingStep, gateNewStep, recordedSteps, undoRecordingDrop } from './recording.js';
@@ -132,7 +132,7 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
     // between steps is a paused run whichever surface stopped it.
     ...(session.sequencePaused || (active.live && !session.sequencePlaying && !session.sequenceBusy && active.currentStep < active.total) ? { paused: true } : {}),
     ...(() => {
-      const held = holdReading(connection).held.filter(one => one.source === 'sequence' && !one.via).map(one => one.layer);
+      const held = holdReading(connection).held.filter(one => !one.via && one.owners.some(owner => owner.kind === 'run-pause')).map(one => one.layer);
       return held.length ? { runHeld: held } : {};
     })(),
     ...(active.heldAt ? { heldAt: active.heldAt } : {}),
@@ -334,7 +334,7 @@ async function driveSequence(
         }, 600),
         new Promise(resolve => setTimeout(resolve, 500)),
       ]);
-      // The one unbounded await in this path. A replay step that never settles
+      // The one unbounded await in this path. A run step that never settles
       // leaves the release scope suspended before its `finally`, so the page
       // stays held and sequenceBusy stays latched - which is what wedges the
       // pane with nothing on screen to say why.
@@ -608,10 +608,15 @@ export async function playSequence(connection: string, options: { throughHolds?:
         if (state.currentStep === before) break;
         // A step that held the screen in its own input, or froze an animation
         // through its motion, stops the play there, frozen part-way through
-        // the motion it started, for a seek or a scrub to read.
+        // the motion it started, for a seek or a scrub to read. A next step
+        // that moves page time - a frame step, a callback step - works on that
+        // held screen, so the play carries on into it.
         if (session.pendingFreeze) await session.pendingFreeze;
+        const next = state.steps[state.currentStep];
+        const heldByStep = holdReading(connection).held
+          .some(layer => layer.layer === 'ui' && layer.owners.some(owner => owner.kind === 'run-step'));
         if (!options.throughHolds && (session.motionPaused?.size
-          || holdReading(connection).held.some(layer => layer.layer === 'ui' && layer.source === 'tool'))) {
+          || (heldByStep && (!next?.tool || drivesPage(next.tool, next.params))))) {
           session.sequencePaused = true;
           state = await getSequenceState(connection);
           break;

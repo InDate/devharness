@@ -79,7 +79,7 @@ function makeReplay(
 
   const getConnectionPort = vi.fn(async (reference: string) => PORTS[reference] ?? null);
 
-  const { replay } = createReplayTools(
+  const { replay, run } = createReplayTools(
     recorder,
     executeToolCall,
     async () => null,          // no page -> no cursor/overlay injection
@@ -87,7 +87,7 @@ function makeReplay(
     undefined
   );
 
-  return { replay, calls, getConnectionPort };
+  return { replay, run, calls, getConnectionPort };
 }
 
 const killedPorts = (calls: Array<{ tool: string; params: Record<string, any> }>) =>
@@ -95,9 +95,9 @@ const killedPorts = (calls: Array<{ tool: string; params: Record<string, any> }>
 
 const text = (res: any) => res.content[0].text as string;
 
-const run = (replay: any, extra: Record<string, any> = {}) =>
-  replay.handler({
-    action: 'run',
+const runSequence = (tool: any, extra: Record<string, any> = {}) =>
+  tool.handler({
+    action: 'sequence',
     // These tests assert on the run's final text, so they use the blocking mode.
     wait: true,
     sequenceId: 'seq-kill',
@@ -108,25 +108,25 @@ const run = (replay: any, extra: Record<string, any> = {}) =>
 
 describe('killChromeOnFinish', () => {
   it("kills the run's own Chrome exactly once", async () => {
-    const { replay, calls } = makeReplay([
+    const { replay, run, calls } = makeReplay([
       { tool: 'dom', params: { action: 'querySelector', selector: '#a' } },
       { tool: 'dom', params: { action: 'querySelector', selector: '#b' } },
     ]);
 
-    const res = await run(replay);
+    const res = await runSequence(run);
 
     expect(killedPorts(calls)).toEqual([RUN_PORT]);
     expect(text(res)).toContain('Chrome killed');
   });
 
   it('leaves a borrowed per-step connection running', async () => {
-    const { replay, calls } = makeReplay([
+    const { replay, run, calls } = makeReplay([
       { tool: 'dom', params: { action: 'querySelector', selector: '#a' } },
       // a browser the user launched themselves and expects to keep
       { tool: 'dom', params: { action: 'querySelector', selector: '#b', connection: 'borrowed-device' } },
     ]);
 
-    await run(replay);
+    await runSequence(run);
 
     expect(killedPorts(calls)).toEqual([RUN_PORT]);
     expect(killedPorts(calls)).not.toContain(BORROWED_PORT);
@@ -135,11 +135,11 @@ describe('killChromeOnFinish', () => {
   });
 
   it('leaves a borrowed connection running even when its reference comes from a variable', async () => {
-    const { replay, calls, getConnectionPort } = makeReplay([
+    const { replay, run, calls, getConnectionPort } = makeReplay([
       { tool: 'dom', params: { action: 'querySelector', selector: '#b', connection: '{{var:device}}' } },
     ]);
 
-    await run(replay);
+    await runSequence(run);
 
     expect(killedPorts(calls)).toEqual([RUN_PORT]);
     // and we never even asked for the port of an uninterpolated reference
@@ -150,12 +150,12 @@ describe('killChromeOnFinish', () => {
   // instance, so a second connection shares the run's port. Killing by port
   // then takes that browser down too - the exact thing this promises not to do.
   it('leaves the browser running when another connection shares its port', async () => {
-    const { replay, calls } = makeReplay(
+    const { replay, run, calls } = makeReplay(
       [{ tool: 'dom', params: { action: 'querySelector', selector: '#a' } }],
       { connections: [{ reference: 'run-device', port: RUN_PORT }, { reference: 'tab-sibling', port: RUN_PORT }] },
     );
 
-    const res = await run(replay);
+    const res = await runSequence(run);
 
     expect(killedPorts(calls)).toEqual([]);
     expect(text(res)).toContain('Chrome left running');
@@ -163,12 +163,12 @@ describe('killChromeOnFinish', () => {
   });
 
   it('still kills when the only connection on the port is the run\'s own', async () => {
-    const { replay, calls } = makeReplay(
+    const { replay, run, calls } = makeReplay(
       [{ tool: 'dom', params: { action: 'querySelector', selector: '#a' } }],
       { connections: [{ reference: 'run-device', port: RUN_PORT }, { reference: 'phone', port: 9444 }] },
     );
 
-    await run(replay);
+    await runSequence(run);
 
     expect(killedPorts(calls)).toEqual([RUN_PORT]);
   });
@@ -179,14 +179,14 @@ describe('killChromeOnFinish', () => {
     // The device shape: the sequence brings up its own browsers, so the run
     // takes no connection of its own and the second launch is a browser
     // that exists only because this run opened it.
-    const { replay, calls } = makeReplay([
+    const { replay, run, calls } = makeReplay([
       { tool: 'connection', params: { action: 'launch', connection: 'run-device' } },
       { tool: 'dom', params: { action: 'querySelector', selector: '#a', connection: 'run-device' } },
       { tool: 'connection', params: { action: 'launch', connection: 'phone' } },
       { tool: 'dom', params: { action: 'querySelector', selector: '#b', connection: 'phone' } },
     ]);
 
-    await run(replay, { connection: undefined });
+    await runSequence(run, { connection: undefined });
 
     expect(killedPorts(calls)).toContain(PORTS['phone']);
     // and the reference is released, so the next run can launch it again
@@ -195,7 +195,7 @@ describe('killChromeOnFinish', () => {
   });
 
   it('leaves a per-step browser alone when the launch only reused it', async () => {
-    const { replay, calls } = makeReplay(
+    const { replay, run, calls } = makeReplay(
       [
         { tool: 'connection', params: { action: 'launch', connection: 'run-device' } },
         { tool: 'dom', params: { action: 'querySelector', selector: '#a', connection: 'run-device' } },
@@ -205,7 +205,7 @@ describe('killChromeOnFinish', () => {
       { reused: ['borrowed-device'] },
     );
 
-    await run(replay, { connection: undefined });
+    await runSequence(run, { connection: undefined });
 
     expect(killedPorts(calls)).toEqual([RUN_PORT]);
     expect(killedPorts(calls)).not.toContain(BORROWED_PORT);
@@ -216,11 +216,11 @@ describe('killChromeOnFinish', () => {
   // "could not read socket health - Connection not found" - a failure produced
   // by the run's own cleanup.
   it('reads socket health BEFORE killing the browser', async () => {
-    const { replay, calls } = makeReplay(
+    const { replay, run, calls } = makeReplay(
       [{ tool: 'dom', params: { action: 'querySelector', selector: '#a' } }],
     );
 
-    const res = await run(replay, { requireSockets: true });
+    const res = await runSequence(run, { requireSockets: true });
 
     const order = calls.map(c => c.tool);
     const lastNetwork = order.lastIndexOf('network');
@@ -231,11 +231,11 @@ describe('killChromeOnFinish', () => {
   });
 
   it('kills nothing when killChromeOnFinish is not set', async () => {
-    const { replay, calls } = makeReplay([
+    const { replay, run, calls } = makeReplay([
       { tool: 'dom', params: { action: 'querySelector', selector: '#a', connection: 'borrowed-device' } },
     ]);
 
-    await run(replay, { killChromeOnFinish: undefined });
+    await runSequence(run, { killChromeOnFinish: undefined });
 
     expect(killedPorts(calls)).toEqual([]);
   });

@@ -55,7 +55,7 @@ const proxySchema = z.object({
   id: z.string().optional().describe('body: the event id. withdraw: the answer id'),
   urlIncludes: z.string().optional().describe('events: only URLs containing this. answer/answerFrame: the URL substring the answer applies to'),
   method: z.string().optional().describe('answer: only this HTTP method'),
-  step: z.coerce.number().int().min(0).optional().describe('answer/answerFrame: only while this 0-based replay step is in flight'),
+  step: z.coerce.number().int().min(0).optional().describe('answer/answerFrame: only while this 0-based run step is in flight'),
   unmatchedWrites: z.enum(['refuse', 'forward']).optional().describe('refuse: an unmatched POST/PUT/PATCH/DELETE is refused (403, recorded) or forwarded (default)'),
   status: z.number().optional().describe('answer: status to answer with (default 200)'),
   contentType: z.string().optional().describe('answer: content-type to answer with (default application/json)'),
@@ -70,7 +70,7 @@ const EVENTS_LISTED = 30;
 export function createProxyTools() {
   return {
     proxy: createTool(
-      'Read and steer the intercepting proxy a browser was launched through. Actions: status, events (what crossed the boundary, newest last), sockets (what each socket did: reply or push), body (one event\'s kept payload), answer (a URL answered with a value in place of the server), answerFrame (a socket message replaced or dropped), withdraw (an answer), answers (the ones in force), refuse (unmatched writes answered 403, or forwarded), stop (drop the proxy under this name). Holding traffic in time is the hold tool.',
+      'Read and steer the intercepting proxy a browser was launched through (launch with proxy: true); holding traffic in time is the hold tool.',
       proxySchema,
       async (args) => {
         const proxy = getProxy(args.connection);

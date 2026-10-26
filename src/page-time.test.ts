@@ -65,7 +65,7 @@ describe('page time follows the page\'s stops', () => {
 
   it('stops page time when the page stops under a hold of devharness\'s, and runs it when none is left', async () => {
     const { log, fire, done } = attached();
-    recordHeld('followed', 'code', 'tool');
+    recordHeld('followed', 'code', { kind: 'agent' });
     fire(true);
     recordReleased('followed', 'code');
     fire(false);
@@ -76,7 +76,7 @@ describe('page time follows the page\'s stops', () => {
 
   it('leaves page time running through someone else\'s breakpoint', async () => {
     const { log, fire, done } = attached();
-    recordHeld('followed', 'code', 'breakpoint');
+    recordHeld('followed', 'code', { kind: 'outside' });
     fire(true);
     await new Promise(r => setTimeout(r, 0));
     expect(log).toEqual([]);
@@ -85,7 +85,7 @@ describe('page time follows the page\'s stops', () => {
 
   it('keeps page time stopped across a resume that leaves a hold standing, as a step does', async () => {
     const { log, fire, done } = attached();
-    recordHeld('followed', 'ui', 'bench');
+    recordHeld('followed', 'ui', { kind: 'person' });
     fire(false);
     await new Promise(r => setTimeout(r, 0));
     expect(log).toEqual([]);

@@ -1,0 +1,1677 @@
+{
+  "about": "Each scenario on the motion demo against each capability of the workbench loop. A cell holds what devharness is expected to do and how that stands today: works, gap, unmeasured or n/a. A cell's basis is code (read from src/), research:<file> (a report under docs/research/) or sequence:<name> (shown by a run). A cell reads works only on a sequence basis. A capability's rule applies to every scenario. A scenario's cell is merged over its mechanism's default, then over the capability's default.",
+  "capabilities": [
+    {
+      "id": "seen",
+      "name": "Seen",
+      "question": "Does devharness register this motion, and through what?",
+      "rule": "By mechanism: CSS and Web Animations through Chrome's Animation reports; JS writing styles or SVG attributes through a page-side MutationObserver, a run of changes on one element read as one motion; canvas, WebGL and video as a region redrawing per frame, plus the media element's state; SVG <animate> through its begin and end events and the SVG's animation time; smooth scroll through scroll offsets to scrollend; and a style change with no animation reported as changed with no motion."
+    },
+    {
+      "id": "row",
+      "name": "Row",
+      "question": "Under which step, at what offset, or in which lane does its row land?"
+    },
+    {
+      "id": "solo",
+      "name": "Solo",
+      "question": "Can it play alone, every other motion frozen?",
+      "default": {
+        "expect": "Every other motion frozen while this one plays",
+        "today": "gap",
+        "basis": "code",
+        "note": "Motion rules act per selector; no rule freezes all but one"
+      },
+      "rule": "One motion replays; every other motion freezes where it stood when that one starts."
+    },
+    {
+      "id": "hold",
+      "name": "Hold and step",
+      "question": "Does hold ui stop it, and hold frame step it?"
+    },
+    {
+      "id": "slow",
+      "name": "Slow",
+      "question": "Does rate slow it?"
+    },
+    {
+      "id": "crop",
+      "name": "Crop",
+      "question": "Which ancestor do its snapshots crop to?",
+      "default": {
+        "today": "gap",
+        "basis": "code",
+        "note": "A held screen is captured from the screencast frame, an element placed by the frame's scroll and kept to its overlap with the screen (sequence:screencast-reads-held-screen); nothing picks the ancestor to crop to. Layout Instability's previousRect and currentRect give up to five shifted boxes (research:motion-detection.md)"
+      },
+      "rule": "Snapshots crop to the smallest ancestor holding every box the motion occupied and the elements it shifted. A full-viewport fade that changes only opacity or colour is stated in text, outside the crop."
+    },
+    {
+      "id": "flag",
+      "name": "Text flag",
+      "question": "What anomaly do the numbers show before any image is taken?",
+      "default": {
+        "today": "gap",
+        "basis": "code",
+        "note": "No anomaly is read from motion values"
+      }
+    },
+    {
+      "id": "tune",
+      "name": "Tune",
+      "question": "What can be changed, and how does the change reach the source?",
+      "default": {
+        "today": "gap",
+        "basis": "code",
+        "note": "No live timing edit. Animation.setTiming takes duration and delay only; easing and keyframes need a CSS edit, and DevTools writes the winning declaration with CSS.setEffectivePropertyValueForNode (research:motion-time-control.md)"
+      },
+      "rule": "Timing is set live where the mechanism allows; devharness names the rule or code and its line, and the LLM session edits the file."
+    },
+    {
+      "id": "env",
+      "name": "Viewport and environment",
+      "question": "Do size, reduced motion or frame rate change it?",
+      "default": {
+        "today": "unmeasured"
+      }
+    }
+  ],
+  "mechanisms": {
+    "css-transition": {
+      "name": "CSS transition",
+      "seen": {
+        "expect": "Animation object, through the record",
+        "today": "unmeasured"
+      },
+      "hold": {
+        "expect": "Stopped by Animation.setPlaybackRate(0); frame step advances it",
+        "today": "unmeasured"
+      },
+      "slow": {
+        "expect": "rate sets its playback rate",
+        "today": "unmeasured"
+      }
+    },
+    "css-keyframes": {
+      "name": "CSS keyframes",
+      "seen": {
+        "expect": "Animation object, through the record",
+        "today": "unmeasured"
+      },
+      "hold": {
+        "expect": "Stopped by Animation.setPlaybackRate(0); frame step advances it",
+        "today": "unmeasured"
+      },
+      "slow": {
+        "expect": "rate sets its playback rate",
+        "today": "unmeasured"
+      }
+    },
+    "waapi": {
+      "name": "Web Animations",
+      "seen": {
+        "expect": "Animation object, through the record",
+        "today": "unmeasured"
+      },
+      "hold": {
+        "expect": "Stopped by Animation.setPlaybackRate(0); frame step advances it",
+        "today": "unmeasured"
+      },
+      "slow": {
+        "expect": "rate sets its playback rate",
+        "today": "unmeasured"
+      }
+    },
+    "view-transition": {
+      "name": "View Transitions",
+      "seen": {
+        "expect": "Animations on the ::view-transition pseudo-elements, through the record",
+        "today": "unmeasured"
+      },
+      "hold": {
+        "expect": "Stopped with the document timeline; the transition's snapshot is already taken",
+        "today": "unmeasured"
+      },
+      "slow": {
+        "expect": "rate sets its playback rate",
+        "today": "unmeasured"
+      }
+    },
+    "scroll-timeline": {
+      "name": "Scroll-driven CSS",
+      "seen": {
+        "expect": "Animation object on a scroll or view timeline",
+        "today": "unmeasured"
+      },
+      "hold": {
+        "expect": "Follows scroll position, so it holds while scroll holds; nothing to step",
+        "today": "n/a"
+      },
+      "slow": {
+        "expect": "No time axis to slow",
+        "today": "n/a"
+      }
+    },
+    "frame-loop": {
+      "name": "JS frame loop writing styles",
+      "seen": {
+        "expect": "Style writes from frame callbacks, one motion per run: height #acc-body js style → 58px over 299ms",
+        "today": "works",
+        "basis": "sequence:motion-seen-without-animation-objects"
+      },
+      "hold": {
+        "expect": "The page clock owns requestAnimationFrame: held, and stepped a callback at a time",
+        "today": "unmeasured"
+      },
+      "slow": {
+        "expect": "rate scales the page clock",
+        "today": "unmeasured"
+      }
+    },
+    "timer-text": {
+      "name": "JS timer writing text",
+      "seen": {
+        "expect": "Text changes from timer callbacks: text #counter js text 0 → 1248 over 623ms",
+        "today": "works",
+        "basis": "sequence:motion-seen-without-animation-objects"
+      },
+      "hold": {
+        "expect": "The page clock owns the timer",
+        "today": "unmeasured"
+      },
+      "slow": {
+        "expect": "rate scales the page clock",
+        "today": "unmeasured"
+      }
+    },
+    "scroll-listener": {
+      "name": "JS scroll listener writing styles",
+      "seen": {
+        "expect": "Style writes from its scroll handler: height #masthead js style → 48px over 83ms",
+        "today": "works",
+        "basis": "sequence:motion-seen-without-animation-objects"
+      },
+      "hold": {
+        "expect": "Follows scroll position; nothing to step",
+        "today": "n/a"
+      },
+      "slow": {
+        "expect": "No time axis to slow",
+        "today": "n/a"
+      }
+    },
+    "smooth-scroll": {
+      "name": "Browser smooth scroll",
+      "seen": {
+        "expect": "Scroll offsets per frame: scrollY html run",
+        "today": "works",
+        "basis": "sequence:motion-seen-without-animation-objects"
+      },
+      "hold": {
+        "expect": "Cut where it stands when the screen is held; the page stays there at release",
+        "today": "works",
+        "basis": "sequence:screen-hold-stops-time-not-js"
+      },
+      "slow": {
+        "expect": "Slowed with the page",
+        "today": "unmeasured"
+      }
+    },
+    "canvas": {
+      "name": "Canvas",
+      "seen": {
+        "expect": "Draw calls on its 2D context, one motion per run",
+        "today": "unmeasured",
+        "note": "Watched as WebGL is; the sky runs only with background motion on, and no run had it on"
+      },
+      "hold": {
+        "expect": "The page clock owns its frame loop",
+        "today": "unmeasured"
+      },
+      "slow": {
+        "expect": "rate scales the page clock",
+        "today": "unmeasured"
+      }
+    },
+    "webgl": {
+      "name": "WebGL",
+      "seen": {
+        "expect": "Draw calls on its context, one motion per run: pixels #gl canvas over 583ms",
+        "today": "works",
+        "basis": "sequence:motion-seen-without-animation-objects"
+      },
+      "hold": {
+        "expect": "The page clock owns its frame loop",
+        "today": "unmeasured"
+      },
+      "slow": {
+        "expect": "rate scales the page clock",
+        "today": "unmeasured"
+      }
+    },
+    "video": {
+      "name": "Video",
+      "seen": {
+        "expect": "The media element's play and pause: currentTime #promo media 0.016 → 0.910 over 899ms",
+        "today": "works",
+        "basis": "sequence:motion-seen-without-animation-objects"
+      },
+      "hold": {
+        "expect": "Paused with page time, played again at release",
+        "today": "works",
+        "basis": "sequence:screen-hold-pauses-and-resumes-video"
+      },
+      "slow": {
+        "expect": "Its playbackRate follows rate",
+        "today": "gap",
+        "basis": "code",
+        "note": "rate sets Animation playback and the page clock only"
+      }
+    },
+    "smil": {
+      "name": "SVG SMIL",
+      "seen": {
+        "expect": "Its begin and end events: cx circle smil 12 → 108 over 798ms",
+        "today": "works",
+        "basis": "sequence:motion-seen-without-animation-objects"
+      },
+      "hold": {
+        "expect": "Held with the document timeline the CSS rate stops",
+        "today": "works",
+        "basis": "sequence:smil-holds-with-page"
+      },
+      "slow": {
+        "expect": "Slowed with the document timeline's rate",
+        "today": "unmeasured",
+        "basis": "research:motion-time-control.md",
+        "note": "Read from Blink source, not run"
+      }
+    },
+    "lottie": {
+      "name": "Lottie (lottie-web SVG renderer)",
+      "seen": {
+        "expect": "SVG attribute writes from its frame loop: transform g js attribute over 1967ms, 119 frames",
+        "today": "works",
+        "basis": "sequence:motion-seen-without-animation-objects"
+      },
+      "hold": {
+        "expect": "The page clock owns its frame loop",
+        "today": "unmeasured"
+      },
+      "slow": {
+        "expect": "rate scales the page clock",
+        "today": "unmeasured"
+      }
+    },
+    "gsap": {
+      "name": "GSAP",
+      "seen": {
+        "expect": "Inline style writes from GSAP's ticker: translate, rotate, scale, opacity div.plan, left #plan-pick",
+        "today": "works",
+        "basis": "sequence:motion-seen-without-animation-objects"
+      },
+      "hold": {
+        "expect": "The page clock owns GSAP's ticker",
+        "today": "unmeasured",
+        "note": "GSAP's lagSmoothing advances its timeline only 33ms when page time jumps more than 500ms between ticks (research:motion-detection.md)"
+      },
+      "slow": {
+        "expect": "rate scales the page clock",
+        "today": "unmeasured"
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "id": "badge",
+      "page": "index.html",
+      "key": "1",
+      "name": "New mail badge",
+      "trigger": "action",
+      "mechanism": "css-keyframes",
+      "clock": "page time",
+      "fault": "The pop keyframes dip to scale(0.6) for about 15ms",
+      "cells": {
+        "row": {
+          "expect": "Press step, +0",
+          "today": "unmeasured"
+        },
+        "crop": {
+          "expect": "#count, the button the badge sits on"
+        },
+        "flag": {
+          "expect": "scale reverses 1.25→0.6→1.2 inside 10% of the run"
+        },
+        "tune": {
+          "expect": "The keyframe stops, in the stylesheet"
+        },
+        "env": {
+          "expect": "At 120Hz the dip spans two frames, at 60Hz one"
+        }
+      }
+    },
+    {
+      "id": "toast",
+      "page": "index.html",
+      "key": "2",
+      "name": "Save toast",
+      "trigger": "chain",
+      "mechanism": "css-transition",
+      "clock": "page time",
+      "fault": "Frame 0 paints the toast at full opacity; a 700ms timer fades it out mid fade-in",
+      "cells": {
+        "seen": {
+          "expect": "Animation object, through the record",
+          "today": "works",
+          "basis": "sequence:animation-list-at-frame-steps"
+        },
+        "row": {
+          "expect": "Press step: fade-in +2 frames, fade-out +700ms",
+          "today": "gap",
+          "basis": "sequence:animation-list-at-frame-steps",
+          "note": "Credited to the frame step that ran the callback"
+        },
+        "crop": {
+          "expect": "The toast's box with a margin; its ancestor is the page"
+        },
+        "flag": {
+          "expect": "opacity 1 on frame 0 before the fade; fade-in reverses at 70%"
+        },
+        "tune": {
+          "expect": "The 700ms dismiss and the 1000ms fade, in the source"
+        }
+      }
+    },
+    {
+      "id": "folders",
+      "page": "index.html",
+      "key": "3",
+      "name": "Folders panel",
+      "trigger": "action",
+      "mechanism": "css-transition",
+      "clock": "page time",
+      "fault": "The panel animates width; item 3 eases in; item 5 starts at 260ms where the stagger puts 160ms",
+      "cells": {
+        "seen": {
+          "expect": "13 Animation objects, through the record",
+          "today": "works",
+          "basis": "sequence:animation-sweep-probes"
+        },
+        "row": {
+          "expect": "Press step, +0, as one group",
+          "today": "gap",
+          "basis": "sequence:motion-group-at-stop",
+          "note": "Under a held press, credited to the next frame step"
+        },
+        "hold": {
+          "expect": "Held at the frame stop; the group reads at 0ms",
+          "today": "works",
+          "basis": "sequence:motion-group-at-stop"
+        },
+        "crop": {
+          "expect": "#panel; the backdrop fade in text"
+        },
+        "flag": {
+          "expect": "width lays out; item 3 easing differs from its siblings; item 5 delay breaks the 40ms stagger"
+        },
+        "tune": {
+          "expect": "Delay and easing per item, live; the rule at index.html:44"
+        },
+        "env": {
+          "expect": "The panel's width is fixed; a narrow viewport covers more of the page"
+        }
+      }
+    },
+    {
+      "id": "remove",
+      "page": "index.html",
+      "key": "4",
+      "name": "Remove row",
+      "trigger": "action",
+      "mechanism": "css-transition",
+      "clock": "page time",
+      "fault": "transition: none, so the row snaps out",
+      "cells": {
+        "seen": {
+          "expect": "No animation; height, margin and opacity change at once",
+          "today": "unmeasured"
+        },
+        "row": {
+          "expect": "Press step: styles changed, no motion"
+        },
+        "crop": {
+          "expect": "#list"
+        },
+        "flag": {
+          "expect": "Height 48→0 in one frame with no animation"
+        },
+        "tune": {
+          "expect": "The .removing rule's transition, in the stylesheet"
+        }
+      }
+    },
+    {
+      "id": "like",
+      "page": "catalog.html",
+      "key": "q",
+      "name": "Like",
+      "trigger": "action",
+      "mechanism": "waapi",
+      "clock": "page time",
+      "fault": "A second press within 400ms starts a burst over the first; scale jumps back to 1",
+      "cells": {
+        "row": {
+          "expect": "Press step, +0; a second press adds a second row on the same element"
+        },
+        "crop": {
+          "expect": "#like"
+        },
+        "flag": {
+          "expect": "Two animations on one property overlap; scale jumps on the second start"
+        },
+        "tune": {
+          "expect": "Duration and easing live; cancel-before-animate in the source"
+        }
+      }
+    },
+    {
+      "id": "switch",
+      "page": "catalog.html",
+      "key": "w",
+      "name": "Notifications switch",
+      "trigger": "action",
+      "mechanism": "css-transition",
+      "clock": "page time",
+      "fault": null,
+      "cells": {
+        "row": {
+          "expect": "Press step, +0; on ::after"
+        },
+        "crop": {
+          "expect": "#notify"
+        },
+        "flag": {
+          "expect": "None; a reversal mid-way continues from the current value"
+        },
+        "tune": {
+          "expect": "Duration and easing, in the stylesheet"
+        }
+      }
+    },
+    {
+      "id": "details",
+      "page": "catalog.html",
+      "key": "e",
+      "name": "Details",
+      "trigger": "chain",
+      "mechanism": "frame-loop",
+      "clock": "page time",
+      "fault": "A press mid-way restarts from the full or empty height; height lays out every frame",
+      "cells": {
+        "row": {
+          "expect": "Press step, +1 frame",
+          "today": "works",
+          "basis": "sequence:motion-seen-without-animation-objects",
+          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet"
+        },
+        "crop": {
+          "expect": "The section holding the panel and the content it pushes"
+        },
+        "flag": {
+          "expect": "height jumps on interrupt; height lays out"
+        },
+        "tune": {
+          "expect": "The 300ms constant and the cubic ease, in the source"
+        },
+        "env": {
+          "expect": "Text wraps, so the open height changes with width"
+        }
+      }
+    },
+    {
+      "id": "tabs",
+      "page": "catalog.html",
+      "key": "r",
+      "name": "Tabs",
+      "trigger": "action",
+      "mechanism": "view-transition",
+      "clock": "page time",
+      "fault": null,
+      "cells": {
+        "row": {
+          "expect": "Press step, +1 frame, after the transition's snapshot"
+        },
+        "crop": {
+          "expect": "The tab strip and pane"
+        },
+        "flag": {
+          "expect": "None"
+        },
+        "tune": {
+          "expect": "::view-transition-group duration, in the stylesheet"
+        }
+      }
+    },
+    {
+      "id": "compose",
+      "page": "catalog.html",
+      "key": "t",
+      "name": "Compose modal",
+      "trigger": "action",
+      "mechanism": "css-keyframes",
+      "clock": "page time",
+      "fault": "Close removes the class; the modal snaps out",
+      "cells": {
+        "row": {
+          "expect": "Open: press step, +0. Close: press step, styles changed, no motion"
+        },
+        "crop": {
+          "expect": "The dialog box with a margin; its ancestor is the page"
+        },
+        "flag": {
+          "expect": "Close: display none in one frame with no exit animation"
+        },
+        "tune": {
+          "expect": "An exit rule with @starting-style, in the stylesheet"
+        }
+      }
+    },
+    {
+      "id": "load",
+      "page": "catalog.html",
+      "key": "y",
+      "name": "Load messages",
+      "trigger": "reply",
+      "mechanism": "css-keyframes",
+      "clock": "page time",
+      "fault": "The spinner shows for a 60ms reply; 36px skeleton rows give way to 56px rows",
+      "cells": {
+        "row": {
+          "expect": "Press step, from the press until GET /api/messages landed"
+        },
+        "hold": {
+          "expect": "The proxy holds the reply, so spinner and skeleton stay; release ends them",
+          "today": "unmeasured"
+        },
+        "crop": {
+          "expect": "#messages with its button"
+        },
+        "flag": {
+          "expect": "Spinner visible for a 60ms reply; layout shift of 20px a row"
+        },
+        "tune": {
+          "expect": "A spinner threshold and the skeleton height, in the source"
+        }
+      }
+    },
+    {
+      "id": "sync",
+      "page": "catalog.html",
+      "key": "u",
+      "name": "Sync",
+      "trigger": "reply",
+      "mechanism": "css-transition",
+      "clock": "page time",
+      "fault": null,
+      "cells": {
+        "row": {
+          "expect": "Press step: one bar row driven by bytes read over the stream, then the check at stream end"
+        },
+        "hold": {
+          "expect": "Holding the stream at the proxy holds the bar where the bytes stopped",
+          "today": "unmeasured"
+        },
+        "crop": {
+          "expect": "The sync controls row"
+        },
+        "flag": {
+          "expect": "None; bar progress tracks bytes read"
+        },
+        "tune": {
+          "expect": "Bar transition duration, in the stylesheet"
+        }
+      }
+    },
+    {
+      "id": "send",
+      "page": "catalog.html",
+      "key": "i",
+      "name": "Send",
+      "trigger": "reply",
+      "mechanism": "css-keyframes",
+      "clock": "page time",
+      "fault": "The failure path never hides the spinner",
+      "cells": {
+        "row": {
+          "expect": "Press step: spinner from the press, still running after POST /api/send returned 500"
+        },
+        "hold": {
+          "expect": "The proxy holds the 500; release shows the spinner outliving the reply",
+          "today": "unmeasured"
+        },
+        "crop": {
+          "expect": "The send controls row"
+        },
+        "flag": {
+          "expect": "Spinner still running after its request ended in 500"
+        },
+        "tune": {
+          "expect": "The failure branch, in the source"
+        }
+      }
+    },
+    {
+      "id": "join",
+      "page": "catalog.html",
+      "key": "o",
+      "name": "Join with no @",
+      "trigger": "action",
+      "mechanism": "css-keyframes",
+      "clock": "page time",
+      "fault": "The invalid class is never removed; a second invalid press shakes nothing",
+      "cells": {
+        "row": {
+          "expect": "First press: press step, +0. Second press: no motion"
+        },
+        "crop": {
+          "expect": "The Join controls row"
+        },
+        "flag": {
+          "expect": "Second press: same validation, no animation"
+        },
+        "tune": {
+          "expect": "Class restart in the source"
+        }
+      }
+    },
+    {
+      "id": "newest",
+      "page": "catalog.html",
+      "key": "p",
+      "name": "Newest first",
+      "trigger": "action",
+      "mechanism": "waapi",
+      "clock": "page time",
+      "fault": "Monday has no starting position and jumps while the rest slide",
+      "cells": {
+        "row": {
+          "expect": "Press step, +0, three rows; Monday changed position with no motion"
+        },
+        "crop": {
+          "expect": "#flip-list"
+        },
+        "flag": {
+          "expect": "One of four reordered items moved with no animation"
+        },
+        "tune": {
+          "expect": "The measure loop's start index, in the source"
+        }
+      }
+    },
+    {
+      "id": "count",
+      "page": "catalog.html",
+      "key": "a",
+      "name": "Count",
+      "trigger": "action",
+      "mechanism": "timer-text",
+      "clock": "page time",
+      "fault": "Ends at 1248, not 1280",
+      "cells": {
+        "row": {
+          "expect": "Press step: text counting over 640ms",
+          "today": "works",
+          "basis": "sequence:motion-seen-without-animation-objects",
+          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet"
+        },
+        "crop": {
+          "expect": "#counter"
+        },
+        "flag": {
+          "expect": "Final value 1248, target 1280"
+        },
+        "tune": {
+          "expect": "The steps + 1 divisor, in the source"
+        }
+      }
+    },
+    {
+      "id": "live",
+      "page": "catalog.html",
+      "key": "s",
+      "name": "Live feed",
+      "trigger": "push",
+      "mechanism": "css-keyframes",
+      "clock": "page time",
+      "fault": "Items below each new item jump down with no motion",
+      "cells": {
+        "row": {
+          "expect": "Under the source opened by the press, one row per pushed event at its arrival",
+          "today": "gap",
+          "basis": "code",
+          "note": "No source rows exist"
+        },
+        "hold": {
+          "expect": "Holding a pushed frame at the proxy holds its item back",
+          "today": "unmeasured"
+        },
+        "crop": {
+          "expect": "#feed"
+        },
+        "flag": {
+          "expect": "Layout shift of the items below each insert"
+        },
+        "tune": {
+          "expect": "A height animation on insert, in the source"
+        }
+      }
+    },
+    {
+      "id": "sheet",
+      "page": "catalog.html",
+      "key": "g",
+      "name": "Quick reply sheet",
+      "trigger": "pointer",
+      "mechanism": "frame-loop",
+      "clock": "pointer",
+      "fault": "A drag released past 120px snaps shut",
+      "cells": {
+        "row": {
+          "expect": "Drag: under the pointer steps, following the pointer. Release: release step, spring or snap. g: press step, spring",
+          "today": "gap",
+          "basis": "code"
+        },
+        "crop": {
+          "expect": "The sheet's box with a margin; its ancestor is the page"
+        },
+        "flag": {
+          "expect": "Release past 120px: translateY jumps to closed in one frame"
+        },
+        "tune": {
+          "expect": "Spring stiffness and damping, the 120px threshold, in the source"
+        },
+        "env": {
+          "expect": "The closed position follows the sheet's height"
+        }
+      }
+    },
+    {
+      "id": "card-hover",
+      "page": "catalog.html",
+      "key": null,
+      "name": "Pointer card",
+      "trigger": "pointer",
+      "mechanism": "css-transition",
+      "clock": "pointer",
+      "fault": null,
+      "cells": {
+        "row": {
+          "expect": "Under the hover step, +0"
+        },
+        "crop": {
+          "expect": "The Pointer section"
+        },
+        "flag": {
+          "expect": "None"
+        },
+        "tune": {
+          "expect": "Duration and lift, in the stylesheet"
+        }
+      }
+    },
+    {
+      "id": "carousel",
+      "page": "catalog.html",
+      "key": "k",
+      "name": "Carousel",
+      "trigger": "repeating",
+      "mechanism": "css-transition",
+      "clock": "page time",
+      "fault": "Keeps turning with the tab hidden and under reduced motion",
+      "cells": {
+        "row": {
+          "expect": "One source row: started at the navigate step, period 3s, stopped by k",
+          "today": "gap",
+          "basis": "code",
+          "note": "Each turn is a separate animation row"
+        },
+        "crop": {
+          "expect": ".carousel"
+        },
+        "flag": {
+          "expect": "Repeating at 3s; still turning under reduced motion"
+        },
+        "tune": {
+          "expect": "Period and slide duration, in the source"
+        },
+        "env": {
+          "expect": "Reduced motion should stop it, and does not"
+        }
+      }
+    },
+    {
+      "id": "marquee",
+      "page": "catalog.html",
+      "key": null,
+      "name": "Marquee",
+      "trigger": "repeating",
+      "mechanism": "css-keyframes",
+      "clock": "page time",
+      "fault": null,
+      "cells": {
+        "row": {
+          "expect": "One source row from the navigate step, infinite"
+        },
+        "crop": {
+          "expect": ".marquee"
+        },
+        "flag": {
+          "expect": "None"
+        },
+        "tune": {
+          "expect": "Duration, in the stylesheet"
+        },
+        "env": {
+          "expect": "Stops under reduced motion"
+        }
+      }
+    },
+    {
+      "id": "sky",
+      "page": "catalog.html",
+      "key": null,
+      "name": "Sky",
+      "trigger": "repeating",
+      "mechanism": "canvas",
+      "clock": "page time",
+      "fault": "Every 120th frame runs a 90ms busy loop, so frames drop every two seconds",
+      "cells": {
+        "row": {
+          "expect": "One source row from the navigate step",
+          "today": "gap",
+          "basis": "code"
+        },
+        "hold": {
+          "expect": "The page clock owns its frame loop",
+          "today": "unmeasured",
+          "note": "The busy loop spins on performance.now(); under page time it ends only if time advances inside a callback. Playwright, Sinon and Jest clocks advance a paused performance.now() only from outside (research:motion-time-control.md)"
+        },
+        "crop": {
+          "expect": "#sky"
+        },
+        "flag": {
+          "expect": "A 90ms long animation frame every 120 frames"
+        },
+        "tune": {
+          "expect": "The busy loop, in the source"
+        }
+      }
+    },
+    {
+      "id": "hero",
+      "page": "catalog.html",
+      "key": null,
+      "name": "Hero title",
+      "trigger": "load",
+      "mechanism": "css-keyframes",
+      "clock": "page time",
+      "fault": null,
+      "cells": {
+        "row": {
+          "expect": "Navigate step, +100ms"
+        },
+        "crop": {
+          "expect": ".hero"
+        },
+        "flag": {
+          "expect": "None"
+        },
+        "tune": {
+          "expect": "Delay and duration, in the stylesheet"
+        }
+      }
+    },
+    {
+      "id": "scroll-bar",
+      "page": "catalog.html",
+      "key": null,
+      "name": "Scroll progress bar",
+      "trigger": "scroll",
+      "mechanism": "scroll-timeline",
+      "clock": "scroll position",
+      "fault": null,
+      "cells": {
+        "row": {
+          "expect": "Under each scroll step, progress against scroll position"
+        },
+        "crop": {
+          "expect": "#scroll-bar"
+        },
+        "flag": {
+          "expect": "None; progress equals scroll fraction"
+        },
+        "tune": {
+          "expect": "Not tuned in time"
+        }
+      }
+    },
+    {
+      "id": "reveal",
+      "page": "catalog.html",
+      "key": null,
+      "name": "Reveal cards",
+      "trigger": "scroll",
+      "mechanism": "scroll-timeline",
+      "clock": "scroll position",
+      "fault": null,
+      "cells": {
+        "row": {
+          "expect": "Under the scroll step that brings each card in, progress against its view range"
+        },
+        "crop": {
+          "expect": "The Scroll section"
+        },
+        "flag": {
+          "expect": "None"
+        },
+        "tune": {
+          "expect": "animation-range, in the stylesheet"
+        },
+        "env": {
+          "expect": "The viewport height changes where each reveal starts"
+        }
+      }
+    },
+    {
+      "id": "parallax",
+      "page": "catalog.html",
+      "key": null,
+      "name": "Hero parallax",
+      "trigger": "scroll",
+      "mechanism": "scroll-listener",
+      "clock": "scroll position",
+      "fault": null,
+      "cells": {
+        "row": {
+          "expect": "Under each scroll step",
+          "today": "gap",
+          "basis": "code"
+        },
+        "crop": {
+          "expect": ".hero"
+        },
+        "flag": {
+          "expect": "None"
+        },
+        "tune": {
+          "expect": "The 0.4 factor, in the source"
+        }
+      }
+    },
+    {
+      "id": "masthead",
+      "page": "catalog.html",
+      "key": null,
+      "name": "Masthead shrink",
+      "trigger": "scroll",
+      "mechanism": "scroll-listener",
+      "clock": "scroll position",
+      "fault": "height lays out on every scroll event",
+      "cells": {
+        "row": {
+          "expect": "Under each scroll step",
+          "today": "works",
+          "basis": "sequence:motion-seen-without-animation-objects",
+          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet"
+        },
+        "crop": {
+          "expect": "#masthead"
+        },
+        "flag": {
+          "expect": "height written per scroll event; lays out"
+        },
+        "tune": {
+          "expect": "A transform in place of height, in the source"
+        }
+      }
+    },
+    {
+      "id": "labels",
+      "page": "catalog.html",
+      "key": null,
+      "name": "Labels card",
+      "trigger": "scroll",
+      "mechanism": "css-transition",
+      "clock": "page time",
+      "fault": "The reveal waits 400ms after the card enters",
+      "cells": {
+        "row": {
+          "expect": "The scroll step that brought it in, +400ms"
+        },
+        "crop": {
+          "expect": "The Scroll section"
+        },
+        "flag": {
+          "expect": "Starts 400ms after the card entered the viewport"
+        },
+        "tune": {
+          "expect": "The 400ms delay, in the source"
+        },
+        "env": {
+          "expect": "The viewport height changes when it enters"
+        }
+      }
+    },
+    {
+      "id": "refresh",
+      "page": "catalog.html",
+      "key": "c",
+      "name": "Refresh",
+      "trigger": "reply",
+      "mechanism": "css-keyframes",
+      "clock": "page time",
+      "fault": null,
+      "cells": {
+        "row": {
+          "expect": "Press step: list dims at +0, spinner at +300ms, both end when the 600ms reply lands"
+        },
+        "hold": {
+          "expect": "The proxy holds the reply; the spinner appears at 300ms and stays",
+          "today": "unmeasured"
+        },
+        "crop": {
+          "expect": "#refreshed with its button"
+        },
+        "flag": {
+          "expect": "None; spinner only past 300ms, no layout shift"
+        },
+        "tune": {
+          "expect": "The 300ms threshold, in the source"
+        }
+      }
+    },
+    {
+      "id": "refresh-cached",
+      "page": "catalog.html",
+      "key": "v",
+      "name": "Refresh cached",
+      "trigger": "reply",
+      "mechanism": "css-keyframes",
+      "clock": "page time",
+      "fault": null,
+      "cells": {
+        "row": {
+          "expect": "Press step: list dims; no spinner, the 60ms reply beats the threshold"
+        },
+        "crop": {
+          "expect": "#refreshed with its button"
+        },
+        "flag": {
+          "expect": "None"
+        },
+        "tune": {
+          "expect": "The 300ms threshold, in the source"
+        }
+      }
+    },
+    {
+      "id": "star",
+      "page": "catalog.html",
+      "key": "b",
+      "name": "Star",
+      "trigger": "reply",
+      "mechanism": "css-transition",
+      "clock": "page time",
+      "fault": "The star reverts on the 409 but the count keeps its increment",
+      "cells": {
+        "row": {
+          "expect": "Press step: fill at +0, revert when POST /api/star returned 409"
+        },
+        "hold": {
+          "expect": "The proxy holds the 409; the star stays filled until release",
+          "today": "unmeasured"
+        },
+        "crop": {
+          "expect": "The star controls row"
+        },
+        "flag": {
+          "expect": "End state: star off, count +1"
+        },
+        "tune": {
+          "expect": "The rollback branch, in the source"
+        }
+      }
+    },
+    {
+      "id": "search",
+      "page": "catalog.html",
+      "key": "n, m",
+      "name": "Search archive, Cancel",
+      "trigger": "reply",
+      "mechanism": "css-keyframes",
+      "clock": "page time",
+      "fault": null,
+      "cells": {
+        "row": {
+          "expect": "Search step: spinner from the press; Cancel step: spinner ends with the aborted request"
+        },
+        "crop": {
+          "expect": "The search controls row"
+        },
+        "flag": {
+          "expect": "None"
+        },
+        "tune": {
+          "expect": "Not needed"
+        }
+      }
+    },
+    {
+      "id": "typing",
+      "page": "catalog.html",
+      "key": "d",
+      "name": "Typing",
+      "trigger": "repeating",
+      "mechanism": "frame-loop",
+      "clock": "page time",
+      "fault": null,
+      "cells": {
+        "row": {
+          "expect": "One source row from the press to the next press, period about 1s",
+          "today": "gap",
+          "basis": "code"
+        },
+        "crop": {
+          "expect": "The dots' span"
+        },
+        "flag": {
+          "expect": "Repeating, period about 1s; a fresh closure every frame"
+        },
+        "tune": {
+          "expect": "Period and amplitude, in the source"
+        }
+      }
+    },
+    {
+      "id": "notices",
+      "page": "catalog.html",
+      "key": "f",
+      "name": "Dismiss notices",
+      "trigger": "action",
+      "mechanism": "css-transition",
+      "clock": "page time",
+      "fault": "The second notice has no opacity transition; its removal never fires and it stays as an invisible gap",
+      "cells": {
+        "row": {
+          "expect": "Press step, +0; then the notice's removal, or its absence"
+        },
+        "crop": {
+          "expect": "#notices"
+        },
+        "flag": {
+          "expect": "Exit ended, element still in the layout"
+        },
+        "tune": {
+          "expect": "The .warn transition list, in the stylesheet"
+        }
+      }
+    },
+    {
+      "id": "tour",
+      "page": "catalog.html",
+      "key": "h",
+      "name": "Tour",
+      "trigger": "chain",
+      "mechanism": "waapi",
+      "clock": "page time",
+      "fault": null,
+      "cells": {
+        "row": {
+          "expect": "Press step: five animations at their offsets, each after the one before"
+        },
+        "crop": {
+          "expect": ".tour-row"
+        },
+        "flag": {
+          "expect": "None; 300ms gaps between stops"
+        },
+        "tune": {
+          "expect": "Per-step duration and the gap, in the source"
+        }
+      }
+    },
+    {
+      "id": "backup",
+      "page": "catalog.html",
+      "key": "j, l, z, x",
+      "name": "Back up, Pause, Faster, Cancel",
+      "trigger": "app-controlled",
+      "mechanism": "waapi",
+      "clock": "page time",
+      "fault": null,
+      "cells": {
+        "row": {
+          "expect": "Back up step starts the row; Pause, Faster and Cancel steps change it"
+        },
+        "hold": {
+          "expect": "Held with the page; the app's own pause stays a pause on release",
+          "today": "unmeasured"
+        },
+        "slow": {
+          "expect": "rate multiplies the app's 4× rather than replacing it",
+          "today": "unmeasured"
+        },
+        "crop": {
+          "expect": "The backup controls row"
+        },
+        "flag": {
+          "expect": "None"
+        },
+        "tune": {
+          "expect": "Duration live; the 4× in the source"
+        }
+      }
+    },
+    {
+      "id": "chip",
+      "page": "catalog.html",
+      "key": "5",
+      "name": "Drafts chip (shadow DOM)",
+      "trigger": "action",
+      "mechanism": "css-keyframes",
+      "clock": "page time",
+      "fault": null,
+      "cells": {
+        "seen": {
+          "expect": "Animation object inside an open shadow root, named through the host",
+          "today": "unmeasured"
+        },
+        "row": {
+          "expect": "Press step, +0"
+        },
+        "crop": {
+          "expect": "mail-chip"
+        },
+        "flag": {
+          "expect": "None"
+        },
+        "tune": {
+          "expect": "The keyframes, in the component's template"
+        }
+      }
+    },
+    {
+      "id": "frame",
+      "page": "catalog.html",
+      "key": "6",
+      "name": "Outbox (iframe)",
+      "trigger": "action",
+      "mechanism": "css-transition",
+      "clock": "page time",
+      "fault": null,
+      "cells": {
+        "seen": {
+          "expect": "Animation object in the iframe's document",
+          "today": "unmeasured"
+        },
+        "hold": {
+          "expect": "Held with the parent page",
+          "today": "unmeasured"
+        },
+        "row": {
+          "expect": "Press step, +0"
+        },
+        "crop": {
+          "expect": "#frame"
+        },
+        "flag": {
+          "expect": "None"
+        },
+        "tune": {
+          "expect": "The iframe's stylesheet"
+        },
+        "slow": {
+          "expect": "Slowed with the parent: Animation.setPlaybackRate applies to every inspected frame's timeline",
+          "today": "unmeasured",
+          "basis": "research:motion-time-control.md"
+        }
+      }
+    },
+    {
+      "id": "detail-nav",
+      "page": "catalog.html",
+      "key": "/",
+      "name": "Open message",
+      "trigger": "load",
+      "mechanism": "view-transition",
+      "clock": "page time",
+      "fault": null,
+      "cells": {
+        "seen": {
+          "expect": "The cross-document transition's animations on the new document",
+          "today": "unmeasured"
+        },
+        "row": {
+          "expect": "The navigate step, +0 on the new page"
+        },
+        "crop": {
+          "expect": "The viewport"
+        },
+        "flag": {
+          "expect": "None"
+        },
+        "tune": {
+          "expect": "::view-transition duration, in both stylesheets"
+        }
+      }
+    },
+    {
+      "id": "settings",
+      "page": "catalog.html",
+      "key": "7",
+      "name": "Settings dialog",
+      "trigger": "action",
+      "mechanism": "css-transition",
+      "clock": "page time",
+      "fault": null,
+      "cells": {
+        "row": {
+          "expect": "Open and close steps, +0 each, including the exit"
+        },
+        "crop": {
+          "expect": "The dialog box with a margin; its ancestor is the top layer"
+        },
+        "flag": {
+          "expect": "None"
+        },
+        "tune": {
+          "expect": "Duration, in the stylesheet"
+        }
+      }
+    },
+    {
+      "id": "menu",
+      "page": "catalog.html",
+      "key": "8",
+      "name": "Menu popover",
+      "trigger": "action",
+      "mechanism": "css-transition",
+      "clock": "page time",
+      "fault": null,
+      "cells": {
+        "row": {
+          "expect": "Open and close steps, +0 each"
+        },
+        "crop": {
+          "expect": "#menu with a margin"
+        },
+        "flag": {
+          "expect": "None"
+        },
+        "tune": {
+          "expect": "Duration, in the stylesheet"
+        }
+      }
+    },
+    {
+      "id": "faq",
+      "page": "catalog.html",
+      "key": "9",
+      "name": "FAQ details",
+      "trigger": "action",
+      "mechanism": "css-transition",
+      "clock": "page time",
+      "fault": null,
+      "cells": {
+        "row": {
+          "expect": "Press step, +0, on ::details-content"
+        },
+        "crop": {
+          "expect": "#faq"
+        },
+        "flag": {
+          "expect": "height animates to auto; lays out"
+        },
+        "tune": {
+          "expect": "Duration, in the stylesheet"
+        },
+        "env": {
+          "expect": "Text wraps, so the open height changes with width"
+        }
+      }
+    },
+    {
+      "id": "premium",
+      "page": "catalog.html",
+      "key": "0",
+      "name": "Premium shine",
+      "trigger": "action",
+      "mechanism": "css-keyframes",
+      "clock": "page time",
+      "fault": null,
+      "cells": {
+        "row": {
+          "expect": "Press step, +0, on --angle"
+        },
+        "crop": {
+          "expect": "#premium"
+        },
+        "flag": {
+          "expect": "None; a custom property, no geometry"
+        },
+        "tune": {
+          "expect": "Duration and easing, in the stylesheet"
+        }
+      }
+    },
+    {
+      "id": "archive",
+      "page": "catalog.html",
+      "key": ";",
+      "name": "Archive plane",
+      "trigger": "action",
+      "mechanism": "css-keyframes",
+      "clock": "page time",
+      "fault": null,
+      "cells": {
+        "row": {
+          "expect": "Press step, +0, on offset-distance"
+        },
+        "crop": {
+          "expect": ".flight"
+        },
+        "flag": {
+          "expect": "None"
+        },
+        "tune": {
+          "expect": "The path and duration, in the stylesheet"
+        }
+      }
+    },
+    {
+      "id": "preview",
+      "page": "catalog.html",
+      "key": "'",
+      "name": "Preview reveal",
+      "trigger": "action",
+      "mechanism": "css-transition",
+      "clock": "page time",
+      "fault": null,
+      "cells": {
+        "row": {
+          "expect": "Press step, +0, on clip-path"
+        },
+        "crop": {
+          "expect": "#preview"
+        },
+        "flag": {
+          "expect": "None"
+        },
+        "tune": {
+          "expect": "Duration, in the stylesheet"
+        }
+      }
+    },
+    {
+      "id": "dot",
+      "page": "catalog.html",
+      "key": ",",
+      "name": "Move dot",
+      "trigger": "action",
+      "mechanism": "smil",
+      "clock": "page time",
+      "fault": null,
+      "cells": {
+        "row": {
+          "expect": "Press step, +0",
+          "today": "works",
+          "basis": "sequence:motion-seen-without-animation-objects",
+          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet"
+        },
+        "crop": {
+          "expect": "The dot's svg"
+        },
+        "flag": {
+          "expect": "None"
+        },
+        "tune": {
+          "expect": "dur, on the animate element"
+        }
+      }
+    },
+    {
+      "id": "jump",
+      "page": "catalog.html",
+      "key": ".",
+      "name": "Jump to Labels",
+      "trigger": "action",
+      "mechanism": "smooth-scroll",
+      "clock": "page time",
+      "fault": null,
+      "cells": {
+        "row": {
+          "expect": "Press step: the scroll, and under it every scroll row it drives",
+          "today": "works",
+          "basis": "sequence:motion-seen-without-animation-objects",
+          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet"
+        },
+        "crop": {
+          "expect": "The viewport"
+        },
+        "flag": {
+          "expect": "None"
+        },
+        "tune": {
+          "expect": "Not tunable; browser-defined"
+        }
+      }
+    },
+    {
+      "id": "promo",
+      "page": "catalog.html",
+      "key": "[",
+      "name": "Promo video",
+      "trigger": "action",
+      "mechanism": "video",
+      "clock": "media clock",
+      "fault": null,
+      "cells": {
+        "row": {
+          "expect": "Play press: playing from +0. Pause press: paused at its time",
+          "today": "works",
+          "basis": "sequence:motion-seen-without-animation-objects",
+          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet"
+        },
+        "crop": {
+          "expect": "#promo"
+        },
+        "flag": {
+          "expect": "None"
+        },
+        "tune": {
+          "expect": "Not tuned; the media is fixed"
+        }
+      }
+    },
+    {
+      "id": "envelope",
+      "page": "catalog.html",
+      "key": "]",
+      "name": "Envelope (Lottie)",
+      "trigger": "action",
+      "mechanism": "lottie",
+      "clock": "page time",
+      "fault": null,
+      "cells": {
+        "row": {
+          "expect": "Press step, +0, 2s",
+          "today": "works",
+          "basis": "sequence:motion-seen-without-animation-objects",
+          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet"
+        },
+        "crop": {
+          "expect": "#envelope"
+        },
+        "flag": {
+          "expect": "None"
+        },
+        "tune": {
+          "expect": "Frame rate and keyframes, in media/envelope.json"
+        }
+      }
+    },
+    {
+      "id": "spin",
+      "page": "catalog.html",
+      "key": "-",
+      "name": "Spin (WebGL)",
+      "trigger": "repeating",
+      "mechanism": "webgl",
+      "clock": "page time",
+      "fault": null,
+      "cells": {
+        "row": {
+          "expect": "One source row from the press to the next press",
+          "today": "works",
+          "basis": "sequence:motion-seen-without-animation-objects",
+          "note": "Its start sits under the press. Its end shows on the stopping press's row in both cases: as pixels #gl stopped when the last frame falls inside that step, and as last frame N ms before this step, not tied to it by time, when it falls before. The second credits no step, since time alone cannot separate a stopped loop from one that ended on its own"
+        },
+        "crop": {
+          "expect": "#gl"
+        },
+        "flag": {
+          "expect": "None"
+        },
+        "tune": {
+          "expect": "The rotation speed, in the source"
+        }
+      }
+    },
+    {
+      "id": "plans",
+      "page": "catalog.html",
+      "key": "=",
+      "name": "Plans (GSAP)",
+      "trigger": "action",
+      "mechanism": "gsap",
+      "clock": "page time",
+      "fault": "The highlight animates left, which lays out every frame",
+      "cells": {
+        "row": {
+          "expect": "Press step: three cards staggered 100ms, then the highlight",
+          "today": "works",
+          "basis": "sequence:motion-seen-without-animation-objects",
+          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet"
+        },
+        "crop": {
+          "expect": ".plans"
+        },
+        "flag": {
+          "expect": "left written per frame; lays out"
+        },
+        "tune": {
+          "expect": "Timeline durations and x in place of left, in the source"
+        }
+      }
+    }
+  ]
+}

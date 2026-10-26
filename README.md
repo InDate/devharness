@@ -100,13 +100,8 @@ claude mcp add devharness -- npx devharness@latest
 
 **Other MCP clients:** run `npx devharness@latest` over stdio.
 
-Without the plugin, link the skill into your project so the agent gets the same
-guidance:
-
-```bash
-mkdir -p .claude/skills
-ln -s ../../node_modules/devharness/plugin/skills/devharness .claude/skills/devharness
-```
+The tools' descriptions and replies carry how to use them; the full reference is
+[`docs/instructions.md`](docs/instructions.md).
 
 ## For developers
 

@@ -319,7 +319,7 @@ export function createIssuesTools(
 ) {
   return {
     issues: createTool(
-      'Bugs and features as Markdown issues (title, body, labels, comments). Actions: list (all, filtered, or one by id), create, edit, workOn (start on an issue, replaying its sequence), resolve (a PERSON confirms the fix in a browser overlay; an agent calling it waits until the overlay times out, so record findings with comment), acknowledge (pending bugs, which block tools until acknowledged), comment, publish/sync/import/link/pullSequence (GitHub through the gh CLI)',
+      'Bugs and features as Markdown issues, optionally linked to a sequence.',
       issuesSchema,
       async (args, abortSignal) => {
         // Initialize tracker on first use
@@ -639,8 +639,8 @@ export function createIssuesTools(
                   filename: sequencePath,
                 });
 
-                await executeToolCall('replay', {
-                  action: 'run',
+                await executeToolCall('run', {
+                  action: 'sequence',
                   // Blocking: workOn's response reports the replay's outcome, so
                   // the run must complete (or fail) before we return.
                   wait: true,
@@ -927,8 +927,8 @@ export function createIssuesTools(
                   filename: sequencePath,
                 });
 
-                replayResult = await executeToolCall('replay', {
-                  action: 'run',
+                replayResult = await executeToolCall('run', {
+                  action: 'sequence',
                   // Blocking: the failure check below parses the run's result.
                   wait: true,
                   name: sequenceName,

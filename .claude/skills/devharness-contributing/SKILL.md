@@ -38,7 +38,7 @@ If the data isn't in `_meta`, add it there rather than parsing the string. **No 
 - `src/tools/*.ts` — one file per tool family, action-based schemas.
 - `docs/mcp-instructions.md` — sent on every MCP connection, injected unconditionally. Keep it tiny.
 - `docs/instructions.md` — full tool reference for clients without Agent Skills support.
-- `plugin/skills/devharness/` — the Agent Skill shipped to consumers; loads only on activation.
+- `docs/bench.md`, `docs/boundary.md`, `docs/sequences.md` — reference for people on the bench, the traffic boundary and sequences. Operational facts an agent needs go where the instructing-sessions skill places them, not here.
 - `docs/messages.md` — source of truth for response text (`## MESSAGE_ID` sections), parsed at runtime by `messages.ts`. Costs tokens only when that call happens, so detail is fine here.
 
 **Keep tool schema descriptions terse** (`.describe()` and `createTool()`'s first argument). They go to every session at `listTools` time whether or not the tool is ever called — a fixed cost, not a progressive-disclosure surface. Put why/when/what-happens in the shipped skill or its `references/`.

@@ -438,13 +438,20 @@ export class PortMonitor {
     return true;
   }
 
-  async acknowledgeFailure(port: number): Promise<boolean> {
+  /**
+   * Acknowledge a failed port, so its block lifts. A port that came back up
+   * between the block and the acknowledgment holds nothing any more: it is
+   * answered as up, not as a mistake, since the block that named it was true
+   * when it was read.
+   */
+  async acknowledgeFailure(port: number): Promise<'acknowledged' | 'up' | 'unmonitored'> {
     const monitored = this.ports.get(port);
-    if (!monitored || monitored.status !== 'down') return false;
+    if (!monitored) return 'unmonitored';
+    if (monitored.status !== 'down') return 'up';
 
     monitored.acknowledged = true;
     await debugLog('PortMonitor', `Acknowledged failure for port ${port}`);
-    return true;
+    return 'acknowledged';
   }
 
   getFailedPorts(): PortFailureInfo[] {

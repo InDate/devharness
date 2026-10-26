@@ -1,0 +1,117 @@
+import { describe, it, expect } from 'vitest';
+import vm from 'node:vm';
+import { MOTION_BINDING, MOTION_KEY, PAGE_MOTION_SOURCE, type MotionReport } from './page-motion.js';
+import { AnimationRecord } from './animation-record.js';
+import { markedNow } from './proxy/cause-timeline.js';
+
+/** A page with a clock of its own: page time moved by hand, the native timers run by hand, mutations fed by hand. */
+function pageWithMotion() {
+  let pageNow = 1000;
+  let observerCallback: ((records: any[]) => void) | undefined;
+  const timers: Array<{ at: number; run: () => void }> = [];
+  const reports: MotionReport[] = [];
+  class Context2D { canvas: any; constructor(canvas: any) { this.canvas = canvas; } fillRect() {} }
+  const page: any = {
+    document: { addEventListener: () => {}, removeEventListener: () => {}, documentElement: { tagName: 'HTML' } },
+    performance: { now: () => pageNow },
+    addEventListener: () => {}, removeEventListener: () => {},
+    setTimeout: () => 0, clearTimeout: () => {},
+    MutationObserver: class { constructor(callback: (records: any[]) => void) { observerCallback = callback; } observe() {} disconnect() {} },
+    CanvasRenderingContext2D: Context2D,
+    [MOTION_BINDING]: (payload: string) => reports.push(JSON.parse(payload)),
+  };
+  page[Symbol.for('devharness.clock')] = { native: { setTimeout: (run: () => void, ms: number) => { timers.push({ at: pageNow + ms, run }); return timers.length; }, clearTimeout: () => {} } };
+  page[Symbol.for('devharness.animations')] = { name: (element: any) => element?.id ? `#${element.id}` : 'div' };
+  vm.createContext(page);
+  vm.runInContext(PAGE_MOTION_SOURCE, page);
+  const motion = vm.runInContext(`globalThis[Symbol.for('${MOTION_KEY}')]`, page);
+  const element = { id: 'acc-body', attrs: { style: '' } as Record<string, string>, getAttribute(name: string) { return this.attrs[name] ?? null; } };
+  const writeStyle = (style: string) => {
+    const oldValue = element.attrs.style;
+    element.attrs.style = style;
+    observerCallback?.([{ type: 'attributes', attributeName: 'style', target: element, oldValue }]);
+  };
+  /** Move page time on and run the native timers that come due, as the browser would. */
+  const advance = (ms: number) => {
+    pageNow += ms;
+    for (let due = timers.findIndex(t => t.at <= pageNow); due >= 0; due = timers.findIndex(t => t.at <= pageNow)) timers.splice(due, 1)[0].run();
+  };
+  return { page, motion, writeStyle, advance, reports, Context2D };
+}
+
+describe('the page\'s watch of motion with no Animation object', () => {
+  it('reads a frame loop\'s style writes as one motion, from its first value to its last', () => {
+    const { motion, writeStyle, advance, reports } = pageWithMotion();
+    motion.start();
+    for (const px of [4, 20, 40, 58]) { writeStyle(`height: ${px}px;`); advance(16); }
+    advance(200);
+
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({ source: 'style', element: '#acc-body', property: 'height', from: '', to: '58px', frames: 4 });
+    expect(reports[0].endMs - reports[0].startMs).toBe(48);
+  });
+
+  it('starts a new motion after a pause longer than its quiet time', () => {
+    const { motion, writeStyle, advance, reports } = pageWithMotion();
+    motion.start();
+    writeStyle('height: 10px;');
+    advance(300);
+    writeStyle('height: 0px;');
+    advance(300);
+
+    expect(reports.map(r => r.to)).toEqual(['10px', '0px']);
+  });
+
+  it('counts a canvas\'s drawing frames, and watches nothing before it starts', () => {
+    const { motion, advance, reports, Context2D } = pageWithMotion();
+    const context = new Context2D({ id: 'sky' });
+    context.fillRect();
+    advance(200);
+    expect(reports).toHaveLength(0);
+
+    motion.start();
+    for (let frame = 0; frame < 3; frame++) { context.fillRect(); context.fillRect(); advance(16); }
+    advance(200);
+
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({ source: 'canvas', element: '#sky', frames: 3 });
+  });
+});
+
+describe('a motion report in the page\'s record', () => {
+  it('stands as an ended entry of its kind, with its change for the row', () => {
+    const record = new AnimationRecord('conn');
+    record.takeMotion({ source: 'style', element: '#acc-body', property: 'height', from: '0px', to: '58px', startMs: 1000, endMs: 1300, frames: 19, sentMs: 1420 }, 50_000);
+
+    const [entry] = record.list();
+    expect(entry).toMatchObject({ kind: 'height #acc-body', via: 'motion', gone: 'finished', createdAt: 49_580 });
+    expect(entry.read).toMatchObject({ type: 'StyleWrites', duration: 300, from: '0px', to: '58px', frames: 19 });
+    expect(record.live()).toHaveLength(0);
+  });
+});
+
+describe('a motion a later step stopped', () => {
+  it('carries the step it ended in beside the step it began in', () => {
+    markedNow({ kind: 'command', index: 9 }, 100_000);
+    markedNow({ kind: 'command', index: 11 }, 100_900);
+    const record = new AnimationRecord('conn');
+    // Played at page 1000 under #9, paused at page 1900 under #11, reported at 1910.
+    record.takeMotion({ source: 'media', element: '#promo', property: 'currentTime', from: '0.015', to: '0.900', startMs: 1000, endMs: 1900, frames: 0, sentMs: 1910 }, 100_910);
+
+    const [entry] = record.list();
+    expect(entry.createdIn).toMatchObject({ index: 9 });
+    expect(entry.endedIn).toMatchObject({ index: 11 });
+    expect(entry.endedAt).toBe(100_900);
+  });
+});
+
+describe('a motion that ends under the step it began in', () => {
+  it('carries no end of its own, however many cursors that step stood under', () => {
+    markedNow({ kind: 'replay', runId: 'r', step: 1, entry: 3 }, 200_000);
+    markedNow({ kind: 'replay', runId: 'r', step: 1, entry: 3 }, 200_100);
+    const record = new AnimationRecord('conn');
+    record.takeMotion({ source: 'style', element: '#acc-body', property: 'height', from: '', to: '58px', startMs: 1000, endMs: 1300, frames: 19, sentMs: 1420 }, 200_500);
+
+    expect(record.list()[0].endedIn).toBeUndefined();
+  });
+});

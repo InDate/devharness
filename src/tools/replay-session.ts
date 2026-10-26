@@ -84,7 +84,7 @@ function formatRunsOverview(records: RunRecord[]): string {
       : ` - ${r.results.filter(s => s.success).length}/${r.totalSteps} steps ok`;
     return `- \`${r.runId}\` ${r.sequenceName}: **${r.status}**${progress}`;
   });
-  return `**Runs** (details: \`replay({ action: 'status', runId: '...' })\`)\n${lines.join('\n')}`;
+  return `**Runs** (details: \`run({ action: 'status', runId: '...' })\`)\n${lines.join('\n')}`;
 }
 
 /** Full status for one run. For a settled run this includes the final result. */
@@ -96,16 +96,16 @@ function formatRunRecord(record: RunRecord): any {
     text += record.currentStep > 0
       ? `\n\nExecuting step ${record.currentStep}/${record.totalSteps}${record.currentTool ? ` (${record.currentTool})` : ''}.`
       : `\n\nSetting up (connection/navigation), no step started yet.`;
-    text += `\n\nPoll again with \`replay({ action: 'status', runId: '${record.runId}' })\``;
+    text += `\n\nPoll again with \`run({ action: 'status', runId: '${record.runId}' })\``;
     if (record.status === 'running') {
-      text += ` or stop it with \`replay({ action: 'cancel', runId: '${record.runId}' })\`.`;
+      text += ` or stop it with \`run({ action: 'cancel', runId: '${record.runId}' })\`.`;
     } else {
       text += `. Cancel was requested; steps that support cancellation stop promptly, others at the next step boundary.`;
     }
   } else if (record.finalResponse?.content?.[0]?.text) {
     text += `\n\n${record.finalResponse.content[0].text}`;
     if (record.status === 'paused') {
-      text += `\n\nDrive the paused session with \`replay({ action: 'step' })\` / \`finish\`, or drop it with \`replay({ action: 'cancel', runId: '${record.runId}' })\`.`;
+      text += `\n\nDrive the paused session with \`run({ action: 'step' })\` / \`finish\`, or drop it with \`run({ action: 'cancel', runId: '${record.runId}' })\`.`;
     }
   } else if (record.error) {
     text += `\n\nRun failed before producing a result: ${record.error}`;
@@ -212,7 +212,7 @@ export async function handleCancel(args: ReplayArgs, recorder: CommandRecorder) 
   // behaviour - `cancel` always meant "drop the paused session").
   const activeSeq = recorder.getActiveSequence();
   if (activeSeq) {
-    await releasePauseHold(activeSeq);
+    await releaseRunHolds(activeSeq);
     await standPausedRun(undefined);
     endPausedRun(activeSeq.runId, 'cancelled');
     const name = activeSeq.sequenceName;
@@ -246,7 +246,7 @@ export async function handleCancel(args: ReplayArgs, recorder: CommandRecorder) 
  */
 async function resumeBreakpointHold(activeSeq: ActiveSequenceState): Promise<void> {
   if (!activeSeq.breakpointHit) return;
-  await release(activeSeq.connection, { layers: ['code'] });
+  await release(activeSeq.connection, { by: { kind: 'debugger' }, layers: ['code'] });
   delete activeSeq.breakpointHit;
 }
 
@@ -273,10 +273,19 @@ async function releasePauseHold(activeSeq: ActiveSequenceState): Promise<void> {
   const layers = activeSeq.pauseHeld;
   if (!layers) return;
   delete activeSeq.pauseHeld;
-  const stillOurs = holdReading(activeSeq.connection).held
-    .filter(held => held.source === 'sequence' && layers.includes(held.layer))
-    .map(held => held.layer);
-  if (stillOurs.length) await release(activeSeq.connection, { layers: stillOurs });
+  const run = runOf(activeSeq);
+  if (run) await release(activeSeq.connection, { by: { kind: 'run', run, pauseOnly: true }, layers });
+}
+
+/** End every hold a cancelled run took, its steps' and its pause's; other owners keep the page. */
+async function releaseRunHolds(activeSeq: ActiveSequenceState): Promise<void> {
+  delete activeSeq.pauseHeld;
+  const run = runOf(activeSeq);
+  if (run) await release(activeSeq.connection, { by: { kind: 'run', run } });
+}
+
+function runOf(activeSeq: ActiveSequenceState): string | undefined {
+  return activeSeq.runTimestamp !== undefined ? `run-${activeSeq.runTimestamp.toString(36)}` : undefined;
 }
 
 /**
@@ -416,7 +425,7 @@ export async function handleStep(
         ...(args.steps ? { steps: args.steps } : {}), failures: failuresOf(execResult.results),
         rules, pauses, ...(execResult.personInput ? { person: execResult.personInput } : {}),
       })
-      + `\n\n**Held at step ${lastExecuted}:** a breakpoint the sequence did not set stopped the page at \`${execResult.breakpointHit.url}:${execResult.breakpointHit.lineNumber}\`. \`replay({ action: 'step' })\` or \`finish\` resumes it and carries on.` }] };
+      + `\n\n**Held at step ${lastExecuted}:** a breakpoint the sequence did not set stopped the page at \`${execResult.breakpointHit.url}:${execResult.breakpointHit.lineNumber}\`. \`run({ action: 'step' })\` or \`finish\` resumes it and carries on.` }] };
   } else if (failed || lastExecuted >= commands.length) {
     recorder.setActiveSequence(null);
     endPausedRun(activeSeq.runId, failed ? 'failed' : 'completed');
@@ -527,7 +536,7 @@ export async function handleFinish(
       content: [{ type: 'text', text: formatRunReply(recorder, {
         name: sequence.name, total: commands.length, since: activeSeq.runSince ?? since, paused: true,
         ...(args.steps ? { steps: args.steps } : {}), failures: failuresOf(execResult.results), rules, pauses,
-      }) + `\n\n**Paused at the pause point before step ${execResult.pausedAtMark + 1}**${execResult.pauseHeld?.length ? `, holding the page's ${execResult.pauseHeld.join(', ')}` : ''}. \`replay step\` or \`finish\` carries on.`
+      }) + `\n\n**Paused at the pause point before step ${execResult.pausedAtMark + 1}**${execResult.pauseHeld?.length ? `, holding the page's ${execResult.pauseHeld.join(', ')}` : ''}. \`run step\` or \`finish\` carries on.`
         + formatPauseNote(execResult.pausedAtMark + 1, execResult.pauseNote, execResult.pauseNotify) }],
     };
   }

@@ -15,7 +15,7 @@ import { debugLog } from './debug-logger.js';
 import type { StepTally } from './bench/wire.js';
 
 export interface RunEntry {
-  /** The registry's id for a replay run; a bench play has none. */
+  /** The registry's id for a run sequence; a bench play has none. */
   runId?: string;
   sequence: string;
   connection?: string;

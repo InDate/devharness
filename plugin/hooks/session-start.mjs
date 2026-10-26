@@ -209,7 +209,7 @@ try {
 }
 
 const lines = [
-  `devharness event stream: ${streamPath}. Guard blocks, messages from other sessions, and bench notes, screenshots and sequence writes land there as they happen; with no watch each reaches you only on your next devharness call. Arm this as your first tool call, before answering:`,
+  `devharness event stream: ${streamPath}. Guard blocks, messages from other sessions, and bench notes, screenshots and sequence writes land there as they happen; with no watch each reaches you on your next devharness call, at no extra request. A watch costs a request each time it wakes, so arm it when events arrive while no devharness call is made - a person working in the bench, or a wait on another session's message:`,
   watchCall(shortId, streamPath),
 ];
 

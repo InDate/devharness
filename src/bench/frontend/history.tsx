@@ -185,7 +185,7 @@ export function History({ base, onGoTo, entry: focus, onGoToEvent, onGoToStep }:
     // Played again whole, on the browser its steps drove: a bench play walked
     // it a step per call, and the first of those calls runs step 1 alone.
     const connection = group.steps.find(step => step.connection)?.connection;
-    const playArgs = { action: 'run', name: group.name, wait: true, ...(connection ? { connection } : {}) };
+    const playArgs = { action: 'sequence', name: group.name, wait: true, ...(connection ? { connection } : {}) };
     const started = group.calls[group.calls.length - 1];
     const tools = (
       <>
@@ -194,15 +194,15 @@ export function History({ base, onGoTo, entry: focus, onGoToEvent, onGoToStep }:
             e.stopPropagation();
             void fetch(`${base}/tools/call`, {
               method: 'POST', headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ tool: 'replay', args: playArgs }),
+              body: JSON.stringify({ tool: 'run', args: playArgs }),
             }).catch(() => {});
           }}><Glyph of="play" /></button>
-        <button class="marknote" title={started ? 'open the replay call that started this run in Tools' : `open a run of ${group.name} in Tools`}
+        <button class="marknote" title={started ? 'open the call that started this run in Tools' : `open a run of ${group.name} in Tools`}
           aria-label="go to the tool call"
           onClick={(e: Event) => {
             e.stopPropagation();
-            if (!started) { onGoTo({ tool: 'replay', args: playArgs }); return; }
-            void paramsOf(started.index).then(args => onGoTo({ tool: 'replay', args: args ?? playArgs }));
+            if (!started) { onGoTo({ tool: 'run', args: playArgs }); return; }
+            void paramsOf(started.index).then(args => onGoTo(args ? { tool: started.tool, args } : { tool: 'run', args: playArgs }));
           }}><Glyph of="goto:tools" /></button>
       </>
     );

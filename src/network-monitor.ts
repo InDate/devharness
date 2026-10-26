@@ -7,7 +7,11 @@ import { Page, HTTPRequest, HTTPResponse } from 'puppeteer-core';
 import type { InitiatorRoot } from './proxy/intercept-proxy.js';
 import { SEND_BINDING, SEND_WRAPPER_SOURCE, type SocketSendReport, type RequestOriginReport } from './proxy/send-provenance.js';
 import { PAGE_CLOCK_SOURCE } from './page-clock.js';
+import { PAGE_ANIMATIONS_SOURCE } from './page-animations.js';
+import { PAGE_INPUT_GUARD_SOURCE } from './page-input-guard.js';
+import { MOTION_BINDING, PAGE_MOTION_SOURCE, type MotionReport } from './page-motion.js';
 import { ownScript } from './utils/own-script.js';
+import { openSession } from './utils/own-session.js';
 
 export interface StoredNetworkRequest {
   id: string;
@@ -246,6 +250,8 @@ export class NetworkMonitor {
   onRequestInitiator?: (report: RequestInitiatorReport) => void;
   /** Where each socket send's reported root goes, when a caller wants it. */
   onSocketSend?: (report: SocketSendReport) => void;
+  /** A motion the page made with no `Animation` object, closed, with the moment it arrived. */
+  onMotion?: (report: MotionReport, arrivedAt: number) => void;
   /** Where a request started inside a trusted dispatch goes. */
   onRequestOrigin?: (report: RequestOriginReport) => void;
   private wsClient: any = null;
@@ -313,7 +319,7 @@ export class NetworkMonitor {
     }
     try {
       this.wsPage = page;
-      const client: any = await (page as any).createCDPSession();
+      const client: any = await openSession(page as any);
       this.wsClient = client;
       await client.send('Network.enable');
       this.reportSocketSends(client);
@@ -410,6 +416,10 @@ export class NetworkMonitor {
     // before the resume and the wrapper is in before the target's first line.
     try {
       client.on('Runtime.bindingCalled', (e: any) => {
+        if (e?.name === MOTION_BINDING) {
+          try { this.onMotion?.(JSON.parse(String(e.payload)) as MotionReport, Date.now()); } catch { /* a payload this build does not produce */ }
+          return;
+        }
         if (e?.name !== SEND_BINDING) return;
         try {
           const payload = JSON.parse(String(e.payload));
@@ -433,6 +443,7 @@ export class NetworkMonitor {
       });
       void client.send('Runtime.enable').catch(() => {});
       void client.send('Runtime.addBinding', { name: SEND_BINDING }).catch(() => {});
+      void client.send('Runtime.addBinding', { name: MOTION_BINDING }).catch(() => {});
       // A worker target carries no Page domain, so this copy is for pages; the
       // evaluate below is what reaches a worker, and what reaches a page that
       // was attached to after its document had already loaded.
@@ -443,6 +454,25 @@ export class NetworkMonitor {
         .catch(() => { /* no Page here: a worker keeps wall time */ });
       void client.send('Runtime.evaluate', {
         expression: ownScript('page-clock', PAGE_CLOCK_SOURCE), awaitPromise: false, returnByValue: true,
+      }).catch(() => { /* nothing to evaluate against yet */ });
+      // The page's own list of its animations, which the clock's held steps sweep.
+      void client.send('Page.addScriptToEvaluateOnNewDocument', { source: ownScript('page-animations', PAGE_ANIMATIONS_SOURCE) })
+        .catch(() => { /* no Page here: a worker draws nothing */ });
+      void client.send('Runtime.evaluate', {
+        expression: ownScript('page-animations', PAGE_ANIMATIONS_SOURCE), awaitPromise: false, returnByValue: true,
+      }).catch(() => { /* nothing to evaluate against yet */ });
+      // The guard of a person's input while the screen is held: the first
+      // listener the page has, so it stands ahead of every app listener.
+      void client.send('Page.addScriptToEvaluateOnNewDocument', { source: ownScript('page-input-guard', PAGE_INPUT_GUARD_SOURCE) })
+        .catch(() => { /* no Page here: a worker takes no input */ });
+      void client.send('Runtime.evaluate', {
+        expression: ownScript('page-input-guard', PAGE_INPUT_GUARD_SOURCE), awaitPromise: false, returnByValue: true,
+      }).catch(() => { /* nothing to evaluate against yet */ });
+      // Motion with no Animation object, watched while the bench's motion detection is on.
+      void client.send('Page.addScriptToEvaluateOnNewDocument', { source: ownScript('page-motion', PAGE_MOTION_SOURCE) })
+        .catch(() => { /* no Page here: a worker draws nothing */ });
+      void client.send('Runtime.evaluate', {
+        expression: ownScript('page-motion', PAGE_MOTION_SOURCE), awaitPromise: false, returnByValue: true,
       }).catch(() => { /* nothing to evaluate against yet */ });
       void client.send('Page.addScriptToEvaluateOnNewDocument', { source: ownScript('send-wrapper', SEND_WRAPPER_SOURCE) })
         .catch(() => { /* no Page here; the evaluate still installs it */ });

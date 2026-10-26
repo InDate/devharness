@@ -18,6 +18,7 @@ import { productionShaped } from '../test-support/fake-execute-tool-call.js';
 let dir: string;
 let recorder: CommandRecorder;
 let replay: any;
+let run: any;
 
 const writeSequence = async (name: string, tags?: string[]) => {
   await fs.writeFile(join(dir, `${name}.json`), JSON.stringify({
@@ -31,7 +32,7 @@ beforeEach(async () => {
   recorder = new CommandRecorder();
   vi.spyOn(recorder, 'getSequencesDir').mockReturnValue(dir);
 
-  ({ replay } = createReplayTools(
+  ({ replay, run } = createReplayTools(
     recorder,
     vi.fn(productionShaped(async () => ({ content: [{ type: 'text', text: '' }] }))) as any,
     async () => null,
@@ -46,7 +47,7 @@ afterEach(async () => {
 });
 
 const text = (res: any) => res.content[0].text as string;
-const runAll = (params: Record<string, any> = {}) => replay.handler({ action: 'runAll', ...params } as any);
+const runAll = (params: Record<string, any> = {}) => run.handler({ action: 'all', ...params } as any);
 
 describe('declaring tags', () => {
   it('stores them on the sequence and writes them back to its file', async () => {

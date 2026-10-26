@@ -4,7 +4,7 @@
  * A sequence is found by its name in three places besides its own file: the
  * activity file beside it, which holds its baseline and responses by the same
  * path; and every sequence that runs it, through a check's `holds` or `fails`
- * `{ run }`, a forEach's `do`, or a `replay run` step's `name`. A rename that
+ * `{ run }`, a forEach's `do`, or a `run sequence` step's `name`. A rename that
  * left any of those on the old name would break the guard or lose the
  * baseline, so all of them move together.
  */
@@ -29,7 +29,7 @@ function repoint(commands: any[] | undefined, from: string, to: string): number 
       if (params[branch]?.run === from) { params[branch].run = to; changed += 1; }
     }
     if (params.do === from) { params.do = to; changed += 1; }
-    if (command.tool === 'replay' && params.name === from) { params.name = to; changed += 1; }
+    if ((command.tool === 'replay' || command.tool === 'run') && params.name === from) { params.name = to; changed += 1; }
   }
   return changed;
 }

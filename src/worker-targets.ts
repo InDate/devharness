@@ -8,6 +8,7 @@
  */
 
 import CDP from 'chrome-remote-interface';
+import { tagClient } from './utils/own-session.js';
 import { ownScript } from './utils/own-script.js';
 
 /** The three target types that run script outside the page. */
@@ -69,7 +70,7 @@ export class WorkerTargetRegistry {
     private host: string,
     private port: number,
     private listTargets: (options: { host: string; port: number }) => Promise<any[]> = CDP.List,
-    private connect: (options: any) => Promise<any> = CDP
+    private connect: (options: CDP.Options) => Promise<any> = options => CDP(options).then(tagClient)
   ) {}
 
   async list(): Promise<WorkerTarget[]> {

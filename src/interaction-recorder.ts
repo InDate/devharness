@@ -13,6 +13,7 @@
 
 import type { Page } from 'puppeteer-core';
 import { debugLog } from './debug-logger.js';
+import { openSession } from './utils/own-session.js';
 
 // =============================================================================
 // Types
@@ -382,7 +383,7 @@ export async function startRecording(
 
   try {
     // Set up navigation tracking via CDP
-    const client = await page.createCDPSession();
+    const client = await openSession(page);
     let currentUrl = startUrl;
 
     // Listen for navigation events

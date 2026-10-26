@@ -70,7 +70,7 @@ export function createContentTools(resolveConnectionByName: (connection: string)
 
   return {
     content: createTool(
-      'Primary tool for page content; prefer over screenshots. Actions: extractText (page text as outline, full or one section), findInteractive (links, buttons, inputs), verify (UI checks: dead buttons, viewport, touch targets, clipping), parse (a page-parser plugin from .devharness/parsers/)',
+      'Primary tool for page content; prefer over screenshots.',
       contentSchema,
       // abortSignal (#110): INTERRUPTIBLE AT A CHECKPOINT. The only real wait
       // here is `parse`'s plugin `waitFor` predicate (up to waitMs, default

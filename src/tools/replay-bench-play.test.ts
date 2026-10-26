@@ -29,9 +29,9 @@ import { createReplayTools } from './replay-tools.js';
 describe('a bench play whose step failed before it was recorded', () => {
   it('names that step and its whole reason', async () => {
     const recorder = new CommandRecorder();
-    const { replay } = createReplayTools(recorder, vi.fn() as any, async () => null, async () => 9222, undefined);
+    const { replay, run } = createReplayTools(recorder, vi.fn() as any, async () => null, async () => 9222, undefined);
 
-    const res: any = await replay.handler({ action: 'run', name: 'env-token-search', connection: 'app', bench: true, wait: true } as any);
+    const res: any = await run.handler({ action: 'sequence', name: 'env-token-search', connection: 'app', bench: true, wait: true } as any);
     const text = res.content.map((c: any) => c.text).join('\n');
 
     expect(text).toContain('env-token-search failed at step 2 of 5');
@@ -42,9 +42,9 @@ describe('a bench play whose step failed before it was recorded', () => {
   it('names the file a step took a value from, and the name', async () => {
     play.failed = false;
     const recorder = play.recorder = new CommandRecorder();
-    const { replay } = createReplayTools(recorder, vi.fn() as any, async () => null, async () => 9222, undefined);
+    const { replay, run } = createReplayTools(recorder, vi.fn() as any, async () => null, async () => 9222, undefined);
 
-    const res: any = await replay.handler({ action: 'run', name: 'env-token-search', connection: 'app', bench: true, wait: true } as any);
+    const res: any = await run.handler({ action: 'sequence', name: 'env-token-search', connection: 'app', bench: true, wait: true } as any);
     const text = res.content.map((c: any) => c.text).join('\n');
 
     expect(text).toContain('env-token-search completed 1 of 1');
@@ -64,9 +64,9 @@ describe('a bench play given an env file', () => {
     play.failed = false;
     play.envFiles = [];
     const recorder = play.recorder = new CommandRecorder();
-    const { replay } = createReplayTools(recorder, vi.fn() as any, async () => null, async () => 9222, undefined);
+    const { replay, run } = createReplayTools(recorder, vi.fn() as any, async () => null, async () => 9222, undefined);
 
-    const res: any = await replay.handler({ action: 'run', name: 'env-token-search', connection: 'app', bench: true, wait: true, envFile: file } as any);
+    const res: any = await run.handler({ action: 'sequence', name: 'env-token-search', connection: 'app', bench: true, wait: true, envFile: file } as any);
 
     expect(res.isError).toBeFalsy();
     expect(play.envFiles).toEqual([file]);
@@ -77,9 +77,9 @@ describe('a bench play given an env file', () => {
   it('refuses a file that does not exist, and sets nothing', async () => {
     play.envFiles = [];
     const recorder = new CommandRecorder();
-    const { replay } = createReplayTools(recorder, vi.fn() as any, async () => null, async () => 9222, undefined);
+    const { replay, run } = createReplayTools(recorder, vi.fn() as any, async () => null, async () => 9222, undefined);
 
-    const res: any = await replay.handler({ action: 'run', name: 'env-token-search', connection: 'app', bench: true, wait: true, envFile: '/nonexistent/local.env' } as any);
+    const res: any = await run.handler({ action: 'sequence', name: 'env-token-search', connection: 'app', bench: true, wait: true, envFile: '/nonexistent/local.env' } as any);
 
     expect(res.isError).toBe(true);
     expect(res.content[0].text).toContain('envFile');
@@ -89,9 +89,9 @@ describe('a bench play given an env file', () => {
 
   it('still refuses a baseUrl, which a bench play does not carry', async () => {
     const recorder = new CommandRecorder();
-    const { replay } = createReplayTools(recorder, vi.fn() as any, async () => null, async () => 9222, undefined);
+    const { replay, run } = createReplayTools(recorder, vi.fn() as any, async () => null, async () => 9222, undefined);
 
-    const res: any = await replay.handler({ action: 'run', name: 'env-token-search', connection: 'app', bench: true, wait: true, baseUrl: 'http://localhost:9000' } as any);
+    const res: any = await run.handler({ action: 'sequence', name: 'env-token-search', connection: 'app', bench: true, wait: true, baseUrl: 'http://localhost:9000' } as any);
 
     expect(res.isError).toBe(true);
     expect(res.content[0].text).toContain('Not carried into a bench play: baseUrl');

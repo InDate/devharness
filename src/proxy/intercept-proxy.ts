@@ -20,6 +20,7 @@ import { connect as netConnect, type Socket } from 'net';
 import { WebSocketServer, WebSocket } from 'ws';
 import { mintProxyCertificate, type ProxyCertificate } from './certificate.js';
 import { TrafficQueue } from './traffic-queue.js';
+import { observeEvent } from '../observation-log.js';
 
 /** A value served in place of what the server would answer. */
 export interface Pin {
@@ -29,7 +30,7 @@ export interface Pin {
   /** Only this method, when given. */
   method?: string;
   /**
-   * Only under this replay step, when given.
+   * Only under this run step, when given.
    *
    * A pin with no step answers its URL at every position in a run, so a
    * request the server would refuse for arriving out of order is served over.
@@ -143,7 +144,7 @@ export interface ProxyEvent {
    * run, and its traffic was counted as the parent's first step.
    */
   within?: number[];
-  /** The history entry of the replay step this crossed under, which joins a run's traffic to that step's call. */
+  /** The history entry of the run step this crossed under, which joins a run's traffic to that step's call. */
   entry?: number;
   /**
    * Crossed while the run stood paused before `step`: no step's window was
@@ -425,10 +426,7 @@ function stampWith(event: ProxyEvent, cursor: ProxyCursor): void {
   if (cursor.paused) event.paused = true;
 }
 
-/** Called with each event as the proxy stores it, stamped: how an index follows what crosses without scanning. */
-export const stampedEvents = new Set<(event: ProxyEvent) => void>();
-
-/** The history entry a stamped event belongs to: its command, or the replay step's own call. */
+/** The history entry a stamped event belongs to: its command, or the run step's own call. */
 export function entryOf(event: ProxyEvent): number | undefined {
   const owner = causeOf(event);
   return owner?.kind === 'command' ? owner.index : owner?.kind === 'replay' ? owner.entry : undefined;
@@ -921,7 +919,7 @@ export interface FramePin {
    * decides.
    */
   field?: FrameField;
-  /** Only under this replay step, when given; see `Pin.step`. */
+  /** Only under this run step, when given; see `Pin.step`. */
   step?: number;
   /** Only under one of these replay steps, when given; see `Pin.steps`. */
   steps?: number[];
@@ -931,6 +929,9 @@ export interface FramePin {
 }
 
 export class InterceptProxy {
+  /** The connection that launched the browser this proxy carries, written on every observation it makes. */
+  constructor(readonly reference?: string) {}
+
   private certificate: ProxyCertificate | null = null;
   private front = createHttpServer();
   /** Fed sockets after CONNECT rather than listening; it terminates the TLS. */
@@ -1291,6 +1292,16 @@ export class InterceptProxy {
       if (closer || tied) { best = i; bestGap = gap; }
     }
     if (best === -1) return undefined;
+    // The stack and the page both report a click handler's fetch, each stamped
+    // on its own side, so which lands nearer the crossing varies run to run.
+    // `input` outranks the stack's class here as it does on a request already
+    // recorded; a timer root stands, since the page measured no dispatch.
+    const nearest = this.reportedInitiators[best].root;
+    if (nearest !== 'input' && nearest !== 'timer') {
+      const input = this.reportedInitiators.findIndex(held =>
+        held.key === key && held.root === 'input' && Math.abs(held.at - startedAt) <= JOIN_WINDOW_MS);
+      if (input >= 0) best = input;
+    }
     const [held] = this.reportedInitiators.splice(best, 1);
     // Any other report still held for this same request describes a request
     // that has now been accounted for, so it would only be taken by a later
@@ -1403,7 +1414,7 @@ export class InterceptProxy {
       if (began < window.from || (window.to !== undefined && began >= window.to)) continue;
       if (causeOf(event) !== undefined || event.evidence?.initiator === 'timer') continue;
       stampWith(event, window.cursor);
-      for (const listener of stampedEvents) listener(event);
+      observeEvent(event, this.reference);
     }
   }
 
@@ -1525,7 +1536,7 @@ export class InterceptProxy {
       if (late) stampWith(stored, late);
     }
     this.events.push(stored);
-    for (const listener of stampedEvents) listener(stored);
+    observeEvent(stored, this.reference);
     if (body !== undefined) this.bodies.set(stored.id, body);
     if (this.events.length > MAX_EVENTS) {
       for (const gone of this.events.splice(0, this.events.length - MAX_EVENTS)) {
@@ -1698,7 +1709,7 @@ export class InterceptProxy {
   }
 
   /**
-   * Whether a replay step is the one in flight.
+   * Whether a run step is the one in flight.
    *
    * Read off the cursor as the request arrives. A request starting after its
    * step released carries the next step or none, so a step-bound pin answers

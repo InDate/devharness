@@ -27,7 +27,7 @@ import { sanitizeReference } from '../reference-validator.js';
 import { observes } from '../observing-tools.js';
 import { configManager } from '../config.js';
 import { describePersonInput, personInputSince } from '../person-watch.js';
-import { hold, holdReading, type HoldLayer } from '../hold.js';
+import { hold, holdReading, isOutside, isRunOwn, release, type HoldLayer } from '../hold.js';
 import { interpolateParams } from './interpolation.js';
 import { getMessage, isElementNotFoundFailure } from '../messages.js';
 import type { CheckOutcome as CheckAction } from './check-tools.js';
@@ -780,7 +780,7 @@ export async function executeCommandWithRetry(
   logPrefix: string = 'executor',
   /**
    * The RUN's signal, forwarded to the tool handler so handlers that honour
-   * it (currently `wait`) are interrupted mid-step by `replay cancel`. Note
+   * it (currently `wait`) are interrupted mid-step by `run cancel`. Note
    * this helper still RESOLVES `{ success: false }` when a handler throws an
    * abort - executeSteps consults the signal on the failure path to classify
    * it as "Replay aborted by user" rather than a genuine step failure.
@@ -880,7 +880,10 @@ export interface ExecuteStepsOptions {
  * Execute a range of steps from a sequence
  */
 export async function executeSteps(options: ExecuteStepsOptions): Promise<ExecutionResult> {
-  const execution = await withinRun(options.sequence.name, () => executeStepsWithin(options));
+  // The id is fixed before the run is entered, so a hold its step takes names
+  // the run its traffic is stamped with, across a later step or finish call.
+  const runTimestamp = options.ctx.runTimestamp ?? (options.ctx.runTimestamp = Date.now());
+  const execution = await withinRun(options.sequence.name, `run-${runTimestamp.toString(36)}`, () => executeStepsWithin(options));
   const last = execution.results[execution.results.length - 1];
   if (last && !last.success) options.ctx.commandRecorder?.markStepFailed?.(options.sequence.name, last.step);
   return execution;
@@ -1013,7 +1016,8 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
   let heldStep = options.heldStep && !ctx.stampUnder ? options.heldStep : undefined;
   let releaseReported = false;
   const screenHeldByStep = () => ctx.connection !== undefined
-    && holdReading(sanitizeReference(ctx.connection)).held.some(layer => layer.layer === 'ui' && layer.source === 'tool');
+    && holdReading(sanitizeReference(ctx.connection)).held
+      .some(layer => layer.layer === 'ui' && layer.owners.some(owner => isRunOwn(owner, `run-${runTimestamp.toString(36)}`, 'run-step')));
   const comparable = async (started: Map<number, number>): Promise<Map<number, number>> => {
     if (!heldStep) return started;
     const held = heldStep;
@@ -1231,7 +1235,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
         }
       }
 
-      // A nested `replay run` STEP must block: `run` is background-by-default
+      // A nested `run sequence` STEP must block: `run` is background-by-default
       // for direct callers, but a sequence step that starts another sequence
       // needs its result (the parent's success depends on it). Without this a
       // nested run would register as its own top-level run and the step would
@@ -1335,7 +1339,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
       const unexpectedPause = async (): Promise<BreakpointHitInfo | null> => {
         if (!stepConnection) return null;
         const heldCode = holdReading(sanitizeReference(stepConnection)).held
-          .some(layer => layer.layer === 'code' && layer.source !== 'breakpoint');
+          .some(layer => layer.layer === 'code' && !layer.owners.every(isOutside));
         if (heldCode) return null;
         const at = await checkIfPaused(stepCtx);
         if (!at) return null;
@@ -1547,7 +1551,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
       // Breakpoint pauses are NOT affected: input tools detect a pause and
       // return immediately (pausedAtBreakpoint / pausedDuringClick), so a
       // legitimate pause never blocks inside the tool call - it is handled by
-      // checkIfPaused after the step. replay({action:'step'}) pauses between
+      // checkIfPaused after the step. run({action:'step'}) pauses between
       // steps, outside this race.
       const remainingTotal = Math.max(1, totalTimeout - (Date.now() - startTime));
       const boundedByTotal = cmd.tool === 'wait' || remainingTotal < stepTimeout;
@@ -1805,11 +1809,12 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
 
       if (!heldStep && comparesBehaviour && !ctx.stampUnder && screenHeldByStep()) {
         heldStep = { step: i, markedAt: stepStartedAt.get(i) ?? Date.now() };
-      } else if ((cmd.tool === 'input' || (heldStep && !releaseReported)) && comparesBehaviour && ctx.connection && !screenHeldByStep()) {
-        // An input's transitions start on the frame after it, and a held
-        // press's on the frame after the step that releases it; Chrome reports
-        // them after that frame, and a run moves to its next step at once,
-        // which would take them as the next step's.
+      } else if ((cmd.tool === 'input' || cmd.tool === 'navigate' || (heldStep && !releaseReported)) && comparesBehaviour && ctx.connection && !screenHeldByStep()) {
+        // An input's transitions start on the frame after it, a navigate's on
+        // the frames after the page loads, and a held press's on the frame
+        // after the step that releases it; Chrome reports them after that
+        // frame, and a run moves to its next step at once, which would take
+        // them as the next step's.
         const watch = sessions.get(sanitizeReference(ctx.connection))?.writeWatch;
         if (watch?.animations) await watch.animationsReported();
         if (heldStep) releaseReported = true;
@@ -1911,6 +1916,11 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
   // leaves none: its finish line is the last step's release, and what crosses
   // after it belongs to no run.
   const stands = isPaused && options.standsPaused !== false;
+  // A run that is over can end none of its holds later, so a hold one of its
+  // steps took and never released ends with it; other owners keep the page.
+  if (!isPaused && ctx.connection && !ctx.stampUnder) {
+    await release(sanitizeReference(ctx.connection), { by: { kind: 'run', run: proxyRun } }).catch(() => undefined);
+  }
   if (stands && !ctx.stampUnder) {
     const next = pausedForPerson ?? pausedAtMark
       ?? (abortSignal?.aborted ? (results.at(-1)?.step ?? startStep + 1) - 1 : targetEnd);
@@ -1927,8 +1937,8 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
   const markHolds = pausedAtMark !== undefined ? (commands[pausedAtMark] as { pauseHolds?: HoldLayer[] }).pauseHolds : undefined;
   const layers = pausedForPerson !== undefined ? undefined : stoppedAtEnd ? markHolds ?? options.holdWhilePaused : [];
   if (stands && (pausedForPerson !== undefined || stoppedAtEnd) && layers?.length !== 0 && ctx.connection && !ctx.stampUnder) {
-    const reading = await hold(sanitizeReference(ctx.connection), { source: 'sequence', ...(layers ? { layers } : {}) }).catch(() => undefined);
-    pauseHeld = reading?.held.filter(held => held.source === 'sequence').map(held => held.layer);
+    const reading = await hold(sanitizeReference(ctx.connection), { owner: { kind: 'run-pause', run: proxyRun }, ...(layers ? { layers } : {}) }).catch(() => undefined);
+    pauseHeld = reading?.held.filter(held => held.owners.some(owner => isRunOwn(owner, proxyRun, 'run-pause'))).map(held => held.layer);
   }
 
   const marked = pausedAtMark !== undefined ? (commands[pausedAtMark] as { pauseNote?: string; pauseNotify?: true }) : undefined;
@@ -1939,7 +1949,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
       sequence: sequence.name,
       step: pausedAtMark! + 1,
       ...(pauseNote ? { note: pauseNote } : {}),
-      resolve: "replay({ action: 'finish' })",
+      resolve: "run({ action: 'finish' })",
     });
   }
 
@@ -2070,7 +2080,7 @@ async function compareBehaviour(
  * - **Its own budget.** `teardownTimeout` is deliberately not drawn from the
  *   run's `totalTimeout`. The commonest reason a run needs cleaning up after is
  *   that it timed out, and sharing the budget would skip teardown exactly then.
- * - **No abort signal.** The run's signal is not passed down. `replay cancel`
+ * - **No abort signal.** The run's signal is not passed down. `run cancel`
  *   must stop the work, not the cleanup - a cancelled run is precisely one that
  *   has left something behind.
  * - **The variable store, shared.** Teardown reads `ctx.variableStore`, so it

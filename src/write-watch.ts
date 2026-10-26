@@ -24,11 +24,15 @@
 
 import type { CDPSession, Page, Target, WebWorker } from 'puppeteer-core';
 import { currentCursor, onCursorEnd } from './proxy/registry.js';
-import { watchHolds } from './hold.js';
+import { animationRecordOf } from './animation-record.js';
+import type { PageAnimation } from './page-animations.js';
 import { causeAt, onCauseAdded } from './proxy/cause-timeline.js';
 import type { ProxyCursor } from './proxy/intercept-proxy.js';
 import { describeStructuredValue } from './structured-value.js';
 import { movesPerRun } from './bench/kinds.js';
+import { ownFunction, ownScript } from './utils/own-script.js';
+import { MOTION_KEY } from './page-motion.js';
+import { observeWrite } from './observation-log.js';
 
 export type WriteStore =
   | 'localStorage' | 'sessionStorage' | 'cookie' | 'indexedDB'
@@ -49,25 +53,25 @@ export interface PageWrite {
    */
   group?: string;
   value?: string;
+  /** A motion's reading in fields, for a view that shapes its own line rather than reading `value`. */
+  motion?: WriteMotion;
   cursor?: ProxyCursor;
 }
 
+export interface WriteMotion {
+  type: PageAnimation['type'];
+  durationMs: number;
+  frames?: number;
+  from?: string;
+  to?: string;
+  /** One change in one frame: a value set, not motion. */
+  set: boolean;
+}
+
 const MAX_WRITES = 2000;
-/** How long after a command or step returns an animation it reported starting still counts as its doing. */
-const ANIMATION_REACH_MS = 500;
-/** Animations created under a hold and not yet reported started, kept at most. */
-const CREATED_KEPT = 500;
-/** The longest wait for two painted frames after a release; a hidden tab paints none. */
-const FRAMES_CAP_MS = 250;
 const VALUE_CHARS = 2000;
 const COOKIE_POLL_MS = 500;
 
-function sameCursor(a: ProxyCursor | undefined, b: ProxyCursor | undefined): boolean {
-  if (!a || !b || a.kind !== b.kind) return false;
-  if (a.kind === 'command') return a.index === (b as typeof a).index;
-  const other = b as typeof a;
-  return a.runId === other.runId && a.step === other.step && (a.within ?? []).join('.') === (other.within ?? []).join('.');
-}
 const FILE_POLL_MS = 1000;
 /** Records read from one object store or cache; a store holding more is reported as written, not diffed. */
 const RECORD_LIMIT = 200;
@@ -124,9 +128,6 @@ function diff(
 
 type Reading = Map<string, { sig: string; value?: string }>;
 
-/** Called with each write as it is stored, stamped: how an index follows writes without scanning. */
-export const stampedWrites = new Set<(write: PageWrite) => void>();
-
 export class WriteWatch {
   readonly writes: PageWrite[] = [];
   private count = 0;
@@ -151,19 +152,8 @@ export class WriteWatch {
   private detach: Array<() => void> = [];
   private animationsOn = false;
   private passCancel?: (id: string) => boolean;
-  /** The command or run step that last finished, and when, for an animation it started to be stamped with. */
-  private lastEnded?: { cursor: ProxyCursor; at: number };
-  /** Each running animation's key, by id, for its cancel to be named by. */
+  /** Each animation taken, by its record key, for its cancel to be named by. */
   private animationKeys = new Map<string, string>();
-  /**
-   * The step that held the screen, and the release that ended its hold. A held
-   * page paints no frame, so Chrome reports the animations its input set off
-   * only when a later read forces a style pass or the release lets a frame
-   * through, both of which run under another step's cursor.
-   */
-  private screenHold?: { cursor: ProxyCursor; releasedBy?: ProxyCursor; releasedAt?: number };
-  /** The step a held screen belonged to when each animation was created, by id, until its start is reported. */
-  private createdUnder = new Map<string, ProxyCursor>();
 
   constructor(private client: CDPSession, private page: Page, private connection?: string) {}
 
@@ -179,8 +169,7 @@ export class WriteWatch {
       ...(cursor ? { cursor } : {}),
     });
     if (this.writes.length > MAX_WRITES) this.writes.splice(0, this.writes.length - MAX_WRITES);
-    const stored = this.writes[this.writes.length - 1];
-    for (const listener of stampedWrites) listener(stored);
+    observeWrite(this.writes[this.writes.length - 1], this.connection);
   }
 
   /** Run a read after the ones queued before it, stamped with the moment it was asked for. */
@@ -191,30 +180,13 @@ export class WriteWatch {
   }
 
   async start(): Promise<void> {
-    this.detach.push(onCursorEnd(ending => {
-      this.lastEnded = { cursor: ending, at: Date.now() };
-      const hold = this.screenHold;
-      // The release's own window bounds what the hold set off: a timer the page
-      // runs once released fires on its own clock, however fast the run moved on.
-      if (hold?.releasedAt !== undefined && !sameCursor(ending, hold.cursor)) this.screenHold = undefined;
-    }));
-    this.detach.push(watchHolds(change => {
-      if (change.connection !== this.connection || !change.layers.includes('ui')) return;
-      if (change.change === 'held') {
-        const ended = this.lastEnded;
-        const cursor = currentCursor() ?? (ended && Date.now() - ended.at <= ANIMATION_REACH_MS ? ended.cursor : undefined);
-        this.screenHold = cursor ? { cursor } : undefined;
-      } else if (change.change === 'released' && this.screenHold) {
-        this.screenHold = { ...this.screenHold, releasedBy: currentCursor(), releasedAt: Date.now() };
-      }
-    }));
     // A cause added after the fact - a person's input - takes the writes made
     // inside its window with nothing in flight.
     this.detach.push(onCauseAdded(window => {
       for (const write of this.writes) {
         if (write.cursor || write.at < window.from || (window.to !== undefined && write.at >= window.to)) continue;
         write.cursor = window.cursor;
-        for (const listener of stampedWrites) listener(write);
+        observeWrite(write, this.connection);
       }
     }));
     const area = (event: any): WriteStore => (event?.storageId?.isLocalStorage ? 'localStorage' : 'sessionStorage');
@@ -266,47 +238,31 @@ export class WriteWatch {
 
     // An animation the page starts is a change on screen that no network
     // carries, taken while the bench's motion detection is on. Its key is what
-    // animates and on which element, so each run's are counted against the last.
-    // An animation a held step set off is created while the screen stands
-    // held - on the frame a frame step runs, say - and reported started only
-    // once the compositor starts it, after the release and the release step's
-    // window can both have passed. The step it belongs to is read at creation.
-    this.client.on('Animation.animationCreated' as any, (e: any) => {
-      if (!this.animationsOn || !e?.id) return;
-      const held = this.heldCursor();
-      if (!held) return;
-      this.createdUnder.set(e.id, held);
-      if (this.createdUnder.size > CREATED_KEPT) this.createdUnder.delete(this.createdUnder.keys().next().value as string);
-    });
-    this.client.on('Animation.animationStarted' as any, (e: any) => {
-      const animation = e?.animation;
-      if (!this.animationsOn || !animation?.id) return;
-      const created = this.createdUnder.get(animation.id);
-      this.createdUnder.delete(animation.id);
-      const held = created ?? this.heldCursor();
-      this.queue(async (at, inFlight) => {
-        // A transition starts on the frame after the input, and Chrome reports
-        // it after that; the step that sent the input has usually returned by
-        // then, and the animation is its doing.
-        const ended = this.lastEnded;
-        const cursor = held ?? inFlight ?? (ended && at - ended.at <= ANIMATION_REACH_MS ? ended.cursor : undefined);
-        const source = animation.source ?? {};
-        const element = source.backendNodeId ? await elementName(this.client, source.backendNodeId) : undefined;
-        const name = animation.name || animation.cssId || 'animation';
-        const key = element ? `${name} ${element}` : name;
-        this.animationKeys.set(animation.id, key);
-        const kind = animation.type === 'CSSTransition' ? 'transition' : animation.type === 'CSSAnimation' ? 'css animation' : 'web animation';
-        const looping = source.iterations === null || source.iterations === Infinity;
-        const value = `${kind} ${Math.round(source.duration ?? 0)}ms${source.delay ? ` after ${Math.round(source.delay)}ms` : ''}${looping ? ', looping' : ''}`;
-        this.push({ store: 'animation', operation: 'started', key, value }, at, cursor);
-      });
-    });
-    this.client.on('Animation.animationCanceled' as any, (e: any) => {
-      const key = e?.id ? this.animationKeys.get(e.id) : undefined;
-      if (!this.animationsOn || !key || this.passCancel?.(e.id)) return;
-      this.animationKeys.delete(e.id);
-      this.push({ store: 'animation', operation: 'stopped', key });
-    });
+    // animates and on which element, so each run's are counted against the
+    // last. The page's animation record names each one once and credits it to
+    // the step it was created in; one it could not read stands with no name
+    // and is left out, since no run's count could match it by kind.
+    if (this.connection) {
+      this.detach.push(animationRecordOf(this.connection).watch((entry, change) => {
+        if (!this.animationsOn || !entry.read) return;
+        if (change === 'added') {
+          this.animationKeys.set(entry.key, entry.kind);
+          this.push({ store: 'animation', operation: 'started', key: entry.kind, value: animationValue(entry.read), motion: motionOf(entry.read) }, entry.createdAt, entry.createdIn);
+          if (entry.endedIn && entry.endedAt !== undefined) {
+            this.push({ store: 'animation', operation: 'stopped', key: entry.kind, value: endingValue(entry.read) }, entry.endedAt, entry.endedIn);
+          }
+          return;
+        }
+        if (entry.gone !== 'canceled' || !this.animationKeys.has(entry.key)) return;
+        this.animationKeys.delete(entry.key);
+        if (this.passCancel?.(entry.key)) return;
+        this.push({ store: 'animation', operation: 'stopped', key: entry.kind });
+      }));
+    }
+
+    // A new document starts with its motion watch off; it takes the bench's setting.
+    this.client.on('Page.domContentEventFired' as any, () => { if (this.animationsOn) void this.watchMotion(true); });
+    void call(this.client, 'Page.enable').catch(() => {});
 
     this.watchWorkers();
     this.client.on('ServiceWorker.workerRegistrationUpdated' as any, (e: any) => this.registrationsUpdated(e.registrations ?? []));
@@ -332,30 +288,12 @@ export class WriteWatch {
   }
 
   /**
-   * The step an animation reported now belongs to by the screen's hold: the
-   * step that took it, while the hold stands and through the window of the
-   * step that released it; a release outside any step reaches as far as a
-   * returned step's does.
-   */
-  private heldCursor(): ProxyCursor | undefined {
-    const hold = this.screenHold;
-    if (!hold) return undefined;
-    if (hold.releasedAt === undefined) return hold.cursor;
-    const now = currentCursor();
-    const another = now !== undefined && !sameCursor(now, hold.releasedBy) && !sameCursor(now, hold.cursor);
-    return another || Date.now() - hold.releasedAt > ANIMATION_REACH_MS ? undefined : hold.cursor;
-  }
-
-  /**
-   * Resolves once the animations a release let start have been taken: Chrome
-   * reports them a frame or two after the page paints again, and each is
-   * named by a read queued behind the ones before it. A hidden tab paints no
-   * frame, so the wait for frames is capped.
+   * Resolves once the animations the step created stand in the page's record:
+   * the page's own list is swept, pending ones included, and the reads of
+   * Chrome's start reports queued so far have landed.
    */
   async animationsReported(): Promise<void> {
-    const frames = this.page.evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))').catch(() => {});
-    await Promise.race([frames, new Promise(resolve => setTimeout(resolve, FRAMES_CAP_MS))]);
-    await this.reads;
+    if (this.connection) await animationRecordOf(this.connection).settle(this.client);
   }
 
   /** Pass over the cancel Chrome reports for an animation a rule acted on, which goes on. */
@@ -363,10 +301,19 @@ export class WriteWatch {
     this.passCancel = pass;
   }
 
-  /** Take the animations the page starts as writes, or stop taking them. */
+  /** Take the animations the page starts as writes, or stop taking them, the page's motion watch with them. */
   setAnimations(on: boolean): void {
+    const was = this.animationsOn;
     this.animationsOn = on;
     if (!on) this.animationKeys.clear();
+    if (was !== on) void this.watchMotion(on);
+  }
+
+  /** Start or stop the page's watch of motion with no Animation object (`page-motion.ts`). */
+  private async watchMotion(on: boolean): Promise<void> {
+    await call(this.client, 'Runtime.evaluate', {
+      expression: ownScript('motion-watch', `globalThis[Symbol.for('${MOTION_KEY}')]?.${on ? 'start' : 'stop'}()`), returnByValue: true,
+    }).catch(() => {});
   }
 
   get animations(): boolean {
@@ -442,7 +389,7 @@ export class WriteWatch {
     }
     try {
       const { result } = await call(this.client, 'Runtime.callFunctionOn', {
-        objectId: remote.objectId, functionDeclaration: SERIALIZE, returnByValue: true,
+        objectId: remote.objectId, functionDeclaration: ownFunction('serialize', SERIALIZE), returnByValue: true,
       });
       return typeof result?.value === 'string' ? result.value : remote.description ?? '';
     } catch {
@@ -673,25 +620,44 @@ export function logpointLine(args: Array<{ value?: unknown }>): { key: string; v
   return { key: `${path}:${at[2]}`, value };
 }
 
-/** An element named as `#id`, or its tag and first two classes: enough to tell one animated element from another. */
-export async function elementName(client: CDPSession, backendNodeId: number): Promise<string | undefined> {
-  try {
-    const { object } = await call(client, 'DOM.resolveNode', { backendNodeId });
-    if (!object?.objectId) return undefined;
-    const { result } = await call(client, 'Runtime.callFunctionOn', {
-      objectId: object.objectId,
-      functionDeclaration: `function () {
-        if (this.id) return '#' + this.id;
-        var classes = typeof this.className === 'string' ? this.className.trim().split(/\\s+/).filter(Boolean).slice(0, 2) : [];
-        return this.tagName.toLowerCase() + classes.map(function (c) { return '.' + c; }).join('');
-      }`,
-      returnByValue: true,
-    });
-    await call(client, 'Runtime.releaseObject', { objectId: object.objectId }).catch(() => {});
-    return typeof result?.value === 'string' ? result.value : undefined;
-  } catch {
-    return undefined;
+/** An animation as a row reads it: its kind, its timing, and whether it loops. */
+/** What carried each kind of motion, as a row names it. */
+export const CARRIER: Record<PageAnimation['type'], string> = {
+  CSSTransition: 'transition', CSSAnimation: 'css animation', WebAnimation: 'web animation',
+  StyleWrites: 'js style', AttributeWrites: 'js attribute', TextWrites: 'js text',
+  Canvas: 'canvas', Media: 'media', SMIL: 'smil', Scroll: 'scroll',
+};
+
+export function animationValue(read: PageAnimation): string {
+  const carrier = CARRIER[read.type];
+  if (read.frames !== undefined) {
+    const change = read.from ? ` ${clip(read.from)} → ${clip(read.to ?? '')}` : read.to ? ` → ${clip(read.to)}` : '';
+    // One change in one frame is a value set, not motion: what a snap or a library's set-up looks like.
+    if (read.frames === 1 && read.duration === 0) return `${carrier} set${change}`;
+    const frames = read.frames ? `, ${read.frames} frame${read.frames === 1 ? '' : 's'}` : '';
+    return `${carrier}${change} over ${Math.round(read.duration)}ms${frames}`;
   }
+  return `${carrier} ${Math.round(read.duration)}ms${read.delay ? ` after ${Math.round(read.delay)}ms` : ''}${read.looping ? ', looping' : ''}`;
+}
+
+export function motionOf(read: PageAnimation): WriteMotion {
+  return {
+    type: read.type, durationMs: Math.round(read.duration),
+    ...(read.frames !== undefined ? { frames: read.frames } : {}),
+    ...(read.from !== undefined ? { from: read.from } : {}),
+    ...(read.to !== undefined ? { to: read.to } : {}),
+    set: read.frames === 1 && read.duration === 0,
+  };
+}
+
+/** How a motion that a later step stopped ended: a video paused at its time, anything else stopped. */
+function endingValue(read: PageAnimation): string {
+  return read.type === 'Media' ? `paused at ${read.to ?? ''}` : 'stopped';
+}
+
+/** A value short enough to read in a row. */
+function clip(value: string): string {
+  return value.length > 24 ? `${value.slice(0, 23)}…` : value;
 }
 
 export function writeLine(write: PageWrite): string {

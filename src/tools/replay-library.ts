@@ -18,6 +18,7 @@ import {
 } from './replay-formatters.js';
 import { replyReturnsToAgent } from '../call-origin.js';
 import { getSessionInfo } from './dashboard-tools.js';
+import { getClaudeSessionId } from '../session-identity.js';
 import { configManager } from '../config.js';
 import { generatePuppeteerCode, generatePlaywrightCode } from './replay-codegen.js';
 import { type ReplayArgs } from './replay-schema.js';
@@ -51,11 +52,11 @@ export async function handleCreate(
     });
   }
 
-  const replayEntries = args.indices.filter(index => recorder.getCommand(index)?.tool === 'replay');
+  const replayEntries = args.indices.filter(index => ['replay', 'run'].includes(recorder.getCommand(index)?.tool ?? ''));
   if (replayEntries.length === args.indices.length) {
     return createErrorResponse('INVALID_PARAMETER', {
       parameter: 'indices', value: args.indices.join(', '),
-      message: 'Every index names a replay call, and a replay call does not become a step. A sequence that runs another one gets it through addCheck or split.',
+      message: 'Every index names a replay or run call, and such a call does not become a step. A sequence that runs another one gets it through addCheck or split.',
     });
   }
 
@@ -184,14 +185,14 @@ export function formatConnectionNote(normalized: ReturnType<typeof normalizeStep
 
   if (hoisted) {
     return `\n\n**Connection:** every step ran against \`${hoisted}\`, so it was hoisted off the steps` +
-      ` - the sequence is portable and \`replay({ action: 'run', connection: '<other>' })\` retargets it.`;
+      ` - the sequence is portable and \`run({ action: 'sequence', connection: '<other>' })\` retargets it.`;
   }
 
   if (analysis.multiConnection) {
     notes.push(`\n\n**Multi-connection sequence:** steps keep their own connections (${analysis.references.map(r => `\`${r}\``).join(', ')}),` +
       ` so the recorded interleaving is reproduced instead of collapsing into one browser.` +
       ` A run-level \`connection\` does NOT override them; in another session rebind them with` +
-      ` \`replay({ action: 'run', name: '...', connections: { ${analysis.references.map(r => `"${r}": "<reference here>"`).join(', ')} } })\`.` +
+      ` \`run({ action: 'sequence', name: '...', connections: { ${analysis.references.map(r => `"${r}": "<reference here>"`).join(', ')} } })\`.` +
       ` A reference that doesn't exist at run time fails that step rather than falling back.`);
   }
 
@@ -231,7 +232,11 @@ async function diskListing(args: ReplayArgs, recorder: CommandRecorder, inMemory
   const issueSequences = await listIssueSequencesOrEmpty(recorder);
   const listing = diskListingEntries(saved, issueSequences, args.showAll ?? false);
   if (!replyReturnsToAgent()) return formatDiskListing(listing, inMemoryNames);
-  const key = `${getSessionInfo()?.sessionId ?? ''}\u0000${args.showAll ? 'all' : 'shown'}`;
+  // The environment names the session from its first call; the detector names
+  // it only once a reply has been written and matched, so keyed by the detector
+  // alone the first listing after a start sits under no session.
+  const session = getClaudeSessionId() ?? getSessionInfo()?.sessionId ?? '';
+  const key = `${session}\u0000${args.showAll ? 'all' : 'shown'}`;
   const before = lastListing.get(key);
   lastListing.set(key, new Map(listing.entries.map(entry => [diskListingKey(entry), entry])));
   if (!before || args.full || listing.entries.length === 0) return formatDiskListing(listing, inMemoryNames);
@@ -475,7 +480,7 @@ export async function handleLoad(args: ReplayArgs, recorder: CommandRecorder, ge
     sequenceId: sequence.id,
     name: sequence.name,
     commandCount: sequence.commands.length,
-    message: `Sequence "${sequence.name}" loaded successfully. Use replay({ action: 'run', sequenceId: '${sequence.id}' }) to execute.`
+    message: `Sequence "${sequence.name}" loaded successfully. Use run({ action: 'sequence', sequenceId: '${sequence.id}' }) to execute.`
   });
 }
 

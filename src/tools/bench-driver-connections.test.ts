@@ -20,7 +20,7 @@ function driverHolding(commands: Array<{ tool: string; params: Record<string, an
     listSavedSequencesOnDisk: async () => [],
   } as any;
   const driver = createSequenceDriver(recorder, async (tool: string, params: Record<string, any>) => {
-    if (tool === 'replay' && params.action === 'run') runs.push(params);
+    if (tool === 'run' && params.action === 'sequence') runs.push(params);
     return { content: [{ type: 'text', text: 'ok' }] };
   }, () => []);
   return { driver, runs };

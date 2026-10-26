@@ -116,20 +116,20 @@ Past this point, calls are written short and leave `connection` out. Every call 
 - **CDP line mapping**: May map to nearest valid line. Use `breakpoint({ action: 'validate' })` first
 - **Source maps**: Auto-handled. Use `source({ action: 'loadMaps' })` for manual
 - **File paths**: Full URLs (`http://localhost:3000/app.js`) or `file://`
-- **Network monitoring**: Must enable with `network({ action: 'enable' })`
+- **Network monitoring**: starts with the first `network list`, from that moment; `network({ action: 'enable' })` before a navigation captures it from its first request
 - **Working an issue**: `comment` on it as you go - once when you start (what you're about to change and why) and once when you finish (what you actually changed, files touched, tests added, and anything that contradicts the issue as written). The issue is the durable record; someone reviewing later reads the timeline, not your diff
 - **Closing an issue**: `issues({ action: 'resolve' })` waits on a browser overlay only a human can click - don't call it unattended, use `issues({ action: 'comment' })` to record findings instead
 
 ## Recovering from a failed tool call
 
-- **Missing/invalid parameters**: the call is in history, refused or not, and the footer reads `Replay N, fix: <fields>`. `replay({ action: 'repeat', indices: [N], params: { <field>: <value> } })` runs it again with only those fields replaced; `null` removes one. The rerun takes its own index.
-- **A validated call gets blocked by a guard** (port failure, dead server, breakpoint pause): the footer shows its history index, `Replay: N`. Acknowledge the guard (e.g. `server({ action: 'acknowledgePort' })`), then `replay({ action: 'repeat', indices: [N] })` resumes the exact call.
+- **Missing/invalid parameters**: the call is in history, refused or not, and the footer reads `Replay N, fix: <fields>`. `run({ action: 'repeat', indices: [N], params: { <field>: <value> } })` runs it again with only those fields replaced; `null` removes one. The rerun takes its own index.
+- **A validated call gets blocked by a guard** (port failure, dead server, breakpoint pause): the footer shows its history index, `Replay: N`. Acknowledge the guard (e.g. `server({ action: 'acknowledgePort' })`), then `run({ action: 'repeat', indices: [N] })` resumes the exact call.
 
 ## The event stream
 
 Everything devharness pushes - a guard block, a message from another session, an annotation picked in the browser - appends one JSON line to `~/.devharness/events/<sessionId>.jsonl`. One file per session, so one watch covers every kind, including kinds added later.
 
-Installed as a plugin, a `SessionStart` hook (`plugin/hooks/session-start.mjs`) creates that file and prints the watch call as session context before the first turn. In Claude Code, arm it as the session's first tool call:
+Installed as a plugin, a `SessionStart` hook (`plugin/hooks/session-start.mjs`) creates that file and prints the watch call as session context before the first turn. With no watch, each event rides on the next devharness reply at no extra request; a watch costs a request each time it wakes, so in Claude Code arm it when events arrive while no devharness call is made - a person in the bench, a wait on another session's message:
 
 ```
 Bash({ command: "devharness watch", run_in_background: true, description: "devharness events" })
@@ -151,6 +151,86 @@ Line kinds:
 
 If devharness itself seems stuck or broken (not the target app), restart it yourself rather than asking the user to reconnect: `config({ action: 'restart' })`. Falls back to `kill -USR2 $(cat .devharness/mcp-supervisor.pid)` via Bash if that action reports `CONFIG_RESTART_NOT_SUPERVISED` (e.g. a bare `node build/index.js`, not through the supervisor). Editing devharness's own source and running `npm run build` triggers the same restart automatically via its postbuild hook - `config({ action: 'status' })` reports which build is actually answering (entry file, its timestamp, server and supervisor pids), so a rebuild that signalled the wrong supervisor is visible rather than silent. Either way, this kills any Chrome instances it launched (relaunch with `connection` action `launch`) but managed dev servers (`server` tool) survive and reattach. Ending the session or `/reload-plugins` ends the supervisor, which stops the servers this session started; `server({ action: 'start' })` or `autoRun: true` brings them back.
 
+## `.devharness/` must be git-ignored
+
+State lands in `.devharness/` — config, server claims, logs, sequences, issues. Machine-local; carries pids, ports, and local paths into what may be a public repo.
+
+devharness checks this itself: the session's first reply says so when `.devharness/` is not ignored or is tracked. It tests a path inside the directory (`git check-ignore -q .devharness/config.json`), since a `.devharness/*` pattern ignores everything in it while `git check-ignore .devharness` still reports the directory as not ignored.
+
+Not ignored → **ask** before adding it to `.gitignore`. Already tracked → say so; `git rm -r --cached .devharness` untracks, but anything pushed stays in history.
+
+## Repeat instead of retyping
+
+Every response footer carries its own history index, `Replay: 58`, which `run({ action: 'repeat', indices: [58] })` takes. History holds every call from every channel - yours, the bench's, the CLI's - and each step a sequence run makes, listed as `in run \`<name>\``. `replay` calls that act - `run`, `runAll`, `create`, `split` and the like - are listed too; reads (`history`, `list`, `status`) and `repeat` are not, so looking does not move indices. `create` leaves a listed `replay` call out: it does not become a step.
+
+- `indices` takes a list: `[58, 59, 60, 61]` re-runs four steps in order
+- Use it for anything you already did — relaunch, re-login, refilling a form, getting back to the bug. Retyped arguments drift from what actually ran
+- `replay({ action: 'history' })` when indices scrolled away
+- Each call replays on the connection it was recorded with
+- Worth keeping: `replay({ action: 'create', name, indices })`
+
+## Letting someone point instead of describe
+
+When describing which element is wrong would cost a paragraph - or the problem
+only exists mid-interaction and is gone before it can be described - open the
+bench instead of asking:
+
+```
+bench({ action: 'start', connection: 'my-web-app' })
+```
+
+It opens a pane in its own tab with the page still running. PICKER arms
+Chrome's element picker; FREEZE holds the page. They click an element in the
+app tab, type in the pane, save - and the note lands in the step of the
+sequence it belongs to, and on the event stream, so with a watch armed it
+reaches you mid-task. Keep working while they write.
+
+Only notes, captures, screenshots and sequence writes reach the event stream.
+Everything else a person does in the bench - Run on the Tools tab, a comment
+or an edit on the Issues tab, Run on a History row - is a tool call, and
+`replay({ action: 'history' })` lists it marked `from the bench`. Asked whether
+you can see something done in the bench, read history first; the event stream
+answers only for those four kinds.
+
+The bench also drives a sequence step by step, reads what crossed the boundary
+under each step, and carries the proxy's own controls. Launch the browser with
+`proxy: true` or it records nothing.
+
+While the page is held, other devharness tools report it as paused at a
+breakpoint; `bench({ action: 'release' })`, `hold({ action: 'release' })`,
+`execution({ action: 'resume' })` and `stop` each release the whole hold.
+
+Ticking into a transient state, pause-and-resume, notes and captures, cropping,
+the boundary panel, `sweep`, the CLI command:
+[bench.md](bench.md)
+
+## Talking to another devharness session
+
+Two devharness sessions on this machine reach each other by mailbox id - the session hitting a devharness bug and the session working on devharness itself, for example.
+
+`message({ action: 'sessions' })` lists who is reachable and prints this session's own mailbox path.
+
+```
+message({ action: 'send', to: 'a1b2c3d4', text: 'Repro: ...', waitForReplyMs: 120000 })
+```
+
+That holds the call open until something lands in this session's mailbox, then returns it; answer with `message({ action: 'reply', replyTo: '<id>', text: '...' })`. The wait returns on ANY arrival, not only a tagged reply - two sessions blocking at the same moment both release instead of both timing out.
+
+An arriving message announces itself on the event stream, so the watch above covers it and there is no second watch to arm. `message({ action: 'read' })` is what takes them, advancing a cursor so each is returned once; the full history stays in the mailbox file.
+
+## Running a tool from the shell
+
+`devharness <command>` typed in a session's shell runs that tool **inside that session**, against the connections it already holds. The plugin does not put `devharness` on PATH - `npm i -g devharness` does, or run it as `npx -y devharness@<version> <command>`. The SessionStart hook reports which of those applies here. Candidates are the sessions rooted at the shell's directory or above it - project state such as issues and config resolves against the answering server's root - and the process tree picks among those, so `! devharness call screenshot '{"connection":"my-web-app"}'` uses the browser this session opened as `app`, not a new one. A directory no session is rooted in reports that rather than reaching another project.
+
+- `devharness which` - which session this shell resolves to
+- `devharness watch` - exits on this session's next events and prints them; `--follow` streams them (see The event stream)
+- `devharness call <tool> '<json>'` - any tool: `devharness call config '{"action":"status"}'`
+- `devharness sessions` / `send <id> "text"` / `read` / `reply <id> "text"` - the message tool, with `--wait=<ms>` to hold for an answer
+- `devharness bug "<title>" [body words]` / `feature "<title>" [body words]` - files an acknowledged issue of that type; no sequence is recorded and Chrome stays closed
+- `--session=<id>` names a session explicitly, `--json` prints the raw response, `--timeout=<ms>` bounds the call
+
+Two differences from an MCP call. Guards do not apply - a dead dev server port, a paused breakpoint or a pending bug blocks a tool call through MCP and does not block this one. And a session the supervisor has suspended is not listening, so the CLI reports that rather than waiting.
+
 ## Tool Categories
 
 Most tools are **grouped**: one tool name plus an `action` param, e.g.
@@ -168,18 +248,24 @@ runs against (see Quick Start).
 - `close` and both `browser` actions require a `reason`. Closing the last connection to a Chrome kills that Chrome. `browser` is separate so that allowing `connection` allows no kill
 - `connection({ action: 'launch', profile: 'device-a' })` uses a **named persistent profile**: a stable user-data-dir under `~/.devharness/profiles` (override per project with `chrome.persistentProfileRoot`) that survives across runs, so logins, cookies and IndexedDB persist. Naming it is what makes it persistent - there is no separate flag. It does not pin a port. Only one live Chrome may hold a profile at a time. Unnamed launches stay throwaway and are deleted on exit
 - `connection({ action: 'launch', port, forceNewInstance: true })` honours that exact port and errors if it is already taken, rather than quietly moving to another one
+- `status`: one connection's debugger - connected, runtime, paused, breakpoint counts, source maps. `browsers`: the Chrome processes this session launched, with their recent exits and why
+- `browser resetLauncher` kills nothing: it forgets the Chromes this session tracks, after one closed outside devharness, and leaves their profile directories for the next startup sweep
 
 **Breakpoint**: `breakpoint` (actions: set, remove, list, setLogpoint, validate, resetCounter, waitForScript, setDOMBreakpoint, setEventBreakpoint, setXHRBreakpoint, await)
 - `waitForScript`: block until a script URL loads, so you can breakpoint code that isn't parsed yet
 - `await`: wait for a breakpoint to be hit rather than polling
-- `setLogpoint`: non-pausing logging with `{expr}` interpolation, `maxExecutions` to cap noise
+- `setLogpoint`: non-pausing logging with `{expr}` interpolation, `maxExecutions` (default 20) to cap noise. The `maxExecutions`-th hit pauses the page on that line, and `execution resume` is refused until `resetCounter` starts the count again
+- `validate`: a logpoint's `{expr}` tried before it is set - a temporary breakpoint waits up to `timeout` (2000ms) for the line to run and evaluates them in its frame, naming the line CDP actually placed it on
+- `setDOMBreakpoint` / `setEventBreakpoint` / `setXHRBreakpoint`: pause when an element changes, an event fires, or a request URL holds `urlPattern` (Chrome only)
 
 **Execution**: `execution` (actions: pause, resume, stepOver, stepInto, stepOut, acknowledge)
-- `pause`/`resume` are the code layer of `hold`. A resume on a page the bench holds releases the whole hold
+- `pause`/`resume` are the code layer of `hold`. A resume on a page the bench holds releases the whole hold; on a page a person holds by hand it leaves the page stopped and refuses with `HELD_BY_PERSON`
+- `acknowledge`: a pause at a breakpoint blocks other tools; acknowledging it lets them run while the page stays paused
 
 **Hold**: `hold` (actions: hold, step, frame, group, release, status, seek, rate, motion)
-- Stops the app at one moment across its layers: `code` (the debugger), `ui` (code plus CSS animation, needs the bench open), `network` (frames and responses wait at the proxy, needs `proxy: true`). All three by default
-- `step({ layer })` moves one layer on by its unit - a statement, a callback, a message - and stops it again. The screen's callback is the page clock's next timer or held frame, page time moved on to it, else the page's next callback
+- Each held layer records who took it: a person in the bench, an agent's call, a run's step or pause, a motion rule, the bench's own capture, or a breakpoint. A layer runs again when its last owner is released. An agent's release ends the holds of agents, runs, motion rules and breakpoints, and a person's hand hold ends in the bench; a run ends the holds its steps took as it finishes or is cancelled, and a run's later steps work on a hold an earlier step took
+- Stops the app at one moment across its layers: `code` (the debugger), `ui` (page time, CSS, media and input stopped, JS running; needs the bench), `network` (frames and responses wait at the proxy, needs `proxy: true`). All three by default
+- `step({ layer })` moves one layer on by its unit - a statement, a callback, a message - and stops it again. The screen's callback is the page clock's next timer or held frame, page time moved on to it; a page with no clock steps to its next callback
 - The page reads time from a clock of devharness's, put in before the app's first script: `setTimeout`, `setInterval`, `Date`, `performance.now`, `Event.timeStamp` and `AbortSignal.timeout` follow it, and frame callbacks get its time. A held screen stops it, so a timer set before a hold fires as though the hold took no time, and a JS animation reading `performance.now` resumes where it stood. A page opened before devharness attached has no clock until it reloads; workers keep wall time
 - `frame({ ms? })` moves a held screen one frame on - page time by `ms` (default 16.7), the timers due in it, the queued frame callbacks once, and the CSS animations by the same span - so JS and compositor motion advance together
 - `group` lists the animations started since a frame stop (`input` with `holdBeforeFrame`), each with its element, property, delay, duration, easing and current position
@@ -187,15 +273,19 @@ runs against (see Quick Start).
 - `seek({ ms })` moves every CSS transition, CSS animation and web animation the bench has seen start on by that much of its own time, the JS untouched, and the compositor paints the new frame under the hold: a 420ms settle held at 0 is read and captured at 105, 210 and 420. `frame` moves the JS and the animations together. Needs the bench open; an animation started before it is not seen
 - `rate({ playbackRate })` sets what the CSS animations and the page clock run at while released - 0.2 shows a settle, and the JS timing around it, at a fifth speed in the tab - and a release restores it
 - `motion({ animation?, element?, off?, alone?, freezeAt?, duration?, delay? })` sets a rule on single CSS and web animations, matched by what animates and a selector the element matches (`#panel`, or `div.item:nth-child(4)` for one of several alike): `off` jumps it to its end, `alone` pauses every other animation, `freezeAt` holds it that many ms in, the rest running, `duration`/`delay` replace its timing. A rule acts as each animation is created, before its first frame, and on the group a frame stop holds when it is set there. Speed is not a rule: `rate` sets it for the whole page. Motion a page drives from its own frame callbacks is no animation object, and no rule reaches it. Rules stand across replays until `clear: true`; with nothing set it lists them and what they last did. Needs the bench open
+- `frame`, `group`, `seek` and `motion` need the bench open; `rate` needs only a debugger connection
 
-**Inspection**: `inspect` (actions: getCallStack, getVariables, evaluateExpression, searchCode, searchFunctions)
+**Inspection**: `inspect` (actions: getCallStack, getVariables, evaluateExpression, searchCode, searchFunctions, listTargets)
 - `evaluateExpression` awaits a returned Promise by default (async IIFEs resolve to their settled value; a rejection is reported as the expression's own error). Pass `awaitPromise: false` to inspect the Promise object itself. While paused at a breakpoint only already-settled promises can be resolved - a pending one fails fast because the event loop is stopped
+- `getCallStack` and `getVariables` read the paused frames; `getVariables` takes a `callFrameId` from the call stack. `searchCode` and `searchFunctions` search the scripts the page loaded
 
-**Source**: `source` (actions: get, loadMaps)
+**Source**: `source` (actions: get, loadMaps, search)
 
 **Console**: `console` (actions: list, get, recent, search, clear, setObjectDepth)
+- `get`: one message by id, summarised when large; `full`, or `textOffset` / `textLimit` / `argsIndex`, read it whole or in parts. `search`: messages matching a regex. `setObjectDepth`: how deep logged objects are expanded
 
-**Network**: `network` (actions: list, get, search, enable, disable, setConditions)
+**Network**: `network` (actions: list, get, search, enable, disable, setConditions, sockets, streams)
+- `get`: one request by id; `includeBody` saves the response body to disk and returns its path. `setConditions`: throttle to a preset - offline, slow-3g, fast-3g, fast-4g, online. `sockets`: WebSocket opens, closes, errors and, with `frames`, their messages; `streams`: EventSource messages
 
 **Proxy**: `proxy` (actions: status, events, sockets, body, answer, answerFrame, withdraw, answers, refuse, stop)
 - Needs a browser launched with `connection({ action: 'launch', proxy: true })`. Holds what reached the outside world, where `network` reads what CDP saw
@@ -206,15 +296,21 @@ runs against (see Quick Start).
 - `sockets` reads each socket's shape from its own frames: `reply` means every arrival was accounted to a send, `push` means something arrived unasked so arrival names no cause
 
 **Page**: `navigate` (actions: goto, reload, back, forward, info)
+- `goto`, `reload`, `back` and `forward` answer with the page's console error and warning counts and failed requests, and cache its interactive elements for `input` for 5 minutes. `info`: URL, title and viewport; a paused page answers with its URL alone
 
-**DOM**: `dom` (actions: querySelector, getProperties, snapshot)
+**DOM**: `dom` (actions: querySelector, getProperties, snapshot, hitTest)
+- `getProperties`: an element's attributes, computed styles and bounding box. `snapshot`: the accessibility tree and DOM structure to `maxDepth` (default 5)
 
 **Content**: `content` (actions: extractText, findInteractive, verify, parse)
+- `extractText`: the page as text - `outline` (headings), then one `section`, or `full`. `findInteractive`: links, buttons and inputs with selectors to drive. `verify`: dead buttons, viewport position, touch target size, clipping, blocked clicks, dead links, scroll
+- `parse`: a page-parser plugin from `.devharness/parsers/` (project first, then `~/.devharness/parsers/`), whose `extract` runs in the page and returns JSON; read at call time, so editing one needs no restart. No `name` lists them
 
 **Screenshot**: `screenshot` (actions: fullPage, viewport, element, pdf, burst)
 - `burst`: the frames the page swaps over `forMs` (default 500) with nothing dispatched, as `input` with `burst` records them around a gesture: a settle let run after `hold release`, a loop that never rests. `viewport` and `fullPage` capture a held page
+- `pdf`: the page printed to PDF with Chrome or WeasyPrint (`engine`), saved under `.devharness/pdfs/`
 
 **Input**: `input` (actions: click, type, press, hover, focus, focusNext, focusPrevious, drag, scroll, mousemove, pinch, tap, swipe)
+- `type` with `insert: true` puts the whole text in as one trusted input event (CDP `Input.insertText`), as a paste or an IME commit does: a long value in one step, seen by the page's input handlers and a framework's model, where a value set from inside an evaluation reaches the DOM alone. Keydown and keyup handlers do not see it
 - `tap` / `swipe`: real touch events via `Input.dispatchTouchEvent`. Mouse actions never produce touchstart/touchmove, so a component listening only for touch cannot be driven by `click` or `drag`. `tap` takes a selector or x/y; `swipe` takes `from`/`to` and `steps` (default 10) and emits touchstart, N touchmove, touchend
 - `hold: ['ui']` on press, click, scroll, drag, tap or swipe takes the hold in the same call, right after the last event is dispatched, where a second call lands after any settle of a few hundred ms has finished. `holdAfterMs` lets the page run that long first, so a 420ms settle is frozen at 100ms and read with `inspect` or captured with `screenshot`; `hold({ action: 'release' })` lets it run. With `holdBeforeFrame: true` the page stands at the first frame the input schedules instead: the page clock holds the app's frame callbacks from before the dispatch, so the frame and the animations the input starts are read at 0ms, and `hold frame` steps on. The ui layer needs the bench open. A swipe with `holdBeforeEnd: true` holds with the contact still down and no touchend; after the release, `input({ action: 'swipe', finish: true })` lifts it
 - `burst: { forMs, frames, clip }` records the frames the compositor swaps from the dispatch on, through `Page.startScreencast`, each stamped with its swap time: a 420ms settle after a press comes back as 28 frames at the page's 16ms cadence, where a loop of screenshots forces its own frames 30 to 60ms apart. The frames and a contact sheet with `+<ms>` under each tile go under `.devharness/screenshots/<date>/burst-<ts>/`, and `_meta.burst` lists them. With `hold`, the capture ends at the hold. A tab in the background swaps no frames
@@ -233,7 +329,7 @@ runs against (see Quick Start).
 - `assert`: a check whose fail stops the sequence - use `{{var:name.path}}` templates against values captured by a prior `saveAs`. A DOM assert reads for up to 5s (`timeoutMs`); written into a sequence from history it is stored as a `check` step
 - **`variables` on `run`/`runAll`**: replaces the text of recorded `input type` steps. Keys are BUILT from the selector - `var_<0-based step index>_<selector, non-alphanumerics replaced by _>` - so `#password` at step 3 is `var_3__password`, two underscores; read them off `get` or off the prompt a run returns rather than composing them by hand. A key naming no typed-text step is rejected before anything runs, with the substitutable keys listed. Substitutions reach the sequences a check's `{ run }` or a `forEach` nests into, so a key naming a step in a shared login helper lands there; `runAll` holds one map for the whole suite and accepts a key matching any member
 - **`{{env:NAME}}`**: any step param may hold it, resolved from `process.env` when the step runs. This is how a credential stays OUT of the sequence file - the file holds the token, the value lives in the environment, and neither the file nor the tool call carries the secret. An unset or empty variable fails the step and names the variable; an empty value would otherwise be typed as-is. The name must match `[A-Za-z_][A-Za-z0-9_]*`. A token-bearing step does not hold the run open for a `variables` answer, and an explicitly supplied `variables` value still wins over the environment
-- **`envFile` on `run`/`runAll`**: a KEY=value file supplying the `{{env:NAME}}` tokens for that run - `replay({ action: 'run', name: 'login', envFile: 'sequences.env' })`. A relative path resolves against the project directory (the one holding `.devharness`), absolute is used as-is. The file's values win over the server's own environment and a name it omits falls through to `process.env`; `process.env` is never written, so two background runs may name different files and changing the file needs no client restart. A missing file, or a line that is neither blank, a `#` comment, nor `NAME=value`, fails as a parameter error before any step runs. With no `envFile` named, a run - a bench play included - reads `.devharness/sequences.env` when it exists, and the reply names the file and each name it supplied. No `$VAR` expansion inside values
+- **`envFile` on `run`/`runAll`**: a KEY=value file supplying the `{{env:NAME}}` tokens for that run - `run({ action: 'sequence', name: 'login', envFile: 'sequences.env' })`. A relative path resolves against the project directory (the one holding `.devharness`), absolute is used as-is. The file's values win over the server's own environment and a name it omits falls through to `process.env`; `process.env` is never written, so two background runs may name different files and changing the file needs no client restart. A missing file, or a line that is neither blank, a `#` comment, nor `NAME=value`, fails as a parameter error before any step runs. With no `envFile` named, a run - a bench play included - reads `.devharness/sequences.env` when it exists, and the reply names the file and each name it supplied. No `$VAR` expansion inside values
 - **Capturing values with `saveAs`**: supported on `request` and on `inspect({ action: 'evaluateExpression' })`. They store different shapes - `request` stores the whole response object (so `{{var:login.body.token}}`), `inspect` stores the evaluated value itself (so `{{var:pairingUrl}}` is the string). A `saveAs` that cannot be honoured now fails the step rather than silently capturing nothing. Async expressions work: a returned Promise is awaited and the settled value is captured exactly (JSON-serializable values are captured by value, not from display text)
 
 **Wait**: `wait` (exactly one of: selector, selectorGone, expression, ms)
@@ -254,6 +350,8 @@ runs against (see Quick Start).
 **Bench**: `bench` (actions: start, stop, hold, release, picker, motion, tick, keepStep, dropStep, flagStep, sweep, retake, capture, list, status)
 - `motion({ on })` records each animation the page starts as a MOTION row under the step that started it, beside its traffic, and keeps the setting across restarts; with `on` absent it reads it. A replay compares a recording's MOTION rows only while it is on. A row's settings - slow, off, alone, freeze at a point, timing - are stored on its step under `motion`, keyed by the animation's kind, and applied when the step runs
 - The panel beside a driven app: it holds the page still, shows what crossed the boundary and what caused each thing, records and steps sequences, and collects element-level comments
+- `keepStep` / `dropStep` / `flagStep`: while a person records in the bench, each captured step is held for checking; keep it, drop it (the page's event buffer rewound with it), or flag it with a `reason` and selector `options` for the person to pick
+- `retake`: a capture taken again at its recorded window size and hold, compared with an earlier version (`against`). `capture`: a capture file's record and element facts. `list`: the notes saved in sequences. `status`: the page's hold, picker, sequence standing and any open dialog
 
 - For when describing a UI problem costs more than pointing at it. `start` opens the bench in its own tab with the page still running and Chrome's element picker idle; the person arms the picker, clicks an element in the app tab, types a comment in the bench, saves. Each annotation records the selector, the text, the component name and the JSX source location where a dev build exposes one - so the report carries what the element *is*, not a description of where it sits
 - Nothing is injected into the page being driven. The comment box, picker toggle, tick buttons and boundary stream live in the bench tab, served from `127.0.0.1` while apps sit on `localhost` - a different site, so Chrome gives it its own renderer process and freezing the app pane cannot take the UI down with it. Chrome's split view has no API (`splitViewId` is read-only), so the tab is opened beside the app for the person to split manually
@@ -274,11 +372,18 @@ runs against (see Quick Start).
 **Server**: `server` (actions: start, stop, restart, list, logs, stopAll, setAutoRun, clearLogs, remove, monitorPort, unmonitorPort, listMonitored, acknowledgePort, acknowledgeStartup, extendStartup, cancelPendingRestart)
 - Use `global: true` to access servers started from a different working directory
 - `start({ watch: true, watchPaths?: [...] })`: devharness watches the given paths (default: cwd) and auto-restarts the server on file changes, instead of relying on `--watch`/nodemon. Pause-aware: if a breakpoint debugger is paused on that server's inspector port, the restart queues instead of firing immediately - `cancelPendingRestart` discards a queued restart to keep debugging without it firing on resume
+- `logs`: a server's log paths, or the docker command. `remove`: stop a saved server and forget it. `setAutoRun`: start it with devharness
+- `monitorPort`: watch a port at `inform`, `error` or `block`; a failed port at `block`, and a failed startup, block tools until `acknowledgePort` / `acknowledgeStartup`. `extendStartup`: 30s more for a slow startup
 
-**Replay**: `replay` (actions: history, create, list, get, delete, export, load, listSaved, deleteSaved, run, runAll, step, finish, insert, addCheck, repair, copy, split, adopt, search, status, cancel, repeat, runFromLog, recordInteraction)
+**Run**: `run` (actions: steps, sequence, all, repeat, fromLog, step, finish, status, cancel)
+- `steps`: tool calls written into the call as `commands: [{ tool, params }]`, run in order in that one request through the sequence executor and blocking until done. The reply is one line per step with its history index; `inspect` and `check` readings come back whole. The run stops at the first failing step and names it. A step naming no `connection` runs on the call's, and a connection that is not live is launched. Nothing is saved: `replay({ action: 'create', name, indices })` with the step indices keeps them as a sequence
+- `sequence`: a saved sequence by name, in the background unless `wait: true`. `all`: every sequence in a folder or with a tag. `repeat`: earlier calls by history index. `fromLog`: `history.log` lines. `step` / `finish`: a paused run on. `status` / `cancel`: a run by `runId`
+- `replay` records and keeps sequences; `run` executes them
+
+**Replay**: `replay` (actions: history, create, list, get, delete, export, load, listSaved, deleteSaved, insert, addCheck, declare, pause, repair, copy, split, adopt, search, recordInteraction)
 - `list`: every sequence - the ones in memory, then the ones on disk. A fresh session holds none in memory while the sequences dir holds a whole suite, so `list` is what shows what already exists; `listSaved` narrows it to the files. A session's first listing draws every saved sequence; each later `list` or `listSaved` draws only the sequences added, gone or changed since the last one, since the full list already stands in the agent's context. `full: true` draws it again, after a compaction dropped it
 - `recordInteraction`: record mouse, keyboard, and navigation events with a visual overlay
-- `runAll`: run every sequence in a folder and report one line each - `replay({ action: 'runAll', folder: 'spine', connection: 'my-web-app' })`. Sequences may live in SUBFOLDERS of the sequences dir (`spine/`, `story/`, `_helpers/`); filenames are relative to that root (`spine/spine-01.json`) and `load` still accepts the bare basename. The whole tree is LOADED before anything runs, so a sequence in one folder can still reference a helper in another by name (a check's `{ run }`, a forEach's `do`) - those resolve by sequence name, not by path. Folders whose name starts with `_` are loaded but never run by a bare `runAll`, which is where preamble guards and forEach bodies belong; naming such a folder explicitly runs it anyway. A failure is recorded and the suite continues (`continueOnFailure`, default true). Scoped to one root: the project sequences dir, or the global one with `global: true`. Accepts `baseUrl`, so one call runs a suite against any deployment - it reaches the nested sequences a check or forEach names, too. Accepts `killChromeOnFinish`, which means the SUITE's finish: only the last sequence carries it, so a preamble's browser survives between sequences
+- `runAll`: run every sequence in a folder and report one line each - `run({ action: 'all', folder: 'spine', connection: 'my-web-app' })`. Sequences may live in SUBFOLDERS of the sequences dir (`spine/`, `story/`, `_helpers/`); filenames are relative to that root (`spine/spine-01.json`) and `load` still accepts the bare basename. The whole tree is LOADED before anything runs, so a sequence in one folder can still reference a helper in another by name (a check's `{ run }`, a forEach's `do`) - those resolve by sequence name, not by path. Folders whose name starts with `_` are loaded but never run by a bare `runAll`, which is where preamble guards and forEach bodies belong; naming such a folder explicitly runs it anyway. A failure is recorded and the suite continues (`continueOnFailure`, default true). Scoped to one root: the project sequences dir, or the global one with `global: true`. Accepts `baseUrl`, so one call runs a suite against any deployment - it reaches the nested sequences a check or forEach names, too. Accepts `killChromeOnFinish`, which means the SUITE's finish: only the last sequence carries it, so a preamble's browser survives between sequences
 - `addCheck`: add a check step - `replay({ action: 'addCheck', name: 'flow', check: { selector: '.cookie-banner', condition: 'present', holds: { run: 'dismiss-banner' }, fails: 'continue' }, insertAfterStep: 2 })`. `check` takes the check tool's parameters; the tool's schema, the sequence to run (known, not this one) and a forward `resumeAt` are validated up front, and a sequence already on disk is rewritten in place. A check that runs a sequence has no other authoring route
 - `repair`: a run paused on a click step that reached another element than the one recorded is repaired in place - `replay({ action: 'repair', accept: 'selector' })` points the step at where the recorded element is now (offered only when exactly one element carries its identity), `accept: 'element'` keeps the selector and records the element it reached. The file is rewritten; `step` runs the step again
 - `copy` / `split`: cut a sequence after `throughStep`. `copy` makes `newName` own a copy of steps 1 to N, standing apart afterwards. `split` moves steps 1 to N into `sharedName`, which the original runs in their place through a check, and so does `newName` where given; an edit to the path then goes to the shared sequence and reaches every caller. `adopt` replaces steps 1 to N of an existing sequence with a run of `sharedName`, refusing where its own steps differ from the shared sequence's unless `overwrite: true`. Teardown and declarations stay on the callers, a cut that takes a `connection launch` step or a check resuming past the cut is refused, and the reply names the `variables` keys that moved and flags a step N that is no check or wait. The steps of a sequence a check runs are compared against their own recording, reported as `step 1.3`; a forEach body's are not, since its iterations share one position
@@ -286,11 +391,12 @@ runs against (see Quick Start).
 - `forEach`: a virtual step - enumerate a source and run a sequence per item: `{ tool: 'forEach', params: { in: '{{var:shares}}', as: 'share', do: 'revoke-one-share', where: 'item.name !== "Employees"', maxItems: 50 } }`. `in` is either an array a prior `saveAs` captured or `{{selectorAll:CSS}}`; `where` is JavaScript with `item`/`index` in scope, not the condition grammar. A check reads one thing, so this is what expresses "for everything that is there". An empty source is a success and the count is reported
 - `teardown`: an optional command array beside a sequence's `commands`, run when the main steps reach a terminal state - success, a failed step, an abort, or the total timeout - but not when the run pauses. It has its own timeout budget and does not receive the run's abort signal, so a cancelled or timed-out run still cleans up; it shares the variable store, so it can revoke what setup minted. A failing teardown step never changes the run's verdict. Best-effort: a killed server takes pending teardown with it
 - `export`: export a sequence to file - `format: sequence | playwright | puppeteer`
-- `repeat`: instantly re-execute commands by history index - `replay({ action: 'repeat', indices: [0, 1, 2] })`. One index answers with that call's own reply; `params` replaces fields of that one call (`null` removes one). Each tool response shows its history index in the "Repeat" hint
+- `repeat`: instantly re-execute commands by history index - `run({ action: 'repeat', indices: [0, 1, 2] })`. One index answers with that call's own reply; `params` replaces fields of that one call (`null` removes one). Each tool response shows its history index in the "Repeat" hint
 - `run`: does not block - returns a `runId` immediately and executes in the background; poll `status({ runId })` for progress and the final result (kept 30 min in memory), `cancel({ runId })` interrupts the step in flight where the tool allows it (`wait` and `request` are genuinely cancelled, `navigate`/`inspect`/`content` stop waiting, `input` stops dispatching further events, the rest stop at the next step boundary - table in `docs/replay.md`). `wait: true` blocks for the full result (pre-0.7 behaviour). `bench: true` plays it in the bench open on `connection` instead, as the bench's Replay button does. `startUrl` overrides the stored start URL for one run; `baseUrl` retargets every absolute URL at another deployment's origin - the sequence's own steps, a declared connection's launch url, and every sequence it reaches through a check's `{ run }` or a forEach
 - Use `global: true` with `export` to save to ~/.devharness/sequences/ instead of the working directory
 
 **Dashboard**: `dashboard` (actions: open, status, stop)
+- One page over every devharness session. `open`: its URL. `status`: whether this session hosts the hub or reports to one, and the hub's session count. `stop`: the hub's server, from the hub session
 
 **Config**: `config` (actions: status, useLocal, useGlobal, reset, backup, cloneFromGlobal, show, listTools, reload, restart, listProfiles, resetProfile, setDebugLogging, debugLoggingStatus)
 - `status`: Show where config is loaded from (local vs global)

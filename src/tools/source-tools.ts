@@ -140,7 +140,7 @@ export function createSourceTools(
 
   return {
     source: createTool(
-      'Read source code and load source maps. Actions: get (a script\'s code over a line range, 10 lines from startLine when endLine is omitted), loadMaps (register the .js.map files in a directory and its subdirectories; each loads when first needed), search (the original sources the maps carry, as file:line:column; with none registered, build, dist, out, .next and lib are registered first)',
+      'Read source code and its original sources through source maps.',
       sourceSchema,
       async (args) => {
         const missing = REQUIRED[args.action].filter(key => args[key] === undefined);

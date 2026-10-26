@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { CDPManager, EvaluateExpressionExceptionError, EvaluateExpressionTimeoutError, EvaluateExpressionPendingPromiseError } from '../cdp-manager.js';
 import { SourceMapHandler } from '../sourcemap-handler.js';
 import { createTool } from '../validation-helpers.js';
-import { createSuccessResponse, createErrorResponse, formatCodeBlock } from '../messages.js';
+import { createSuccessResponse, createErrorResponse, formatCodeBlock, responseWithOnce } from '../messages.js';
 import type { ToolResponseMeta } from '../tool-response.js';
 import { isAbortError, raceAbort, throwIfAborted } from '../utils/abort.js';
 import {
@@ -294,6 +294,9 @@ const inspectionToolSchema = z.object({
   functionName: z.string().optional().describe('searchFunctions: function name'),
 }).strict();
 
+/** An expression that dispatches input from inside the page: a click() call, a dispatched event, a constructed input event. */
+const SYNTHETIC_INPUT = /\.click\(\s*\)|dispatchEvent\(|new\s+(Mouse|Keyboard|Pointer|Input|Touch)Event\b/;
+
 export function createInspectionTools(
   sourceMapHandler: SourceMapHandler,
   resolveConnectionByName: (connection: string) => Promise<{
@@ -307,7 +310,7 @@ export function createInspectionTools(
 ) {
   return {
     inspect: createTool(
-      'Inspect and debug code. Actions: getCallStack (get call stack when paused), getVariables (get variables in call frame), evaluateExpression (evaluate JavaScript, in the page or inside a worker via `target`), searchCode (search code by pattern), searchFunctions (find function definitions), listTargets (list service/dedicated/shared worker targets)',
+      'Inspect and debug code.',
       inspectionToolSchema,
       // abortSignal (#110): a cancel stops the wait, not the work. An
       // evaluation, in the page or in a worker, is raced against it: CDP cannot
@@ -510,7 +513,7 @@ export function createInspectionTools(
                 },
               };
 
-              return {
+              const evaluated = {
                 ...createSuccessResponse('EVALUATE_EXPRESSION_SUCCESS', {
                   expression,
                   context: callFrameId ? `Call frame ${callFrameId}` : 'Global context',
@@ -518,6 +521,10 @@ export function createInspectionTools(
                 }),
                 _meta: inspectMeta,
               };
+              // An expression that dispatches input drives the page with events
+              // the page made itself; the first such one of the session names
+              // the real-input path at the same request count.
+              return SYNTHETIC_INPUT.test(expression) ? responseWithOnce(evaluated, 'EVALUATE_SYNTHETIC_INPUT') : evaluated;
             } catch (error) {
               // A cancel rethrows before the catch-all below, which would report
               // it as EVALUATE_EXPRESSION_FAILED.

@@ -29,7 +29,7 @@ const STREAM_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 /** A full session id, which names its stream by its first 8 characters. */
 const FULL_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f-]+$/i;
 
-import { openSync, fstatSync, readSync, readFileSync, writeFileSync, renameSync, mkdirSync, appendFileSync } from 'fs';
+import { openSync, fstatSync, readSync, readFileSync, writeFileSync, renameSync, mkdirSync, appendFileSync, existsSync } from 'fs';
 import { execFileSync } from 'child_process';
 import { dirname } from 'path';
 import { getEventStreamPath, getEventCursorPath, getEventWatchPath } from '../session-events.js';
@@ -48,6 +48,21 @@ const FOOTER = 'Next watch: a lone event → the same Bash call; more coming (a 
  * asynchronous, so a write followed by exit loses what is still queued, and the
  * cursor written after it would skip those lines for good.
  */
+/** What every exit after a stream's first prints: the full rules are already in that session's context. */
+const SHORT_FOOTER = 'Next watch: the same call.';
+
+/**
+ * The footer for this exit: the full rules on a stream's first exit, the short
+ * one after, recorded in a file beside the stream's cursor so each session
+ * reads the rules once; a marker that cannot be written leaves the full rules.
+ */
+function footerFor(cursorPath: string): string {
+  const marker = `${cursorPath}.footer`;
+  if (existsSync(marker)) return SHORT_FOOTER;
+  try { writeFileSync(marker, ''); } catch { /* the full rules again next time */ }
+  return FOOTER;
+}
+
 const print = (text: string) => new Promise<void>(resolve => process.stdout.write(text, () => resolve()));
 
 /**
@@ -194,7 +209,7 @@ export async function runWatch(follow: boolean, session?: string): Promise<numbe
     const read = readLines(fd, offset, last);
     text = read.text;
     if (read.next > offset) {
-      await print(`${text}${FOOTER}\n`);
+      await print(`${text}${footerFor(cursorPath)}\n`);
       writeCursor(cursorPath, read.next);
       offset = read.next;
     }

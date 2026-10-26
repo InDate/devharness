@@ -148,7 +148,7 @@ export function createNetworkTools(
 
   return {
     network: createTool(
-      'Network traffic of a browser connection. Actions: list (requests, filtered and paged), get (one request by ID), search (requests by regex), enable, disable (monitoring), setConditions (throttling preset), sockets (WebSocket opens, closes, errors and frames), streams (EventSource messages)',
+      'Network traffic as CDP sees it; proxy holds what reached the outside world.',
       networkToolSchema,
       async (args) => {
         const { action, connection } = args;

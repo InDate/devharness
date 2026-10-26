@@ -173,7 +173,7 @@ export function analyzeRecordedStepConnections(commands: RecordedCommand[]): Rec
 
 /**
  * Hoist a uniform per-step connection back off the steps so the sequence stays
- * portable: `replay({ action: 'run', connection: 'other' })` can then
+ * portable: `run({ action: 'sequence', connection: 'other' })` can then
  * retarget the whole thing. Steps keep their own connection only where the
  * sequence genuinely spans connections (or where it is ambiguous - see
  * `mixed`), which is the case a run-level connection cannot express.
@@ -311,6 +311,6 @@ export function formatMissingStepConnection(opts: {
       ` the run-level connection${runConnection ? ` "${runConnection}"` : ''} - that would replay a` +
       ` multi-browser sequence in a single browser and report success.`,
     `Either create it (connection({ action: 'launch', connection: "${resolved}" })) or rebind it:` +
-      ` replay({ action: 'run', ..., connections: { "${recorded}": "<a reference from this session>" } }).`,
+      ` run({ action: 'sequence', ..., connections: { "${recorded}": "<a reference from this session>" } }).`,
   ].join(' ');
 }

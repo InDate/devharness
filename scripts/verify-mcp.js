@@ -17,14 +17,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..');
 
 /**
- * Docs that claim to enumerate the tool surface. These ship to users - the
- * Agent Skill's catalog is loaded by clients that support Agent Skills, and
- * docs/instructions.md is the same material inline for clients that don't.
- * A stale catalog is worse than no catalog: it sends an agent confidently
+ * Docs that claim to enumerate the tool surface. They ship to users, and a
+ * stale catalog is worse than no catalog: it sends an agent confidently
  * after tools that do not exist.
  */
 const TOOL_SURFACE_DOCS = [
-  'plugin/skills/devharness/references/tool-categories.md',
   'docs/instructions.md',
 ];
 
@@ -97,26 +94,11 @@ function verifyDescribedActions(tools) {
 }
 
 /**
- * The skill's stamped version is what lets the server spot an installed copy
- * left behind by an older release. If it drifts from package.json the stamp
- * silently stops meaning anything, so treat a mismatch as a build failure.
+ * The version the plugin installs, which has to be the one being released.
  */
-function verifySkillVersionStamp() {
+function verifyPluginPin() {
   try {
     const pkgVersion = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf-8')).version;
-    const skill = readFileSync(join(REPO_ROOT, 'plugin/skills/devharness/SKILL.md'), 'utf-8');
-    const stamped = skill.match(/^version:\s*(.+)$/m)?.[1].trim();
-
-    if (!stamped) {
-      console.error('✗ plugin/skills/devharness/SKILL.md has no `version:` in its frontmatter');
-      return false;
-    }
-    if (stamped !== pkgVersion) {
-      console.error(`✗ SKILL.md is stamped ${stamped} but package.json is ${pkgVersion} - bump the skill stamp`);
-      return false;
-    }
-
-    console.log(`✓ SKILL.md version stamp matches package.json (${pkgVersion})`);
 
     // .mcp.json is the plugin manifest that ships to users: it is what their
     // install actually runs. Pinned deliberately rather than @latest, which
@@ -137,7 +119,7 @@ function verifySkillVersionStamp() {
     console.log(`✓ plugin/.mcp.json pins devharness@${pinned}`);
     return true;
   } catch (error) {
-    console.error(`✗ Cannot verify version stamps: ${error.message}`);
+    console.error(`✗ Cannot verify the plugin pin: ${error.message}`);
     return false;
   }
 }
@@ -148,8 +130,9 @@ function verifySkillVersionStamp() {
  * action - but every call they *do* show must be real.
  */
 const CALL_EXAMPLE_DOCS = [
-  'plugin/skills/devharness/references/sequences.md',
-  'plugin/skills/devharness/SKILL.md',
+  'docs/sequences.md',
+  'docs/bench.md',
+  'docs/boundary.md',
 ];
 
 /**
@@ -202,7 +185,7 @@ function verifyDocumentedCalls(tools) {
 }
 
 function verifyDocumentedToolSurface(liveToolNames) {
-  let ok = verifySkillVersionStamp();
+  let ok = verifyPluginPin();
 
   for (const relPath of TOOL_SURFACE_DOCS) {
     let markdown;

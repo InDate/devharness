@@ -8,6 +8,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { handleList, handleListSaved, resetDiskListings } from './replay-library.js';
 import { arriveOn } from '../call-origin.js';
+import { setSessionInfo } from './dashboard-tools.js';
 
 function recorder(saved: Array<{ name: string; commandCount: number }>) {
   return {
@@ -21,6 +22,17 @@ const text = (result: any): string => result.content[0].text;
 
 describe('listing the saved sequences in a session', () => {
   beforeEach(() => resetDiskListings());
+
+  it('names how to view, run and drop a sequence on the first listing of the session only', async () => {
+    const disk = recorder([{ name: 'a', commandCount: 2 }]);
+    resetDiskListings();
+    const first = text(await handleListSaved({ action: 'listSaved', full: true } as any, disk));
+    const second = text(await handleListSaved({ action: 'listSaved', full: true } as any, disk));
+
+    expect(first).toContain("run({ action: 'sequence', name })");
+    expect(second).not.toContain("run({ action: 'sequence', name })");
+    expect(second).toContain('1. a (2)');
+  });
 
   it('draws every sequence on the first listing', async () => {
     const out = text(await handleListSaved({ action: 'listSaved' } as any, recorder([{ name: 'a', commandCount: 2 }, { name: 'b', commandCount: 3 }])));
@@ -75,4 +87,21 @@ describe('listing the saved sequences in a session', () => {
     const agent = text(await handleListSaved({ action: 'listSaved' } as any, disk));
     expect(agent).toContain('1. a (2)');
   });
+
+  it('keeps the record when the detector names the session between two listings', async () => {
+    const before = process.env.CLAUDE_CODE_SESSION_ID;
+    process.env.CLAUDE_CODE_SESSION_ID = 'aaaa1111-2222-3333-4444-555566667777';
+    try {
+      const disk = recorder([{ name: 'a', commandCount: 2 }]);
+      setSessionInfo(null);
+      await handleListSaved({ action: 'listSaved' } as any, disk);
+      setSessionInfo({ sessionId: 'aaaa1111-2222-3333-4444-555566667777', shortId: 'aaaa1111' } as any);
+      const out = text(await handleList({ action: 'list' } as any, disk));
+      expect(out).toContain('1 saved, unchanged');
+    } finally {
+      setSessionInfo(null);
+      if (before === undefined) delete process.env.CLAUDE_CODE_SESSION_ID; else process.env.CLAUDE_CODE_SESSION_ID = before;
+    }
+  });
 });
+

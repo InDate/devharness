@@ -53,8 +53,8 @@ function makeReplay(cutShort: { at?: string; controller?: AbortController }) {
     }
     return { content: [{ type: 'text', text: '' }] };
   }));
-  const { replay } = createReplayTools(recorder, executeToolCall, async () => null, async () => 9222, undefined);
-  return { replay, recorder, ran };
+  const { replay, run } = createReplayTools(recorder, executeToolCall, async () => null, async () => 9222, undefined);
+  return { replay, run, recorder, ran };
 }
 
 beforeEach(() => runRegistry.clear());
@@ -63,10 +63,10 @@ afterEach(async () => { await standPausedRun(undefined); forgetCursor(); });
 describe('a step cut short by its caller', () => {
   it('leaves the session at the last step that finished and runs no teardown', async () => {
     const cutShort: { at?: string; controller?: AbortController } = { at: '#b', controller: new AbortController() };
-    const { replay, recorder, ran } = makeReplay(cutShort);
+    const { replay, run, recorder, ran } = makeReplay(cutShort);
 
-    await replay.handler({ action: 'run', sequenceId: 'seq-abort', connection: CONNECTION, wait: true, stepTo: 1 });
-    await replay.handler({ action: 'step' }, cutShort.controller!.signal);
+    await run.handler({ action: 'sequence', sequenceId: 'seq-abort', connection: CONNECTION, wait: true, stepTo: 1 });
+    await run.handler({ action: 'step' }, cutShort.controller!.signal);
 
     expect(ran).toEqual(['#a', '#b']);
     expect(recorder.getActiveSequence()).toMatchObject({ currentStep: 1 });
@@ -74,11 +74,11 @@ describe('a step cut short by its caller', () => {
 
   it('carries on from the step that was cut short, not from the first', async () => {
     const cutShort: { at?: string; controller?: AbortController } = { at: '#b', controller: new AbortController() };
-    const { replay, ran } = makeReplay(cutShort);
+    const { replay, run, ran } = makeReplay(cutShort);
 
-    await replay.handler({ action: 'run', sequenceId: 'seq-abort', connection: CONNECTION, wait: true, stepTo: 1 });
-    await replay.handler({ action: 'step' }, cutShort.controller!.signal);
-    await replay.handler({ action: 'finish' });
+    await run.handler({ action: 'sequence', sequenceId: 'seq-abort', connection: CONNECTION, wait: true, stepTo: 1 });
+    await run.handler({ action: 'step' }, cutShort.controller!.signal);
+    await run.handler({ action: 'finish' });
 
     expect(ran).toEqual(['#a', '#b', '#b', '#c', '#teardown']);
   });
@@ -87,15 +87,15 @@ describe('a step cut short by its caller', () => {
 describe('a finish cut short by its caller', () => {
   it('stops as a step does: at the last step that finished, with no teardown', async () => {
     const cutShort: { at?: string; controller?: AbortController } = { at: '#c', controller: new AbortController() };
-    const { replay, recorder, ran } = makeReplay(cutShort);
+    const { replay, run, recorder, ran } = makeReplay(cutShort);
 
-    await replay.handler({ action: 'run', sequenceId: 'seq-abort', connection: CONNECTION, wait: true, stepTo: 1 });
-    await replay.handler({ action: 'finish' }, cutShort.controller!.signal);
+    await run.handler({ action: 'sequence', sequenceId: 'seq-abort', connection: CONNECTION, wait: true, stepTo: 1 });
+    await run.handler({ action: 'finish' }, cutShort.controller!.signal);
 
     expect(ran).toEqual(['#a', '#b', '#c']);
     expect(recorder.getActiveSequence()).toMatchObject({ currentStep: 2 });
 
-    await replay.handler({ action: 'finish' });
+    await run.handler({ action: 'finish' });
     expect(ran).toEqual(['#a', '#b', '#c', '#c', '#teardown']);
   });
 });
@@ -105,13 +105,13 @@ describe('a pause point saved before a step', () => {
     const marked = sequence.commands[2] as { pauseBefore?: true };
     marked.pauseBefore = true;
     try {
-      const { replay, recorder, ran } = makeReplay({});
+      const { replay, run, recorder, ran } = makeReplay({});
 
-      await replay.handler({ action: 'run', sequenceId: 'seq-abort', connection: CONNECTION, wait: true });
+      await run.handler({ action: 'sequence', sequenceId: 'seq-abort', connection: CONNECTION, wait: true });
       expect(ran).toEqual(['#a', '#b']);
       expect(recorder.getActiveSequence()).toMatchObject({ currentStep: 2 });
 
-      await replay.handler({ action: 'finish' });
+      await run.handler({ action: 'finish' });
       expect(ran).toEqual(['#a', '#b', '#c', '#teardown']);
       expect(recorder.getActiveSequence()).toBeNull();
     } finally {

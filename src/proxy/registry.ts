@@ -83,7 +83,7 @@ export async function startProxyFor(reference: string, appUrl?: string): Promise
   const existing = proxies.get(reference);
   if (existing) return { proxy: existing, chromeArgs: launchArgs.get(reference) ?? [] };
 
-  const proxy = new InterceptProxy();
+  const proxy = new InterceptProxy(reference);
   const { chromeArgs } = await proxy.start();
   launchArgs.set(reference, chromeArgs);
   // Only the app under test reaches the network. Everything the browser does
@@ -254,7 +254,7 @@ export function boundarySettled(): Promise<void> {
  * carries the same step as the traffic beside it.
  */
 /**
- * Put a replay step's history entry on the cursor in flight. A run marks its
+ * Put a run step's history entry on the cursor in flight. A run marks its
  * step before the step's call is recorded, so the entry is known only once the
  * call is; written onto the same cursor, everything stamped after it joins
  * that call in history.

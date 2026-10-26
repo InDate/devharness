@@ -1,5 +1,5 @@
 /**
- * Parse a `KEY=value` environment file for a single replay run.
+ * Parse a `KEY=value` environment file for a single run sequence.
  *
  * A run reads its credentials from a file the caller names rather than from
  * the ambient process environment, so the values never enter the sequence

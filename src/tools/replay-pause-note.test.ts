@@ -56,8 +56,8 @@ function makeReplay(sequence: CommandSequence) {
     if (tool === 'dom') ran.push(params.selector);
     return { content: [{ type: 'text', text: '' }] };
   }));
-  const { replay } = createReplayTools(recorder, executeToolCall, async () => null, async () => 9222, undefined);
-  return { replay, recorder, ran };
+  const { replay, run } = createReplayTools(recorder, executeToolCall, async () => null, async () => 9222, undefined);
+  return { replay, run, recorder, ran };
 }
 
 const textOf = (response: any): string => response?.content?.[0]?.text ?? '';
@@ -72,18 +72,18 @@ describe('a pause point with a note', () => {
   it('stops before the step, sends the note as an instruction and in the reply, and finish carries on', async () => {
     const sequence = freshSequence();
     Object.assign(sequence.commands[1], { pauseBefore: true, pauseHolds: [], pauseNote: 'Play the other sequence in the bench.' });
-    const { replay, recorder, ran } = makeReplay(sequence);
+    const { replay, run, recorder, ran } = makeReplay(sequence);
 
-    const paused = await replay.handler({ action: 'run', sequenceId: 'seq-note', connection: CONNECTION, wait: true });
+    const paused = await run.handler({ action: 'sequence', sequenceId: 'seq-note', connection: CONNECTION, wait: true });
     expect(ran).toEqual(['#a']);
     expect(recorder.getActiveSequence()).toMatchObject({ currentStep: 1 });
     expect(textOf(paused)).toContain('To carry out before step 2:** Play the other sequence in the bench.');
     expect(events.appended).toEqual([{
       kind: 'instruction',
-      payload: { sequence: 'note-seq', step: 2, note: 'Play the other sequence in the bench.', resolve: "replay({ action: 'finish' })" },
+      payload: { sequence: 'note-seq', step: 2, note: 'Play the other sequence in the bench.', resolve: "run({ action: 'finish' })" },
     }]);
 
-    await replay.handler({ action: 'finish' });
+    await run.handler({ action: 'finish' });
     expect(ran).toEqual(['#a', '#b']);
     expect(events.appended).toHaveLength(1);
   });
@@ -91,23 +91,23 @@ describe('a pause point with a note', () => {
   it('a pause point set to notify with no note sends an instruction that asks why', async () => {
     const sequence = freshSequence();
     Object.assign(sequence.commands[1], { pauseBefore: true, pauseHolds: [], pauseNotify: true });
-    const { replay, ran } = makeReplay(sequence);
+    const { replay, run, ran } = makeReplay(sequence);
 
-    const paused = await replay.handler({ action: 'run', sequenceId: 'seq-note', connection: CONNECTION, wait: true });
+    const paused = await run.handler({ action: 'sequence', sequenceId: 'seq-note', connection: CONNECTION, wait: true });
     expect(ran).toEqual(['#a']);
     expect(textOf(paused)).toContain('notifies the session before step 2, with no reason given');
     expect(events.appended).toEqual([{
       kind: 'instruction',
-      payload: { sequence: 'note-seq', step: 2, resolve: "replay({ action: 'finish' })" },
+      payload: { sequence: 'note-seq', step: 2, resolve: "run({ action: 'finish' })" },
     }]);
   });
 
   it('a pause point that does not notify stops the run without writing an instruction', async () => {
     const sequence = freshSequence();
     Object.assign(sequence.commands[1], { pauseBefore: true, pauseHolds: [] });
-    const { replay, ran } = makeReplay(sequence);
+    const { replay, run, ran } = makeReplay(sequence);
 
-    const paused = await replay.handler({ action: 'run', sequenceId: 'seq-note', connection: CONNECTION, wait: true });
+    const paused = await run.handler({ action: 'sequence', sequenceId: 'seq-note', connection: CONNECTION, wait: true });
     expect(ran).toEqual(['#a']);
     expect(textOf(paused)).not.toContain('To carry out before step');
     expect(events.appended).toEqual([]);
@@ -117,7 +117,7 @@ describe('a pause point with a note', () => {
 describe('the pause action', () => {
   it('sets the mark, its holds and its note on the step, and remove takes all three away', async () => {
     const sequence = freshSequence();
-    const { replay } = makeReplay(sequence);
+    const { replay, run } = makeReplay(sequence);
 
     await replay.handler({ action: 'pause', sequenceId: 'seq-note', step: 2, hold: ['network'], note: '  Do the thing.  ' });
     expect(sequence.commands[1]).toMatchObject({ pauseBefore: true, pauseHolds: ['network'], pauseNotify: true, pauseNote: 'Do the thing.' });
@@ -140,7 +140,7 @@ describe('the pause action', () => {
   });
 
   it('refuses step 1, a step past the end, and a call with no step', async () => {
-    const { replay } = makeReplay(freshSequence());
+    const { replay, run } = makeReplay(freshSequence());
 
     const first: any = await replay.handler({ action: 'pause', sequenceId: 'seq-note', step: 1 });
     const past: any = await replay.handler({ action: 'pause', sequenceId: 'seq-note', step: 3 });

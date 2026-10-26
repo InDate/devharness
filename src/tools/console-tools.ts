@@ -332,7 +332,7 @@ export function createConsoleTools(
 ) {
   return {
     console: createTool(
-      'Monitor and manage console messages, from the page or from a worker via `target`. Actions: list, get, recent, search, clear, setObjectDepth',
+      'Console messages, from the page or a worker via `target`.',
       consoleSchema,
       async (args: ConsoleArgs) => {
         // Validate required params

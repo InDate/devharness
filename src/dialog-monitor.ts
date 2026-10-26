@@ -23,6 +23,7 @@ import { debugLog } from './debug-logger.js';
 import { createErrorResponse, createSuccessResponse } from './messages.js';
 import type { ToolResponseMeta } from './tool-response.js';
 import { ownScript } from './utils/own-script.js';
+import { openSession } from './utils/own-session.js';
 
 export type JavaScriptDialogType = 'alert' | 'confirm' | 'prompt' | 'beforeunload';
 
@@ -137,7 +138,7 @@ export class DialogMonitor {
   private constructor(private readonly session: CDPSession) {}
 
   static async attach(page: Page): Promise<DialogMonitor> {
-    const session = await page.createCDPSession();
+    const session = await openSession(page);
     const monitor = new DialogMonitor(session);
     monitor.listen();
     monitor.targetId = targetIdOf(page);

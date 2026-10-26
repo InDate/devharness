@@ -8,6 +8,10 @@
 
 import { describe, it, expect } from 'vitest';
 import { buildStatusSuffix } from './tool-response.js';
+import { messages } from './messages.js';
+import { mkdtempSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 
 describe('buildStatusSuffix', () => {
   it('says nothing when nothing changed', () => {
@@ -36,4 +40,17 @@ describe('buildStatusSuffix', () => {
     expect(explained).toContain('this note only once');
     expect(explained.length).toBeGreaterThan(plain.length * 5);
   });
+
+  it('explains the lines once a session, a restarted server included', () => {
+    const record = join(mkdtempSync(join(tmpdir(), 'devharness-once-')), 'session.json');
+    // A server that showed the legend before it restarted left it in the session's record.
+    writeFileSync(record, JSON.stringify(['STATUS_LEGEND']));
+    messages.setOnceRecordPath(() => record);
+    try {
+      expect(buildStatusSuffix([{ label: 'Replay', value: '0' }], true)).not.toContain('session history');
+    } finally {
+      messages.setOnceRecordPath(() => undefined);
+    }
+  });
 });
+

@@ -184,6 +184,34 @@ describe('what the page reports about a request', () => {
     expect(proxy.eventsForCommand(20).some(e => e.url.includes('both=1'))).toBe(true);
   });
 
+  it('lets a trusted dispatch outrank the stack when both are held and the stack lands nearer', async () => {
+    // The page stamps its report on its side and CDP's lands later, so the
+    // page's can sit further from the crossing than the stack's.
+    const { proxy, port } = await proxyUnderTest();
+    await markNextCommand({ kind: 'command', index: 21 });
+    const url = `http://127.0.0.1:${originPort}/held-both`;
+    proxy.noteInitiator('GET', url, 'input', Date.now() - 900);
+    proxy.noteInitiator('GET', url, 'script', Date.now());
+    await get(port, '/held-both');
+
+    const event = proxy.eventsIn().find(e => e.url.includes('/held-both'))!;
+    expect(event.evidence?.initiator).toBe('input');
+  });
+
+  it('keeps a timer root over a held trusted dispatch on the same endpoint', async () => {
+    // A poll the page measured as a timer took no gesture, however near a
+    // click's report to the same URL sits.
+    const { proxy, port } = await proxyUnderTest();
+    await markNextCommand({ kind: 'command', index: 22 });
+    const url = `http://127.0.0.1:${originPort}/held-poll`;
+    proxy.noteInitiator('GET', url, 'input', Date.now() - 900);
+    proxy.noteInitiator('GET', url, 'timer', Date.now());
+    await get(port, '/held-poll');
+
+    const event = proxy.eventsIn().find(e => e.url.includes('/held-poll'))!;
+    expect(event.evidence?.initiator).toBe('timer');
+  });
+
   it('joins a report that arrives before its request crosses', async () => {
     // The report travels a CDP session and the bytes travel the wire, so
     // either can be first. A join in one direction only would miss half.

@@ -14,6 +14,8 @@ import { resolveSelector, isExtendedSelector, cleanupResolvedSelector } from '..
 import { getOutputPath, getTempPath } from '../helpers/paths.js';
 import { throwIfAborted } from '../utils/abort.js';
 import { captureBurst, describeBurst } from '../frame-burst.js';
+import { openSession } from '../utils/own-session.js';
+import { captureScreen } from '../screen-capture.js';
 
 // WeasyPrint availability cache
 let weasyPrintCache: { available: boolean; version?: string; error?: string; checkedAt: number } | null = null;
@@ -323,7 +325,7 @@ async function generatePDFWithChrome(
 
   let cdpSession: any;
   try {
-    cdpSession = await page.createCDPSession();
+    cdpSession = await openSession(page);
 
     // A4 paper size in cm: 21.0 x 29.7 (default for consistency with WeasyPrint)
     const a4WidthCm = 21.0;
@@ -457,7 +459,7 @@ export function createScreenshotTools(resolveConnectionByName: (connection: stri
 
   return {
     screenshot: createTool(
-      'Visual verification only. Use extractText for content. Actions: fullPage (full page screenshot), viewport (viewport screenshot), element (element screenshot), pdf (print to PDF with Chrome or WeasyPrint engines), burst (the frames the page swaps over a window, tiled into a contact sheet)',
+      'Visual verification only; extractText reads content.',
       screenshotSchema,
       // abortSignal (#110): ENTRY CHECKPOINT ONLY - enough to not START a
       // capture (or, for `pdf`, a multi-second WeasyPrint/Chrome print) after
@@ -494,7 +496,7 @@ export function createScreenshotTools(resolveConnectionByName: (connection: stri
             // motion produces them: a settle let run after a release, a loop
             // that never rests. Nothing is dispatched; `input` with `burst`
             // records a gesture.
-            const client = await page.createCDPSession();
+            const client = await openSession(page);
             try {
               const { burst } = await captureBurst(
                 client,
@@ -511,6 +513,9 @@ export function createScreenshotTools(resolveConnectionByName: (connection: stri
           }
           case 'fullPage': {
             const fullPage = args.fullPage ?? true;
+            if (fullPage && targetCdpManager?.isPaused()) {
+              return createErrorResponse('SCREENSHOT_PAGE_HELD', { connection: args.connection });
+            }
             const type = args.type || 'jpeg';
             const quality = args.quality ?? (args.clip ? 50 : 30);
             const autoSaveThreshold = args.autoSaveThreshold ?? 1;
@@ -551,18 +556,16 @@ export function createScreenshotTools(resolveConnectionByName: (connection: stri
           }
 
           case 'viewport': {
-            const type = args.type || 'jpeg';
             const quality = args.quality ?? (args.clip ? 50 : 30);
             const autoSaveThreshold = args.autoSaveThreshold ?? 1;
 
-            // Get screenshot as Buffer (not base64 yet)
-            const screenshot = await page.screenshot({
-              fullPage: false,
-              type: type as 'png' | 'jpeg',
-              ...(type === 'jpeg' && { quality }),
-              ...(args.clip && { clip: args.clip }),
-              optimizeForSpeed: true,
-            }) as Buffer;
+            const client = await openSession(page);
+            const shot = await captureScreen(client, {
+              format: (args.type || 'jpeg') as 'png' | 'jpeg', quality,
+              ...(args.clip ? { clip: args.clip, of: 'viewport' as const } : {}),
+            }).finally(() => client.detach().catch(() => {}));
+            const screenshot = shot.data;
+            const type = shot.format;
 
             // Check if we should save to disk
             const shouldSaveToDisk = screenshot.length >= autoSaveThreshold || args.saveToDisk;

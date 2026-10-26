@@ -16,7 +16,7 @@ import { stepTimes, withTallies } from './tallies.js';
 import { RECORDED_BODY_CAP, writeEvents } from './traffic.js';
 
 /**
- * Every run going now - each replay run in the registry and each bench's own
+ * Every run going now - each run sequence in the registry and each bench's own
  * play - the suites, and the runs the log holds as ended.
  */
 export async function runsView(): Promise<RunsView> {
@@ -59,7 +59,7 @@ export async function runFromHome(connection: string, name: string): Promise<str
   const reference = `home-run-${++homeRuns}`;
   const launched = await sequences.callTool('connection', { action: 'launch', connection: reference, headless: true, proxy: true, forceNewInstance: true });
   if (launched.failed) return launched.result;
-  const started = await sequences.callTool('replay', { action: 'run', name, connection: reference, killChromeOnFinish: true });
+  const started = await sequences.callTool('run', { action: 'sequence', name, connection: reference, killChromeOnFinish: true });
   return started.failed ? started.result : undefined;
 }
 
@@ -104,7 +104,7 @@ export async function renameFromHome(connection: string, from: string, to: strin
   return renamed;
 }
 
-/** Stop one run going now: a replay run by its id, a bench play by its connection. */
+/** Stop one run going now: a run sequence by its id, a bench play by its connection. */
 export async function stopRun(target: { runId?: string; connection?: string }): Promise<void> {
   if (target.runId) {
     const record = runRegistry.get(target.runId);

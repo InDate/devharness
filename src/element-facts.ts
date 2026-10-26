@@ -12,7 +12,7 @@
 
 import type { CDPSession } from 'puppeteer-core';
 import type { FactKind } from './bench/wire.js';
-import { ownScript } from './utils/own-script.js';
+import { ownFunction, ownScript } from './utils/own-script.js';
 
 export interface ListenerFact {
   /** `self`, an ancestor as `tag#id.class (n up)`, `document` or `window`. */
@@ -128,7 +128,7 @@ async function readEvents(
     }
     const parent: any = await call(client, 'Runtime.callFunctionOn', {
       objectId: current,
-      functionDeclaration: 'function () { return this.parentNode; }',
+      functionDeclaration: ownFunction('parent-node', 'function () { return this.parentNode; }'),
     });
     if (up > 0 && current !== objectId) await call(client, 'Runtime.releaseObject', { objectId: current }).catch(() => {});
     current = parent?.result?.objectId;
@@ -228,7 +228,7 @@ async function readCss(client: CDPSession, objectId: string, sheets: StyleSheets
       if (other) {
         const inside: any = await call(client, 'Runtime.callFunctionOn', {
           objectId,
-          functionDeclaration: 'function (other) { return this === other || this.contains(other); }',
+          functionDeclaration: ownFunction('contains', 'function (other) { return this === other || this.contains(other); }'),
           arguments: [{ objectId: other }],
           returnByValue: true,
         }).catch(() => undefined);

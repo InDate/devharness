@@ -18,21 +18,21 @@ describe('the page standing a bench reply names', () => {
 
   it('names a hold taken outside the bench, with its source', async () => {
     const detach = attachLayer('standing-held', 'code', { engage: async () => ({ armed: true }), disengage: async () => {} });
-    await hold('standing-held', { source: 'tool', layers: ['code'] });
+    await hold('standing-held', { owner: { kind: 'agent' }, layers: ['code'] });
 
-    expect(pageStanding('standing-held', running, false)).toBe('held (code by tool)');
+    expect(pageStanding('standing-held', running, false)).toBe('held (code by agent)');
 
-    await release('standing-held');
+    await release('standing-held', { by: { kind: 'resume' } });
     detach();
   });
 
   it('leaves a held network out, which stops nothing the page runs', async () => {
     const detach = attachLayer('standing-network', 'network', { engage: async () => undefined, disengage: async () => {} });
-    await hold('standing-network', { source: 'bench', layers: ['network'] });
+    await hold('standing-network', { owner: { kind: 'person' }, layers: ['network'] });
 
     expect(pageStanding('standing-network', running, false)).toBe('running');
 
-    await release('standing-network');
+    await release('standing-network', { by: { kind: 'resume' } });
     detach();
   });
 

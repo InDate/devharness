@@ -23,6 +23,7 @@ import { productionShaped } from '../test-support/fake-execute-tool-call.js';
 let dir: string;
 let recorder: CommandRecorder;
 let replay: any;
+let run: any;
 let gotoUrls: string[];
 let killCalls: number;
 
@@ -40,7 +41,7 @@ beforeEach(async () => {
   killCalls = 0;
   vi.spyOn(recorder, 'getSequencesDir').mockReturnValue(dir);
 
-  ({ replay } = createReplayTools(
+  ({ replay, run } = createReplayTools(
     recorder,
     vi.fn(productionShaped(async (tool: string, params: Record<string, any>) => {
       if (tool === 'navigate' && params.action === 'goto') gotoUrls.push(String(params.url));
@@ -59,7 +60,7 @@ afterEach(async () => {
 });
 
 const runAll = (params: Record<string, any> = {}) =>
-  replay.handler({ action: 'runAll', ...params } as any);
+  run.handler({ action: 'all', ...params } as any);
 
 describe('runAll carries baseUrl', () => {
   it('retargets every sequence in the suite', async () => {

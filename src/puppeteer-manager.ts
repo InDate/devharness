@@ -4,6 +4,7 @@
  */
 
 import puppeteer, { Browser, Page } from 'puppeteer-core';
+import { openSession } from './utils/own-session.js';
 
 /**
  * Browser.newPage() creates the tab in the foreground, which on macOS
@@ -13,7 +14,7 @@ import puppeteer, { Browser, Page } from 'puppeteer-core';
  * stays the visible tab of its window.
  */
 export async function openBackgroundPage(browser: Browser, options: { newWindow?: boolean } = {}): Promise<Page> {
-  const session = await browser.target().createCDPSession();
+  const session = await openSession(browser.target());
   try {
     const { targetId } = await session.send('Target.createTarget', {
       url: 'about:blank', background: true, ...(options.newWindow ? { newWindow: true } : {}),

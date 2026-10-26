@@ -71,6 +71,7 @@ describe('a token-bearing step does not prompt for variables', () => {
   let dir: string;
   let recorder: CommandRecorder;
   let replay: any;
+  let run: any;
   let typed: string[];
   const original = { ...process.env };
 
@@ -81,7 +82,7 @@ describe('a token-bearing step does not prompt for variables', () => {
     vi.spyOn(recorder, 'getSequencesDir').mockReturnValue(dir);
 
     const fieldValues = new Map<string, string>();
-    ({ replay } = createReplayTools(
+    ({ replay, run } = createReplayTools(
       recorder,
       vi.fn(productionShaped(async (tool: string, params: Record<string, any>) => {
         if (tool === 'input' && params.action === 'type') {
@@ -115,7 +116,7 @@ describe('a token-bearing step does not prompt for variables', () => {
   it('runs without variables and types the environment value', async () => {
     process.env.APP_PASSWORD = 'from-env';
 
-    const res = await replay.handler({ action: 'run', wait: true, name: 'login', connection: 'suite' } as any);
+    const res = await run.handler({ action: 'sequence', wait: true, name: 'login', connection: 'suite' } as any);
 
     expect(res._meta?.replay?.prompted).toBeUndefined();
     expect(typed).toEqual(['from-env']);
@@ -124,8 +125,8 @@ describe('a token-bearing step does not prompt for variables', () => {
   it('lets an explicitly supplied value win over the environment', async () => {
     process.env.APP_PASSWORD = 'from-env';
 
-    await replay.handler({
-      action: 'run', wait: true, name: 'login', connection: 'suite',
+    await run.handler({
+      action: 'sequence', wait: true, name: 'login', connection: 'suite',
       variables: { var_0__password: 'from-caller' },
     } as any);
 
@@ -135,7 +136,7 @@ describe('a token-bearing step does not prompt for variables', () => {
   it('fails the run when the variable is unset', async () => {
     delete process.env.APP_PASSWORD;
 
-    const res = await replay.handler({ action: 'run', wait: true, name: 'login', connection: 'suite' } as any);
+    const res = await run.handler({ action: 'sequence', wait: true, name: 'login', connection: 'suite' } as any);
 
     expect(res._meta?.replay?.success).toBe(false);
     expect(typed).toEqual([]);

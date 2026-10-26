@@ -8,12 +8,13 @@ import { NetworkMonitor } from '../network-monitor.js';
 import { executeWithPauseDetection, type ActionResult } from '../debugger-aware-wrapper.js';
 import { checkBrowserAutomation } from '../error-helpers.js';
 import { createTool } from '../validation-helpers.js';
-import { createSuccessResponse, createErrorResponse } from '../messages.js';
+import { createSuccessResponse, createErrorResponse, withOnce } from '../messages.js';
 import { autoLaunchChrome } from './replay-executor.js';
 import { type ClickableCache, pageKey } from '../clickable-cache.js';
 import { collectInteractiveElements } from '../element-collector.js';
 import type { ExecuteToolCall } from '../types.js';
 import { raceAbort, throwIfAborted } from '../utils/abort.js';
+import { openSession } from '../utils/own-session.js';
 
 // =============================================================================
 // Types
@@ -88,6 +89,11 @@ export async function gatherPageContext(
   };
 }
 
+/** A navigation hint on the first reply of the session that carries it; later replies carry the counts alone. */
+function onceHint(id: string, on: string): string | undefined {
+  return withOnce('', id, { on }).trim() || undefined;
+}
+
 /**
  * Format page context for response. Each hint names `connection`,
  * since a call that acts on a connection without naming one is refused.
@@ -100,7 +106,7 @@ export function formatPageContextForResponse(context: PageContext, connection: s
     clickableElements: {
       total: context.clickableElements.total,
       inViewport: context.clickableElements.inViewport,
-      hint: `Use content({ action: 'findInteractive', ${on} }) to explore interactive elements`,
+      hint: onceHint('PAGE_CLICKABLE_HINT', on),
     },
   };
 
@@ -109,9 +115,7 @@ export function formatPageContextForResponse(context: PageContext, connection: s
     response.console = {
       errors: context.console.errors,
       warnings: context.console.warnings,
-      hint: context.console.errors > 0
-        ? `Use console({ action: 'list', ${on}, type: 'error' }) to view errors`
-        : undefined,
+      hint: context.console.errors > 0 ? onceHint('PAGE_CONSOLE_HINT', on) : undefined,
     };
   }
 
@@ -120,7 +124,7 @@ export function formatPageContextForResponse(context: PageContext, connection: s
     response.network = {
       failed: context.network.failed,
       total: context.network.total,
-      hint: `Use network({ action: 'list', ${on} }) to see each request with its status or failure`,
+      hint: onceHint('PAGE_NETWORK_HINT', on),
     };
   }
 
@@ -174,7 +178,7 @@ export function createPageTools(
 
   return {
     navigate: createTool(
-      'Navigate and control browser pages. Actions: goto (navigate to URL), reload (reload page), back (navigate back), forward (navigate forward), info (get page information)',
+      'Navigate the page; goto, reload, back and forward return its console and failed-request counts and cache its interactive elements for 5 min. info: URL, title, viewport.',
       navigateSchema,
       // abortSignal (#110): a cancelled navigation STOPS WAITING only (D4).
       // We deliberately do NOT call Page.stopLoading - a half-loaded page
@@ -267,7 +271,7 @@ export function createPageTools(
               async () => {
                 // Clear cache before reload if requested
                 if (args.ignoreCache) {
-                  const client = await page.createCDPSession();
+                  const client = await openSession(page);
                   await client.send('Network.clearBrowserCache');
                 }
 

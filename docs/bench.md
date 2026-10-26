@@ -12,10 +12,11 @@ bench({ action: 'start', connection: 'my-web-app', sequence: 'checkout', step: 3
 `start` returns as soon as the pane is open and never blocks. Open its URL in a
 tab beside the app — Chrome's split view has no API, so the person splits it.
 Launch the browser with `proxy: true` or the boundary records nothing; a
-running browser cannot gain one.
+running Chrome gains a proxied window through `connection launch` with
+`newContextWindow: true, proxy: true`.
 
 `start` on an open bench applies nothing. Switch sequence with
-`replay({ action: 'run', name, connection, bench: true })` or the pane's list;
+`run({ action: 'sequence', name, connection, bench: true })` or the pane's list;
 no `stop`.
 
 ## Nothing is injected into the app
@@ -34,9 +35,8 @@ keystroke, which is why the UI cannot live inside it.
 
 While the page is held, anything waiting on a timer stops, including a
 navigation's load timers, so other devharness tools report it as paused at a
-breakpoint. `bench({ action: 'release' })` or `stop` clears that — **not**
-`execution({ action: 'resume' })`, which leaves the bench holding a page it no
-longer has.
+breakpoint. `bench({ action: 'release' })`, `hold({ action: 'release' })`,
+`execution({ action: 'resume' })` and `stop` each release the whole hold.
 
 ## Walking into a transient state
 

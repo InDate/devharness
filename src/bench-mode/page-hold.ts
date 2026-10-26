@@ -3,7 +3,7 @@ import { debugLog } from '../debug-logger.js';
 import { readGroup, seekAnimations } from './animations.js';
 import type { NextReading } from '../page-time.js';
 import { applyMotionRules } from './motion-rules.js';
-import { attachLayer, hold, holdReading, isHeld, release, step, type HoldLayer, type HoldSource, type LayerHold, type LayerStanding } from '../hold.js';
+import { attachLayer, hold, holdReading, isHeld, isOutside, release, step, type HoldCaller, type HoldLayer, type HoldOwner, type LayerHold, type LayerStanding } from '../hold.js';
 import type { CallbackEntry, TickResult } from '../bench/wire.js';
 import { pageTime, setInspectMode } from './cdp.js';
 import { dialogMonitorOf } from '../dialog-monitor.js';
@@ -20,7 +20,9 @@ import { type BenchSession, type PageDebugger, MAX_CALLBACK_LOG, sessions } from
  * - no pause of ours may land while it runs, so one asked for and not landed
  *   is disarmed, and the callback stops come off;
  * - a pause that is NOT ours is left exactly alone, so a breakpoint someone
- *   set is still there, still stopped, when the step is done.
+ *   set is still there, still stopped, when the step is done;
+ * - a hold the run's own step took stays, so a later step of that run - a
+ *   frame step after a held press - meets the page as the earlier one left it.
  */
 export async function withPageReleased<T>(session: BenchSession, work: () => Promise<T>): Promise<T> {
   // A JavaScript dialog stops the page's scripts, so no hold of ours is in
@@ -30,23 +32,23 @@ export async function withPageReleased<T>(session: BenchSession, work: () => Pro
   // Every layer the step would otherwise drive into a stop: the queue lets
   // held traffic cross during the step, so it lands under the step.
   const restore = holdReading(session.connection).held.filter(stopsDriving);
-  if (restore.length) await release(session.connection, { layers: restore.map(held => held.layer) });
+  // Suspended for the step and put back after it with the same owners, so the
+  // step records no release: the owners stand through it.
+  if (restore.length) await release(session.connection, { by: { kind: 'resume' }, layers: restore.map(held => held.layer) });
 
-  // A step that drives the page runs page.evaluate to resolve its selector,
-  // that evaluate schedules a timer, and a callback stop left armed would stop
-  // the page inside the evaluate, which then never returns.
-  await session.debugger?.clearInstrumentationBreakpoints();
-  session.stepBreakpointsSet = false;
-
-  // A pause standing or armed that no hold accounts for is a late one of the
-  // bench's; a breakpoint's is recorded on the code layer and stays.
-  const dbg = session.debugger;
-  const foreign = holdReading(session.connection).held.some(held => held.layer === 'code' && held.source === 'breakpoint');
-  if (dbg && !foreign) {
-    if (dbg.isPaused()) await dbg.resume().catch(() => {});
-    else await dbg.disarmPause().catch(() => {});
-  } else if (foreign) {
+  const stillHeld = holdReading(session.connection).held.filter(held => held.layer !== 'network');
+  if (stillHeld.some(held => held.owners.some(isOutside))) {
     debugLog('bench', 'page held by a pause the bench did not take; leaving it alone');
+  } else if (stillHeld.length === 0) {
+    // A step that drives the page runs page.evaluate to resolve its selector,
+    // that evaluate schedules a timer, and a callback stop left armed would
+    // stop the page inside the evaluate, which then never returns.
+    await session.debugger?.clearInstrumentationBreakpoints();
+    session.stepBreakpointsSet = false;
+    // A pause standing or armed that no hold accounts for is a late one of the bench's.
+    const dbg = session.debugger;
+    if (dbg?.isPaused()) await dbg.resume().catch(() => {});
+    else await dbg?.disarmPause().catch(() => {});
   }
 
   try {
@@ -64,9 +66,11 @@ export function stoppedByDialog(session: BenchSession): boolean {
 }
 
 async function restoreAfterStep(session: BenchSession, restore: LayerHold[]): Promise<void> {
-  for (const source of new Set(restore.map(held => held.source))) {
-    const layers = restore.filter(held => held.source === source).map(held => held.layer);
-    await hold(session.connection, { source, layers }).catch(() => {});
+  const owners = new Map<string, HoldOwner>();
+  for (const held of restore) for (const owner of held.owners) owners.set(JSON.stringify(owner), owner);
+  for (const [key, owner] of owners) {
+    const layers = restore.filter(held => held.owners.some(one => JSON.stringify(one) === key)).map(held => held.layer);
+    await hold(session.connection, { owner, layers }).catch(() => {});
   }
 }
 
@@ -101,56 +105,69 @@ function debuggerOf(session: BenchSession): PageDebugger {
 }
 
 /**
- * Both clocks stopped: JS via the page's debugger connection, CSS animation
- * via playback rate.
+ * Page time stopped, with the page's main thread left running.
  *
- * An idle page has nothing to stop, so the pause is armed rather than taken
- * and lands on the next script the page runs; the debugger connection tells
- * the two apart and releases each its own way. A pause already standing - the
- * code kept stopped after a screen released on its own - is the hold's.
+ * The CSS rate holds CSS, Web Animations and SVG; the page clock holds timers,
+ * Date, performance.now and media, and queues the app's frame callbacks; the
+ * input guard drops a person's input and cuts a smooth scroll where it stands.
+ * The main thread keeps painting, so the screen, the picker's outline and every
+ * read agree with what is shown, where a `Debugger.pause` left a smooth scroll
+ * running to the end of the page, the picker blind and reads stale (26 Oct,
+ * `hold-without-pause-keeps-page-still`). A page with no clock has nothing else
+ * to hold its timers, and its JS is paused by the debugger as before.
  *
- * Armed for a frame stop, the hold pauses nothing yet: the input dispatched
- * after it runs with the animations it starts standing at 0ms, and
- * `landFrameStop` stops the page in front of the frame it scheduled.
+ * Armed for a frame stop, the hold queues frames and stops nothing yet: the
+ * input dispatched after it runs whole, and `landFrameStop` stops page time in
+ * front of the frame it scheduled.
  */
 async function holdScreen(session: BenchSession): Promise<void> {
   if (session.frozen) return;
-  const dbg = debuggerOf(session);
   await session.time.holdAnimations();
   if (session.frameStopArming) {
     session.frameStopArming = false;
     session.groupSince = Date.now();
     session.framesHeld = await session.time.holdFrames();
-  } else if (!dbg.isPaused()) {
-    // Page time stops with the CSS animations, before the pause: on an idle
-    // page the pause only arms, and lands when the page next runs, which can be
-    // long after; page time would run on until then.
+  } else if (await session.time.hasClock()) {
     await pauseClock(session);
-    await dbg.pause();
+    session.framesHeld = await session.time.holdFrames();
+    await session.time.holdInput();
+  } else {
+    const dbg = debuggerOf(session);
+    if (!dbg.isPaused()) await dbg.pause();
+    session.pausedForScreen = true;
   }
   session.frozen = true;
 }
 
-/**
- * Let the page run again without closing the bench. The callback stops go
- * first, or the resume would stop on the very next callback.
- */
+/** Let the page run again without closing the bench. */
 async function releaseScreenHold(session: BenchSession): Promise<void> {
   if (!session.frozen) return;
   await releaseScreen(session);
-  await releaseJs(session);
+  // A pause of the bench's stands on a page with no clock, and after a frame
+  // stop's arming on one whose frames it could not hold.
+  if (session.pausedForScreen || session.debugger?.isPaused()) await releaseJs(session);
+  else await releaseTime(session);
 }
 
 /**
- * The screen's half of a release: the callback stops come off and CSS
- * animation runs again, and the page's JS stays paused where it stands.
+ * The screen's half of a release: input reaches the app again, the page
+ * stands where the hold found it, and CSS animation runs again. Page time, and
+ * a debugger pause on a page with no clock, stay stopped.
  */
 async function releaseScreen(session: BenchSession): Promise<void> {
   if (!session.frozen) return;
   await session.debugger?.clearInstrumentationBreakpoints();
   session.stepBreakpointsSet = false;
+  await session.time.releaseInput();
   await session.time.releaseAnimations();
   session.frozen = false;
+}
+
+/** Page time, its media and the app's queued frames run on. */
+async function releaseTime(session: BenchSession): Promise<void> {
+  await resumeClock(session);
+  session.framesHeld = false;
+  session.pausedEvent = undefined;
 }
 
 /**
@@ -179,7 +196,7 @@ export async function resumeClock(session: BenchSession): Promise<void> {
  */
 async function releaseJs(session: BenchSession): Promise<void> {
   const dbg = session.debugger;
-  const foreign = holdReading(session.connection).held.some(held => held.layer === 'code' && held.source === 'breakpoint' && !held.via);
+  const foreign = holdReading(session.connection).held.some(held => held.layer === 'code' && !held.via && held.owners.some(isOutside));
   if (foreign) return;
   if (dbg?.isPaused()) {
     await resumeClock(session);
@@ -189,6 +206,7 @@ async function releaseJs(session: BenchSession): Promise<void> {
     await resumeClock(session);
   }
   session.framesHeld = false;
+  session.pausedForScreen = false;
   session.pausedEvent = undefined;
 }
 
@@ -201,31 +219,32 @@ async function releaseJs(session: BenchSession): Promise<void> {
  * stopped to look at and they would have no way to know the bench did it.
  */
 export async function releaseBench(session: BenchSession): Promise<void> {
-  await releaseHolds(session.connection);
+  await releaseHolds(session.connection, { kind: 'person' });
   session.detachUi?.();
+  session.detachRecord?.();
+  session.detachRules?.();
   session.unwatchPause?.();
 }
 
-export function holdUi(session: BenchSession): Promise<unknown> {
-  return hold(session.connection, { source: 'bench', layers: ['ui'] });
+export function holdUi(session: BenchSession, owner: HoldOwner): Promise<unknown> {
+  return hold(session.connection, { owner, layers: ['ui'] });
 }
 
-export function releaseUi(session: BenchSession): Promise<unknown> {
-  return release(session.connection, { layers: ['ui'] });
+export function releaseUi(session: BenchSession, by: HoldCaller): Promise<unknown> {
+  return release(session.connection, { by, layers: ['ui'] });
 }
 
-/** Release every layer held on the connection, leaving a breakpoint's pause where it stopped. */
-export async function releaseHolds(connection: string): Promise<void> {
+/** Release what `by` may end on every layer, leaving a breakpoint's pause where it stopped. */
+export async function releaseHolds(connection: string, by: HoldCaller): Promise<void> {
   const layers = holdReading(connection).held
-    .filter(held => held.source !== 'breakpoint')
+    .filter(held => !held.owners.some(isOutside))
     .map(held => held.layer);
-  if (layers.length) await release(connection, { layers });
+  if (layers.length) await release(connection, { by, layers });
 }
 
 /** The bench's own UI hold, attached to the hold record for as long as the bench is open. */
 export function attachUiLayer(session: BenchSession): void {
   session.detachUi = attachLayer(session.connection, 'ui', {
-    covers: ['code'],
     engage: async () => {
       await holdScreen(session);
       return uiStanding(session);
@@ -260,7 +279,7 @@ export async function letGoForRun(session: BenchSession): Promise<void> {
   const reading = holdReading(session.connection).held;
   const layers = reading.filter(stopsDriving).map(held => held.layer);
   if (layers.length === 0) return;
-  await release(session.connection, { layers });
+  await release(session.connection, { by: { kind: 'resume' }, layers });
   await announceHold(session, reading.map(held => held.layer), false, 'bench');
 }
 
@@ -268,23 +287,23 @@ export async function letGoForRun(session: BenchSession): Promise<void> {
  * Whether a hold has to be let go for a step to drive the page.
  *
  * A held screen or held code stops the page's JS, so a click reaches nothing
- * and a step waits on it to its timeout: those go, a breakpoint's excepted,
- * which is left where it stopped. Held traffic stops nothing the page does -
- * it stands for a network that is slow or gone, which is a condition to drive
- * the app under - so a person's traffic hold stays. The traffic a sequence's
- * own pause took goes, so what crosses lands under the step that let it
- * through.
+ * and a step waits on it to its timeout: those go. A breakpoint's stays where
+ * it stopped, and so does a hold a run's own step took, which the run's later
+ * steps work on. Held traffic stops nothing the page does - it stands for a
+ * network that is slow or gone, which is a condition to drive the app under -
+ * so it stays, and only the traffic a run's pause took goes, so what crosses
+ * lands under the step that let it through.
  */
 function stopsDriving(held: LayerHold): boolean {
-  if (held.source === 'breakpoint') return false;
-  return held.layer !== 'network' || held.source === 'sequence';
+  if (held.owners.some(owner => owner.kind === 'outside' || owner.kind === 'run-step')) return false;
+  return held.layer !== 'network' || held.owners.every(owner => owner.kind === 'run-pause');
 }
 
 /**
  * Write a hold or release the bench made to the session's event stream, so the
  * agent reads the moment the person stopped on while it is still held.
  */
-export async function announceHold(session: BenchSession, before: HoldLayer[], held: boolean, source: HoldSource): Promise<void> {
+export async function announceHold(session: BenchSession, before: HoldLayer[], held: boolean, source: string): Promise<void> {
   const after = holdReading(session.connection).held.map(layer => layer.layer);
   const changed = held ? after.filter(layer => !before.includes(layer)) : before.filter(layer => !after.includes(layer));
   if (changed.length === 0) return;
@@ -314,14 +333,20 @@ export type FrameStopLanding = 'frame' | 'no clock';
  * Stand the page at the frame an input scheduled, once the input is
  * delivered. The page clock has held the app's frame callbacks since before
  * the dispatch, with the page's JS left running for the whole input; page
- * time stops first, so no timer fires between, then the page is paused, with
- * the first frame's callbacks queued and unrun. A page opened before the clock
- * was put in has no frames to hold, and is paused where it stands.
+ * time stops, so no timer fires, and the first frame's callbacks stand queued
+ * and unrun, with the main thread still painting. A person's input is guarded
+ * from here on, after the input the stop was armed for. A page opened before
+ * the clock was put in has no frames to hold, and is paused where it stands.
  */
 export async function landFrameStop(session: BenchSession): Promise<FrameStopLanding> {
   await pauseClock(session);
-  const dbg = session.debugger;
-  if (dbg && !dbg.isPaused()) await dbg.pause().catch(() => {});
+  if (session.framesHeld) {
+    await session.time.holdInput();
+  } else {
+    const dbg = session.debugger;
+    if (dbg && !dbg.isPaused()) await dbg.pause().catch(() => {});
+    session.pausedForScreen = true;
+  }
   // The standing rules act on the group at 0ms: an animation reported created
   // cannot always be read yet, and its start is reported only after the release.
   if (session.motionRules?.length) {
@@ -386,16 +411,20 @@ function nextStop(dbg: PageDebugger, timeoutMs: number): Promise<any | null> {
 export async function tickBench(
   connection: string,
   request: { steps?: number; budgetMs?: number } = {},
-  stepTimeoutMs = 2000
+  stepTimeoutMs = 2000,
+  owner: HoldOwner = { kind: 'agent' },
 ): Promise<TickResult | undefined> {
   const session = sessions.get(connection);
   if (!session) return undefined;
 
   const { client } = session;
-  // Stepping only means anything against a held page.
-  if (!session.frozen) await holdUi(session);
+  // Stepping only means anything against a held page, which stays held after
+  // the step under whoever asked for it.
+  if (!session.frozen) await holdUi(session, owner);
   const dbg = debuggerOf(session);
-  await ensureStepBreakpoints(session);
+  // Callback stops step a page held by the debugger; on a page held by page
+  // time, whose main thread runs, they would stop it on its next timer.
+  if (session.pausedForScreen) await ensureStepBreakpoints(session);
 
   // Neither given means the smallest possible move: one callback.
   const wantSteps = request.steps ?? (request.budgetMs === undefined ? 1 : undefined);
@@ -418,8 +447,12 @@ export async function tickBench(
     const before = await pageTime(client);
     // A stopped page clock holds the page's timers and its held frames, which
     // no resume would reach: the next of them runs on the stopped page, page
-    // time moved on to it.
-    const held = dbg.isPaused() ? await clockNext(session) : undefined;
+    // time moved on to it. The screen's hold stops the clock whether its pause
+    // has landed or stands armed on an idle page.
+    const held = session.frozen ? await clockNext(session) : undefined;
+    // Held by page time, the clock holds everything a step can reach: with
+    // nothing queued there, the page has gone quiet.
+    if (!held && session.frozen && !session.pausedForScreen) { quiet = true; break; }
     if (held) {
       steps++;
       elapsed += Math.max(0, held.now - before);

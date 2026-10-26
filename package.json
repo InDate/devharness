@@ -27,7 +27,7 @@
     "check:workers": "node scripts/check-worker-eval.mjs",
     "check:sequences": "node scripts/check-sequences.mjs",
     "prepublishOnly": "npm run test:run && npm run build:verify",
-    "version": "node scripts/sync-skill-version.mjs",
+    "version": "node scripts/sync-plugin-pin.mjs",
     "postversion": "git push && git push --tags"
   },
   "keywords": [
@@ -61,7 +61,6 @@
   "files": [
     "build/",
     "docs/",
-    "plugin/skills/",
     "README.md",
     "LICENSE"
   ],

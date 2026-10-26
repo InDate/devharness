@@ -1,7 +1,8 @@
 /**
  * The page's clock, put in before the app's first script.
  *
- * A hold stops the page's JS and its CSS animations, and wall time goes on:
+ * A hold stops the page's CSS animations, and a code hold its JS, while wall
+ * time goes on:
  * a timer set before the hold comes due during it and fires the moment the
  * page runs again, a JS animation that reads performance.now() jumps by the
  * length of the hold, and a sequence replayed faster than it was recorded
@@ -149,8 +150,19 @@ function installPageClock(g: any): void {
     const frame = native.requestAnimationFrame;
     const cancel = native.cancelAnimationFrame;
     const nativeIds = new Map<number, number>();
+    // Chrome stamps a frame with its document timeline, which the CSS rate a
+    // hold sets has already slowed, so the stamp is not native time to convert:
+    // converted, it falls behind performance.now() by every hold so far. A
+    // frame takes the page time read at its first callback, and every callback
+    // that frame runs shares it.
+    let frameStamp: number | undefined;
+    let framePage = 0;
+    const frameTime = (at: number): number => {
+      if (at !== frameStamp) { frameStamp = at; framePage = pageNow(); }
+      return framePage;
+    };
     const pass = (id: number, callback: Function) => {
-      nativeIds.set(id, frame((at: number) => { nativeIds.delete(id); callback(toPage(at)); }));
+      nativeIds.set(id, frame((at: number) => { nativeIds.delete(id); callback(frameTime(at)); }));
     };
     define(g, 'requestAnimationFrame', function requestAnimationFrame(callback: Function) {
       const id = nextFrameId++;
@@ -194,16 +206,52 @@ function installPageClock(g: any): void {
   } catch { /* a frozen prototype keeps the native constructor */ }
   define(g, 'Date', Date);
 
+  // Media plays on a clock of its own that neither page time nor the CSS rate
+  // reaches: a held page left a video playing to its end (26 Oct). What plays
+  // when page time stops is paused with it, moved on by each frame step, and
+  // played again when page time runs; the app's own pause events fire for it.
+  const heldMedia = new Set<any>();
+  const mediaElements = (): any[] => {
+    try { return [...g.document.querySelectorAll('video, audio')]; } catch { return []; }
+  };
+  const holdMedia = () => {
+    for (const element of mediaElements()) if (!element.paused) { element.pause(); heldMedia.add(element); }
+  };
+  const releaseMedia = () => {
+    for (const element of heldMedia) { try { element.play()?.catch?.(() => {}); } catch { /* removed from the document */ } }
+    heldMedia.clear();
+  };
+  const stepMedia = (ms: number) => {
+    for (const element of heldMedia) { try { element.currentTime += ms / 1000; } catch { /* no seekable range yet */ } }
+  };
+
+  // A frame recalculates style and lays the page out after its callbacks, and
+  // recalculating style is what starts a CSS transition. A held page renders
+  // no frame, so a step that ran the page's callbacks brings the whole document
+  // up to date here - a computed style read updates one element alone, a
+  // layout read every one - and the transitions they set off begin on that
+  // step, not on whatever next reads the page.
+  const flushStyle = () => {
+    try { if (g.document.documentElement) void g.document.documentElement.offsetWidth; } catch { /* nothing to lay out */ }
+  };
+  // What a step's callbacks created and ended, read once style is current:
+  // a transition a held step sets off stands pending, where only the page's
+  // own list reaches it.
+  const swept = (): object => {
+    const reading = g[Symbol.for('devharness.animations')]?.sweep?.();
+    return reading ? { animations: reading } : {};
+  };
+
   // The controls devharness drives from outside, read while the page's JS is
   // stopped as well as while it runs.
   g[Symbol.for('devharness.clock')] = {
     /** Stop page time where it stands; no timer fires until it runs again. */
-    pause() { if (paused) return page; sync(); paused = true; schedule(); return page; },
+    pause() { if (paused) return page; sync(); paused = true; schedule(); holdMedia(); return page; },
     /** Run page time on from where it stopped, and the frames held with it. */
     resume() {
       if (framesHeld) releaseFrames?.();
       if (!paused) return page;
-      syncedNative = native.perfNow(); paused = false; schedule(); return page;
+      syncedNative = native.perfNow(); paused = false; schedule(); if (rate > 0) releaseMedia(); return page;
     },
     /** Queue the app's frame callbacks in place of handing them to Chrome. */
     holdFrames() { if (!releaseFrames) return false; framesHeld = true; return true; },
@@ -218,6 +266,7 @@ function installPageClock(g: any): void {
       paused = true;
       schedule();
       page += Math.max(0, Number(ms) || 0);
+      stepMedia(Math.max(0, Number(ms) || 0));
       // One callback's error leaves the rest of the frame to run, as the
       // browser runs each task and frame callback apart; it is reported as
       // an uncaught error would be.
@@ -231,7 +280,8 @@ function installPageClock(g: any): void {
       const batch = [...queuedFrames.values()];
       queuedFrames.clear();
       for (const callback of batch) run(callback, [page]);
-      return { now: page, ran: batch.length, waiting: queuedFrames.size };
+      flushStyle();
+      return { now: page, ran: batch.length, waiting: queuedFrames.size, ...swept() };
     },
     /**
      * The next thing a stopped clock holds, run on its own: the timer due
@@ -247,12 +297,20 @@ function installPageClock(g: any): void {
         page = Math.max(page, timer.at);
         if (timer.interval !== undefined) { timer.at += timer.interval; timer.order = order++; } else timers.delete(timer.id);
         try { timer.callback.apply(g, timer.args); } catch (error) { if (typeof g.reportError === 'function') g.reportError(error); }
-        return { kind: timer.interval !== undefined ? 'setInterval' : 'setTimeout', fn: timer.callback.name || '', now: page };
+        flushStyle();
+        return { kind: timer.interval !== undefined ? 'setInterval' : 'setTimeout', fn: timer.callback.name || '', now: page, ...swept() };
       }
       return { kind: 'requestAnimationFrame', fn: '', ...this.frame(frameMs) };
     },
     /** Run page time at this multiple of wall time. */
-    rate(value: number) { sync(); rate = Math.max(0, Number(value) || 0); schedule(); return rate; },
+    rate(value: number) {
+      sync(); rate = Math.max(0, Number(value) || 0); schedule();
+      for (const element of mediaElements()) { try { if (rate > 0) element.playbackRate = rate; } catch { /* a rate the element refuses */ } }
+      if (rate === 0) holdMedia(); else if (!paused) releaseMedia();
+      return rate;
+    },
+    /** Wall-time scheduling for devharness's own page scripts, out of page time and out of the callbacks a step runs. */
+    native: { setTimeout: native.setTimeout, clearTimeout: native.clearTimeout },
     /** Where page time stands, and how far behind wall time holds and slower speeds have left it. */
     state() {
       const now = pageNow();

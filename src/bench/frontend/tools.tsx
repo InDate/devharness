@@ -85,7 +85,7 @@ const PURPOSES: Array<[string, string[]]> = [
   ['debug', ['breakpoint', 'execution', 'inspect', 'source', 'console']],
   ['page', ['navigate', 'input', 'dom', 'content', 'modal', 'screenshot', 'storage', 'download']],
   ['traffic', ['network', 'proxy', 'hold', 'request']],
-  ['sequences', ['replay', 'check', 'assert', 'wait', 'bench']],
+  ['sequences', ['replay', 'run', 'check', 'assert', 'wait', 'bench']],
   ['project', ['issues', 'message', 'dashboard', 'config']],
 ];
 
@@ -494,7 +494,7 @@ function optionsOf(tool: ToolCard, action: string | undefined, kept: string[] = 
 function knownValue(tool: string, action: string | undefined, name: string, context: ToolContext): unknown {
   if (name === 'connection') return tool === 'connection' && (action === 'launch' || action === 'attach') ? undefined : context.connection;
   if (name === 'url' && tool === 'navigate') return context.pageUrl;
-  if (name === 'name' && tool === 'replay' && context.sequence && ['run', 'get', 'export'].includes(action ?? '')) return context.sequence;
+  if (name === 'name' && context.sequence && ((tool === 'replay' && ['run', 'get', 'export'].includes(action ?? '')) || (tool === 'run' && action === 'sequence'))) return context.sequence;
   if (name === 'reason') return 'from the bench Tools tab';
   return undefined;
 }
@@ -524,7 +524,7 @@ function startingPayload(tool: ToolCard, action: string | undefined, context: To
 function suggestionsFor(tool: string, name: string, values: ToolValues, context: ToolContext): string[] {
   if (name === 'connection') return values.connections;
   if ((name === 'serverId' || name === 'id') && tool === 'server') return values.servers;
-  if ((name === 'name' && tool === 'replay') || (name === 'sequence' && tool === 'bench')) return values.sequences;
+  if ((name === 'name' && (tool === 'replay' || tool === 'run')) || (name === 'sequence' && tool === 'bench')) return values.sequences;
   if (name === 'profile') return values.profiles;
   if (name === 'url' && tool === 'navigate' && context.pageUrl) return [context.pageUrl];
   return [];

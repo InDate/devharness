@@ -8,37 +8,28 @@
 import { promises as fs } from 'fs';
 import type { BenchSession } from './session.js';
 import { sessions } from './session.js';
-import { request, send } from './cdp.js';
-import { seekAnimations, setPlaybackRate } from './animations.js';
+import { actOn, readNow, seekAnimations, setPlaybackRate } from './animations.js';
+import { animationRecordOf } from '../animation-record.js';
 import { recordBenchCall } from '../person-watch.js';
 import type { AnimationView, MotionView } from '../bench/wire.js';
 
 /** Each running animation and how far through it stands, read without moving it. */
 export async function animationsOf(session: BenchSession): Promise<AnimationView[]> {
   const views: AnimationView[] = [];
-  for (const tracked of [...session.animations.values()]) {
-    if (tracked.duration === undefined) continue;
-    let currentMs: number;
-    try {
-      const { currentTime } = await request(session.client, 'Animation.getCurrentTime', { id: tracked.id }, 500);
-      currentMs = typeof currentTime === 'number' && currentTime > 0 ? currentTime : 0;
-    } catch {
-      session.animations.delete(tracked.id);
-      continue;
-    }
-    // A rule may have given it other timing, slowed or retimed; it runs to that.
-    const applied = session.motionApplied?.find(one => one.id === tracked.id);
-    const duration = applied?.duration || tracked.duration;
-    const delay = applied ? applied.delay : tracked.delay ?? 0;
+  for (const entry of animationRecordOf(session.connection).live()) {
+    const now = await readNow(session, entry);
+    // Only an Animation object stands still to be seeked; page motion is recorded, not driven.
+    if (!now || (now.type !== 'CSSTransition' && now.type !== 'CSSAnimation' && now.type !== 'WebAnimation')) continue;
+    // A rule may have given it other timing; it runs to that.
+    const applied = session.motionApplied?.find(one => one.id === entry.key);
+    const duration = applied?.duration || now.duration;
+    const delay = applied ? applied.delay : now.delay;
     const span = delay + duration;
-    if (span > 0 && currentMs >= span) {
-      session.animations.delete(tracked.id);
-      continue;
-    }
-    const progress = duration ? Math.max(0, Math.min(1, (currentMs - delay) / duration)) : 0;
+    if (span > 0 && now.currentTime >= span) continue;
+    const progress = duration ? Math.max(0, Math.min(1, (now.currentTime - delay) / duration)) : 0;
     views.push({
-      id: tracked.id, name: tracked.name, ...(applied?.element ? { element: applied.element } : {}), type: tracked.type,
-      currentMs: Math.round(currentMs), durationMs: duration, ownDurationMs: tracked.duration, delayMs: delay, progress,
+      id: entry.key, name: now.name, ...(now.element ? { element: now.element } : {}), type: now.type,
+      currentMs: Math.round(now.currentTime), durationMs: duration, ownDurationMs: entry.read?.duration ?? now.duration, delayMs: delay, progress,
     });
   }
   return views;
@@ -76,7 +67,8 @@ export async function setBenchRate(connection: string, playbackRate: number): Pr
 export async function seekOne(connection: string, id: string, currentMs: number): Promise<void> {
   const session = sessions.get(connection);
   if (!session) return;
-  await send(session.client, 'Animation.seekAnimations', { animations: [id], currentTime: Math.max(0, currentMs) }).catch(() => {});
+  const entry = animationRecordOf(connection).get(id);
+  if (entry) await actOn(session, entry, pageId => `seek(${pageId}, ${Math.max(0, currentMs)})`);
 }
 
 /** Close the burst sheet; `drop` deletes its frames from disk. */

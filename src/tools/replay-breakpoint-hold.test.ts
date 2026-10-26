@@ -50,7 +50,7 @@ function makeReplay() {
       ran.push(params.selector);
       if (params.selector === '#stops') {
         paused = true;
-        recordHeld(CONNECTION, 'code', 'breakpoint', { at: `${LOGPOINT_LINE.url}:${LOGPOINT_LINE.lineNumber}` });
+        recordHeld(CONNECTION, 'code', { kind: 'outside' }, { at: `${LOGPOINT_LINE.url}:${LOGPOINT_LINE.lineNumber}` });
       }
     }
     return { content: [{ type: 'text', text: '' }] };
@@ -58,8 +58,8 @@ function makeReplay() {
   // The code layer's release resumes the page, as the connection's debugger does.
   const resume = vi.fn(async () => { paused = false; });
   detach = attachLayer(CONNECTION, 'code', { engage: async () => { paused = true; }, disengage: resume });
-  const { replay } = createReplayTools(recorder, executeToolCall, async () => null, async () => 9222, undefined);
-  return { replay, recorder, ran, resume, isPaused: () => paused };
+  const { replay, run } = createReplayTools(recorder, executeToolCall, async () => null, async () => 9222, undefined);
+  return { replay, run, recorder, ran, resume, isPaused: () => paused };
 }
 
 beforeEach(() => runRegistry.clear());
@@ -67,12 +67,12 @@ afterEach(async () => { detach?.(); detach = undefined; await standPausedRun(und
 
 describe('a run that a breakpoint the sequence did not set stops', () => {
   it('holds on the step that ran into it, with where the page stopped', async () => {
-    const { replay, recorder, ran } = makeReplay();
+    const { replay, run, recorder, ran } = makeReplay();
 
-    const result: any = await replay.handler({ action: 'run', sequenceId: 'seq-hold', connection: CONNECTION, wait: true });
+    const result: any = await run.handler({ action: 'sequence', sequenceId: 'seq-hold', connection: CONNECTION, wait: true });
 
     expect(result._meta.replay).toMatchObject({ paused: true });
-    expect(result.content[0].text).toContain("replay({ action: 'finish' })");
+    expect(result.content[0].text).toContain("run({ action: 'finish' })");
     expect(ran).toEqual(['#a', '#stops']);
     expect(recorder.getActiveSequence()).toMatchObject({
       currentStep: 2,
@@ -81,10 +81,10 @@ describe('a run that a breakpoint the sequence did not set stops', () => {
   });
 
   it('resumes the page and runs the remaining steps on finish', async () => {
-    const { replay, recorder, ran, resume, isPaused } = makeReplay();
-    await replay.handler({ action: 'run', sequenceId: 'seq-hold', connection: CONNECTION, wait: true });
+    const { replay, run, recorder, ran, resume, isPaused } = makeReplay();
+    await run.handler({ action: 'sequence', sequenceId: 'seq-hold', connection: CONNECTION, wait: true });
 
-    const result: any = await replay.handler({ action: 'finish' });
+    const result: any = await run.handler({ action: 'finish' });
 
     expect(result.isError).toBeUndefined();
     expect(resume).toHaveBeenCalledTimes(1);
@@ -95,16 +95,16 @@ describe('a run that a breakpoint the sequence did not set stops', () => {
   });
 
   it('holds a step-through session on that step, and the next step resumes the page first', async () => {
-    const { replay, recorder, ran, resume } = makeReplay();
+    const { replay, run, recorder, ran, resume } = makeReplay();
     // Holding nothing at the stepTo pause, so the one resume counted is the breakpoint's.
-    await replay.handler({ action: 'run', sequenceId: 'seq-hold', connection: CONNECTION, wait: true, stepTo: 1, hold: [] });
+    await run.handler({ action: 'sequence', sequenceId: 'seq-hold', connection: CONNECTION, wait: true, stepTo: 1, hold: [] });
 
-    const held: any = await replay.handler({ action: 'step' });
+    const held: any = await run.handler({ action: 'step' });
 
     expect(held.content[0].text).toContain('Held at step 2');
     expect(recorder.getActiveSequence()).toMatchObject({ currentStep: 2, breakpointHit: { lineNumber: 180 } });
 
-    await replay.handler({ action: 'step' });
+    await run.handler({ action: 'step' });
 
     expect(resume).toHaveBeenCalledTimes(1);
     expect(ran).toEqual(['#a', '#stops', '#c']);
@@ -114,9 +114,9 @@ describe('a run that a breakpoint the sequence did not set stops', () => {
 
 describe('the step a breakpoint stopped the page inside', () => {
   it("stays open through the pause, its cursor standing on the run's own pass", async () => {
-    const { replay, recorder } = makeReplay();
+    const { replay, run, recorder } = makeReplay();
 
-    await replay.handler({ action: 'run', sequenceId: 'seq-hold', connection: CONNECTION, wait: true });
+    await run.handler({ action: 'sequence', sequenceId: 'seq-hold', connection: CONNECTION, wait: true });
 
     const active = recorder.getActiveSequence();
     expect(active.openStep).toMatchObject({ step: 1 });
@@ -126,10 +126,10 @@ describe('the step a breakpoint stopped the page inside', () => {
   });
 
   it('is closed by finish, which leaves no cursor standing once the run ends', async () => {
-    const { replay } = makeReplay();
+    const { replay, run } = makeReplay();
 
-    await replay.handler({ action: 'run', sequenceId: 'seq-hold', connection: CONNECTION, wait: true });
-    await replay.handler({ action: 'finish' });
+    await run.handler({ action: 'sequence', sequenceId: 'seq-hold', connection: CONNECTION, wait: true });
+    await run.handler({ action: 'finish' });
 
     expect(currentCursor()).toBeUndefined();
   });
@@ -137,32 +137,32 @@ describe('the step a breakpoint stopped the page inside', () => {
 
 describe('a run paused at stepTo', () => {
   it('stands a pause stamp before the step it resumes at, which cancel takes down', async () => {
-    const { replay } = makeReplay();
+    const { replay, run } = makeReplay();
 
-    await replay.handler({ action: 'run', sequenceId: 'seq-hold', connection: CONNECTION, wait: true, stepTo: 1 });
+    await run.handler({ action: 'sequence', sequenceId: 'seq-hold', connection: CONNECTION, wait: true, stepTo: 1 });
     expect(currentCursor()).toMatchObject({ kind: 'replay', step: 1, paused: true });
 
-    await replay.handler({ action: 'cancel' });
+    await run.handler({ action: 'cancel' });
     expect(currentCursor()).toBeUndefined();
   });
 });
 
 describe('what a stepTo pause holds', () => {
   it('holds the page by default, and finish releases it before the next step', async () => {
-    const { replay, isPaused } = makeReplay();
+    const { replay, run, isPaused } = makeReplay();
 
-    await replay.handler({ action: 'run', sequenceId: 'seq-hold', connection: CONNECTION, wait: true, stepTo: 1 });
-    expect(holdReading(CONNECTION).held).toEqual([expect.objectContaining({ layer: 'code', source: 'sequence' })]);
+    await run.handler({ action: 'sequence', sequenceId: 'seq-hold', connection: CONNECTION, wait: true, stepTo: 1 });
+    expect(holdReading(CONNECTION).held).toEqual([expect.objectContaining({ layer: 'code', owners: [expect.objectContaining({ kind: 'run-pause' })] })]);
     expect(isPaused()).toBe(true);
 
-    await replay.handler({ action: 'step' });
-    expect(holdReading(CONNECTION).held.filter(held => held.source === 'sequence')).toEqual([]);
+    await run.handler({ action: 'step' });
+    expect(holdReading(CONNECTION).held.filter(held => held.owners.some(owner => owner.kind === 'run-pause'))).toEqual([]);
   });
 
   it('holds nothing where the run asks for nothing', async () => {
-    const { replay, isPaused } = makeReplay();
+    const { replay, run, isPaused } = makeReplay();
 
-    await replay.handler({ action: 'run', sequenceId: 'seq-hold', connection: CONNECTION, wait: true, stepTo: 1, hold: [] });
+    await run.handler({ action: 'sequence', sequenceId: 'seq-hold', connection: CONNECTION, wait: true, stepTo: 1, hold: [] });
     expect(holdReading(CONNECTION).held).toEqual([]);
     expect(isPaused()).toBe(false);
   });
@@ -174,14 +174,14 @@ describe('what a pause point holds', () => {
     marked.pauseBefore = true;
     try {
       const first = makeReplay();
-      await first.replay.handler({ action: 'run', sequenceId: 'seq-hold', connection: CONNECTION, wait: true });
-      expect(holdReading(CONNECTION).held).toEqual([expect.objectContaining({ layer: 'code', source: 'sequence' })]);
-      await first.replay.handler({ action: 'cancel' });
+      await first.run.handler({ action: 'sequence', sequenceId: 'seq-hold', connection: CONNECTION, wait: true });
+      expect(holdReading(CONNECTION).held).toEqual([expect.objectContaining({ layer: 'code', owners: [expect.objectContaining({ kind: 'run-pause' })] })]);
+      await first.run.handler({ action: 'cancel' });
       detach?.(); detach = undefined;
 
       marked.pauseHolds = [];
       const second = makeReplay();
-      await second.replay.handler({ action: 'run', sequenceId: 'seq-hold', connection: CONNECTION, wait: true });
+      await second.run.handler({ action: 'sequence', sequenceId: 'seq-hold', connection: CONNECTION, wait: true });
       expect(second.ran).toEqual(['#a']);
       expect(holdReading(CONNECTION).held).toEqual([]);
     } finally {

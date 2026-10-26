@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { createTool } from '../validation-helpers.js';
 import { createErrorResponse } from '../messages.js';
-import { ALL_LAYERS, hold, holdableLayers, holdReading, release, step, type HoldLayer, type HoldReading } from '../hold.js';
+import { ALL_LAYERS, hold, holdableLayers, holdReading, holderWord, release, step, type HoldLayer, type HoldReading } from '../hold.js';
+import { callOwner } from '../call-origin.js';
 import { getProxy } from '../proxy/registry.js';
 import { sessions } from '../bench-mode/session.js';
 import { readGroup, seekAnimations } from '../bench-mode/animations.js';
@@ -57,7 +58,7 @@ function render(reading: HoldReading): string {
         const where = layer.standing
           ? ' - ' + Object.entries(layer.standing).map(([key, value]) => `${key} ${value}`).join(', ')
           : '';
-        const by = layer.via ? `with the ${LAYER_WORDS[layer.via]}` : `by the ${layer.source}`;
+        const by = layer.via ? `with the ${LAYER_WORDS[layer.via]}` : `by the ${layer.owners.map(holderWord).join(' and ')}`;
         return `${LAYER_WORDS[layer.layer]} (${layer.layer}) held ${by}${where}`;
       });
   if (reading.unavailable.length) {
@@ -78,7 +79,7 @@ function render(reading: HoldReading): string {
 export function createHoldTools() {
   return {
     hold: createTool(
-      'Stop the app across its layers and step it. Layers: code, ui (screen: JS, CSS animations, page clock), network (proxy). Actions: hold, release, status, step (code a statement; ui the clock\'s next timer or held frame, else next callback; network a message), frame (held screen one frame: page time, due timers, frame callbacks, CSS), group (animations since a frame stop), seek (CSS animations by ms), rate (CSS and page clock speed), motion (rule on one CSS animation: off, alone, freezeAt, duration, delay; none lists rules)',
+      'Stop the app across its layers and step it. Layers: code (JS paused), ui (page time, CSS, media, input; JS runs; needs the bench), network (proxy).',
       holdSchema,
       async (args) => {
         const { connection } = args;
@@ -98,15 +99,21 @@ export function createHoldTools() {
         }
         switch (args.action) {
           case 'hold':
-            return respond(await hold(connection, { source: 'tool', layers: args.layers ?? ALL_LAYERS }));
+            return respond(await hold(connection, { owner: callOwner(), layers: args.layers ?? ALL_LAYERS }));
           case 'release': {
             const before = holdReading(connection).held.map(layer => layer.layer);
-            const reading = await release(connection, args.layers ? { layers: args.layers } : {});
+            const reading = await release(connection, { by: { kind: 'agent' }, ...(args.layers ? { layers: args.layers } : {}) });
             const after = new Set(reading.held.map(layer => layer.layer));
             const released = before.filter(layer => !after.has(layer));
+            // A person's hand hold outlives an agent's release: named so the
+            // agent waits on the person rather than releasing again.
+            const byHand = reading.held.filter(layer => (!args.layers || args.layers.includes(layer.layer)) && layer.owners.some(owner => owner.kind === 'person'));
             const response = respond(reading);
-            response.content[0].text = `${released.length ? `Released ${released.map(layer => `${LAYER_WORDS[layer]} (${layer})`).join(', ')}.` : 'Released nothing: no named layer was held.'}\n${response.content[0].text}`;
-            return { ...response, _meta: { ...response._meta, released } };
+            const head = released.length ? `Released ${released.map(layer => `${LAYER_WORDS[layer]} (${layer})`).join(', ')}.`
+              : byHand.length ? 'Released nothing.' : 'Released nothing: no named layer was held.';
+            const kept = byHand.length ? `\nA person holds the ${byHand.map(layer => LAYER_WORDS[layer.layer]).join(' and ')} by hand; it runs again when they release it in the bench.` : '';
+            response.content[0].text = `${head}${kept}\n${response.content[0].text}`;
+            return { ...response, _meta: { ...response._meta, released, ...(byHand.length ? { heldByPerson: byHand.map(layer => layer.layer) } : {}) } };
           }
           case 'status':
             return respond(holdReading(connection));

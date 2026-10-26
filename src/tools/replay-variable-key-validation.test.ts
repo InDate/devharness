@@ -26,6 +26,7 @@ import { HELD, runsOnPass } from '../test-support/check-steps.js';
 let dir: string;
 let recorder: CommandRecorder;
 let replay: any;
+let run: any;
 let typed: Array<{ selector?: string; text: string }>;
 
 const write = async (name: string, commands: any[]) => {
@@ -44,7 +45,7 @@ beforeEach(async () => {
   vi.spyOn(recorder, 'getSequencesDir').mockReturnValue(dir);
 
   const fieldValues = new Map<string, string>();
-  ({ replay } = createReplayTools(
+  ({ replay, run } = createReplayTools(
     recorder,
     vi.fn(productionShaped(async (tool: string, params: Record<string, any>) => {
     if (tool === 'check') return HELD;
@@ -78,8 +79,8 @@ describe('run rejects a key that names no step', () => {
   });
 
   it('names the key, states the transform, and lists what is substitutable', async () => {
-    const res = await replay.handler({
-      action: 'run', wait: true, name: 'login', connection: 'suite',
+    const res = await run.handler({
+      action: 'sequence', wait: true, name: 'login', connection: 'suite',
       variables: { 'var_0_#password': 'supplied' },
     } as any);
 
@@ -90,8 +91,8 @@ describe('run rejects a key that names no step', () => {
   });
 
   it('accepts the key the executor actually builds', async () => {
-    const res = await replay.handler({
-      action: 'run', wait: true, name: 'login', connection: 'suite',
+    const res = await run.handler({
+      action: 'sequence', wait: true, name: 'login', connection: 'suite',
       variables: { var_0__password: 'supplied' },
     } as any);
 
@@ -103,8 +104,8 @@ describe('run rejects a key that names no step', () => {
     await write('outer', [runsOnPass('login')]);
     await recorder.loadSequenceFromDisk(join(dir, 'outer.json'));
 
-    const res = await replay.handler({
-      action: 'run', wait: true, name: 'outer', connection: 'suite',
+    const res = await run.handler({
+      action: 'sequence', wait: true, name: 'outer', connection: 'suite',
       variables: { var_0__password: 'supplied' },
     } as any);
 
@@ -112,8 +113,8 @@ describe('run rejects a key that names no step', () => {
   });
 
   it('accepts an empty map, which is how a caller keeps the recorded values', async () => {
-    const res = await replay.handler({
-      action: 'run', wait: true, name: 'login', connection: 'suite', variables: {},
+    const res = await run.handler({
+      action: 'sequence', wait: true, name: 'login', connection: 'suite', variables: {},
     } as any);
 
     expect(res.isError).toBeUndefined();
@@ -128,8 +129,8 @@ describe('runAll checks the map against the whole suite', () => {
   });
 
   it('accepts a key that matches only one member, and leaves the other on its recorded text', async () => {
-    const res = await replay.handler({
-      action: 'runAll', connection: 'suite',
+    const res = await run.handler({
+      action: 'all', connection: 'suite',
       variables: { var_0__password: 'supplied' },
     } as any);
 
@@ -141,8 +142,8 @@ describe('runAll checks the map against the whole suite', () => {
   });
 
   it('rejects a key that matches no member, before anything runs', async () => {
-    const res = await replay.handler({
-      action: 'runAll', connection: 'suite',
+    const res = await run.handler({
+      action: 'all', connection: 'suite',
       variables: { var_0__nosuchfield: 'supplied' },
     } as any);
 

@@ -12,6 +12,7 @@ import { addressedConnection, createdName } from './connection-steps.js';
 import { formatHistory } from './replay-formatters.js';
 import { readHistoryLines, getHistoryFilePath } from '../debug-logger.js';
 import { type ReplayArgs } from './replay-schema.js';
+import { formatEntries, formatObservations } from './history-activity.js';
 
 /** The most of one `inspect` step's reading a batch reply carries. */
 const READING_CHARS = 4_000;
@@ -21,7 +22,7 @@ const READING_CHARS = 4_000;
  * whole up to READING_CHARS, since a repeated read-back is run for its value;
  * any other step's first line of reply, which names what it acted on.
  */
-function stepReply(tool: string, response: any): string {
+export function stepReply(tool: string, response: any): string {
   const text: string = (response?.content ?? [])
     .filter((part: any) => part?.type === 'text' && typeof part.text === 'string')
     .map((part: any) => part.text)
@@ -37,6 +38,15 @@ function stepReply(tool: string, response: any): string {
 }
 
 export async function handleHistory(args: ReplayArgs, recorder: CommandRecorder) {
+  if (args.ids?.length) {
+    return { content: [{ type: 'text', text: formatObservations(args.ids) }] };
+  }
+  if (args.indices?.length) {
+    const commands = args.indices.flatMap(index => { const command = recorder.getCommand(index); return command ? [command] : []; });
+    const missing = args.indices.filter(index => !recorder.getCommand(index));
+    const text = [formatEntries(commands), missing.length ? `Not in history: ${missing.map(i => `#${i}`).join(', ')}` : ''].filter(Boolean).join('\n\n');
+    return { content: [{ type: 'text', text }] };
+  }
   const limit = args.limit || 50;
   const history = recorder.getHistory(limit);
   const stats = recorder.getStats();

@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Motion matrix</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px/1.4 system-ui, sans-serif; background: #f4f4f6; color: #222; }
+  header { position: sticky; top: 0; z-index: 3; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 16px; background: #fff; border-bottom: 1px solid #ddd; }
+  header h1 { margin: 0 auto 0 0; font-size: 16px; }
+  select, label { font: inherit; }
+  .wrap { overflow: auto; height: calc(100vh - var(--head, 50px)); padding: 0 16px 16px; }
+  table { border-collapse: separate; border-spacing: 0; margin-top: 12px; background: #fff; }
+  th, td { vertical-align: top; padding: 6px 8px; border-bottom: 1px solid #eee; border-right: 1px solid #f2f2f2; }
+  thead th { position: sticky; top: 0; z-index: 2; background: #fafafa; text-align: left; font-weight: 600; }
+  thead th small { display: block; font-weight: 400; color: #777; }
+  thead th small.rule { margin-top: 4px; color: #345; font-style: italic; }
+  tbody th { position: sticky; left: 0; z-index: 1; min-width: 180px; background: #fff; text-align: left; font-weight: 600; }
+  tbody th small { display: block; font-weight: 400; color: #666; }
+  td { min-width: 170px; max-width: 220px; }
+  .fault { color: #a33; }
+  .clean { color: #3a3; }
+  .cell { display: flex; gap: 6px; }
+  .mark { flex: 0 0 auto; width: 9px; height: 9px; margin-top: 4px; border-radius: 50%; }
+  .works .mark { background: #2a2; }
+  .gap .mark { background: #d33; }
+  .unmeasured .mark { background: #fff; border: 1.5px solid #999; }
+  .na .mark { background: #ccc; }
+  .note { display: block; color: #777; font-size: 12px; }
+  .basis { color: #36c; font-size: 12px; }
+  .key { display: inline-block; min-width: 18px; padding: 0 4px; border: 1px solid #ccc; border-radius: 4px; text-align: center; font-family: ui-monospace, monospace; }
+  .legend { display: flex; gap: 12px; align-items: center; }
+  .legend span { display: inline-flex; gap: 4px; align-items: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Motion matrix</h1>
+  <select id="f-page"><option value="">All pages</option></select>
+  <select id="f-trigger"><option value="">All triggers</option></select>
+  <select id="f-mechanism"><option value="">All mechanisms</option></select>
+  <select id="f-today"><option value="">Any standing</option><option value="gap">Has a gap</option><option value="unmeasured">Has unmeasured</option><option value="works">Has works</option></select>
+  <label><input type="checkbox" id="f-faults"> Faults only</label>
+  <div class="legend">
+    <span class="works"><i class="mark"></i>works</span><span class="gap"><i class="mark"></i>gap</span>
+    <span class="unmeasured"><i class="mark"></i>unmeasured</span><span class="na"><i class="mark"></i>n/a</span>
+  </div>
+</header>
+<div class="wrap"><table id="matrix"></table></div>
+<script>
+  const header = document.querySelector('header');
+  const sizeWrap = () => document.documentElement.style.setProperty('--head', header.offsetHeight + 'px');
+  addEventListener('resize', sizeWrap);
+  sizeWrap();
+
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  const cellOf = (data, scenario, cap) => ({
+    ...(cap.default ?? {}),
+    ...(data.mechanisms[scenario.mechanism]?.[cap.id] ?? {}),
+    ...(scenario.cells?.[cap.id] ?? {}),
+  });
+
+  const render = (data, filters) => {
+    const caps = data.capabilities;
+    const rows = data.scenarios.filter(s =>
+      (!filters.page || s.page === filters.page) &&
+      (!filters.trigger || s.trigger === filters.trigger) &&
+      (!filters.mechanism || s.mechanism === filters.mechanism) &&
+      (!filters.faults || s.fault) &&
+      (!filters.today || caps.some(c => cellOf(data, s, c).today === filters.today)));
+
+    const counts = Object.fromEntries(caps.map(c => [c.id, { works: 0, gap: 0, unmeasured: 0, 'n/a': 0 }]));
+    for (const s of rows) for (const c of caps) counts[c.id][cellOf(data, s, c).today ?? 'unmeasured']++;
+
+    const head = `<thead><tr><th>Scenario <small>${rows.length} shown</small></th>${caps.map(c =>
+      `<th title="${esc(c.question)}">${esc(c.name)}<small>${counts[c.id].works} works · ${counts[c.id].gap} gap · ${counts[c.id].unmeasured} unmeasured</small>${c.rule ? `<small class="rule">${esc(c.rule)}</small>` : ''}</th>`).join('')}</tr></thead>`;
+
+    const body = rows.map(s => {
+      const link = s.page === 'index.html' ? 'index.html' : 'catalog.html';
+      const title = `<th><a href="${link}">${esc(s.name)}</a> ${s.key ? `<span class="key">${esc(s.key)}</span>` : ''}
+        <small>${esc(s.trigger)} · ${esc(data.mechanisms[s.mechanism]?.name ?? s.mechanism)} · ${esc(s.clock)}</small>
+        <small class="${s.fault ? 'fault' : 'clean'}">${esc(s.fault ?? 'Clean')}</small></th>`;
+      const cells = caps.map(c => {
+        const cell = cellOf(data, s, c);
+        const standing = (cell.today ?? 'unmeasured').replace('/', '');
+        return `<td class="${standing}"><div class="cell"><i class="mark" title="${esc(cell.today ?? 'unmeasured')}"></i><div>${esc(cell.expect)}
+          ${cell.note ? `<span class="note">${esc(cell.note)}</span>` : ''}
+          ${cell.basis ? `<span class="basis">${esc(cell.basis)}</span>` : ''}</div></div></td>`;
+      }).join('');
+      return `<tr>${title}${cells}</tr>`;
+    }).join('');
+
+    document.getElementById('matrix').innerHTML = head + `<tbody>${body}</tbody>`;
+  };
+
+  fetch('matrix.json').then(r => r.json()).then(data => {
+    const fill = (id, values) => {
+      const select = document.getElementById(id);
+      for (const v of [...new Set(values)].sort()) select.insertAdjacentHTML('beforeend', `<option value="${esc(v)}">${esc(v)}</option>`);
+    };
+    fill('f-page', data.scenarios.map(s => s.page));
+    fill('f-trigger', data.scenarios.map(s => s.trigger));
+    fill('f-mechanism', data.scenarios.map(s => s.mechanism));
+    const read = () => ({
+      page: document.getElementById('f-page').value,
+      trigger: document.getElementById('f-trigger').value,
+      mechanism: document.getElementById('f-mechanism').value,
+      today: document.getElementById('f-today').value,
+      faults: document.getElementById('f-faults').checked,
+    });
+    for (const el of document.querySelectorAll('header select, header input')) el.addEventListener('change', () => render(data, read()));
+    render(data, read());
+  });
+</script>
+</body>
+</html>

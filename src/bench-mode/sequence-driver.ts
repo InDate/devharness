@@ -35,6 +35,7 @@ import { activityOf, countsOf } from '../activity-index.js';
 import { describeFingerprint, type ElementFingerprint } from '../element-fingerprint.js';
 import { CANCELLED } from './session.js';
 import { heldRulesOf, type SiteReader } from './rules.js';
+import { routedReplayCall } from '../tools/replay-schema.js';
 
 /**
  * Stands in for the bench's own address inside a recorded sequence.
@@ -232,7 +233,8 @@ export function createSequenceDriver(
     let raised = false;
     let failedResponse: any;
     try {
-      const response = await executeToolCall('replay', args, signal);
+      const routed = routedReplayCall(args);
+      const response = await executeToolCall(routed.tool, routed.args, signal);
       if (response?._meta?.replay?.prompted) return 'the run asked for replacement text and ran no step';
       // A paused click - reaching another element, or failing validation -
       // leaves the run standing on the step, and its reply reads as no error.
@@ -576,7 +578,7 @@ export function createSequenceDriver(
         from: command.from,
         ...(command.run !== undefined ? { run: command.run } : {}),
         ...(command.runStep !== undefined ? { runStep: command.runStep } : {}),
-        ...(command.tool === 'replay' ? { replay: {
+        ...(command.tool === 'replay' || command.tool === 'run' ? { replay: {
           action: String(command.params?.action),
           ...(typeof command.params?.name === 'string' ? { name: command.params.name } : {}),
         } } : {}),
@@ -814,9 +816,15 @@ export function createSequenceDriver(
       }
       const chosen = layers ?? active.holdWhilePaused;
       if (chosen?.length === 0) return;
-      const reading = await hold(active.connection, { source: 'sequence', ...(chosen ? { layers: chosen } : {}) }).catch(() => undefined);
-      const held = reading?.held.filter(one => one.source === 'sequence').map(one => one.layer);
+      const run = active.runTimestamp !== undefined ? `run-${active.runTimestamp.toString(36)}` : undefined;
+      const reading = await hold(active.connection, { owner: { kind: 'run-pause', ...(run ? { run } : {}) }, ...(chosen ? { layers: chosen } : {}) }).catch(() => undefined);
+      const held = reading?.held.filter(one => one.owners.some(owner => owner.kind === 'run-pause' && owner.run === run)).map(one => one.layer);
       if (held?.length) active.pauseHeld = held;
+    },
+
+    runId: () => {
+      const stamp = commandRecorder.getActiveSequence()?.runTimestamp;
+      return stamp !== undefined ? `run-${stamp.toString(36)}` : undefined;
     },
 
     setPause: async (step: number, change: { on?: boolean; holds?: Array<'code' | 'ui' | 'network'>; note?: string; notify?: boolean }) => {
@@ -1090,7 +1098,7 @@ export function createSequenceDriver(
     testCommands: async (name: string, commands: Array<{ tool: string; params: Record<string, unknown> }>, connection: string) => {
       const sequence = await commandRecorder.createSequenceFromCommands(`${name}-test`, commands as any);
       try {
-        const response = await executeToolCall('replay', { action: 'run', name: sequence.name, connection, wait: true });
+        const response = await executeToolCall('run', { action: 'sequence', name: sequence.name, connection, wait: true });
         return { passed: response?._meta?.replay?.success === true, summary: textOf(response).split('\n').slice(0, 2).join(' ') };
       } catch (error: any) {
         return { passed: false, summary: textOf(error).split('\n').slice(0, 2).join(' ') };

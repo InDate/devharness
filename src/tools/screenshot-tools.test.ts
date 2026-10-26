@@ -70,7 +70,19 @@ describe('screenshot', () => {
   });
 
   it('saves a screenshot into a directory that does not exist yet', async () => {
-    const screenshot = makeScreenshot({ screenshot: vi.fn(async () => Buffer.from('jpeg-bytes')) });
+    const handlers = new Map<string, (event: any) => void>();
+    const session = {
+      on: (event: string, handler: (event: any) => void) => { handlers.set(event, handler); },
+      off: (event: string) => { handlers.delete(event); },
+      detach: vi.fn(async () => {}),
+      send: vi.fn(async (method: string) => {
+        if (method === 'Page.startScreencast') {
+          setTimeout(() => handlers.get('Page.screencastFrame')?.({ data: Buffer.from('jpeg-bytes').toString('base64'), sessionId: 1, metadata: {} }), 0);
+        }
+        return {};
+      }),
+    };
+    const screenshot = makeScreenshot({ createCDPSession: vi.fn(async () => session) });
     const target = join(dir, 'new', 'nested', 'shot.jpg');
 
     const result: any = await screenshot.handler({ ...on, action: 'viewport', saveToDisk: target });

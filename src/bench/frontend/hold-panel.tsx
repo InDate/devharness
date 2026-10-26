@@ -136,6 +136,9 @@ function TimeRow({ state, post }: {
   const slower = [...SPEEDS].reverse().find(speed => speed < rate);
   const faster = SPEEDS.find(speed => speed > rate);
   const changed = rate !== 1;
+  // The speed is a setting and the standing is a state: a held page keeps its
+  // speed, so "real time" names the speed only while page time runs.
+  const stopped = clock?.paused === true;
   const set = (playbackRate: number) => void post('/motion/rate', { playbackRate });
   // Stopped, a frame step moves page time by 16.7ms, so it reads to the ms;
   // running, it reads at the size it has reached.
@@ -143,10 +146,11 @@ function TimeRow({ state, post }: {
     ? `page ${clock.paused ? `${Math.round(clock.now)}ms` : span(clock.now)} · ${clock.paused ? 'stopped' : 'running'}${clock.behind >= BEHIND_SHOWN_MS ? ` · ${span(clock.behind)} behind real time` : ''}`
     : 'no page clock: the page was opened before devharness attached, so only CSS follows the speed';
   return (
-    <div class={`holdrow row-time ${changed ? 'slowed' : 'layer-running'}`}>
+    <div class={`holdrow row-time ${stopped ? 'layer-held' : changed ? 'slowed' : 'layer-running'}`}>
       <b class="layername"><Glyph of="timer" /> Time</b>
       <span class="holdbadges">
-        {changed ? <span class="badge holder">{rate}×</span> : <span class="badge running">real time</span>}
+        {stopped ? <span class="badge holder">stopped</span> : !changed && <span class="badge running">real time</span>}
+        {changed && <span class="badge holder">{rate}×</span>}
       </span>
       <span class="layerstate" title={said}>{said}</span>
       <span class="holdreading" />

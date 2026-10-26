@@ -13,8 +13,11 @@
  */
 
 import { CLOCK_KEY } from './page-clock.js';
+import { INPUT_GUARD_KEY } from './page-input-guard.js';
 import { ownScript } from './utils/own-script.js';
-import { holdReading } from './hold.js';
+import { holdReading, stopsPageTime } from './hold.js';
+import { animationRecordOf } from './animation-record.js';
+import type { SweepReading } from './page-animations.js';
 
 /** A Chrome session commands are sent through. */
 export interface TimeChannel {
@@ -38,6 +41,8 @@ export interface FrameReading {
   now: number;
   ran: number;
   waiting: number;
+  /** What the step's callbacks created and ended, from the page's own list. */
+  animations?: SweepReading;
 }
 
 /** What the clock's next held timer or frame was, run on a stopped page. */
@@ -45,6 +50,7 @@ export interface NextReading {
   kind: string;
   fn: string;
   now: number;
+  animations?: SweepReading;
 }
 
 /** A command a held page does not answer is given up on after this; the page goes on. */
@@ -115,17 +121,43 @@ export class PageTime {
 
   /** One frame of the page's JS on a stopped clock; undefined on a page with no clock. */
   async frame(ms: number): Promise<FrameReading | undefined> {
-    return (await this.control(`frame(${Number(ms)})`)) ?? undefined;
+    const reading: FrameReading | undefined = (await this.control(`frame(${Number(ms)})`)) ?? undefined;
+    animationRecordOf(this.connection).takeSweep(reading?.animations);
+    return reading;
   }
 
   /** The next timer or held frame a stopped clock holds, run; undefined when it holds nothing. */
   async next(frameMs: number): Promise<NextReading | undefined> {
-    return (await this.control(`next(${Number(frameMs)}) ?? null`)) ?? undefined;
+    const reading: NextReading | undefined = (await this.control(`next(${Number(frameMs)}) ?? null`)) ?? undefined;
+    animationRecordOf(this.connection).takeSweep(reading?.animations);
+    return reading;
   }
 
   /** Where page time stands; undefined on a page with no clock. */
   async reading(): Promise<ClockReading | undefined> {
     return (await this.control('state() ?? null')) ?? undefined;
+  }
+
+  /** Whether the page carries the clock, which a page opened before devharness attached does not. */
+  async hasClock(): Promise<boolean> {
+    return (await this.reading()) !== undefined;
+  }
+
+  /** Stop a person's input to the page and cut a running smooth scroll; false on a page with no guard. */
+  async holdInput(): Promise<boolean> {
+    return (await this.guard('hold() != null')) === true;
+  }
+
+  /** Let a person's input through again, the page put back where the hold found it. */
+  async releaseInput(): Promise<void> {
+    await this.guard('release()');
+  }
+
+  private async guard(call: string): Promise<any> {
+    const answer = await this.command('Runtime.evaluate', {
+      expression: ownScript('input-guard', `globalThis[Symbol.for('${INPUT_GUARD_KEY}')]?.${call}`), returnByValue: true,
+    });
+    return answer?.result?.value;
   }
 
   private async animationRate(playbackRate: number): Promise<void> {
@@ -164,7 +196,7 @@ export function pageTimeOf(connection: string): PageTime | undefined {
  * time runs through it, as the browser's own debugger leaves time running.
  */
 function heldByDevharness(connection: string): boolean {
-  return holdReading(connection).held.some(held => (held.layer === 'code' || held.layer === 'ui') && held.source !== 'breakpoint');
+  return holdReading(connection).held.some(held => (held.layer === 'code' || held.layer === 'ui') && held.owners.some(stopsPageTime));
 }
 
 /**

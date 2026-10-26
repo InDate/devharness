@@ -74,6 +74,20 @@ export function causeAt(at: number): ProxyCursor | undefined {
   return best?.cursor;
 }
 
+/**
+ * The cause that began most recently at or before `at`, its window closed or
+ * not, of those `accept` takes: the action a consequence followed in time,
+ * which it stands after in a list without being owned by it.
+ */
+export function causeBefore(at: number, accept: (cursor: ProxyCursor) => boolean = () => true): ProxyCursor | undefined {
+  for (let i = windows.length - 1; i >= 0; i--) {
+    const window = windows[i];
+    if (window.from < at - LOOKBACK_MS) break;
+    if (window.from <= at && accept(window.cursor)) return window.cursor;
+  }
+  return undefined;
+}
+
 /** Called with each late cause as it is added; returns the unsubscribe. */
 export function onCauseAdded(listener: (window: CauseWindow) => void): () => void {
   added.add(listener);

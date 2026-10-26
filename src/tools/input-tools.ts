@@ -18,12 +18,14 @@ import { abortErrorFor, abortableSleep, isAbortError, throwIfAborted } from '../
 import { clickElement } from '../utils/click-element.js';
 import { describeFingerprint, readFingerprint, refuseOtherElement, type ElementFingerprint, type ElementRepair } from '../element-fingerprint.js';
 import { hold, type HoldLayer } from '../hold.js';
+import { callOwner } from '../call-origin.js';
 import { LAYER_WORDS, unavailableNote } from './hold-tools.js';
 import { captureBurst, describeBurst } from '../frame-burst.js';
 import { showBenchBurst } from '../bench-mode/session.js';
 import { sanitizeReference } from '../reference-validator.js';
 import { sessions, type BenchSession } from '../bench-mode/session.js';
 import { armFrameStop, landFrameStop } from '../bench-mode/page-hold.js';
+import { openSession } from '../utils/own-session.js';
 
 // Coordinate schema for mouse actions
 const coordinateSchema = z.object({
@@ -49,6 +51,7 @@ const inputToolSchema = z.object({
   text: z.string().optional(),
   delay: z.number().optional().describe('Keystroke delay ms'),
   append: z.boolean().optional().describe('Append text instead of replacing (default: false)'),
+  insert: z.boolean().optional().describe('type: put the text in as one trusted input event (CDP Input.insertText), as a paste or an IME commit does, in place of a keystroke per character; keydown and keyup handlers do not see it'),
 
   // press
   key: z.string().optional(),
@@ -123,7 +126,7 @@ async function driveToFrameStop(
   await bringHiddenPageToFront(bench.page, abortableSleep);
   armFrameStop(bench);
   const heldAt = Date.now();
-  const reading = await hold(args.connection, { source: 'tool', layers: args.hold as HoldLayer[] });
+  const reading = await hold(args.connection, { owner: callOwner(), layers: args.hold as HoldLayer[] });
   const response = await drive(args, abortSignal);
   const landed = await landFrameStop(bench);
   if (response?.isError) return response;
@@ -151,7 +154,7 @@ async function holdAfterInput(args: InputArgs, response: any, abortSignal?: Abor
   const layers = args.hold as HoldLayer[];
   if (args.holdAfterMs) await abortableSleep(args.holdAfterMs, abortSignal);
   const heldAt = Date.now();
-  const reading = await hold(args.connection, { source: 'tool', layers });
+  const reading = await hold(args.connection, { owner: callOwner(), layers });
   const held = reading.held.filter(layer => layers.includes(layer.layer) || layer.via);
   const lines: string[] = [];
   if (held.length) {
@@ -406,12 +409,23 @@ function elementMismatch(action: string, target: string, refused: { line: string
   };
 }
 
+/**
+ * Text into the focused element: a keystroke per character, or, with
+ * `insert`, the whole text as one trusted input event - the browser's own
+ * insertion, which a page's input handlers see as they see a paste, where a
+ * value set from script reaches the DOM and leaves a framework's model behind.
+ */
+async function typeText(page: any, text: string, delay: number, insert: boolean): Promise<void> {
+  if (insert) await page.keyboard.sendCharacter(text);
+  else await page.keyboard.type(text, { delay });
+}
+
 export function createInputTools(
   resolveConnectionByName: (connection: string) => Promise<any>
 ) {
   return {
     input: createTool(
-      'Browser input. Actions: click, type (selector, or the focused element), press (a key or combo, e.g. Meta+a), hover, focus, focusNext/focusPrevious (Tab/Shift+Tab), drag (from/to), scroll (wheel at x/y), mousemove, pinch (zoom gesture), tap (real touch, selector or x/y), swipe (real touch drag, selector + direction or from/to, for gestures a mouse cannot drive)',
+      'Browser input; hold, holdBeforeFrame and burst take the hold or the frames in the same call.',
       inputToolSchema,
       // abortSignal (#110): input events cannot be recalled once dispatched -
       // Input.dispatchMouseEvent on the wire WILL be processed by Chrome. What
@@ -440,7 +454,7 @@ export function createInputTools(
     const resolved = await resolveConnectionByName(args.connection);
     const page = resolved?.puppeteerManager?.getPage?.();
     if (!page) return driveThenHold(args, abortSignal);
-    const client = await page.createCDPSession();
+    const client = await openSession(page);
     try {
       let holdTaken: () => void = () => {};
       const held = new Promise<void>(resolve => { holdTaken = resolve; });
@@ -905,7 +919,7 @@ export function createInputTools(
             }
 
             case 'type': {
-              const { selector: rawSelector, text, delay = 0, handleModals = false, dismissStrategy = 'auto', append = false } = args;
+              const { selector: rawSelector, text, delay = 0, handleModals = false, dismissStrategy = 'auto', append = false, insert = false } = args;
 
               if (!text) {
                 return {
@@ -929,7 +943,7 @@ export function createInputTools(
                   async () => {
                     const before = await readFocusedField(page);
                     if (!before) return { noFocus: true };
-                    await withReplayBypass(page, () => page.keyboard.type(text, { delay }));
+                    await withReplayBypass(page, () => typeText(page, text, delay, insert));
                     return { focused: await readFocusedField(page) ?? before };
                   },
                   'typeText'
@@ -1060,7 +1074,7 @@ export function createInputTools(
                     const left = await fieldText(page, selector);
                     if (left !== '') return { selector, uncleared: left, fingerprint };
                   }
-                  await withReplayBypass(page, () => page.keyboard.type(text, { delay }));
+                  await withReplayBypass(page, () => typeText(page, text, delay, insert));
 
                   const currentValue = await fieldText(page, selector);
 
@@ -1882,7 +1896,7 @@ export function createInputTools(
               const result = await executeWithPauseDetection(
                 targetCdpManager,
                 async () => {
-                  const client = await page.createCDPSession();
+                  const client = await openSession(page);
                   const point = (x: number, y: number) => ({ x: Math.round(x), y: Math.round(y) });
                   try {
                     return await withReplayBypass(page, async () => {
@@ -1968,7 +1982,7 @@ export function createInputTools(
                   const centerY = y ?? (viewport?.height ?? 600) / 2;
 
                   // Create CDP session for synthesizePinchGesture
-                  const client = await page.createCDPSession();
+                  const client = await openSession(page);
 
                   try {
                     // Use wrapper to bypass replay blocker overlay for pinch gesture

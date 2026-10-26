@@ -8,7 +8,7 @@
 import type { PortFailureInfo, PendingStartupFailureInfo, PendingRestartInfo } from './server-manager.js';
 import type { Connection } from './connection-manager.js';
 import { hasPendingBugs, getPendingBugs } from './issue-tracker.js';
-import { createErrorResponse, getMessage } from './messages.js';
+import { createErrorResponse, getMessage, withOnce } from './messages.js';
 import type { BlockEventInfo } from './block-events.js';
 import type { LaunchObservations } from './chrome-launcher.js';
 import type { SessionMessage } from './session-messages.js';
@@ -981,7 +981,10 @@ export function buildStatusSuffix(items: StatusLineItem[], legend = false): stri
   if (items.length === 0) return '';
 
   const lines = items.map(item => `${item.label}: ${item.value}`);
-  return `\n\n${lines.join('\n')}${legend ? `\n${getMessage('STATUS_LEGEND')}` : ''}`;
+  // The legend is a once block: the session's record of it is kept on disk, so
+  // a restarted server does not explain the lines a second time.
+  const explained = legend ? withOnce('', 'STATUS_LEGEND').trim() : '';
+  return `\n\n${lines.join('\n')}${explained ? `\n${explained}` : ''}`;
 }
 
 

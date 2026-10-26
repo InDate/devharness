@@ -85,6 +85,22 @@ describe('devharness watch', () => {
     expect(cursor()).toBe(statSync(stream()).size);
   }, 15000);
 
+  it('prints the rules for the next watch on the stream\'s first exit and the short form after', async () => {
+    writeFileSync(stream(), '');
+    writeFileSync(join(dir, 'events', `${SESSION}.cursor`), '0');
+
+    append('{"n":1}\n');
+    const first = start([`--session=${SESSION}`]);
+    expect(await first.exited).toBe(0);
+    append('{"n":2}\n');
+    const second = start([`--session=${SESSION}`]);
+    expect(await second.exited).toBe(0);
+
+    expect(first.output()).toContain('more coming (a person in the bench)');
+    expect(second.output()).toContain('Next watch: the same call.');
+    expect(second.output()).not.toContain('more coming');
+  }, 15000);
+
   it('delivers a backlog whole through a pipe before moving the cursor past it', async () => {
     const backlog = Array.from({ length: 3000 }, (_, i) => `{"n":${i},"pad":"${'x'.repeat(100)}"}\n`).join('');
     writeFileSync(stream(), backlog);

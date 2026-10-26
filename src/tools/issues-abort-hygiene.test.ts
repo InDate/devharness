@@ -61,7 +61,7 @@ describe('workOn abort-listener hygiene', () => {
   it('still closes the tab when aborted while the handler is in flight', async () => {
     let releaseReplay: (() => void) | undefined;
     const executeToolCall = vi.fn(productionShaped(async (tool: string, params: Record<string, any>) => {
-      if (tool === 'replay' && params.action === 'run') {
+      if (tool === 'run' && params.action === 'sequence') {
         await new Promise<void>(resolve => { releaseReplay = resolve; });
       }
       return { content: [{ type: 'text', text: '' }] };

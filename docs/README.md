@@ -23,33 +23,9 @@ Instead of just analyzing static code, AI assistants can now:
 | [API Reference](./instructions.md) | Full tool reference and best practices (human-readable) |
 | [Message Templates](./messages.md) | Response format templates |
 
-### Agent Skill
+### How an agent learns devharness
 
-This package also ships an [Agent Skills](https://agentskills.io)-compatible skill at [`skills/devharness/`](../skills/devharness/SKILL.md), containing the same guidance as the API Reference above but structured for progressive disclosure. Copy or symlink it into a scanned skills directory (e.g. `.claude/skills/devharness` or `.agents/skills/devharness`) so Agent-Skills-aware clients load it only when a debugging task is actually underway, instead of paying the full token cost every session. The MCP server's own `instructions` field (`./mcp-instructions.md`) stays intentionally short for this reason - it's sent to every client on connect, whether or not that client supports Agent Skills.
-
-You don't have to set this up by hand: on startup, the server checks whether the skill is already installed anywhere a client would scan for it (project- or user-level, `.claude/skills/` or `.agents/skills/`). If it isn't found, the `instructions` payload asks the connected agent to offer installing it - the agent will propose the symlink command and only run it if you agree. Once installed, this nudge stops appearing.
-
-## Quick Start
-
-```bash
-# Claude Code CLI
-claude mcp add devharness -- npx -y devharness
-```
-
-```javascript
-// Launch Chrome and start debugging
-connection({ action: 'launch', connection: 'my debug session' })
-navigate({ action: 'goto', url: 'http://localhost:3000', connection: 'my-debug-session' })
-
-// Set a breakpoint
-breakpoint({ action: 'set', url: 'http://localhost:3000/app.js', lineNumber: 42, connection: 'my-debug-session' })
-
-// When paused, inspect state
-inspect({ action: 'getCallStack', connection: 'my-debug-session' })
-inspect({ action: 'getVariables', callFrameId: '0', connection: 'my-debug-session' })
-```
-
-## Core Concepts
+The server's `instructions` field (`./mcp-instructions.md`) is sent to every client on connect, so it stays short and says what devharness is for. Each tool's description says what the tool is for, and the reply of an action's first use in a session, or the error a call meets, carries how to use it. The full reference for people is [`instructions.md`](./instructions.md), with the bench, the boundary and sequences in [`bench.md`](./bench.md), [`boundary.md`](./boundary.md) and [`sequences.md`](./sequences.md).
 
 ### Connection Management
 

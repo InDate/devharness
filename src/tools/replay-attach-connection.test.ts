@@ -46,8 +46,8 @@ function makeHarness(opts: { live?: string[] } = {}) {
     return { content: [{ type: 'text', text: '' }] };
   }));
   const recorder = new CommandRecorder();
-  const { replay } = createReplayTools(recorder, executeToolCall as any, async () => null, async () => null, undefined);
-  return { calls, replay, recorder };
+  const { replay, run } = createReplayTools(recorder, executeToolCall as any, async () => null, async () => null, undefined);
+  return { calls, replay, run, recorder };
 }
 
 /** The connection each call of `tool` ran against, in order. */
@@ -56,14 +56,14 @@ const connectionsOf = (calls: Array<{ tool: string; params: Record<string, any> 
 
 describe('a run of an attach followed by bare steps', () => {
   it('runs the bare steps on the connection the attach created', async () => {
-    const { calls, replay, recorder } = makeHarness();
+    const { calls, replay, run, recorder } = makeHarness();
     await recorder.createSequenceFromCommands('node-debug', [
       { tool: 'connection', params: { action: 'attach', connection: 'api-server', port: 9229 } },
       { tool: 'breakpoint', params: { action: 'set', url: 'file:///app/server.js', lineNumber: 10 } },
       { tool: 'inspect', params: { action: 'evaluateExpression', expression: 'process.pid' } },
     ]);
 
-    await replay.handler({ action: 'run', wait: true, name: 'node-debug' } as any);
+    await run.handler({ action: 'sequence', wait: true, name: 'node-debug' } as any);
 
     expect(connectionsOf(calls, 'breakpoint')).toEqual(['api-server']);
     expect(connectionsOf(calls, 'inspect')).toEqual(['api-server']);
@@ -72,14 +72,14 @@ describe('a run of an attach followed by bare steps', () => {
 
 describe('a run of an attach to Chrome followed by bare browser steps', () => {
   it('attaches under the name and drives that browser, launching none', async () => {
-    const { calls, replay, recorder } = makeHarness();
+    const { calls, replay, run, recorder } = makeHarness();
     await recorder.createSequenceFromCommands('chrome-attach', [
       { tool: 'connection', params: { action: 'attach', connection: 'shop-tab', port: 9222 } },
       { tool: 'navigate', params: { action: 'goto', url: 'http://shop.test/' } },
       { tool: 'input', params: { action: 'click', selector: '#buy' } },
     ]);
 
-    const result: any = await replay.handler({ action: 'run', wait: true, name: 'chrome-attach' } as any);
+    const result: any = await run.handler({ action: 'sequence', wait: true, name: 'chrome-attach' } as any);
 
     expect(result.isError).toBeFalsy();
     expect(calls.filter(c => c.tool === 'connection' && c.params.action === 'launch')).toEqual([]);
@@ -90,13 +90,13 @@ describe('a run of an attach to Chrome followed by bare browser steps', () => {
 
 describe('a run of a launch that names no connection, followed by bare steps', () => {
   it('runs the bare steps on the connection the launch created, under the default name', async () => {
-    const { calls, replay, recorder } = makeHarness();
+    const { calls, replay, run, recorder } = makeHarness();
     await recorder.createSequenceFromCommands('unnamed-launch', [
       { tool: 'connection', params: { action: 'launch', url: 'http://shop.test/' } },
       { tool: 'navigate', params: { action: 'goto', url: 'http://shop.test/cart' } },
     ]);
 
-    const result: any = await replay.handler({ action: 'run', wait: true, name: 'unnamed-launch' } as any);
+    const result: any = await run.handler({ action: 'sequence', wait: true, name: 'unnamed-launch' } as any);
 
     expect(result.isError).toBeFalsy();
     const gotos = calls.filter(c => c.tool === 'navigate' && c.params.action === 'goto');
@@ -114,20 +114,20 @@ describe('a nested sequence that attaches', () => {
   }
 
   it('runs its bare steps on the connection its attach created', async () => {
-    const { calls, replay, recorder } = makeHarness({ live: ['browser-a'] });
+    const { calls, replay, run, recorder } = makeHarness({ live: ['browser-a'] });
     await recordNested(recorder);
 
-    await replay.handler({ action: 'run', wait: true, name: 'outer', connection: 'browser-a' } as any);
+    await run.handler({ action: 'sequence', wait: true, name: 'outer', connection: 'browser-a' } as any);
 
     expect(calls.filter(c => c.tool === 'connection' && c.params.action === 'attach')).toHaveLength(1);
     expect(connectionsOf(calls, 'inspect')).toEqual(['api-server']);
   });
 
   it('skips an attach whose name is already connected, and runs its steps where it was called from', async () => {
-    const { calls, replay, recorder } = makeHarness({ live: ['browser-a', 'api-server'] });
+    const { calls, replay, run, recorder } = makeHarness({ live: ['browser-a', 'api-server'] });
     await recordNested(recorder);
 
-    await replay.handler({ action: 'run', wait: true, name: 'outer', connection: 'browser-a' } as any);
+    await run.handler({ action: 'sequence', wait: true, name: 'outer', connection: 'browser-a' } as any);
 
     expect(calls.filter(c => c.tool === 'connection' && c.params.action === 'attach')).toEqual([]);
     expect(connectionsOf(calls, 'inspect')).toEqual(['browser-a']);
@@ -136,29 +136,29 @@ describe('a nested sequence that attaches', () => {
 
 describe('repeat', () => {
   it('fills the given connection into a bare inspect step', async () => {
-    const { calls, replay, recorder } = makeHarness();
+    const { calls, replay, run, recorder } = makeHarness();
     await recorder.recordCommand('inspect', { action: 'evaluateExpression', expression: 'process.pid' });
 
-    await replay.handler({ action: 'repeat', indices: [0], connection: 'api-server' } as any);
+    await run.handler({ action: 'repeat', indices: [0], connection: 'api-server' } as any);
 
     expect(connectionsOf(calls, 'inspect')).toEqual(['api-server']);
   });
 
   it('takes the connection from an attach among the repeated calls', async () => {
-    const { calls, replay, recorder } = makeHarness();
+    const { calls, replay, run, recorder } = makeHarness();
     await recorder.recordCommand('connection', { action: 'attach', connection: 'api-server', port: 9229 });
     await recorder.recordCommand('execution', { action: 'resume' });
 
-    await replay.handler({ action: 'repeat', indices: [0, 1] } as any);
+    await run.handler({ action: 'repeat', indices: [0, 1] } as any);
 
     expect(connectionsOf(calls, 'execution')).toEqual(['api-server']);
   });
 
   it('refuses a bare inspect step when no connection can be determined', async () => {
-    const { calls, replay, recorder } = makeHarness();
+    const { calls, replay, run, recorder } = makeHarness();
     await recorder.recordCommand('inspect', { action: 'evaluateExpression', expression: 'process.pid' });
 
-    const result: any = await replay.handler({ action: 'repeat', indices: [0] } as any);
+    const result: any = await run.handler({ action: 'repeat', indices: [0] } as any);
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain('connection');
@@ -168,11 +168,11 @@ describe('repeat', () => {
 
 describe('calls that take no connection', () => {
   it('repeat runs a bare acknowledge and loadMaps as they were, without refusing them', async () => {
-    const { calls, replay, recorder } = makeHarness({ live: ['browser-a'] });
+    const { calls, replay, run, recorder } = makeHarness({ live: ['browser-a'] });
     await recorder.recordCommand('execution', { action: 'acknowledge' });
     await recorder.recordCommand('source', { action: 'loadMaps', directory: 'dist' });
 
-    const result: any = await replay.handler({ action: 'repeat', indices: [0, 1] } as any);
+    const result: any = await run.handler({ action: 'repeat', indices: [0, 1] } as any);
 
     expect(result.isError).toBeFalsy();
     expect(calls.filter(c => c.tool === 'execution' || c.tool === 'source').map(c => c.params)).toEqual([
@@ -182,12 +182,12 @@ describe('calls that take no connection', () => {
   });
 
   it('a run leaves a bare acknowledge bare, so it acknowledges every paused connection', async () => {
-    const { calls, replay, recorder } = makeHarness({ live: ['browser-a'] });
+    const { calls, replay, run, recorder } = makeHarness({ live: ['browser-a'] });
     await recorder.createSequenceFromCommands('ack-all', [
       { tool: 'execution', params: { action: 'acknowledge' } },
     ]);
 
-    await replay.handler({ action: 'run', wait: true, name: 'ack-all', connection: 'browser-a' } as any);
+    await run.handler({ action: 'sequence', wait: true, name: 'ack-all', connection: 'browser-a' } as any);
 
     expect(calls.filter(c => c.tool === 'execution').map(c => c.params)).toEqual([{ action: 'acknowledge' }]);
   });
@@ -195,7 +195,7 @@ describe('calls that take no connection', () => {
 
 describe('a forEach whose body attaches', () => {
   it('attaches once and runs every iteration on that connection', async () => {
-    const { calls, replay, recorder } = makeHarness({ live: ['browser-a'] });
+    const { calls, replay, run, recorder } = makeHarness({ live: ['browser-a'] });
     await recorder.createSequenceFromCommands('per-row', [
       { tool: 'connection', params: { action: 'attach', connection: 'api-server', port: 9229 } },
       { tool: 'inspect', params: { action: 'evaluateExpression', expression: 'process.pid' } },
@@ -204,7 +204,7 @@ describe('a forEach whose body attaches', () => {
       { tool: 'forEach', params: { in: [1, 2, 3], as: 'row', do: 'per-row' } },
     ]);
 
-    const result: any = await replay.handler({ action: 'run', wait: true, name: 'rows', connection: 'browser-a' } as any);
+    const result: any = await run.handler({ action: 'sequence', wait: true, name: 'rows', connection: 'browser-a' } as any);
 
     expect(result.isError).toBeFalsy();
     expect(calls.filter(c => c.tool === 'connection' && c.params.action === 'attach')).toHaveLength(1);
@@ -214,14 +214,14 @@ describe('a forEach whose body attaches', () => {
 
 describe('a session with nothing connected', () => {
   it('runs a nested launch, and runs the nested steps on the browser it launched', async () => {
-    const { calls, replay, recorder } = makeHarness({ live: [] });
+    const { calls, replay, run, recorder } = makeHarness({ live: [] });
     await recorder.createSequenceFromCommands('first-device', [
       { tool: 'connection', params: { action: 'launch', connection: 'first-device-tab' } },
       { tool: 'inspect', params: { action: 'evaluateExpression', expression: 'document.title' } },
     ]);
     await recorder.createSequenceFromCommands('setup', [runsOnPass('first-device')]);
 
-    await replay.handler({ action: 'run', wait: true, name: 'setup' } as any);
+    await run.handler({ action: 'sequence', wait: true, name: 'setup' } as any);
 
     expect(calls.filter(c => c.tool === 'connection' && c.params.action === 'launch').map(c => c.params.connection))
       .toEqual(['first-device-tab']);
@@ -229,12 +229,12 @@ describe('a session with nothing connected', () => {
   });
 
   it('refuses a step naming a connection, naming the one it wanted', async () => {
-    const { calls, replay, recorder } = makeHarness({ live: [] });
+    const { calls, replay, run, recorder } = makeHarness({ live: [] });
     await recorder.createSequenceFromCommands('named-step', [
       { tool: 'inspect', params: { action: 'evaluateExpression', expression: '1', connection: 'second-device-tab' } },
     ]);
 
-    const result: any = await replay.handler({ action: 'run', wait: true, name: 'named-step' } as any);
+    const result: any = await run.handler({ action: 'sequence', wait: true, name: 'named-step' } as any);
 
     expect(result.content[0].text).toContain('"second-device-tab"');
     expect(result.content[0].text).toContain('does not exist in this session');

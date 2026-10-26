@@ -11,6 +11,7 @@
 
 import type { Page, CDPSession } from 'puppeteer-core';
 import { ownScript } from './utils/own-script.js';
+import { openSession } from './utils/own-session.js';
 
 // Types for verification results
 export interface UIIssue {
@@ -88,7 +89,7 @@ export class UIVerifier {
     const minTouchTargetSize = options.minTouchTargetSize || DEFAULT_MIN_TOUCH_TARGET;
 
     // Create CDP session for direct protocol access
-    this.cdpSession = await this.page.target().createCDPSession();
+    this.cdpSession = await openSession(this.page.target());
 
     try {
       const issues: UIIssue[] = [];

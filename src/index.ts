@@ -48,7 +48,7 @@ import { createConsoleTools } from './tools/console-tools.js';
 import { createNetworkTools } from './tools/network-tools.js';
 import { createProxyTools } from './tools/proxy-tools.js';
 import { createHoldTools } from './tools/hold-tools.js';
-import { heldConnections, holdReading } from './hold.js';
+import { describeHold, drivesPage, forRunStep, heldConnections, holdReading, isOutside, release, type HoldOwner } from './hold.js';
 import { createPageTools } from './tools/page-tools.js';
 import { createDOMTools } from './tools/dom-tools.js';
 import { createScreenshotTools } from './tools/screenshot-tools.js';
@@ -80,7 +80,7 @@ import { ServerManager } from './server-manager.js';
 import { configManager } from './config.js';
 import { ToolError } from './tool-error.js';
 import type { ServerLog, ServerRow, ToolGroup, ToolValues } from './bench/wire.js';
-import { arriveOn, unlisted, historyPlace, entryChannel, asInnerCall } from './call-origin.js';
+import { arriveOn, unlisted, historyPlace, entryChannel, asInnerCall, callOwner } from './call-origin.js';
 import { markNextCommand, releaseCommand, noteCallStart, newlyIdleProxies, attachEntryToCursor } from './proxy/registry.js';
 import { describePersonInput, isPersonWatchTurnedOn, recordPersonInputInto, takeUnreadPersonInput, watchPersonInput } from './person-watch.js';
 import { activitySummary } from './activity-index.js';
@@ -100,7 +100,16 @@ const RECORDED_REPLAY_ACTIONS = new Set([
 
 /** Whether history holds this call. */
 function recordedInHistory(toolName: string, args: Record<string, unknown> | undefined): boolean {
+  if (toolName === 'run') return !UNRECORDED_RUN_ACTIONS.has(String(args?.action));
   return toolName !== 'replay' || RECORDED_REPLAY_ACTIONS.has(String(args?.action));
+}
+
+/** `run` actions history leaves out: a read of a run, and a repeat, which records the calls it runs. */
+const UNRECORDED_RUN_ACTIONS = new Set(['status', 'repeat']);
+
+/** Tools whose calls run other calls, each of which counts and marks the boundary for itself. */
+function runsCalls(toolName: string): boolean {
+  return toolName === 'replay' || toolName === 'run';
 }
 import { checkPortFailures, checkBreakpointPause, checkBugBlocking, checkPendingStartups, checkDuplicateSession, prependToResponse, appendToResponse, buildStatusSuffix, type StatusLineItem } from './tool-response.js';
 import { recordBlockEvent, clearBlockEvents } from './block-events.js';
@@ -114,13 +123,14 @@ import { fileURLToPath } from 'url';
 import { debugLog, enableDebugLogging, enableHistoryLogging, setStartupMetrics } from './debug-logger.js';
 import { deriveConnectionReference, sanitizeReference, InvalidReferenceError, UNNAMED_CONNECTION } from './reference-validator.js';
 import { underDialogs, type DialogTarget } from './dialog-gate.js';
-import { initializePaths, resolveStateDir, getOutputPath } from './helpers/paths.js';
+import { initializePaths, resolveStateDir, getOutputPath, getProjectDir, hasWorkingDirStorage } from './helpers/paths.js';
 import { cleanupStaleTempFiles, cleanupStaleTempFilesSync } from './atomic-write.js';
 import { createSessionDetector, type SessionInfo, type SessionDetector } from './session-detector.js';
 import { serverClaims } from './server-claims.js';
+import { movedReplayRefusal } from './tools/replay-schema.js';
+import { stateDirNote } from './state-dir-ignored.js';
+import { redoNote } from './redo-hint.js';
 
-/** Tools that move a page, and would wait on one the bench holds still. */
-const DRIVING_TOOLS = new Set(['input', 'navigate', 'wait']);
 /** The replay actions that drive a page: a run or its steps, and a repeat of past calls. */
 const DRIVING_REPLAY = new Set(['run', 'runAll', 'step', 'finish', 'runFromLog', 'repeat']);
 const __filename = fileURLToPath(import.meta.url);
@@ -128,8 +138,7 @@ const __dirname = dirname(__filename);
 
 /**
  * This package's version, read from package.json rather than duplicated here
- * so it cannot drift. Used to report the server version and to detect an
- * installed skill left behind by an older release (see getSkillInstallState).
+ * so it cannot drift. Used to report the server version.
  */
 const SERVER_VERSION: string = (() => {
   try {
@@ -213,127 +222,15 @@ async function findStartingPort(): Promise<number> {
 }
 
 /**
- * Locations a skills-aware client (Claude Code and others following the
- * agentskills.io convention) would scan for the bundled devharness skill.
- * Checked at both project- and user-level, and both the client-native
- * `.claude/skills/` path and the cross-client `.agents/skills/` convention.
- */
-function findSkillInstallCandidates(): string[] {
-  const scanned = [
-    join(process.cwd(), '.claude', 'skills', 'devharness'),
-    join(process.cwd(), '.agents', 'skills', 'devharness'),
-    join(homedir(), '.claude', 'skills', 'devharness'),
-    join(homedir(), '.agents', 'skills', 'devharness'),
-  ];
-  return [...scanned, ...findPluginSkillDirs()];
-}
-
-/**
- * Skill directories belonging to an installed Claude Code plugin.
- *
- * A plugin ships the skill itself, so the client already has a current copy and
- * the nudge would be telling the user to hand-install something they have.
- * These live at ~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/skills/
- * which is not a path this package controls, so it is discovered rather than
- * assumed, and any failure just yields no candidates.
- */
-function findPluginSkillDirs(): string[] {
-  const root = join(homedir(), '.claude', 'plugins', 'cache');
-  const found: string[] = [];
-  try {
-    for (const marketplace of readdirSync(root, { withFileTypes: true })) {
-      if (!marketplace.isDirectory()) continue;
-      const pluginDir = join(root, marketplace.name, 'devharness');
-      if (!existsSync(pluginDir)) continue;
-      for (const version of readdirSync(pluginDir, { withFileTypes: true })) {
-        if (!version.isDirectory()) continue;
-        found.push(join(pluginDir, version.name, 'skills', 'devharness'));
-      }
-    }
-  } catch {
-    // No plugin cache, or unreadable: nothing to add.
-  }
-  return found;
-}
-
-/** Version stamped into a SKILL.md frontmatter, if it has one. */
-function readSkillVersion(skillFile: string): string | null {
-  try {
-    const head = readFileSync(skillFile, 'utf-8').slice(0, 2000);
-    return head.match(/^version:\s*(.+)$/m)?.[1].trim() ?? null;
-  } catch {
-    return null;
-  }
-}
-
-type SkillInstallState =
-  | { status: 'absent' }
-  | { status: 'current' }
-  | { status: 'stale'; path: string; installedVersion: string | null };
-
-/**
- * Whether an installed copy of the skill exists and whether it matches this
- * package.
- *
- * Presence alone is not enough. The documented install is a symlink into the
- * package, which tracks upgrades for free - but nothing stops a client or user
- * from *copying* the directory instead, and a copy is frozen forever: the file
- * exists, so a presence-only check suppresses the nudge permanently and the
- * user silently runs an old skill against a newer tool surface. Comparing the
- * stamped version catches the copy case without needing any install machinery
- * of our own.
- */
-function getSkillInstallState(): SkillInstallState {
-  let stale: { path: string; installedVersion: string | null } | null = null;
-
-  for (const dir of findSkillInstallCandidates()) {
-    const skillFile = join(dir, 'SKILL.md');
-    if (!existsSync(skillFile)) continue;
-
-    const installedVersion = readSkillVersion(skillFile);
-    // A symlink into this package reads back our own file, so this matches and
-    // we stop. Any installed copy that predates the version stamp reports null,
-    // which is itself evidence of staleness.
-    if (installedVersion === SERVER_VERSION) return { status: 'current' };
-
-    stale ??= { path: skillFile, installedVersion };
-  }
-
-  return stale ? { status: 'stale', ...stale } : { status: 'absent' };
-}
-
-/**
  * Load the MCP `instructions` payload from docs/mcp-instructions.md.
  *
- * Kept short and separate from docs/instructions.md (the full human-readable
- * reference): many MCP clients inject this field into the model's context
- * unconditionally at session start, so it shouldn't carry the full tool
- * catalog. The full reference is instead shipped as a progressive-disclosure
- * Agent Skill (skills/devharness/) that skills-aware clients load on demand.
- *
- * If that skill isn't installed anywhere a client would scan for it - or an
- * installed copy is stamped with an older version of this package - append a
- * nudge asking the model to offer setting it up, but only ask, never symlink
- * it in unprompted. Once a matching version is installed this stops appearing.
+ * Kept short and separate from docs/instructions.md (the full reference):
+ * many MCP clients inject this field into the model's context at the start of
+ * every session, so it carries discovery and nothing else.
  */
 async function loadInstructions(): Promise<string | undefined> {
   try {
-    const instructionsPath = join(__dirname, '..', 'docs', 'mcp-instructions.md');
-    const instructions = await readFile(instructionsPath, 'utf-8');
-
-    const skillState = getSkillInstallState();
-    if (skillState.status === 'current') {
-      return instructions;
-    }
-
-    const skillSourcePath = join(__dirname, '..', 'plugin', 'skills', 'devharness');
-    const install = `\`\`\`bash\nmkdir -p .claude/skills\nrm -rf .claude/skills/devharness\nln -s "${skillSourcePath}" .claude/skills/devharness\n\`\`\``;
-
-    const nudge = skillState.status === 'absent'
-      ? `\n\n---\n\n**Setup nudge (one-time):** No devharness Agent Skill was found in this project or your home directory (checked \`.claude/skills/\`, \`.agents/skills/\`, and installed plugins). Ask the user if they'd like it installed - if they agree, run:\n\n${install}\n\nDo not create the symlink without asking first. This message stops appearing once the skill is installed anywhere it would be scanned.\n`
-      : `\n\n---\n\n**Stale skill:** The devharness Agent Skill at \`${skillState.path}\` is from version ${skillState.installedVersion ?? 'an unstamped release'}, but this server is ${SERVER_VERSION}. It was copied rather than symlinked, so it no longer tracks upgrades and may describe tools or actions that have since changed. Ask the user whether to replace it with a symlink that stays current:\n\n${install}\n\nDo not delete or replace their file without asking first - and note the skill is read by the client at session start, so it only takes effect in a new session.\n`;
-
-    return instructions + nudge;
+    return await readFile(join(__dirname, '..', 'docs', 'mcp-instructions.md'), 'utf-8');
   } catch (error) {
     console.error('[devharness] Failed to load instructions file:', error instanceof Error ? error.message : error);
     return undefined;
@@ -493,10 +390,11 @@ function truncate(text: string, limit: number): string {
 }
 
 let pidAnnounced = false;
-let statusLegendShown = false;
 
 /** A call the schema refused, as an error response carrying the fields it names. */
-function validationFailure(toolName: string, error: any): any {
+function validationFailure(toolName: string, error: any, params?: Record<string, any>): any {
+  const moved = toolName === 'replay' ? movedReplayRefusal(params) : undefined;
+  if (moved) return moved;
   return {
     content: [{ type: 'text', text: getErrorMessage('PARAMETERS_REFUSED', { tool: toolName, issues: describeRefusal(error) }) }],
     isError: true,
@@ -513,19 +411,42 @@ function validationFailure(toolName: string, error: any): any {
  * one read again until it holds waits on the page moving, as a wait does.
  */
 function pageHeldRefusal(toolName: string, args: Record<string, any>): any {
-  const drives = DRIVING_TOOLS.has(toolName)
-    || (toolName === 'check' && Number(args.withinMs) > 0)
-    || (toolName === 'replay' && DRIVING_REPLAY.has(String(args.action)));
+  const drives = drivesPage(toolName, args)
+    || (toolName === 'replay' && DRIVING_REPLAY.has(String(args.action)))
+    || (toolName === 'run' && DRIVING_RUN.has(String(args.action)));
   if (!drives) return undefined;
-  const resumesRun = toolName === 'replay' && RESUMES_HELD_RUN.has(String(args.action));
+  const resumesRun = runsCalls(toolName) && RESUMES_HELD_RUN.has(String(args.action));
   const hold = benchHold(args.connection, resumesRun);
   if (hold) return createErrorResponse('PAGE_HELD_BY_BENCH', { ...hold, toolName });
   const held = heldPage(args.connection, resumesRun);
   return held ? createErrorResponse('PAGE_HELD', { ...held, toolName }) : undefined;
 }
 
+/**
+ * Release what an agent or a motion rule holds before a run's driving step,
+ * and name what blocks it otherwise: a person's hand hold first, the one no
+ * agent call ends. A breakpoint's stop is left to the paused-execution guard.
+ */
+async function clearForRunStep(connection: string | undefined, owner: HoldOwner): Promise<{ connection: string; why: string; release: string } | undefined> {
+  if (connection === undefined) return undefined;
+  const name = sanitizeReference(connection);
+  const run = owner.kind === 'run-step' ? owner.run : undefined;
+  const held = holdReading(name).held.filter(layer => !layer.via && layer.layer !== 'network');
+  const blocking = held.flatMap(layer => layer.owners.filter(one => forRunStep(one, run) === 'blocks').map(one => ({ layer, one })));
+  if (blocking.length) {
+    const first = blocking.find(({ one }) => one.kind === 'person') ?? blocking[0];
+    const layers = [...new Set(blocking.map(({ layer }) => layer.layer))];
+    const { holder, release: how } = describeHold(first.one, name);
+    return { connection: name, why: `its ${layers.join(' and ')} ${layers.length > 1 ? 'are' : 'is'} held by ${holder}`, release: how };
+  }
+  const releasable = held.filter(layer => layer.owners.every(one => forRunStep(one, run) === 'released')).map(layer => layer.layer);
+  if (releasable.length) await release(name, { by: { kind: 'agent' }, layers: releasable });
+  return undefined;
+}
+
 /** The replay actions that release the hold a paused run placed before they drive the page. */
 const RESUMES_HELD_RUN = new Set(['step', 'finish']);
+const DRIVING_RUN = new Set(['steps', 'sequence', 'all', 'step', 'finish', 'fromLog', 'repeat']);
 
 /**
  * A page whose JS a hold stops, with no bench open on it: the hold tool's, a
@@ -536,15 +457,16 @@ const RESUMES_HELD_RUN = new Set(['step', 'finish']);
 function heldPage(connection: string | undefined, resumesRun: boolean): { connection: string; why: string; release: string } | undefined {
   const names = connection !== undefined ? [sanitizeReference(connection)] : heldConnections();
   for (const name of names) {
-    const held = holdReading(name).held.filter(layer => !layer.via && layer.layer !== 'network' && layer.source !== 'breakpoint'
-      && !(resumesRun && layer.source === 'sequence'));
+    const blocking = (owner: HoldOwner) => !isOutside(owner) && !(resumesRun && owner.kind === 'run-pause');
+    const held = holdReading(name).held.filter(layer => !layer.via && layer.layer !== 'network' && layer.owners.some(blocking));
     if (!held.length) continue;
+    // A person's hand hold is named first: it is the one no agent call ends.
+    const owners = held.flatMap(layer => layer.owners.filter(blocking));
+    const { holder, release } = describeHold(owners.find(owner => owner.kind === 'person') ?? owners[0], name);
     return {
       connection: name,
-      why: `its ${held.map(layer => layer.layer).join(' and ')} ${held.length > 1 ? 'are' : 'is'} held by the ${held[0].source}`,
-      release: held.every(layer => layer.source === 'sequence')
-        ? `replay({ action: 'finish' }) or replay({ action: 'step' }) carries the paused run on and releases it; replay({ action: 'cancel' }) releases it and ends the run`
-        : `hold({ action: 'release', connection: '${name}' })`,
+      why: `its ${held.map(layer => layer.layer).join(' and ')} ${held.length > 1 ? 'are' : 'is'} held by ${holder}`,
+      release,
     };
   }
   return undefined;
@@ -561,7 +483,7 @@ function dialogTargetOf(args: Record<string, any>): DialogTarget | undefined {
 }
 
 /**
- * Run a tool call that did not arrive over MCP: a replay step, a bench action,
+ * Run a tool call that did not arrive over MCP: a run step, a bench action,
  * a CLI call, or a call one tool makes to another. An isError answer is thrown
  * as a ToolError.
  */
@@ -579,12 +501,12 @@ async function executeToolCall(calledName: string, calledParams: Record<string, 
   if (cliEntry) {
     const held = pageHeldRefusal(toolName, params);
     if (held) throw new ToolError(held);
-  } else if (historyPlace()?.run !== undefined && DRIVING_TOOLS.has(toolName)) {
+  } else if (historyPlace()?.run !== undefined && drivesPage(toolName)) {
     // A run's own step: the bench's guard against a second driver beside a run
     // it plays would refuse the step that run is taking. Only a hold that
     // stops the page refuses it. The refused step is recorded first, so the
     // run lists the step it failed on rather than ending with no row for it.
-    const held = heldPage(params.connection, false);
+    const held = await clearForRunStep(params.connection, callOwner());
     if (held) {
       const refused = createErrorResponse('PAGE_HELD', { ...held, toolName });
       const stepPlace = historyPlace();
@@ -604,7 +526,7 @@ async function executeToolCall(calledName: string, calledParams: Record<string, 
   const place = recordedInHistory(toolName, params) ? historyPlace() : undefined;
 
   if (!validation.success) {
-    const refused = validationFailure(toolName, validation.error);
+    const refused = validationFailure(toolName, validation.error, params);
     if (place) {
       await commandRecorder.recordCommand(toolName, params, place);
       commandRecorder.attachResult(commandRecorder.getCurrentHistoryIndex(), refused);
@@ -619,7 +541,7 @@ async function executeToolCall(calledName: string, calledParams: Record<string, 
     // A run's step was already counted as a call by the executor that ran it,
     // and a replay call walks steps counted on their own; a second start
     // would stand between a traffic check and the step it counts back to.
-    if (toolName !== 'replay' && !place.run) noteCallStart();
+    if (!runsCalls(toolName) && !place.run) noteCallStart();
     // A run marked this step before its call was recorded; the entry joins
     // what the step causes to the call that caused it.
     if (place.run) attachEntryToCursor(index);
@@ -629,7 +551,7 @@ async function executeToolCall(calledName: string, calledParams: Record<string, 
   // path does: without the mark, a repeated or CLI call's traffic lands under
   // no entry and `create` stores nothing for it. A run's step is marked by
   // the run with its own position instead.
-  const marksBoundary = index !== null && toolName !== 'replay' && !place?.run && !observes(toolName, validation.data);
+  const marksBoundary = index !== null && !runsCalls(toolName) && !place?.run && !observes(toolName, validation.data);
   if (marksBoundary) await markNextCommand({ kind: 'command', index: index! });
 
   // A recorded call's own tool calls are made on its behalf and stay out; a
@@ -900,7 +822,7 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
     );
 
     if (!validation.success) {
-      const refused = validationFailure(toolName, validation.error);
+      const refused = validationFailure(toolName, validation.error, request.params.arguments);
       if (recordedInHistory(toolName, request.params.arguments)) {
         await commandRecorder.recordCommand(toolName, request.params.arguments || {});
         const index = commandRecorder.getCurrentHistoryIndex();
@@ -918,7 +840,7 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
       commandIndex = commandRecorder.getCurrentHistoryIndex();
       // A replay call walks steps that each start a call of their own; counted
       // too, it would stand between a traffic check and the step it counts back to.
-      if (toolName !== 'replay') noteCallStart();
+      if (!runsCalls(toolName)) noteCallStart();
     }
 
     // Check for failed monitored ports
@@ -975,9 +897,9 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
     // Marked here rather than beside recordCommand above: a command a guard
     // refused never reaches the app, and stamping its index would hand later
     // traffic to a command that did nothing.
-    // A replay run marks the proxy with its own steps; a mark here would be
+    // A run sequence marks the proxy with its own steps; a mark here would be
     // released under the run's first step.
-    const marksBoundary = commandIndex !== null && toolName !== 'replay' && !observes(toolName, validation.data as Record<string, unknown>);
+    const marksBoundary = commandIndex !== null && !runsCalls(toolName) && !observes(toolName, validation.data as Record<string, unknown>);
     if (marksBoundary) {
       // Queued behind the previous command's release, so this command claims
       // nothing that command is still being credited with.
@@ -1021,7 +943,8 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
 
       // What this call caused that crossed or was written by the time it
       // returned; what arrives after is in the index and in History.
-      const activity = commandIndex !== null ? activitySummary(commandIndex) : undefined;
+      const reading = (validation.data as Record<string, unknown>)?.connection;
+      const activity = commandIndex !== null ? activitySummary(commandIndex, typeof reading === 'string' ? reading : undefined) : undefined;
       if (activity) statusItems.push({ label: 'Activity', value: activity });
 
       // What a person did on this page since the last call here read it, so
@@ -1077,11 +1000,16 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
         statusItems.push({ label: 'Replay', value: String(commandIndex) });
       }
 
-      const statusSuffix = buildStatusSuffix(statusItems, !statusLegendShown);
-      if (statusSuffix) {
-        statusLegendShown = true;
-        appendToResponse(result, statusSuffix);
-      }
+      const statusSuffix = buildStatusSuffix(statusItems, true);
+      if (statusSuffix) appendToResponse(result, statusSuffix);
+      const stateNote = await stateDirNote(hasWorkingDirStorage() ? getProjectDir() : undefined);
+      if (stateNote) appendToResponse(result, `\n\n${stateNote}`);
+      // A call that redoes one in history: the session's first names the repeat.
+      // A refused call's footer already names the repeat with the fields to fix.
+      const redo = commandIndex !== null && !runsCalls(toolName) && !result?.isError
+        ? redoNote(commandRecorder.getHistory(Number.MAX_SAFE_INTEGER), toolName, validation.data as Record<string, unknown>, commandIndex)
+        : '';
+      if (redo) appendToResponse(result, `\n\n${redo}`);
       if (commandIndex !== null && isParameterError(result)) appendToResponse(result, `\n\n${historyFooter(commandIndex, result)}`);
 
       // One occurrence in the transcript is what session-detector.ts matches on.
@@ -1164,7 +1092,7 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
  * CLI mode: `devharness run <sequenceName> [--connection=X] [--headed] [--keep-chrome]`
  * Runs a saved sequence directly from the shell, no MCP client needed.
  * Pre-launches Chrome itself (headless by default, forceNewInstance) so
- * replay run's own auto-launch (always headed) never triggers.
+ * run sequence's own auto-launch (always headed) never triggers.
  */
 async function runCliSequence(argv: string[]): Promise<void> {
   const sequenceName = argv[0];
@@ -1219,8 +1147,8 @@ async function runCliSequence(argv: string[]): Promise<void> {
       headless: !headed,
       forceNewInstance: true,
     });
-    const runResult = await executeToolCall('replay', {
-      action: 'run',
+    const runResult = await executeToolCall('run', {
+      action: 'sequence',
       // Blocking: the CLI's exit code comes from the run result, and the
       // process exits right after - a background run would die mid-flight.
       wait: true,

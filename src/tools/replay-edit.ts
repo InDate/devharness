@@ -732,7 +732,7 @@ export async function handleRepair(args: ReplayArgs, recorder: CommandRecorder) 
       type: 'text',
       text: `**Repaired step ${paused.currentStep + 1}** of "${sequence.name}": ${what}\n`
         + (persisted ? `Written to \`${persisted}\`.\n` : `In memory; \`export\` writes it to a file.\n`)
-        + `\nRun it again: \`replay({ action: 'step' })\``,
+        + `\nRun it again: \`run({ action: 'step' })\``,
     }],
   };
 }
@@ -745,7 +745,7 @@ export async function handleRepair(args: ReplayArgs, recorder: CommandRecorder) 
  * same field only through this action. A pause point with a note is how a
  * sequence holds an action that cannot be a step, such as a bench play: the
  * run stops, the note reaches the event stream and the paused reply, and
- * `replay finish` resumes once it is done.
+ * `run finish` resumes once it is done.
  */
 export async function handlePause(args: ReplayArgs, recorder: CommandRecorder) {
   if (args.step === undefined) {
@@ -810,7 +810,7 @@ export async function handlePause(args: ReplayArgs, recorder: CommandRecorder) {
     : [
         `**Pause point before step ${args.step}** of "${sequence.name}", holding ${command.pauseHolds ? command.pauseHolds.join(', ') || 'nothing' : 'everything'}.`,
         command.pauseNote
-          ? `**Notifies the session:** ${command.pauseNote}\n\nA run stopping here writes the note to the event stream as an \`instruction\` and prints it in its reply; \`replay({ action: 'finish' })\` resumes once it is carried out.`
+          ? `**Notifies the session:** ${command.pauseNote}\n\nA run stopping here writes the note to the event stream as an \`instruction\` and prints it in its reply; \`run({ action: 'finish' })\` resumes once it is carried out.`
           : command.pauseNotify
             ? '**Notifies the session**, with no reason: a run stopping here sends an `instruction` event and its reply asks the session to find out why from the person.'
             : 'Does not notify: a run stops here silently, as at `stepTo`.',

@@ -15,6 +15,7 @@ import type { RuntimeType } from './types.js';
 import type { ChromeLauncher } from './chrome-launcher.js';
 import { disposeWorkerTargetRegistry } from './worker-targets.js';
 import { ownScript } from './utils/own-script.js';
+import { animationRecordOf } from './animation-record.js';
 
 export interface Connection {
   id: string;
@@ -109,6 +110,9 @@ export class ConnectionManager {
       };
       networkMonitor.onRequestOrigin = report => {
         getProxy(reference)?.noteInitiator(report.method, report.url, 'input', report.at);
+      };
+      networkMonitor.onMotion = (report, arrivedAt) => {
+        animationRecordOf(reference).takeMotion(report, arrivedAt);
       };
     }
 
@@ -214,7 +218,7 @@ export class ConnectionManager {
     const unwatch = cdp.watchPause((paused, event) => {
       const top = event?.callFrames?.[0];
       if (paused) {
-        recordHeld(reference, 'code', 'breakpoint', {
+        recordHeld(reference, 'code', { kind: 'outside' }, {
           reason: event?.reason ?? 'other',
           // A frame in an inline script reports no URL of its own; the script it
           // runs in was parsed from the page, and carries the page's URL.

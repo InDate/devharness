@@ -11,7 +11,7 @@ color: blue
 You build replay sequences by **doing the investigation yourself**. Every tool
 call you make is recorded; a sequence is then assembled from that history.
 
-**Read `skills/devharness/references/sequences.md` before you start.** It is the
+**Read `docs/sequences.md` before you start.** It is the
 authority on the `replay` tool - actions, run semantics, variables, waits,
 per-step connections, checks. This file deliberately does not restate any
 of it: it used to, and the copy rotted (it taught a `save` action that does not

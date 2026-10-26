@@ -3,7 +3,7 @@ import { pauseActionsFor, recordPauseAction } from '../pause-actions.js';
 import { recordBenchCall } from '../person-watch.js';
 import { isWatchingPersonInput } from '../person-watch.js';
 import { appendEvent } from '../session-events.js';
-import { holdableLayers, holdReading } from '../hold.js';
+import { holdableLayers, holderWord, holdReading } from '../hold.js';
 import type { BenchHandlers } from '../bench-control.js';
 import { getProxy, checkOutcomesFor } from '../proxy/registry.js';
 import { levelOf, causeOf } from '../proxy/intercept-proxy.js';
@@ -89,7 +89,7 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
         connection,
         pageUrl: page.url(),
         frozen: session.frozen,
-        held: holdReading(connection).held,
+        held: holdReading(connection).held.map(({ owners, ...layer }) => ({ ...layer, source: [...new Set(owners.map(holderWord))].join(' and ') })),
         queued: getProxy(connection)?.queue.list() ?? [],
         holdable: holdableLayers(connection),
         pickerArmed: session.pickerArmed,
@@ -122,7 +122,7 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
     save: async (comment: string) => { await saveAnnotation(connection, comment); },
     discard: async () => { await discardPick(connection); },
     tick: async (request: { steps?: number; budgetMs?: number }) => {
-      const ticked = await tickBench(connection, request);
+      const ticked = await tickBench(connection, request, undefined, { kind: 'person' });
       if (!ticked) return;
       // Each callback the tick ran is a row of the pause: what ran, what
       // scheduled it, where it is, and when in page time.
@@ -147,7 +147,7 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
     setPicker: async (armed: boolean) => { await setPicker(connection, armed); },
     setPersonInput: async (on: boolean) => { await setPersonInput(connection, on); },
     setHeld: async (held: boolean, resume?: boolean) => {
-      await setHeld(connection, held);
+      await setHeld(connection, held, { kind: 'person' });
       if (!held && resume) resumePausedRun(connection);
     },
     selectSequence: async (name: string) => { await selectSequence(connection, name); },

@@ -35,7 +35,7 @@ That split decides what each half of the setup covers.
 | Change | What picks it up |
 | :--- | :--- |
 | Anything under `src/` | `npm run build` - postbuild signals the supervisor, which restarts the child |
-| `plugin/hooks/`, `plugin/.claude-plugin/`, `plugin/skills/` | `claude plugin marketplace update devharness-local`, then a new session for a `SessionStart` hook |
+| `plugin/hooks/`, `plugin/.claude-plugin/` | `claude plugin marketplace update devharness-local`, then a new session for a `SessionStart` hook |
 | The CLI (`devharness call`, `which`, …) | `node build/mcp-supervisor.js <command>` - the checkout is not on PATH |
 
 Plugin ids are `name@marketplace`, so `devharness@devharness-local` installs
@@ -118,10 +118,11 @@ The three `check:`/`stress:` scripts need a build first and are deliberately
 outside `npm test`: they spawn real processes and a real Chrome, which the
 vitest suite never does.
 
-`build:verify` is the release gate. It fails if `docs/instructions.md` or
-`plugin/skills/devharness/references/tool-categories.md` disagree with the tools the
-server actually registers, or if the skill's version stamp doesn't match
-`package.json`. Those files ship to users, so drift there is a user-facing bug.
+`build:verify` is the release gate. It fails if `docs/instructions.md` disagrees
+with the tools the server actually registers, if a call shown in
+`docs/sequences.md`, `docs/bench.md` or `docs/boundary.md` names an action that
+doesn't exist, or if `plugin/.mcp.json` pins another version than `package.json`.
+Those files ship to users, so drift there is a user-facing bug.
 
 `npm run stress:suspend` drives the built supervisor as a real process — idle
 suspend, orphan reaping, requests landing inside the teardown window, RSS/fd
@@ -155,25 +156,25 @@ Chrome on `LAYOUT=1`, `2` and `3`, each held to its entry in the script's
 `EXPECTED` table. Needs a build.
 
 When you add, rename, or change a tool, update `docs/instructions.md`,
-`docs/mcp-instructions.md` (if it affects the quick-start),
-`plugin/skills/devharness/SKILL.md` and `references/tool-categories.md`, and
-`docs/messages.md` (if it returns new response types). These are kept in sync by
+`docs/mcp-instructions.md` (if it affects the quick-start), and
+`docs/messages.md` (if it returns new response types). Where each fact a session
+needs belongs - description, first-use block, error - is the instructing-sessions
+skill's. These are kept in sync by
 hand; `build:verify` is what catches you.
 
 ## Releasing
 
-Version lives in three places that must agree: `package.json`,
-`plugin/skills/devharness/SKILL.md` frontmatter, and `plugin/.mcp.json` — the
-last being the version the plugin actually installs. `build:verify` checks all
-three.
+Version lives in two places that must agree: `package.json` and
+`plugin/.mcp.json`, the version the plugin actually installs. `build:verify`
+checks both.
 
 ```sh
 npm run build:verify   # the gate — run it BEFORE bumping
-npm version patch      # bumps all three, commits, tags, and pushes
+npm version patch      # bumps both, commits, tags, and pushes
 ```
 
 `npm version` is the whole release. Its `version` hook
-(`scripts/sync-skill-version.mjs`) stamps the skill and the pin into the version
+(`scripts/sync-plugin-pin.mjs`) stamps the pin into the version
 commit, and `postversion` pushes the branch and tag with no confirmation step —
 so make `main` exactly what should ship before bumping, and never run
 `npm publish` by hand.

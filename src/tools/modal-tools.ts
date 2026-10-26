@@ -43,7 +43,7 @@ const modalSchema = z.object({
 export function createModalTools(resolveConnectionByName: (connection: string) => Promise<any>) {
   return {
     modal: createTool(
-      'Blocking modals and overlays, and browser dialogs. Actions: detect (an open alert/confirm/prompt/file picker, else page overlays with the strategies each can be dismissed by), dismiss (dismiss a page overlay, the topmost by default), answer (close an open alert/confirm/prompt or fill a file picker), wait (until the open dialog closes, however it is answered)',
+      'Browser dialogs and page overlays.',
       modalSchema,
       async ({ action, ...args }, signal) => {
         const resolved = await resolveConnectionByName(args.connection);

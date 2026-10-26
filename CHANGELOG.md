@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **The devharness Agent Skill.** It reached few sessions, and those mostly on
+  a stale copy, while each fact in it a session needs now arrives with the
+  call it bears on: in the tool's description, the reply of the action's first
+  use in a session, or the error a call meets. Its reference for people moved
+  to `docs/bench.md`, `docs/boundary.md` and `docs/sequences.md`, and its other
+  sections into `docs/instructions.md`. The server no longer asks a session to
+  install the skill or warns of a stale copy.
+
 ### Added
 
 - **The saved sequences list prints in full once a session.** The first
@@ -86,6 +96,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A hold records who took it, and ends by its owner.** Each held layer
+  carries its owners: a person in the bench, an agent's call, a run's step or
+  pause, a motion rule, the bench's own capture, or a breakpoint. A layer runs
+  again when its last owner is released, so one surface's release leaves
+  another's hold standing. An agent's `hold release`, `bench release` and
+  `execution resume` end every hold of an agent, a run, a rule or a
+  breakpoint; a person's hand hold ends in the bench, and an agent's call on
+  it is refused with `HELD_BY_PERSON` and leaves the page stopped. A run ends
+  the holds its steps took as it finishes or is cancelled, and releases an
+  agent's or a rule's hold before a step that drives the page.
 - **A replay puts nothing into the page.** The replay cursor marks each click
   with Chrome's overlay, drawn above the document, in place of a pointer and
   a key badge added to the app's DOM, which the page's own readers took as
@@ -120,6 +140,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A bench play runs a sequence that steps a held screen.** The bench
+  released every hold before each step, so a `hold frame` after an `input`
+  with `holdBeforeFrame` met a running page and failed, and the play stopped
+  at every step that held the screen. A hold a run's own step took now stands
+  through the run's later steps, and the play carries on into a step that
+  moves page time.
 - **A replay credits a step with what its recording did.** A read-only step
   claims no traffic, as its recorded call claimed none; an animation a held
   press set off is credited to the press, read when Chrome creates it rather

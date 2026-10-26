@@ -1,7 +1,7 @@
 import type { HoldLayer } from '../hold.js';
 import type { PersonInput } from '../person-watch.js';
 /**
- * The shapes a replay run passes between the executor and what it calls: the
+ * The shapes a run sequence passes between the executor and what it calls: the
  * run's context, one step's result, the run's result.
  */
 

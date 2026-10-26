@@ -1,4 +1,5 @@
 import type { Page } from 'puppeteer-core';
+import { openSession } from './utils/own-session.js';
 
 export interface Size {
   width: number;
@@ -86,7 +87,7 @@ export async function sizeWindowToViewport(
     return { viewport: target, mode: 'emulated' };
   }
 
-  const session = await page.createCDPSession();
+  const session = await openSession(page);
   try {
     const { windowId } = (await session.send('Browser.getWindowForTarget')) as {
       windowId: number;

@@ -39,7 +39,7 @@ function makeReplay(sequences: CommandSequence[], opts: { stepDelayMs?: number }
     return { content: [{ type: 'text', text: '' }] };
   }));
 
-  const { replay } = createReplayTools(
+  const { replay, run } = createReplayTools(
     recorder,
     executeToolCall,
     async () => null,   // no page -> no cursor/overlay injection
@@ -47,7 +47,7 @@ function makeReplay(sequences: CommandSequence[], opts: { stepDelayMs?: number }
     undefined
   );
 
-  return { replay, recorder, calls, executeToolCall };
+  return { replay, run, recorder, calls, executeToolCall };
 }
 
 const seq = (id: string, name: string, commands: RecordedCommand[]): CommandSequence =>
@@ -72,13 +72,13 @@ beforeEach(() => {
 
 describe('background run', () => {
   it('returns a runId immediately and the results are retrievable via status', async () => {
-    const { replay, calls } = makeReplay(
+    const { replay, run, calls } = makeReplay(
       [seq('seq-a', 'flow-a', [domStep('#a'), domStep('#b'), domStep('#c')])],
       { stepDelayMs: 40 }
     );
 
-    const res = await replay.handler({
-      action: 'run', sequenceId: 'seq-a', connection: 'test-conn',
+    const res = await run.handler({
+      action: 'sequence', sequenceId: 'seq-a', connection: 'test-conn',
     } as any);
 
     // Returned before all three (slow) steps could possibly have run
@@ -90,12 +90,12 @@ describe('background run', () => {
 
     // While running, status reports progress
     await waitFor(() => runRegistry.get(runId)!.currentStep >= 1);
-    const mid = await replay.handler({ action: 'status', runId } as any);
+    const mid = await run.handler({ action: 'status', runId } as any);
     expect(text(mid)).toMatch(/running|completed/);
 
     // Once completed, status returns the full result
     await waitFor(() => runRegistry.get(runId)!.status === 'completed');
-    const done = await replay.handler({ action: 'status', runId } as any);
+    const done = await run.handler({ action: 'status', runId } as any);
     expect(text(done)).toContain('completed');
     expect(text(done)).toContain('flow-a');
     expect(runRegistry.get(runId)!.results).toHaveLength(3);
@@ -104,15 +104,15 @@ describe('background run', () => {
 
   it('cancel by runId stops a run at the next step boundary', async () => {
     const commands = Array.from({ length: 10 }, (_, i) => domStep(`#s${i}`));
-    const { replay, calls } = makeReplay([seq('seq-b', 'flow-b', commands)], { stepDelayMs: 50 });
+    const { replay, run, calls } = makeReplay([seq('seq-b', 'flow-b', commands)], { stepDelayMs: 50 });
 
-    const res = await replay.handler({
-      action: 'run', sequenceId: 'seq-b', connection: 'test-conn',
+    const res = await run.handler({
+      action: 'sequence', sequenceId: 'seq-b', connection: 'test-conn',
     } as any);
     const runId = res._meta.replay.runId as string;
 
     await waitFor(() => runRegistry.get(runId)!.currentStep >= 1);
-    const cancelRes = await replay.handler({ action: 'cancel', runId } as any);
+    const cancelRes = await run.handler({ action: 'cancel', runId } as any);
     expect(text(cancelRes)).toContain(runId);
 
     await waitFor(() => runRegistry.get(runId)!.status === 'cancelled');
@@ -123,19 +123,19 @@ describe('background run', () => {
     await new Promise(r => setTimeout(r, 200));
     expect(calls.filter(c => c.tool === 'dom' && c.params.selector?.startsWith('#s')).length).toBe(stepCalls);
 
-    const status = await replay.handler({ action: 'status', runId } as any);
+    const status = await run.handler({ action: 'status', runId } as any);
     expect(text(status)).toContain('cancelled');
   });
 
   it('two concurrent runs of the same sequence are distinguishable', async () => {
-    const { replay } = makeReplay(
+    const { replay, run } = makeReplay(
       [seq('seq-c', 'flow-c', [domStep('#a'), domStep('#b')])],
       { stepDelayMs: 30 }
     );
 
     const [r1, r2] = await Promise.all([
-      replay.handler({ action: 'run', sequenceId: 'seq-c', connection: 'conn-1' } as any),
-      replay.handler({ action: 'run', sequenceId: 'seq-c', connection: 'conn-2' } as any),
+      run.handler({ action: 'sequence', sequenceId: 'seq-c', connection: 'conn-1' } as any),
+      run.handler({ action: 'sequence', sequenceId: 'seq-c', connection: 'conn-2' } as any),
     ]);
 
     const id1 = r1._meta.replay.runId as string;
@@ -155,10 +155,10 @@ describe('background run', () => {
     const outer = seq('seq-outer', 'outer-flow', [
       runsOnPass('inner-flow'),
     ]);
-    const { replay, calls } = makeReplay([outer, inner]);
+    const { replay, run, calls } = makeReplay([outer, inner]);
 
-    const res = await replay.handler({
-      action: 'run', sequenceId: 'seq-outer', connection: 'test-conn',
+    const res = await run.handler({
+      action: 'sequence', sequenceId: 'seq-outer', connection: 'test-conn',
     } as any);
     const runId = res._meta.replay.runId as string;
 
@@ -173,10 +173,10 @@ describe('background run', () => {
     const outer = seq('seq-nest', 'nest-flow', [
       { tool: 'replay', params: { action: 'run', name: 'inner-flow' } },
     ]);
-    const { replay, calls } = makeReplay([outer]);
+    const { replay, run, calls } = makeReplay([outer]);
 
-    const res = await replay.handler({
-      action: 'run', sequenceId: 'seq-nest', wait: true,
+    const res = await run.handler({
+      action: 'sequence', sequenceId: 'seq-nest', wait: true,
     } as any);
 
     const nested = calls.find(c => c.tool === 'replay' && c.params.action === 'run');
@@ -185,21 +185,21 @@ describe('background run', () => {
   });
 
   it('unknown or expired runId gives a clean error', async () => {
-    const { replay } = makeReplay([]);
-    const res = await replay.handler({ action: 'status', runId: 'run-99-zzz' } as any);
+    const { replay, run } = makeReplay([]);
+    const res = await run.handler({ action: 'status', runId: 'run-99-zzz' } as any);
     expect(res.isError).toBe(true);
     expect(text(res)).toContain('run-99-zzz');
     expect(text(res)).toContain('restart');
 
-    const cancelRes = await replay.handler({ action: 'cancel', runId: 'run-99-zzz' } as any);
+    const cancelRes = await run.handler({ action: 'cancel', runId: 'run-99-zzz' } as any);
     expect(cancelRes.isError).toBe(true);
   });
 
   it('wait: true blocks and returns the full result (pre-0.7 behaviour), without registering a run', async () => {
-    const { replay } = makeReplay([seq('seq-w', 'wait-flow', [domStep('#a'), domStep('#b')])]);
+    const { replay, run } = makeReplay([seq('seq-w', 'wait-flow', [domStep('#a'), domStep('#b')])]);
 
-    const res = await replay.handler({
-      action: 'run', sequenceId: 'seq-w', connection: 'test-conn', wait: true,
+    const res = await run.handler({
+      action: 'sequence', sequenceId: 'seq-w', connection: 'test-conn', wait: true,
     } as any);
 
     expect(res._meta.replay.success).toBe(true);
@@ -210,23 +210,23 @@ describe('background run', () => {
 
   it('cancel without runId targets the only executing run, and errors when ambiguous', async () => {
     const commands = Array.from({ length: 8 }, (_, i) => domStep(`#s${i}`));
-    const { replay } = makeReplay([seq('seq-d', 'flow-d', commands)], { stepDelayMs: 40 });
+    const { replay, run } = makeReplay([seq('seq-d', 'flow-d', commands)], { stepDelayMs: 40 });
 
-    const r1 = await replay.handler({ action: 'run', sequenceId: 'seq-d', connection: 'c1' } as any);
-    const r2 = await replay.handler({ action: 'run', sequenceId: 'seq-d', connection: 'c2' } as any);
+    const r1 = await run.handler({ action: 'sequence', sequenceId: 'seq-d', connection: 'c1' } as any);
+    const r2 = await run.handler({ action: 'sequence', sequenceId: 'seq-d', connection: 'c2' } as any);
 
     // Two executing runs: ambiguous
-    const ambiguous = await replay.handler({ action: 'cancel' } as any);
+    const ambiguous = await run.handler({ action: 'cancel' } as any);
     expect(ambiguous.isError).toBe(true);
     expect(text(ambiguous)).toContain(r1._meta.replay.runId);
     expect(text(ambiguous)).toContain(r2._meta.replay.runId);
 
     // Cancel one by id and let it settle ('cancelling' still counts as
     // executing); a bare cancel then resolves to the remaining run.
-    await replay.handler({ action: 'cancel', runId: r1._meta.replay.runId } as any);
+    await run.handler({ action: 'cancel', runId: r1._meta.replay.runId } as any);
     await waitFor(() => runRegistry.get(r1._meta.replay.runId)!.status === 'cancelled');
 
-    const second = await replay.handler({ action: 'cancel' } as any);
+    const second = await run.handler({ action: 'cancel' } as any);
     expect(text(second)).toContain(r2._meta.replay.runId);
 
     await waitFor(() => runRegistry.get(r2._meta.replay.runId)!.status === 'cancelled');

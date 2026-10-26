@@ -1,10 +1,11 @@
 /**
  * Replay Formatters - Response formatting for replay tool actions
  */
-
 import type { RecordedCommand, CommandSequence, ActiveSequenceState } from '../command-recorder.js';
 import type { StepResult, DebugState, BreakpointHitInfo, ClickValidationFailure } from './replay-executor.js';
 import type { InputEvent } from '../interaction-recorder.js';
+import { countsLine, describeCall, readingConnection } from './history-activity.js';
+import { observationsOf } from '../observation-log.js';
 import {
   isMouseEvent,
   isKeyboardEvent,
@@ -12,7 +13,7 @@ import {
   isCommentEvent,
   isPasteEvent,
 } from '../interaction-recorder.js';
-import { getFormattedResponse } from '../messages.js';
+import { getFormattedResponse, withOnce } from '../messages.js';
 import { sequenceNeedsProxy } from './replay-connections.js';
 
 // =============================================================================
@@ -180,9 +181,9 @@ export function formatPausedResponse(
   }
 
   response += `\n---\n\n**Actions**\n`;
-  response += `- Continue: \`replay({ action: 'step' })\` or \`replay({ action: 'step', stepCount: N })\`\n`;
-  response += `- Finish all: \`replay({ action: 'finish' })\`\n`;
-  response += `- Check status: \`replay({ action: 'status' })\`\n`;
+  response += `- Continue: \`run({ action: 'step' })\` or \`run({ action: 'step', stepCount: N })\`\n`;
+  response += `- Finish all: \`run({ action: 'finish' })\`\n`;
+  response += `- Check status: \`run({ action: 'status' })\`\n`;
   response += `- Insert commands: \`replay({ action: 'insert' })\`\n`;
 
   return response;
@@ -238,14 +239,14 @@ export function formatClickValidationFailure(
       response += `- The recorded element is not on the page\n`;
     }
     response += `- It changed on purpose: \`replay({ action: 'repair', accept: 'element' })\` keeps the selector and records the element it hit\n`;
-    response += `- Either one writes the sequence file; \`replay({ action: 'step' })\` then runs the step again\n`;
+    response += `- Either one writes the sequence file; \`run({ action: 'step' })\` then runs the step again\n`;
   }
 
   response += `\n---\n\n**Actions**\n`;
   response += `- Inspect error: \`console({ action: 'list', type: 'error', connection: '${connection}' })\`\n`;
-  response += `- Retry the step: \`replay({ action: 'step' })\`\n`;
-  response += `- Finish remaining: \`replay({ action: 'finish' })\`\n`;
-  response += `- Cancel: \`replay({ action: 'cancel' })\`\n`;
+  response += `- Retry the step: \`run({ action: 'step' })\`\n`;
+  response += `- Finish remaining: \`run({ action: 'finish' })\`\n`;
+  response += `- Cancel: \`run({ action: 'cancel' })\`\n`;
 
   return response;
 }
@@ -282,7 +283,7 @@ export function formatBreakpointHit(
     response += `${r.step}. **${r.tool}** ✓\n`;
   });
 
-  response += `\n---\n\n**The run is held at step ${results.length}.** \`replay({ action: 'finish' })\` resumes the page and runs the remaining steps; \`replay({ action: 'step' })\` resumes it and runs one; \`replay({ action: 'cancel' })\` ends the run.\n`;
+  response += `\n---\n\n**The run is held at step ${results.length}.** \`run({ action: 'finish' })\` resumes the page and runs the remaining steps; \`run({ action: 'step' })\` resumes it and runs one; \`run({ action: 'cancel' })\` ends the run.\n`;
   response += `\n**Debug Actions**\n`;
   response += `- Inspect call stack: \`inspect({ action: 'getCallStack', connection: '${connection}' })\`\n`;
   response += `- Get variables: \`inspect({ action: 'getVariables', connection: '${connection}', callFrameId: '<from call stack>' })\`\n`;
@@ -369,7 +370,7 @@ export function formatVariablePrompt(
   response += `\n**Execute:**\n\n`;
   response += `**Option 1: Keep original values**\n`;
   response += `\`\`\`javascript\n`;
-  response += `replay({ action: 'run', name: '${sequenceIdOrName}'`;
+  response += `run({ action: 'sequence', name: '${sequenceIdOrName}'`;
   if (connection) {
     response += `, connection: '${connection}'`;
   }
@@ -378,7 +379,7 @@ export function formatVariablePrompt(
 
   response += `**Option 2: Custom values** (replace variable values as needed)\n`;
   response += `\`\`\`javascript\n`;
-  response += `replay({ action: 'run', name: '${sequenceIdOrName}'`;
+  response += `run({ action: 'sequence', name: '${sequenceIdOrName}'`;
   if (connection) {
     response += `, connection: '${connection}'`;
   }
@@ -420,7 +421,9 @@ const CHANNEL_WORDS: Partial<Record<NonNullable<HistoryCommand['from']>, string>
 };
 
 /**
- * Format command history listing
+ * History as a list of calls, oldest first: each call in a few words with
+ * what it caused counted, a run's steps under the run that took them, and a
+ * connection every entry shares named once above them.
  */
 export function formatHistory(
   history: HistoryCommand[],
@@ -429,28 +432,34 @@ export function formatHistory(
   if (history.length === 0) {
     return getFormattedResponse('REPLAY_HISTORY_EMPTY', {});
   }
+  const ordered = [...history].sort((a, b) => a.index - b.index);
+  const connections = new Set(ordered.map(cmd => cmd.params?.connection).filter((c): c is string => typeof c === 'string'));
+  const shared = connections.size === 1 ? [...connections][0] : undefined;
 
-  // Use message template for first two lines
-  let response = getFormattedResponse('REPLAY_HISTORY', {
-    count: history.length,
-    totalCount: totalCount
-  });
+  let response = getFormattedResponse('REPLAY_HISTORY', { count: history.length, totalCount });
+  if (shared) response += ` · connection ${shared}`;
 
-  history.forEach((cmd) => {
-    const paramStr = JSON.stringify(cmd.params);
-    const truncatedParams = paramStr.length > 60 ? paramStr.slice(0, 60) + '...' : paramStr;
-    const run = cmd.run ? ` in run \`${cmd.run}\`` : '';
+  let openRun: string | undefined;
+  for (const cmd of ordered) {
+    const startsRun = cmd.tool === 'run' && typeof cmd.params?.name === 'string';
+    if (cmd.run && cmd.run !== openRun) {
+      // A run's steps with no run call above them in the list - it scrolled off, or a bench play - take a heading of their own.
+      response += `\n    run ${cmd.run}`;
+      openRun = cmd.run;
+    } else if (!cmd.run) {
+      openRun = startsRun ? String(cmd.params.name) : undefined;
+    }
     const channel = cmd.from ? CHANNEL_WORDS[cmd.from] ?? '' : '';
-    let line = `\n${cmd.index}. **${cmd.tool}**${run}${channel} - ${truncatedParams}`;
-    // Show delay and comment if present
+    const elsewhere = !shared && typeof cmd.params?.connection === 'string' ? ` @${cmd.params.connection}` : '';
     const extras: string[] = [];
-    if (cmd.delay) extras.push(`delay:${cmd.delay}ms`);
-    if (cmd.comment) extras.push(`"${cmd.comment.length > 30 ? cmd.comment.slice(0, 30) + '...' : cmd.comment}"`);
-    if (extras.length > 0) line += ` *(${extras.join(', ')})*`;
-    response += line;
-  });
+    if (cmd.delay) extras.push(`delay ${cmd.delay}ms`);
+    if (cmd.comment) extras.push(`"${cmd.comment.length > 30 ? cmd.comment.slice(0, 30) + '…' : cmd.comment}"`);
+    const head = `${cmd.run ? '        ' : '    '}#${cmd.index}  ${describeCall(cmd)}${elsewhere}${channel}${extras.length ? ` (${extras.join(', ')})` : ''}`;
+    const caused = countsLine(observationsOf(cmd.index), readingConnection(cmd));
+    response += `\n${caused ? `${head.padEnd(60)} ${caused}` : head}`;
+  }
 
-  response += `\n\n---\n\nCreate sequence: \`replay({ action: 'create', name: '...', indices: [${history.slice(0, 3).map(c => c.index).join(', ')}] })\``;
+  response += `\n\n---\n\nCreate sequence: \`replay({ action: 'create', name: '...', indices: [${ordered.slice(-3).map(c => c.index).join(', ')}] })\``;
 
   return response;
 }
@@ -488,7 +497,7 @@ export function formatSequenceCreated(sequence: CommandSequence): string {
 
   response += `---\n\n`;
   response += `**Run this sequence:**\n`;
-  response += `\`replay({ action: 'run', sequenceId: '${sequence.id}' })\``;
+  response += `\`run({ action: 'sequence', sequenceId: '${sequence.id}' })\``;
 
   return response;
 }
@@ -513,11 +522,7 @@ export function formatSequenceList(sequences: CommandSequence[], diskSections: s
 
     let response = getFormattedResponse('REPLAY_SEQUENCE_LIST_EMPTY', {});
     response += `\n\n${diskSections.trimEnd()}`;
-    response += `\n\n---\n\n`;
-    response += `**Actions:**\n`;
-    response += `- View details: \`replay({ action: 'get', name: '<name>' })\`\n`;
-    response += `- Execute: \`replay({ action: 'run', name: '<name>' })\``;
-    return response;
+    return withOnce(response, 'REPLAY_LIST_ACTIONS');
   }
 
   let response = getFormattedResponse('REPLAY_SEQUENCE_LIST', {
@@ -545,13 +550,7 @@ export function formatSequenceList(sequences: CommandSequence[], diskSections: s
     response += `\n\n${diskSections.trimEnd()}`;
   }
 
-  response += `\n\n---\n\n`;
-  response += `**Actions:**\n`;
-  response += `- View details: \`replay({ action: 'get', sequenceId: 'seq-id' })\`\n`;
-  response += `- Execute: \`replay({ action: 'run', sequenceId: 'seq-id' })\`\n`;
-  response += `- Delete: \`replay({ action: 'delete', sequenceId: 'seq-id' })\``;
-
-  return response;
+  return withOnce(response, 'REPLAY_LIST_ACTIONS');
 }
 
 /**
@@ -591,7 +590,7 @@ export function formatSequenceDetails(sequence: CommandSequence): string {
   });
 
   response += `---\n\n`;
-  response += `**Run:** \`replay({ action: 'run', name: '${sequence.name}' })\``;
+  response += `**Run:** \`run({ action: 'sequence', name: '${sequence.name}' })\``;
 
   return response;
 }
@@ -724,7 +723,7 @@ export function formatSavedSequencesList(sections: string): string {
     return getFormattedResponse('REPLAY_SAVED_EMPTY', {});
   }
 
-  return `${sections}\nRun: \`replay({ action: 'run', name: '<name>' })\``;
+  return withOnce(sections.trimEnd(), 'REPLAY_LIST_ACTIONS');
 }
 
 // =============================================================================
@@ -757,8 +756,8 @@ export function formatActiveStatus(
   }
 
   response += `\n---\n\n**Actions**\n`;
-  response += `- Continue: \`replay({ action: 'step' })\`\n`;
-  response += `- Finish all: \`replay({ action: 'finish' })\`\n`;
+  response += `- Continue: \`run({ action: 'step' })\`\n`;
+  response += `- Finish all: \`run({ action: 'finish' })\`\n`;
   if (commandsSincePause.length > 0) {
     response += `- Insert commands: \`replay({ action: 'insert' })\`\n`;
   }
@@ -809,8 +808,8 @@ export function formatStepResults(
       });
 
       response += `\n---\n\n**Actions**\n`;
-      response += `- Continue: \`replay({ action: 'step' })\`\n`;
-      response += `- Finish all: \`replay({ action: 'finish' })\`\n`;
+      response += `- Continue: \`run({ action: 'step' })\`\n`;
+      response += `- Finish all: \`run({ action: 'finish' })\`\n`;
     }
   }
 
@@ -1089,9 +1088,9 @@ export function formatCheckAdded(info: {
  */
 /** What a notifying pause point tells the session: its note, or that none was given. */
 export function formatPauseNote(step: number, note: string | undefined, notify?: boolean): string {
-  if (note) return `\n\n**To carry out before step ${step}:** ${note}\n\nThen resume: \`replay({ action: 'finish' })\``;
+  if (note) return `\n\n**To carry out before step ${step}:** ${note}\n\nThen resume: \`run({ action: 'finish' })\``;
   if (!notify) return '';
-  return `\n\n**This pause point notifies the session before step ${step}, with no reason given.** Ask the person why the run stops here, then resume: \`replay({ action: 'finish' })\``;
+  return `\n\n**This pause point notifies the session before step ${step}, with no reason given.** Ask the person why the run stops here, then resume: \`run({ action: 'finish' })\``;
 }
 
 export function formatDeclarations(sequence: CommandSequence, persistedTo?: string): string {
@@ -1127,7 +1126,7 @@ export function formatDeclarations(sequence: CommandSequence, persistedTo?: stri
   const tags = sequence.tags ?? [];
   lines.push(tags.length === 0
     ? "- **Tags:** none - it runs in every `runAll`, and counts as untagged in the summary split"
-    : `- **Tags:** ${tags.map(t => `\`${t}\``).join(', ')} - selectable with \`replay({ action: 'runAll', tags: [...] })\``);
+    : `- **Tags:** ${tags.map(t => `\`${t}\``).join(', ')} - selectable with \`run({ action: 'all', tags: [...] })\``);
 
   lines.push('');
   lines.push(persistedTo

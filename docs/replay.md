@@ -5,7 +5,7 @@ Record and replay command sequences for testing, automation, and debugging workf
 > **Tip:** Use the `replay-agent` (`.claude/agents/replay-agent.md`) to build sequences through investigation - it records your tool calls automatically.
 >
 > For a condensed, agent-facing version of this material see
-> `skills/devharness/references/sequences.md`. This document is the fuller
+> [`sequences.md`](./sequences.md). This document is the fuller
 > reference with worked examples.
 
 ## Actions
@@ -252,10 +252,10 @@ These fields are saved to disk and displayed when listing sequences.
 
 ```javascript
 // Execute commands straight from history without making a sequence
-replay({ action: 'repeat', indices: [12, 13] })
+run({ action: 'repeat', indices: [12, 13] })
 
 // Execute lines from .devharness/history.log (1-indexed, line 1 = most recent)
-replay({ action: 'runFromLog', lines: [3, 4, 5] })
+run({ action: 'fromLog', lines: [3, 4, 5] })
 ```
 
 Both stop at the first failing command. Both infer `connection` from a
@@ -363,7 +363,7 @@ replay({
 Or by name, which also finds it on disk:
 
 ```javascript
-replay({ action: 'run', name: 'login-flow', connection: 'test-debug-session' })
+run({ action: 'sequence', name: 'login-flow', connection: 'test-debug-session' })
 ```
 
 ### Background by Default (breaking change in 0.7)
@@ -373,12 +373,12 @@ names known, `startFrom` in range, variables supplied), registers a run, and
 returns immediately with a run id:
 
 ```javascript
-replay({ action: 'run', name: 'login-flow' })
+run({ action: 'sequence', name: 'login-flow' })
 // -> Run started in the background ... Run id: `run-3-mdkq1x2`
 
-replay({ action: 'status', runId: 'run-3-mdkq1x2' })   // progress while running,
+run({ action: 'status', runId: 'run-3-mdkq1x2' })   // progress while running,
                                                        // the full result once settled
-replay({ action: 'cancel', runId: 'run-3-mdkq1x2' })   // stop it
+run({ action: 'cancel', runId: 'run-3-mdkq1x2' })   // stop it
 ```
 
 While a run executes, `status` with its `runId` reports the current step and
@@ -401,7 +401,7 @@ Lifetime and limits:
   `status`/`cancel` with that id return `REPLAY_RUN_NOT_FOUND`.
 - `cancel` with a `runId` aborts the run's controller. The run's signal is
   forwarded to every step's tool handler; cancellation also reaches nested
-  sequences (a check's `{ run }`, nested `replay run` steps) - they share the
+  sequences (a check's `{ run }`, nested `run sequence` steps) - they share the
   parent run's signal. Status shows `cancelling` until the run actually stops.
   What a cancel does to the step that is currently in flight depends on the
   tool, and the three levels are genuinely different (see the table below).
@@ -425,13 +425,13 @@ Lifetime and limits:
   may still take effect, and a "stops waiting" step leaves work running in the
   target that no one is watching any more.
 - A nested run started by a sequence step (a check's `{ run }`, or a
-  `replay run` step - which is forced to `wait: true`) is part of its parent
+  `run sequence` step - which is forced to `wait: true`) is part of its parent
   run, never a separate top-level run.
 
 **Migration:** pass `wait: true` to keep the pre-0.7 blocking behaviour:
 
 ```javascript
-replay({ action: 'run', name: 'login-flow', wait: true })  // blocks, returns full result
+run({ action: 'sequence', name: 'login-flow', wait: true })  // blocks, returns full result
 ```
 
 ### Auto-Launch Chrome
@@ -440,7 +440,7 @@ If the sequence starts with a `connection` launch, no `connection` is needed -
 the launch step's `connection` becomes the run's connection.
 
 ```javascript
-replay({ action: 'run', sequenceId: 'seq-my-flow' })
+run({ action: 'sequence', sequenceId: 'seq-my-flow' })
 ```
 
 Otherwise, if the sequence needs a browser and no connection is active, Chrome
@@ -451,10 +451,10 @@ derived from the sequence name when you didn't pass one).
 
 ```javascript
 // Point a staging-recorded sequence at local
-replay({ action: 'run', name: 'checkout', baseUrl: 'http://localhost:3000' })
+run({ action: 'sequence', name: 'checkout', baseUrl: 'http://localhost:3000' })
 
 // Enter through a freshly minted link, once
-replay({ action: 'run', name: 'magic-link-login', startUrl: 'https://app.example.com/m/abc123' })
+run({ action: 'sequence', name: 'magic-link-login', startUrl: 'https://app.example.com/m/abc123' })
 ```
 
 - **`baseUrl`** rewrites the origin of *every absolute* `http(s)` URL in the
@@ -517,11 +517,11 @@ replay({
 ### Pause, Step, Finish
 
 ```javascript
-replay({ action: 'run', name: 'login-flow', stepTo: 3 })  // run steps 1-3, then pause
-replay({ action: 'status' })                              // where am I?
-replay({ action: 'step', stepCount: 2 })                  // run the next 2 steps
-replay({ action: 'finish' })                              // run the rest
-replay({ action: 'cancel' })                              // drop the paused session
+run({ action: 'sequence', name: 'login-flow', stepTo: 3 })  // run steps 1-3, then pause
+run({ action: 'status' })                              // where am I?
+run({ action: 'step', stepCount: 2 })                  // run the next 2 steps
+run({ action: 'finish' })                              // run the rest
+run({ action: 'cancel' })                              // drop the paused session
 ```
 
 A bare `cancel` prefers the paused session; with background runs in flight,
@@ -580,7 +580,7 @@ window, so it is listed apart:
   notify?, note?, remove? })` sets, changes or removes one from a session.
 - **A pause point that notifies.** `pauseNotify` (the bench: the bell on the
   pause point line) makes a run stopping there tell the session: it appends an
-  `instruction` event (`sequence`, `step`, `resolve: replay({ action: 'finish'
+  `instruction` event (`sequence`, `step`, `resolve: run({ action: 'finish'
   })`) and says so in its reply. An optional `pauseNote`, set only by a session,
   is the reason: what to carry out there, for an action no step can hold (a
   bench play: a replay call never becomes a step); the event and the reply
@@ -599,7 +599,7 @@ window, so it is listed apart:
 ### Closing Chrome Afterwards
 
 ```javascript
-replay({ action: 'run', name: 'smoke-test', connection: 'ci-test-run',
+run({ action: 'sequence', name: 'smoke-test', connection: 'ci-test-run',
          killChromeOnFinish: true })
 ```
 
@@ -641,7 +641,7 @@ but the word.
 | | `variables` on `run` | `saveAs` + `{{var:...}}` |
 |---|---|---|
 | What it does | Replaces **recorded typed text** before the run | Captures a **value produced mid-run** for later steps |
-| Set where | A parameter of `replay({ action: 'run' })` | A param on an individual sequence step |
+| Set where | A parameter of `run({ action: 'sequence' })` | A param on an individual sequence step |
 | Read where | Only by `input({ action: 'type' })` steps | Any step param, via `{{var:name}}` |
 | Naming | Auto-generated `var_<i>_<selector>` keys | Names you choose |
 
@@ -698,7 +698,7 @@ neither the file nor the tool call carries the secret.
 { tool: 'input', params: { action: 'type', selector: '#password', text: '{{env:APP_PASSWORD}}' } }
 
 // The run needs nothing else:
-replay({ action: 'run', name: 'login', connection: 'my-web-app' })
+run({ action: 'sequence', name: 'login', connection: 'my-web-app' })
 ```
 
 - An **unset or empty** variable fails the step, naming the variable. Resolving
@@ -716,7 +716,7 @@ replay({ action: 'run', name: 'login', connection: 'my-web-app' })
 #### Pointing a run at a file: `envFile`
 
 ```javascript
-replay({ action: 'run', name: 'login', connection: 'my-web-app',
+run({ action: 'sequence', name: 'login', connection: 'my-web-app',
          envFile: 'sequences.env' })
 ```
 
@@ -1100,8 +1100,8 @@ the next run finds the device exactly as this one left it.
 replay({ action: 'declare', name: 'spine-09-retire-asset', tags: ['ui'] })
 replay({ action: 'declare', name: 'story-b1-pool',        tags: ['contract', 'slow'] })
 
-replay({ action: 'runAll', tags: ['ui'] })              // only those
-replay({ action: 'runAll', folder: 'spine', tags: ['ui'] })  // composes with folder
+run({ action: 'all', tags: ['ui'] })              // only those
+run({ action: 'all', folder: 'spine', tags: ['ui'] })  // composes with folder
 ```
 
 Several tags mean **any of**. Tags are lowercased, trimmed and de-duplicated on
@@ -1176,7 +1176,7 @@ The generators only know `navigate` and `input` steps. Anything else —
 becomes a `// [not generated]` comment naming the step, and a sequence where
 *nothing* could be generated exports a test that **throws** rather than an empty
 one that passes. A setup sequence made of a check and a launch has no
-Playwright equivalent at all; run it with `replay({ action: 'run' })` instead of
+Playwright equivalent at all; run it with `run({ action: 'sequence' })` instead of
 exporting it.
 
 ### Two deliberate non-behaviours
@@ -1258,7 +1258,7 @@ element check against a Node target - stops the run whatever `fails` says: a
 check that could not be read has not failed, and carrying on past it would
 report a run that never looked. A malformed selector and a paused page end the
 read at once, not at the end of `withinMs`. An element read survives a
-navigation part-way through, and `replay cancel` stops a read mid-poll.
+navigation part-way through, and `run cancel` stops a read mid-poll.
 
 `assert` and `wait` are checks with a fixed answer to what happens next: an
 `assert` stops the run on a fail, and reads a DOM condition for up to 5s
@@ -1425,7 +1425,7 @@ Three deliberate departures from how nested sequences are otherwise run:
 | Property | Why |
 |---|---|
 | Own `teardownTimeout` (default 60s), not `totalTimeout` | The commonest reason a run needs cleanup is that it timed out. Drawing on the exhausted parent budget would skip teardown in exactly that case. |
-| The run's `AbortSignal` is not forwarded | `replay cancel` must stop the work, not the cleanup. A cancelled run is precisely one that has left something behind. |
+| The run's `AbortSignal` is not forwarded | `run cancel` must stop the work, not the cleanup. A cancelled run is precisely one that has left something behind. |
 | Shares `ctx.variableStore` | Teardown revokes what setup minted, and the capturing step may have run long before the failure. |
 
 The synthetic sequence passed to the nested `executeSteps` call sets
@@ -1564,9 +1564,9 @@ When validation fails the sequence pauses **on the failed step** - the active
 sequence's cursor is rewound so the next `step` re-runs it. You can:
 
 - inspect the error state with `console`, `network`, `dom`, `screenshot`, ...
-- retry the failed step: `replay({ action: 'step', stepCount: 1 })`
-- run the rest: `replay({ action: 'finish' })`
-- abandon it: `replay({ action: 'cancel' })`
+- retry the failed step: `run({ action: 'step', stepCount: 1 })`
+- run the rest: `run({ action: 'finish' })`
+- abandon it: `run({ action: 'cancel' })`
 
 There is no "skip this step" action - `step` always re-runs the step it is
 parked on.
@@ -1608,7 +1608,7 @@ replay({ action: 'recordInteraction', connection: 'checkout-flow-test' })
 replay({ action: 'export', name: 'checkout-flow-test', format: 'playwright' })
 
 // Run anytime to verify
-replay({ action: 'run', name: 'checkout-flow-test', connection: 'test-run-one' })
+run({ action: 'sequence', name: 'checkout-flow-test', connection: 'test-run-one' })
 ```
 
 ### Debugging Workflows
@@ -1624,14 +1624,14 @@ replay({
 })
 
 // Run to debug - debug state is shown automatically after the run
-replay({ action: 'run', name: 'debug-auth-bug' })
+run({ action: 'sequence', name: 'debug-auth-bug' })
 ```
 
 ### Verifying the Same Flow on Two Deployments
 
 ```javascript
-replay({ action: 'run', name: 'checkout', baseUrl: 'http://localhost:3000' })
-replay({ action: 'run', name: 'checkout', baseUrl: 'https://staging.example.com' })
+run({ action: 'sequence', name: 'checkout', baseUrl: 'http://localhost:3000' })
+run({ action: 'sequence', name: 'checkout', baseUrl: 'https://staging.example.com' })
 ```
 
 ### Cross-Device Handoff
@@ -1650,7 +1650,7 @@ replay({
   indices: [0, 1, 2, 3, 4, 5, 6, 7]
 })
 
-replay({ action: 'run', name: 'daily-smoke-test', killChromeOnFinish: true })
+run({ action: 'sequence', name: 'daily-smoke-test', killChromeOnFinish: true })
 ```
 
 ## Notes

@@ -165,9 +165,9 @@ export interface StepCheck {
   error?: string;
 }
 
-/** One run of a sequence, going or ended: a replay run, or a bench's own play. */
+/** One run of a sequence, going or ended: a run sequence, or a bench's own play. */
 export interface RunRow {
-  /** The replay run's id, which stops it; a bench play is stopped by its connection. */
+  /** The run sequence's id, which stops it; a bench play is stopped by its connection. */
   runId?: string;
   sequence: string;
   connection?: string;
@@ -218,7 +218,7 @@ export interface SequenceOutline {
 
 /** One tool call this devharness ran, as its History row lists it. */
 export interface HistoryEntry {
-  /** The index `replay repeat` takes. */
+  /** The index `run repeat` takes. */
   index: number;
   at: number;
   tool: string;
@@ -688,7 +688,8 @@ export interface CaptureVersion {
 
 export interface HeldLayerView {
   layer: 'code' | 'ui' | 'network';
-  source: 'bench' | 'tool' | 'sequence' | 'breakpoint' | 'trigger';
+  /** What holds the layer, as the bench prints it: person, agent, run, motion rule, bench, breakpoint. */
+  source: string;
   /** Epoch ms the layer was held at. */
   since: number;
   /** The layer whose hold stops this one: the screen's hold stops the code. */
@@ -829,7 +830,7 @@ export interface BoundaryEvent {
   step?: number;
   /** The position inside `step` it crossed at, when that step ran another sequence. */
   within?: number[];
-  /** The history entry of the replay step it crossed under. */
+  /** The history entry of the run step it crossed under. */
   entry?: number;
   /** Crossed while the run stood paused before `step`, counted against no step. */
   paused?: true;
@@ -889,7 +890,7 @@ export interface BoundaryRule {
    */
   method?: string;
   /**
-   * The replay step the crossing was staged under.
+   * The run step the crossing was staged under.
    *
    * Bounds the rule to that position in the run: the same call at another
    * position reaches the server, so an order the recording did not have fails

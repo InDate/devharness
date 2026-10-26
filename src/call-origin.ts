@@ -22,6 +22,8 @@ export type CallChannel = 'mcp' | 'cli' | 'bench' | 'person';
 interface Place {
   from: CallChannel;
   run?: string;
+  /** The run's id, `run-<timestamp>`, which a hold its step takes is owned by. */
+  runId?: string;
   /**
    * The run's step now executing, 0-based, and the {{env:}} names that step
    * resolved from a file; one object shared by every call inside the run.
@@ -43,9 +45,22 @@ export function arriveOn<T>(from: CallChannel, work: () => T): T {
 }
 
 /** Run `work` as the run of `sequence`, keeping the channel the run was started from. */
-export function withinRun<T>(sequence: string, work: () => T): T {
+export function withinRun<T>(sequence: string, runId: string, work: () => T): T {
   const outer = place.getStore();
-  return place.run({ from: outer?.from ?? 'mcp', run: sequence, recorded: false, position: {} }, work);
+  return place.run({ from: outer?.from ?? 'mcp', run: sequence, runId, recorded: false, position: {} }, work);
+}
+
+/**
+ * Who a hold taken by the current call belongs to: the run's step when the
+ * call runs inside a run, an agent otherwise. Read off the run, not the step
+ * flag: a step's handler runs `unlisted`, which clears that flag.
+ */
+export function callOwner(): { kind: 'agent' } | { kind: 'run-step'; run: string; step?: number } {
+  const here = place.getStore();
+  if (here?.runId !== undefined) {
+    return { kind: 'run-step', run: here.runId, ...(here.position?.step !== undefined ? { step: here.position.step } : {}) };
+  }
+  return { kind: 'agent' };
 }
 
 /** Set the step the current run is executing, which the step's own call is recorded under. */

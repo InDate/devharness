@@ -24,7 +24,7 @@ export function createDOMTools(
 ) {
   return {
     dom: createTool(
-      'Inspect and query the DOM. Actions: querySelector (find element by CSS selector and get basic info), getProperties (get detailed properties of an element), snapshot (get full DOM structure snapshot), hitTest (for every match, whether it is topmost at its own centre and what covers it when not)',
+      'Inspect and query the DOM.',
       domSchema,
       async (args) => {
         const { action, connection } = args;

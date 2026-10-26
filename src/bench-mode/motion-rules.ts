@@ -9,17 +9,18 @@
  * and web animations. Motion a page drives from its own frame callbacks is
  * no such object, and no rule reaches it.
  *
- * A rule is applied when Chrome reports the animation created, before its
- * first frame, and again for any animation first seen at its start. It is
- * matched by what animates and by a selector the animated element matches -
+ * A rule is applied as the page's animation record takes the animation: at
+ * the end of the held step that created it, before its first painted frame,
+ * or at its start on a running page. It is matched by what animates and by a
+ * selector the animated element matches -
  * `#panel`, or `div.item:nth-child(4)` for one of several alike - and stays
  * in force across replays until cleared, so a replayed step meets it again.
  */
 
 import type { BenchSession } from './session.js';
-import { send } from './cdp.js';
-import { request } from './cdp.js';
 import { hold } from '../hold.js';
+import { animationRecordOf, inPage } from '../animation-record.js';
+import { actOn, readNow } from './animations.js';
 import { sessions } from './session.js';
 import type { MotionSetting } from '../bench/kinds.js';
 
@@ -73,46 +74,19 @@ function matches(rule: MotionRule, animation: string, matchesElement: (selector:
 }
 
 /**
- * One animation read off its object: what animates, the element as the rows
- * name it, its timing, and which of `selectors` the element matches. An
+ * One animation as the page reads it now: what animates, the element as the
+ * rows name it, its timing, and which of `selectors` the element matches. An
  * animation gone, or a selector that does not parse, matches nothing.
  */
-async function readAnimation(session: BenchSession, id: string, selectors: string[]): Promise<
+async function readAnimation(session: BenchSession, key: string, selectors: string[]): Promise<
   { animation: string; element?: string; delay: number; duration: number; matched: Record<string, boolean> } | undefined
 > {
-  try {
-    const { remoteObject } = await request(session.client, 'Animation.resolveAnimation', { animationId: id });
-    if (!remoteObject?.objectId) return undefined;
-    const { result } = await request(session.client, 'Runtime.callFunctionOn', {
-      objectId: remoteObject.objectId,
-      functionDeclaration: `function (selectors) {
-        const timing = this.effect && this.effect.getComputedTiming ? this.effect.getComputedTiming() : {};
-        const target = this.effect && this.effect.target;
-        const classes = target && typeof target.className === 'string' ? target.className.trim().split(/\\s+/).filter(Boolean).slice(0, 2) : [];
-        const element = !target ? '' : target.id ? '#' + target.id : target.tagName.toLowerCase() + classes.map(function (c) { return '.' + c; }).join('');
-        const matched = {};
-        selectors.forEach(function (selector) {
-          try { matched[selector] = !!target && target.matches(selector); } catch (e) { matched[selector] = false; }
-        });
-        return {
-          animation: this.transitionProperty || this.animationName || this.id || '',
-          element: element, matched: matched,
-          duration: typeof timing.duration === 'number' ? timing.duration : 0, delay: timing.delay || 0,
-        };
-      }`,
-      arguments: [{ value: selectors }],
-      returnByValue: true,
-    });
-    const value = result?.value;
-    if (!value) return undefined;
-    return {
-      animation: value.animation || id,
-      ...(value.element ? { element: value.element } : {}),
-      delay: Number(value.delay) || 0, duration: Number(value.duration) || 0, matched: value.matched ?? {},
-    };
-  } catch {
-    return undefined;
-  }
+  const entry = animationRecordOf(session.connection).get(key);
+  if (!entry?.read) return undefined;
+  const now = await readNow(session, entry);
+  if (!now) return undefined;
+  const matched = (await inPage<Record<string, boolean>>(session.client, entry.read.doc, `matches(${entry.read.id}, ${JSON.stringify(selectors)})`)) ?? {};
+  return { animation: now.name, ...(now.element ? { element: now.element } : {}), delay: now.delay, duration: now.duration, matched };
 }
 
 /** The same rule: what it matches, ignoring what it does. */
@@ -124,9 +98,9 @@ export function sameTarget(a: MotionRule, b: MotionRule): boolean {
 const BASES_KEPT = 500;
 
 /**
- * Apply the session's rules to one animation, by its id, and pause it where an
- * `alone` rule stands for another. Called when Chrome reports the animation
- * created and when it reports it started; `again` applies the rules to one
+ * Apply the session's rules to one animation, by its record key, and pause it
+ * where an `alone` rule stands for another. Called as the record takes the
+ * animation; `again` applies the rules to one
  * already acted on - a rule set while its group is held. The timing the page
  * first gave it is kept, so a rule applied again works from the page's
  * timing. Returns what was done.
@@ -142,13 +116,15 @@ export async function applyMotionRules(session: BenchSession, id: string, again 
   bases.set(id, base);
   if (bases.size > BASES_KEPT) bases.delete(bases.keys().next().value as string);
   const { animation, element } = read;
+  const entry = animationRecordOf(session.connection).get(id)!;
+  const act = (call: (pageId: number) => string) => actOn(session, entry, call);
   const own = rules.filter(rule => matches(rule, animation, selector => read.matched[selector] === true));
   const did: string[] = [];
 
   if (!own.length) {
     if (rules.some(rule => rule.alone)) {
       touch(session, id);
-      await send(session.client, 'Animation.setPaused', { animations: [id], paused: true }).catch(() => {});
+      await act(pageId => `pause(${pageId})`);
       (session.motionPaused ??= new Set()).add(id);
       did.push('paused for an animation playing alone');
     }
@@ -160,24 +136,24 @@ export async function applyMotionRules(session: BenchSession, id: string, again 
   const duration = typeof rule.duration === 'number' ? rule.duration : base.duration;
   const delay = typeof rule.delay === 'number' ? rule.delay : base.delay;
   if (typeof rule.duration === 'number' || typeof rule.delay === 'number') {
-    await send(session.client, 'Animation.setTiming', { animationId: id, duration, delay }).catch(() => {});
+    await act(pageId => `retime(${pageId}, ${JSON.stringify({ duration, delay })})`);
     did.push(`timing ${Math.round(duration)}ms after ${Math.round(delay)}ms`);
   }
   if (rule.off) {
-    await send(session.client, 'Animation.seekAnimations', { animations: [id], currentTime: delay + duration }).catch(() => {});
+    await act(pageId => `seek(${pageId}, ${delay + duration})`);
     did.push('off: jumped to its end');
   } else if (typeof rule.freezeAt === 'number' && rule.whole) {
     // The page holds as the animation is created, its clock and every other
     // animation with it, and the animation is set to the point.
     const point = delay + pointIn(rule);
-    session.pendingFreeze = hold(session.connection, { source: 'tool', layers: ['ui'] })
-      .then(() => send(session.client, 'Animation.seekAnimations', { animations: [id], currentTime: point }))
+    session.pendingFreeze = hold(session.connection, { owner: { kind: 'rule' }, layers: ['ui'] })
+      .then(async () => { await act(pageId => `seek(${pageId}, ${point})`); })
       .catch(() => undefined)
       .finally(() => { session.pendingFreeze = undefined; });
     did.push(`page held, it at ${Math.round(rule.freezeAt)}ms`);
   } else if (typeof rule.freezeAt === 'number') {
-    await send(session.client, 'Animation.setPaused', { animations: [id], paused: true }).catch(() => {});
-    await send(session.client, 'Animation.seekAnimations', { animations: [id], currentTime: delay + pointIn(rule) }).catch(() => {});
+    await act(pageId => `pause(${pageId})`);
+    await act(pageId => `seek(${pageId}, ${delay + pointIn(rule)})`);
     (session.motionPaused ??= new Set()).add(id);
     did.push(`held at ${Math.round(rule.freezeAt)}ms`);
   }
@@ -198,7 +174,11 @@ export async function changeMotionRules(session: BenchSession, change: { rule?: 
   // point or an animation playing alone ends with the rule that set it.
   const stillHolding = rules.some(rule => rule.alone || typeof rule.freezeAt === 'number');
   if (!stillHolding && session.motionPaused?.size) {
-    await send(session.client, 'Animation.setPaused', { animations: [...session.motionPaused], paused: false }).catch(() => {});
+    const record = animationRecordOf(session.connection);
+    for (const key of session.motionPaused) {
+      const entry = record.get(key);
+      if (entry) await actOn(session, entry, pageId => `play(${pageId})`);
+    }
     session.motionPaused.clear();
   }
   return rules;

@@ -107,6 +107,8 @@ export interface CommandSequence {
    * outcome never changes the run's verdict.
    */
   teardown?: RecordedCommand[];
+  /** Steps written into a `run steps` call: held only while a paused run can resume them, never written to disk. */
+  inline?: true;
   /**
    * What this sequence does to the traffic it meets, arrived at by running it
    * and deciding row by row. Only the decisions are stored: the events they
@@ -339,7 +341,7 @@ export interface ActiveSequenceState {
    *  the owning run record cancelled. */
   runId?: string;
   /** Recorded-reference -> this-session-reference mapping for the run that
-   *  paused (replay({ action: 'run', connections: {...} })). Carried on the
+   *  paused (run({ action: 'sequence', connections: {...} })). Carried on the
    *  paused state so `step`/`finish` resolve per-step connections exactly the
    *  way the original `run` did instead of reverting to raw recorded names. */
   connectionMap?: Record<string, string>;
@@ -530,6 +532,10 @@ export class CommandRecorder {
    * Set active sequence state (for step-through)
    */
   setActiveSequence(state: ActiveSequenceState | null): void {
+    // A paused run of written steps that ends takes its steps with it: they
+    // were held only so `step` and `finish` could resume them.
+    const ending = state === null && this.activeSequence ? this.sequences.get(this.activeSequence.sequenceId) : undefined;
+    if (ending?.inline) this.sequences.delete(ending.id);
     this.activeSequence = state;
     // Reset history viewed flag when sequence state changes
     this.historyViewedWhilePaused = false;
@@ -598,7 +604,7 @@ export class CommandRecorder {
     // run adds is not the agent's, and leaves what it viewed standing. A replay
     // call is recorded before it runs and is never a step insert takes, so it
     // leaves it standing too; otherwise insert clears the flag it checks.
-    if ((options?.from ?? 'mcp') === 'mcp' && options?.run === undefined && tool !== 'replay') this.historyViewedWhilePaused = false;
+    if ((options?.from ?? 'mcp') === 'mcp' && options?.run === undefined && tool !== 'replay' && tool !== 'run') this.historyViewedWhilePaused = false;
 
     const paramsClone = JSON.parse(JSON.stringify(params));
 
@@ -730,7 +736,7 @@ export class CommandRecorder {
       if (!cmd) return null;
       // A replay call is history, not a step: as a step it would run another
       // sequence in a pass of its own, sharing none of the caller's variables.
-      if (cmd.tool === 'replay') continue;
+      if (cmd.tool === 'replay' || cmd.tool === 'run') continue;
 
       // params is DEEP-CLONED: the sequence is edited after creation (hoisting a
       // uniform connection off the steps, rebasing URLs), and sharing the
@@ -995,7 +1001,7 @@ export class CommandRecorder {
       // The actions go here; what the app did goes to the activity file.
       const { actions, activity } = splitActivity(sequence);
       const exportData = {
-        _comment: 'devharness replay sequence. Load with: replay({ action: "load", filename: "<this-file>" }), then run with: replay({ action: "run", name: "<this-file>" }). What the app did under each step, and the responses that answer it on replay, are in the file of the same name under activity/.',
+        _comment: 'devharness replay sequence. Load with: replay({ action: "load", filename: "<this-file>" }), then run with: run({ action: "sequence", name: "<this-file>" }). What the app did under each step, and the responses that answer it on replay, are in the file of the same name under activity/.',
         ...actions
       };
       await atomicWriteFile(filepath, JSON.stringify(exportData, null, 2));

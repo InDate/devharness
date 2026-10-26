@@ -62,13 +62,13 @@ function makeReplay() {
     engage: async () => { running = false; },
     disengage: async () => { running = true; },
   });
-  const { replay } = createReplayTools(recorder, executeToolCall, async () => null, async () => 9222, undefined);
-  return { replay, recorder, ran, isRunning: () => running };
+  const { replay, run } = createReplayTools(recorder, executeToolCall, async () => null, async () => 9222, undefined);
+  return { replay, run, recorder, ran, isRunning: () => running };
 }
 
 beforeEach(() => { runRegistry.clear(); landing.next = []; });
 afterEach(async () => {
-  await release(CONNECTION).catch(() => {});
+  await release(CONNECTION, { by: { kind: 'resume' } }).catch(() => {});
   detach?.(); detach = undefined;
   await standPausedRun(undefined);
   forgetCursor();
@@ -76,35 +76,35 @@ afterEach(async () => {
 
 describe("a run a person's input lands on", () => {
   it('holds before the next step, with the page held by the run', async () => {
-    const { replay, recorder, ran, isRunning } = makeReplay();
+    const { replay, run, recorder, ran, isRunning } = makeReplay();
 
-    const result: any = await replay.handler({ action: 'run', sequenceId: 'seq-person', connection: CONNECTION, wait: true });
+    const result: any = await run.handler({ action: 'sequence', sequenceId: 'seq-person', connection: CONNECTION, wait: true });
 
     expect(ran.map(one => one.selector)).toEqual(['#a']);
     expect(result.content[0].text).toContain("the run is held before step 2, with the page's code held");
-    expect(holdReading(CONNECTION).held).toEqual([expect.objectContaining({ layer: 'code', source: 'sequence' })]);
+    expect(holdReading(CONNECTION).held).toEqual([expect.objectContaining({ layer: 'code', owners: [expect.objectContaining({ kind: 'run-pause' })] })]);
     expect(isRunning()).toBe(false);
     expect(recorder.getActiveSequence().pauseHeld).toEqual(['code']);
   });
 
   it('releases what the run held before finish drives the next step', async () => {
-    const { replay, ran } = makeReplay();
+    const { replay, run, ran } = makeReplay();
 
-    await replay.handler({ action: 'run', sequenceId: 'seq-person', connection: CONNECTION, wait: true });
-    await replay.handler({ action: 'finish' });
+    await run.handler({ action: 'sequence', sequenceId: 'seq-person', connection: CONNECTION, wait: true });
+    await run.handler({ action: 'finish' });
 
     expect(ran).toEqual([{ selector: '#a', running: true }, { selector: '#b', running: true }]);
     expect(holdReading(CONNECTION).held).toEqual([]);
   });
 
   it('leaves a hold placed by someone else in the pause', async () => {
-    const { replay } = makeReplay();
+    const { replay, run } = makeReplay();
 
-    await replay.handler({ action: 'run', sequenceId: 'seq-person', connection: CONNECTION, wait: true });
-    await release(CONNECTION);
-    await hold(CONNECTION, { source: 'tool', layers: ['code'] });
-    await replay.handler({ action: 'cancel' });
+    await run.handler({ action: 'sequence', sequenceId: 'seq-person', connection: CONNECTION, wait: true });
+    await release(CONNECTION, { by: { kind: 'resume' } });
+    await hold(CONNECTION, { owner: { kind: 'agent' }, layers: ['code'] });
+    await run.handler({ action: 'cancel' });
 
-    expect(holdReading(CONNECTION).held).toEqual([expect.objectContaining({ layer: 'code', source: 'tool' })]);
+    expect(holdReading(CONNECTION).held).toEqual([expect.objectContaining({ layer: 'code', owners: [expect.objectContaining({ kind: 'agent' })] })]);
   });
 });

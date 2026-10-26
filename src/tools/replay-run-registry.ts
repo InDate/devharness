@@ -1,7 +1,7 @@
 /**
  * Run Registry - tracks background sequence runs by run id.
  *
- * `replay({ action: 'run' })` returns a run id immediately and executes in the
+ * `run({ action: 'sequence' })` returns a run id immediately and executes in the
  * background; this registry is what `status` and `cancel` use to address a
  * specific run. Held in memory only: a server restart (e.g. the supervisor's
  * hot-restart on rebuild) kills any in-flight run with the process and

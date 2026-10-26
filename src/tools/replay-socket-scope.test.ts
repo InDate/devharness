@@ -46,22 +46,22 @@ function makeReplay(commands: RecordedCommand[]) {
     return { content: [{ type: 'text', text: '' }] };
   }));
 
-  const { replay } = createReplayTools(
+  const { replay, run } = createReplayTools(
     recorder, executeToolCall, async () => null,
     async (reference: string) => PORTS[reference] ?? null, undefined
   );
-  return { replay };
+  return { replay, run };
 }
 
-const run = (replay: any) => replay.handler({
-  action: 'run', wait: true, sequenceId: 'seq-sockets', connection: 'the-run-connection',
+const runSequence = (tool: any) => tool.handler({
+  action: 'sequence', wait: true, sequenceId: 'seq-sockets', connection: 'the-run-connection',
 } as any);
 
 const text = (res: any) => res.content[0].text as string;
 
 describe('a declared socket', () => {
   it('is not demanded of the run\'s own browser when every navigate names another', async () => {
-    const { replay } = makeReplay([
+    const { replay, run } = makeReplay([
       { tool: 'navigate', params: { action: 'goto', url: 'https://app.test/', connection: 'member-a' } },
       { tool: 'input', params: { action: 'click', selector: '#draw', connection: 'member-a' } },
       // Takes a connection, loads nothing: this is what used to make the run's
@@ -69,7 +69,7 @@ describe('a declared socket', () => {
       { tool: 'assert', params: { value: '{{var:count}}', equals: '1' } },
     ] as RecordedCommand[]);
 
-    const res = await run(replay);
+    const res = await runSequence(run);
 
     expect(text(res)).not.toContain('Socket health failed');
   });
@@ -77,13 +77,13 @@ describe('a declared socket', () => {
   // The absence check re-reads for a few seconds before calling a socket
   // missing, so this one outlives the default test timeout.
   it('is still demanded of the browser that DID navigate', { timeout: 15000 }, async () => {
-    const { replay } = makeReplay([
+    const { replay, run } = makeReplay([
       // The run's own connection loads the app here, and never opens the socket.
       { tool: 'navigate', params: { action: 'goto', url: 'https://app.test/' } },
       { tool: 'input', params: { action: 'click', selector: '#draw' } },
     ] as RecordedCommand[]);
 
-    const res = await run(replay);
+    const res = await runSequence(run);
 
     expect(text(res)).toContain('Socket health failed');
     expect(text(res)).toContain('never opened');

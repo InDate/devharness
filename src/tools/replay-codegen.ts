@@ -324,6 +324,6 @@ function ungeneratedTestGuard(generatedSteps: number, totalSteps: number, hasSta
     '',
     `  throw new Error('devharness: none of the ${totalSteps} recorded step(s) have a generated equivalent`
       + ` (see the "[not generated]" comments above) - this exported test would otherwise pass without doing anything.`
-      + ` Run it with replay({ action: "run" }) instead.');`,
+      + ` Run it with run({ action: "sequence" }) instead.');`,
   ];
 }

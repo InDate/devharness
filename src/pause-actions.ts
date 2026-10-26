@@ -6,7 +6,7 @@
  * app did back.
  */
 import { currentCursor } from './proxy/registry.js';
-import { holdReading, watchHolds, type HoldChange } from './hold.js';
+import { holderWord, holdReading, watchHolds, type HoldChange } from './hold.js';
 
 export interface PauseAction {
   runId: string;
@@ -45,13 +45,13 @@ function lineOf(change: HoldChange): string {
     const at = holdReading(change.connection).held.find(held => held.layer === change.layers[0])?.standing?.at;
     return `${STEPS[change.layers[0]] ?? `stepped the ${change.layers[0]}`}${typeof at === 'string' ? `, now at ${at}` : ''}`;
   }
-  return `${change.change === 'held' ? 'held' : 'released'} the ${change.layers.join(' and ')}${change.source ? ` (${change.source})` : ''}`;
+  return `${change.change === 'held' ? 'held' : 'released'} the ${change.layers.join(' and ')}${change.owner ? ` (${holderWord(change.owner)})` : ''}`;
 }
 
 // The pause's own hold is the pause itself, and the debugger reports that same
 // stop again as a breakpoint's, so neither is listed: what is, is each step
 // taken and each hold or release someone placed while the run stood.
 watchHolds(change => {
-  if (change.change !== 'stepped' && (change.source === 'sequence' || change.source === 'breakpoint' || change.source === undefined)) return;
+  if (change.change !== 'stepped' && (change.owner === undefined || change.owner.kind === 'run-pause' || change.owner.kind === 'outside')) return;
   recordPauseAction(change.connection, { at: Date.now(), kind: 'hold', line: lineOf(change) });
 });

@@ -9,11 +9,12 @@ import { createTool } from '../validation-helpers.js';
 import { createSuccessResponse, createErrorResponse, formatCodeBlock } from '../messages.js';
 import type { ConnectionManager } from '../connection-manager.js';
 import { hold, isHeld, release } from '../hold.js';
+import { callOwner } from '../call-origin.js';
 
 const LOGPOINT_LOGS_SHOWN = 5;
 
 const executionSchema = z.object({
-  action: z.enum(['pause', 'resume', 'stepOver', 'stepInto', 'stepOut', 'acknowledge']).describe('Execution control action to perform'),
+  action: z.enum(['pause', 'resume', 'stepOver', 'stepInto', 'stepOut', 'acknowledge']),
   connection: z.string().optional().describe('The connection, by the name connection launch or attach gave it; acknowledge without one covers every paused connection'),
 }).strict();
 
@@ -31,7 +32,7 @@ export function createExecutionTools(
 ) {
   return {
     execution: createTool(
-      'Control execution flow when paused at breakpoints. Actions: pause (stop at the next statement the page runs), resume (resume execution), stepOver (step to next line), stepInto (step into function call), stepOut (step out of current function), acknowledge (acknowledge breakpoint pause to allow other tools to run while paused)',
+      'Pause and step the page\'s code; pause and resume are the code layer of hold.',
       executionSchema,
       async (args) => {
         const { action, connection } = args;
@@ -87,7 +88,7 @@ export function createExecutionTools(
           case 'pause':
             // Through the hold record, which resume releases.
             if (resolvedConnection.reference) {
-              await hold(resolvedConnection.reference, { source: 'tool', layers: ['code'] });
+              await hold(resolvedConnection.reference, { owner: callOwner(), layers: ['code'] });
             } else {
               await targetCdpManager.pause();
             }
@@ -122,7 +123,14 @@ export function createExecutionTools(
             // all of it - the animation clock and the step breakpoints with the JS.
             const reference: string | undefined = resolvedConnection.reference;
             if (reference && isHeld(reference, 'code')) {
-              await release(reference, { layers: ['code'] });
+              const reading = await release(reference, { by: { kind: 'agent' }, layers: ['code'] });
+              // A person's hand hold outlives the release, and the page stays
+              // stopped under it: resuming the debugger here would run its JS
+              // under their freeze.
+              const byHand = reading.held.filter(layer => layer.layer !== 'network' && layer.owners.some(owner => owner.kind === 'person'));
+              if (byHand.length) {
+                return createErrorResponse('HELD_BY_PERSON', { connection: reference, layers: byHand.map(layer => (layer.layer === 'ui' ? 'screen' : layer.layer)).join(' and ') });
+              }
             }
             if (targetCdpManager.isPaused()) await targetCdpManager.resume();
 

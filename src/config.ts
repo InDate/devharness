@@ -109,7 +109,7 @@ export interface ReplayConfig {
   /**
    * What a run does when a person's input lands on a page it drives
    * (default: 'pause'): `pause` holds the run at the next step boundary for
-   * `replay step` or `finish`, `stop` ends it there, `report` carries on and
+   * `run step` or `finish`, `stop` ends it there, `report` carries on and
    * names the input in the reply. Steps after a person's input run against a
    * page the recording never had, so carrying on can fail where the app is fine.
    */

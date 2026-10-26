@@ -828,6 +828,13 @@ Expression returned a pending Promise while the debugger is paused - the event l
 
 ---
 
+## HELD_BY_PERSON
+
+**Type:** error
+**Code:** HELD_BY_PERSON
+
+**`{{connection}}` stays stopped:** a person holds its {{layers}} by hand in the bench, and no agent call ends that hold. The page runs again when they release it in the bench.
+
 ## NOT_PAUSED
 
 **Type:** error
@@ -875,13 +882,13 @@ Timeout waiting for execution to pause
 
 URL: {{url}}{{#title}}, Title: {{title}}{{/title}}{{#clickableElements}}
 
-**Clickable elements:** {{clickableElements.total}} total ({{clickableElements.inViewport}} in viewport)
+**Clickable elements:** {{clickableElements.total}} total ({{clickableElements.inViewport}} in viewport){{#clickableElements.hint}}
 
-{{clickableElements.hint}}{{/clickableElements}}{{#console}}
+{{clickableElements.hint}}{{/clickableElements.hint}}{{/clickableElements}}{{#console}}
 
 **Console:** {{console.errors}} errors, {{console.warnings}} warnings{{#console.hint}} - {{console.hint}}{{/console.hint}}{{/console}}{{#network}}
 
-**Network:** {{network.failed}} failed requests of {{network.total}} total - {{network.hint}}{{/network}}
+**Network:** {{network.failed}} failed requests of {{network.total}} total{{#network.hint}} - {{network.hint}}{{/network.hint}}{{/network}}
 
 ---
 
@@ -891,11 +898,13 @@ URL: {{url}}{{#title}}, Title: {{title}}{{/title}}{{#clickableElements}}
 
 Navigated back{{#url}} to: {{url}}{{/url}}{{#clickableElements}}
 
-**Clickable elements:** {{clickableElements.total}} total ({{clickableElements.inViewport}} in viewport){{/clickableElements}}{{#console}}
+**Clickable elements:** {{clickableElements.total}} total ({{clickableElements.inViewport}} in viewport){{#clickableElements.hint}}
+
+{{clickableElements.hint}}{{/clickableElements.hint}}{{/clickableElements}}{{#console}}
 
 **Console:** {{console.errors}} errors, {{console.warnings}} warnings{{#console.hint}} - {{console.hint}}{{/console.hint}}{{/console}}{{#network}}
 
-**Network:** {{network.failed}} failed requests of {{network.total}} total - {{network.hint}}{{/network}}
+**Network:** {{network.failed}} failed requests of {{network.total}} total{{#network.hint}} - {{network.hint}}{{/network.hint}}{{/network}}
 
 ---
 
@@ -905,11 +914,13 @@ Navigated back{{#url}} to: {{url}}{{/url}}{{#clickableElements}}
 
 Navigated forward{{#url}} to: {{url}}{{/url}}{{#clickableElements}}
 
-**Clickable elements:** {{clickableElements.total}} total ({{clickableElements.inViewport}} in viewport){{/clickableElements}}{{#console}}
+**Clickable elements:** {{clickableElements.total}} total ({{clickableElements.inViewport}} in viewport){{#clickableElements.hint}}
+
+{{clickableElements.hint}}{{/clickableElements.hint}}{{/clickableElements}}{{#console}}
 
 **Console:** {{console.errors}} errors, {{console.warnings}} warnings{{#console.hint}} - {{console.hint}}{{/console.hint}}{{/console}}{{#network}}
 
-**Network:** {{network.failed}} failed requests of {{network.total}} total - {{network.hint}}{{/network}}
+**Network:** {{network.failed}} failed requests of {{network.total}} total{{#network.hint}} - {{network.hint}}{{/network.hint}}{{/network}}
 
 ---
 
@@ -937,11 +948,13 @@ URL: {{url}} - paused at a breakpoint, so the title was not read: reading it run
 
 Page reloaded successfully{{#clickableElements}}
 
-**Clickable elements:** {{clickableElements.total}} total ({{clickableElements.inViewport}} in viewport){{/clickableElements}}{{#console}}
+**Clickable elements:** {{clickableElements.total}} total ({{clickableElements.inViewport}} in viewport){{#clickableElements.hint}}
+
+{{clickableElements.hint}}{{/clickableElements.hint}}{{/clickableElements}}{{#console}}
 
 **Console:** {{console.errors}} errors, {{console.warnings}} warnings{{#console.hint}} - {{console.hint}}{{/console.hint}}{{/console}}{{#network}}
 
-**Network:** {{network.failed}} failed requests of {{network.total}} total - {{network.hint}}{{/network}}
+**Network:** {{network.failed}} failed requests of {{network.total}} total{{#network.hint}} - {{network.hint}}{{/network.hint}}{{/network}}
 
 ---
 
@@ -1119,11 +1132,9 @@ Element `{{selector}}` was clicked, but may not have a click handler attached. V
 
 {{action}} on `{{selector}}` triggered breakpoint at {{url}}:{{lineNumber}}
 
-**Next steps:**
-- Use `inspect({ action: 'getCallStack', connection })` to see the full call stack
-- Use `inspect({ action: 'getVariables', connection, callFrameId })` to inspect variables at this location
-- Use `execution` with `stepOver`, `stepInto` or `stepOut` to continue debugging
-- Use `execution({ action: 'resume', connection })` to continue execution
+**Once per session:**
+
+Read the pause with `inspect({ action: 'getCallStack', connection })` and `inspect({ action: 'getVariables', connection, callFrameId })`; move on with `execution` `stepOver`, `stepInto` or `stepOut`, or `execution({ action: 'resume', connection })`.
 
 ---
 
@@ -1149,6 +1160,16 @@ Cannot interact with element `{{selector}}` - blocked by {{modalDescription}}
 {{/suggestion}}
 
 ---
+
+## SCREENSHOT_PAGE_HELD
+
+**Type:** error
+**Code:** SCREENSHOT_PAGE_HELD
+
+"{{connection}}" is paused, and a whole-page capture needs it to lay out and paint.
+
+**Suggestions:**
+- `screenshot({ action: 'viewport', connection: '{{connection}}' })` captures the window, paused or not
 
 ## SCREENSHOT_SAVED
 
@@ -1904,8 +1925,10 @@ Completed {{completedSteps}}/{{totalSteps}} steps before abort.{{#failedSteps}}
 
 Run id: `{{runId}}`
 
-- Progress / results: `replay({ action: 'status', runId: '{{runId}}' })`
-- Stop it: `replay({ action: 'cancel', runId: '{{runId}}' })`
+- Progress / results: `run({ action: 'status', runId: '{{runId}}' })`
+- Stop it: `run({ action: 'cancel', runId: '{{runId}}' })`
+
+**Once per session:**
 
 Results are kept in memory for 30 minutes after the run settles. Pass `wait: true` to `run` to block until completion instead.
 
@@ -1969,7 +1992,7 @@ Each list passed to `declare` replaces that field, and `[]` clears it. A `profil
 
 Bench: `{{benchUrl}}`
 
-The run is the bench's own play, so `replay status` does not track it; its rows, badges and check outcomes are in the bench. Pass `wait: true` to block until it ends.
+The run is the bench's own play, so `run status` does not track it; its rows, badges and check outcomes are in the bench. Pass `wait: true` to block until it ends.
 
 ---
 
@@ -2009,8 +2032,8 @@ A bench play runs the sequence file as saved, so {{params}} would be ignored. Ru
 
 A waiting run answers within {{seconds}}s, so a step that never finishes cannot hold the call. The run goes on in the background:
 
-- Progress / results: `replay({ action: 'status', runId: '{{runId}}' })`
-- Stop it: `replay({ action: 'cancel', runId: '{{runId}}' })`
+- Progress / results: `run({ action: 'status', runId: '{{runId}}' })`
+- Stop it: `run({ action: 'cancel', runId: '{{runId}}' })`
 
 ---
 
@@ -2148,8 +2171,8 @@ No dialog is open on `{{connection}}`, so there was nothing to wait for.
 Runs are held in memory only: results expire 30 minutes after a run settles, and a server restart (including the hot-restart on rebuild) kills in-flight runs and forgets every id.
 
 **Suggestions:**
-- `replay({ action: 'status' })` lists the runs this server still knows about
-- Start the sequence again with `replay({ action: 'run', ... })`
+- `run({ action: 'status' })` lists the runs this server still knows about
+- Start the sequence again with `run({ action: 'sequence', ... })`
 
 ---
 
@@ -2160,7 +2183,7 @@ Runs are held in memory only: results expire 30 minutes after a run settles, and
 
 **Cancel requested:** {{name}} (`{{runId}}`)
 
-Steps that support cancellation are interrupted promptly; other steps stop at the next step boundary. Work already dispatched to the browser may still take effect. Check `replay({ action: 'status', runId: '{{runId}}' })` until the status is `cancelled`.
+Steps that support cancellation are interrupted promptly; other steps stop at the next step boundary. Work already dispatched to the browser may still take effect. Check `run({ action: 'status', runId: '{{runId}}' })` until the status is `cancelled`.
 
 ---
 
@@ -2182,7 +2205,7 @@ The paused session for this run was dropped.
 
 **Nothing to cancel:** {{name}} (`{{runId}}`) is already {{status}}.
 
-Its result is still available via `replay({ action: 'status', runId: '{{runId}}' })`.
+Its result is still available via `run({ action: 'status', runId: '{{runId}}' })`.
 
 ---
 
@@ -2196,8 +2219,8 @@ Its result is still available via `replay({ action: 'status', runId: '{{runId}}'
 Runs: {{runList}}
 
 **Suggestions:**
-- `replay({ action: 'cancel', runId: '...' })` targets one run
-- `replay({ action: 'status' })` shows all runs
+- `run({ action: 'cancel', runId: '...' })` targets one run
+- `run({ action: 'status' })` shows all runs
 
 ---
 
@@ -2206,7 +2229,7 @@ Runs: {{runList}}
 **Type:** success
 **Summary:** Command history
 
-Showing {{count}} of {{totalCount}} commands
+{{count}} of {{totalCount}} entries
 
 ---
 
@@ -2471,7 +2494,7 @@ No commands were recorded in this session.
 **Type:** error
 **Code:** NO_ACTIVE_SEQUENCE
 
-{{#message}}{{message}}{{/message}}{{^message}}No active sequence. Use `replay({ action: 'run', stepTo: N })` first to pause one.{{/message}}
+{{#message}}{{message}}{{/message}}{{^message}}No active sequence. Use `run({ action: 'sequence', stepTo: N })` first to pause one.{{/message}}
 
 ---
 
@@ -3369,10 +3392,9 @@ Server `{{serverId}}` stopped.
 
 {{serverList}}
 
-**Actions:**
-- Stop: `server({ action: "stop", serverId: "<id>" })`
-- Restart: `server({ action: "restart", serverId: "<id>" })`
-- Logs: `server({ action: "logs", serverId: "<id>" })`
+**Once per session:**
+
+Actions: stop `server({ action: "stop", serverId: "<id>" })`, restart `server({ action: "restart", serverId: "<id>" })`, logs `server({ action: "logs", serverId: "<id>" })`.
 
 ---
 
@@ -3600,6 +3622,8 @@ No watch-mode restart is queued for `{{serverId}}`.
 
 Now monitoring port {{port}} at level `{{level}}`{{#description}} ({{description}}){{/description}}{{#interval}} with custom interval {{interval}}ms{{/interval}}.
 
+**Once per session:**
+
 The port will be checked via TCP connection probes. If the port goes down, tool responses will be affected based on the monitoring level:
 - `inform`: Info line prepended to responses
 - `error`: Error line prepended to responses
@@ -3693,12 +3717,21 @@ Use `server({ action: 'listMonitored' })` to see all monitored ports.
 
 ---
 
+## PORT_ACK_RECOVERED
+
+**Type:** success
+**Summary:** Port {{port}} is up again
+
+Port {{port}} is up again, so its failure holds nothing and needs no acknowledgment; tools run.
+
+---
+
 ## PORT_ACK_FAILED
 
 **Type:** error
 **Code:** ACK_FAILED
 
-Cannot acknowledge port {{port}}. Either the port is not being monitored, or it is not currently in a failed state.
+Cannot acknowledge port {{port}}: it is not being monitored.
 
 Use `server({ action: 'listMonitored' })` to check the current status of monitored ports.
 
@@ -3861,6 +3894,8 @@ Persistent Chrome profiles are not available - the config tool was created witho
 **Running:** {{entryPath}}
 **Built:** {{buildMtime}}
 
+**Once per session:**
+
 After a rebuild, a `Built` timestamp older than the build means this server
 never reloaded - the rebuild signalled a supervisor that is not the one serving
 you, and everything you are observing is the previous code.
@@ -3950,7 +3985,9 @@ No global config exists to clone from.
 
 {{#changed}}Reloaded config from {{path}} - changes applied live.{{/changed}}{{^changed}}Reloaded config from {{path}} - no changes since last load.{{/changed}}
 
-Note: `tools.enabled`/`tools.disabled` changes still require an MCP server restart to take effect - use `config({action: 'restart'})`.
+**Once per session:**
+
+`tools.enabled`/`tools.disabled` changes still require an MCP server restart to take effect - use `config({action: 'restart'})`.
 
 ---
 
@@ -4168,7 +4205,11 @@ A condition form polls from the MCP side: each read runs in whatever document th
 **Type:** success
 **Summary:** Slept {{ms}}ms
 
-Slept {{ms}}ms. Fixed sleeps are a last resort - prefer `wait({ selector })` or `wait({ expression })`, which return as soon as the condition holds and fail loudly when it never does.
+Slept {{ms}}ms.
+
+**Once per session:**
+
+Fixed sleeps are a last resort - prefer `wait({ selector })` or `wait({ expression })`, which return as soon as the condition holds and fail loudly when it never does.
 
 ---
 
@@ -4183,10 +4224,6 @@ Timed out after {{timeoutMs}}ms ({{polls}} checks) waiting for {{condition}}{{la
 - The condition never became true - check it is the right selector/expression for the page you are on
 - If the page is still loading or async work is slow, raise `timeoutMs`
 - Use `content({ action: 'findInteractive' })` or `screenshot` to see the current page state
-
-**Once per session:**
-
-A condition form polls from the MCP side: each read runs in whatever document the page has at the time, so a navigation mid-wait costs one read, and nothing depends on in-page timers or promises. An `expression` is synchronous: async work starts in a prior step and stores its result in a global, and the wait reads the global, e.g. `window.__probeResult !== 'PENDING'`. A timeout fails the step, which stops a run like any failed step.
 
 ---
 
@@ -4226,7 +4263,9 @@ This session is `{{self}}`. Its mailbox: `{{mailboxPath}}`
 
 {{sessionList}}
 
-**Note:** An arriving message announces itself on this session's event stream, `{{eventStreamPath}}`, which is also where guard blocks land - one watch covers both. The plugin's SessionStart hook prints that path and the watch call at the start of every session. Without a watch, messages surface only when `message({ action: 'read' })` runs. Nothing watches the mailbox file; it holds the conversation and the read cursor.
+**Once per session:**
+
+An arriving message announces itself on this session's event stream, `{{eventStreamPath}}`, which is also where guard blocks land - one watch covers both. The plugin's SessionStart hook prints that path and the watch call at the start of every session. Without a watch, messages surface only when `message({ action: 'read' })` runs. Nothing watches the mailbox file; it holds the conversation and the read cursor.
 
 ---
 
@@ -4235,10 +4274,13 @@ This session is `{{self}}`. Its mailbox: `{{mailboxPath}}`
 **Type:** success
 **Summary:** Sent to {{to}}
 
-Message `{{shortId}}` appended to `{{mailboxPath}}`. The recipient sees it on `message({ action: 'read' })`, or immediately if a watch reads its event stream.{{deliveryNote}}
+Message `{{shortId}}` appended to `{{mailboxPath}}`. The recipient sees it on `message({ action: 'read' })`, or immediately if a watch reads its event stream.{{deliveryNote}}{{#watchCall}}
 
-**Suggestions:**
-- To hold this call open until the other session answers: `message({ action: 'send', to: '{{to}}', text: '...', waitForReplyMs: 120000 })`
+**A reply lands on this session's event stream, which no watch reads.** To hear it without another devharness call: `{{watchCall}}`{{/watchCall}}
+
+**Once per session:**
+
+To hold the call open until the other session answers: `message({ action: 'send', to: '{{to}}', text: '...', waitForReplyMs: 120000 })`.
 
 ---
 
@@ -4261,7 +4303,9 @@ Message `{{shortId}}` appended to `{{mailboxPath}}`. The recipient sees it on `m
 
 {{messageList}}
 
-**Note:** Read advances a cursor, so the same message is returned once. The full history stays in `{{mailboxPath}}`.
+**Once per session:**
+
+Read advances a cursor, so the same message is returned once. The full history stays in `{{mailboxPath}}`.
 
 ---
 
@@ -4463,7 +4507,7 @@ Replay {{index}}, fix: {{names}}
 
 **Once per session:**
 
-This call is history entry {{index}}. `replay({ action: 'repeat', indices: [{{index}}], params: { {{fields}} } })` runs it again with only those fields replaced and every other field as recorded, so the rest is not resent. `null` removes a field. The rerun takes its own index, and a rerun that fails on a field names that index.
+This call is history entry {{index}}. `run({ action: 'repeat', indices: [{{index}}], params: { {{fields}} } })` runs it again with only those fields replaced and every other field as recorded, so the rest is not resent. `null` removes a field. The rerun takes its own index, and a rerun that fails on a field names that index.
 
 ---
 
@@ -4471,7 +4515,9 @@ This call is history entry {{index}}. `replay({ action: 'repeat', indices: [{{in
 
 **Type:** info
 
-(Logs: server output written since the previous tool call, per server - absent when nothing was written. Read it with `server({ action: 'logs', serverId })`. Console: the page's own console over the same window, for the connection this call used, naming the newest error and where it came from. Replay: this call's index in the session history - `replay({ action: 'repeat', indices: [N] })` runs it again, which re-drives setup without retyping it. These lines appear only when something changed, and this note only once.)
+**Once per session:**
+
+(Logs: server output written since the previous tool call, per server - absent when nothing was written. Read it with `server({ action: 'logs', serverId })`. Console: the page's own console over the same window, for the connection this call used, naming the newest error and where it came from. Replay: this call's index in the session history - `run({ action: 'repeat', indices: [N] })` runs it again, which re-drives setup without retyping it. These lines appear only when something changed, and this note only once.)
 
 ---
 
@@ -4520,7 +4566,9 @@ Read the whole sequence against the page and tell the person what will not survi
 **Type:** success
 **Summary:** Bench already open on {{connection}}
 
-Bench: `{{benchUrl}}` - the page is {{held}} and the picker is {{pickerState}}; neither was changed.{{#unapplied}} Not applied: {{unapplied}}. Another sequence: `replay({ action: 'run', name, connection: '{{connection}}', bench: true })`, no `stop`.{{/unapplied}}
+Bench: `{{benchUrl}}` - the page is {{held}} and the picker is {{pickerState}}; neither was changed.{{#unapplied}} Not applied: {{unapplied}}. Another sequence: `run({ action: 'sequence', name, connection: '{{connection}}', bench: true })`, no `stop`.{{/unapplied}}
+
+**Once per session:**
 
 `bench({ action: 'picker', connection: '{{connection}}', armed: true })` arms the picker; `armed: false` disarms it.
 
@@ -4537,11 +4585,9 @@ Bench: `{{benchUrl}}` - the page is {{page}} and the picker is idle.
 
 **Once per session:**
 
-HOLD in the bench stops the page's JS and its CSS animations and, for a browser launched with `proxy: true`, keeps what crosses its boundary waiting at the proxy, so a state that only exists mid-interaction is read with the traffic that produced it; PICKER turns the next click into a pick. They are independent: driving the app needs the picker disarmed *and* the page running, because a held page has its JS stopped and a click reaches nothing. Picking works in either state - the picker is Chrome's, not the page's. While held, a tool that drives the page is refused, naming the hold. `bench({ action: 'release' })`, `hold({ action: 'release' })`, `execution({ action: 'resume', connection })` and `stop` each release every layer of it.
+HOLD stops page time (timers, frames, CSS, media) and a person's input while the page's JS runs, so the screen, picker and reads stay current; with `proxy: true` traffic waits at the proxy too. PICKER makes the next click a pick, held or not. Driving the app needs the picker off and no hold; a drive under a hold is refused, naming it. A person's hold ends in the bench or with `stop`; `bench`/`hold` `release` and `execution resume` end an agent's, a run's or a motion rule's.
 
-Nothing is injected into the page. The bench is served from `127.0.0.1` while apps sit on `localhost` - a different site, so Chrome gives it its own renderer process. Drag it into Chrome's split view to work side by side.
-
-The person picks a step in the bench's step list, clicks the element in the app tab, types a comment, saves. The note is stored in that step of the sequence file, so it travels with the sequence rather than living beside it, and hovering the note swaps its text for the selector while outlining the element on the page. Saves, sequence writes and screenshots announce themselves on this session's event stream, `{{eventStreamPath}}`. With no watch they reach you only on your next devharness call, so each bench start prints the watch call when no process reads the stream. Keep working while they write.
+The bench runs in its own tab on `127.0.0.1`, a separate renderer; the page carries only devharness's clock, animation list, input guard and send wrapper. A note is saved into its step of the sequence file. Saves, sequence writes and screenshots go to `{{eventStreamPath}}`, read by a watch or on your next devharness call.
 
 **Suggestions:**
 - To read what they recorded: `bench({ action: 'list', connection: '{{connection}}' })`
@@ -4555,11 +4601,13 @@ The person picks a step in the bench's step list, clicks the element in the app 
 
 Asked for {{asked}}; ran {{steps}} callback(s) over {{actualMs}}ms of page time and held again. Totals since the hold: {{totalSteps}} callback(s), {{tickMs}}ms.
 
-The callback is the unit - one is one thing the page does, and the only amount a step can deliver exactly. A time target runs as many callbacks as it takes to cover it, so it lands past the number asked for rather than on it.
-
 {{#ranList}}{{ranList}}{{/ranList}}
 
 {{#quiet}}**Nothing was scheduled**, so there was nothing to step to. The page is idle: whatever happens next is waiting on input, the network, or a CSS animation rather than on a timer.{{/quiet}}
+
+**Once per session:**
+
+The callback is the unit - one is one thing the page does, and the only amount a step can deliver exactly. A time target runs as many callbacks as it takes to cover it, so it lands past the number asked for rather than on it.
 
 ---
 
@@ -4617,10 +4665,6 @@ The picture at {{path}} is before, after and the difference side by side: change
 **Code:** BENCH_RETAKE_FAILED
 
 Could not take the capture again: {{reason}}
-
-**Once per session:**
-
-Without `remove: true` a sweep only reports: a capture is evidence, so the list is read before anything goes.
 
 ---
 
@@ -4724,6 +4768,115 @@ A given `port` is always honoured: a Chrome already on it gets a tab, and with `
 
 ---
 
+## DEVHARNESS_DIR_UNIGNORED
+
+**Type:** info
+
+**Once per session:**
+
+**`.devharness/` is not git-ignored in this repository.** It holds machine-local state - pids, ports, local paths, logs - that a commit carries into a repository others read. Ask the person before adding `.devharness/` to `.gitignore`.
+
+---
+
+## DEVHARNESS_DIR_TRACKED
+
+**Type:** info
+
+**Once per session:**
+
+**`.devharness/` is tracked by git in this repository.** It holds machine-local state - pids, ports, local paths, logs. `git rm -r --cached .devharness` untracks it, and anything already pushed stays in history; ask the person before running it.
+
+---
+
+## EVALUATE_SYNTHETIC_INPUT
+
+**Type:** info
+
+**Once per session:**
+
+This expression drove the page with input the page made itself: a synthetic event skips what the browser does for real input - focus, hover, pointer capture, default actions - and reaches states real input never does. `run({ action: 'steps', connection, commands: [{ tool: 'input', params: { action: 'click', selector } }, { tool: 'wait', params: { selector } }, { tool: 'inspect', params: { action: 'evaluateExpression', expression } }] })` drives real input and reads the page back in the same one request; a whole value goes in as one trusted input event with `{ tool: 'input', params: { action: 'type', selector, text, insert: true } }`.
+
+---
+
+## REDO_NAMES_REPEAT
+
+**Type:** info
+
+**Once per session:**
+
+This call repeats history entry #{{index}}. `{{call}}` runs it again from its recorded arguments, nothing retyped; `indices` takes a run of entries, in order, in one call.
+
+---
+
+## REPLAY_LIST_ACTIONS
+
+**Type:** info
+
+**Once per session:**
+
+View a sequence with `replay({ action: 'get', name })`, run it with `run({ action: 'sequence', name })`, drop its copy in memory with `replay({ action: 'delete', sequenceId })`.
+
+---
+
+## REPLAY_ACTION_MOVED
+
+**Type:** error
+**Code:** REPLAY_ACTION_MOVED
+
+`replay` `{{action}}` runs through the `run` tool now, with the same fields: `{{call}}`
+
+---
+
+## RUN_STEPS_REPLY
+
+**Type:** info
+
+**Once per session:**
+
+Steps written into a `run` call are kept nowhere but history. `replay({ action: 'create', name, indices: [...] })` with the `#` indices above keeps them as a sequence; `run({ action: 'repeat', indices: [N] })` runs one of them again.
+
+---
+
+## CONNECTION_INACTIVITY_REPLY
+
+**Type:** info
+
+**Once per session:**
+
+A connection auto-closes after {{minutes}} min of no tool activity against it. Any tool call using this connection resets the timer.
+
+---
+
+## PAGE_CLICKABLE_HINT
+
+**Type:** info
+
+**Once per session:**
+
+Use content({ action: 'findInteractive', {{on}} }) to explore interactive elements
+
+---
+
+## PAGE_CONSOLE_HINT
+
+**Type:** info
+
+**Once per session:**
+
+Use console({ action: 'list', {{on}}, type: 'error' }) to view errors
+
+---
+
+## PAGE_NETWORK_HINT
+
+**Type:** info
+
+**Once per session:**
+
+Use network({ action: 'list', {{on}} }) to see each request with its status or failure
+
+---
+
 ## NETWORK_SOCKETS_STREAMS_REPLY
 
 **Type:** info
@@ -4750,7 +4903,7 @@ Chrome talks to Google's services constantly through the same proxy, and those c
 
 **Once per session:**
 
-An answer with `step` applies while that replay step is in flight, so the same call at another position in the run reaches the server. `withdraw` with the answer's id removes it.
+An answer with `step` applies while that run step is in flight, so the same call at another position in the run reaches the server. `withdraw` with the answer's id removes it.
 
 ---
 

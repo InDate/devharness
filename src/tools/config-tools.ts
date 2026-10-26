@@ -45,7 +45,7 @@ export interface ServerIdentity {
 export function createConfigTools(profileStore?: ProfileStore, serverIdentity?: ServerIdentity) {
   return {
     config: createTool(
-      'devharness configuration. Actions: status (where config loads from), useLocal, useGlobal (project or ~/.devharness config), reset (to defaults), backup (timestamped), cloneFromGlobal (global to local), show, listTools (toggleable tools, status and dependencies), reload (re-read config.json; edits also reload within ~250ms), restart (devharness itself, when stuck or broken), listProfiles (persistent Chrome profiles), resetProfile (wipe one, clearing its storage), setDebugLogging, debugLoggingStatus',
+      'devharness configuration and the server process.',
       configSchema,
       async (args: ConfigArgs) => {
         switch (args.action) {

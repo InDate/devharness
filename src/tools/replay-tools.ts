@@ -1,6 +1,7 @@
 /**
- * The `replay` tool: records and replays command sequences. The actions live
- * in the replay-* modules beside this one; this routes a call to its action.
+ * The `replay` tool records and keeps command sequences; the `run` tool runs
+ * them, or steps written into the call. The actions live in the replay-*
+ * modules beside this one; this routes a call to its action.
  */
 import type { CommandRecorder } from '../command-recorder.js';
 import type { ExecuteToolCall } from '../types.js';
@@ -13,7 +14,7 @@ import { handleRecordInteraction } from './replay-record.js';
 import { handleRun } from './replay-run.js';
 import { handleRunAll } from './replay-run-all.js';
 import { handleSearch } from './replay-search.js';
-import { replaySchema } from './replay-schema.js';
+import { replaySchema, runSchema, RUN_ACTIONS, type ReplayArgs, type RunArgs } from './replay-schema.js';
 import { handleStatus, handleCancel, handleStep, handleFinish } from './replay-session.js';
 
 export { findUnknownStepTools, type UnknownStepTool } from './replay-validation.js';
@@ -31,11 +32,7 @@ export function createReplayTools(
    */
   getKnownToolNames?: () => string[]
 ) {
-  return {
-    replay: createTool(
-      'Record and replay tool-call sequences. Actions: history, repeat (re-run history indices), create (sequence from history indices), insert, addCheck, declare (the browsers, sockets and tags a sequence carries), repair (the step a run paused on after clicking another element), copy (steps 1..N into a new sequence), split (steps 1..N into a shared sequence the original runs), adopt (a shared sequence in place of steps 1..N of another), search (saved steps holding a string, or reaching an element), list (memory and disk), get, delete (from memory), export (to disk as sequence/playwright/puppeteer), load, listSaved, deleteSaved, run (in the background, returning a runId; wait: true blocks), runAll (every sequence in a folder, or carrying a tag, one pass/fail line each), status, cancel, step/finish (a paused run), runFromLog (log line numbers), recordInteraction (a person\'s mouse, keyboard and navigation through a browser overlay; blocks until that person finishes)',
-      replaySchema,
-      async (args, abortSignal) => {
+  const dispatch = async (args: ReplayArgs, abortSignal?: AbortSignal): Promise<any> => {
         switch (args.action) {
           case 'history':
             return handleHistory(args, commandRecorder);
@@ -97,7 +94,35 @@ export function createReplayTools(
           default:
             return createErrorResponse('INVALID_ACTION', { action: args.action });
         }
-      }
+  };
+
+  return {
+    replay: createTool(
+      'Record and keep tool-call sequences; run executes them.',
+      replaySchema,
+      (args, abortSignal) => dispatch(args, abortSignal)
+    ),
+    run: createTool(
+      'Run tool calls: steps written into this call, in one request, each step\'s reading returned; a saved sequence; a folder of them; or earlier calls again by history index.',
+      runSchema,
+      (args: RunArgs, abortSignal) => runAction(args, abortSignal)
     ),
   };
+
+  /** A `run` call carried out by the `replay` action it names; `steps` without commands is refused before anything runs. */
+  async function runAction(args: RunArgs, abortSignal?: AbortSignal): Promise<any> {
+    if (args.action === 'steps' && !args.commands) {
+      return createErrorResponse('MISSING_PARAMETER', {
+        action: 'steps', missing: 'commands',
+        message: 'The "steps" action requires "commands": the calls to run, [{ tool, params }].',
+      });
+    }
+    if (args.action !== 'steps' && args.commands) {
+      return createErrorResponse('INVALID_PARAMETER', {
+        parameter: 'commands', value: args.action,
+        message: '"commands" belongs to the "steps" action; a saved sequence runs with "sequence" and its name.',
+      });
+    }
+    return dispatch({ ...args, action: RUN_ACTIONS[args.action] } as ReplayArgs, abortSignal);
+  }
 }

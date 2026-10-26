@@ -14,6 +14,10 @@ import type { ProxyEvent } from '../proxy/intercept-proxy.js';
 import type { ExecutionResult } from './replay-types.js';
 import { describePersonInput } from '../person-watch.js';
 import { ruleOn, type RunRule, type RunRules } from './run-rules.js';
+import { stepReply } from './replay-history.js';
+import { foreignTo, linesOf, observationsOf, type Observation, type ObservationLine } from '../observation-log.js';
+import { CARRIER } from '../write-watch.js';
+import { describeCall, readingConnection } from './history-activity.js';
 
 export interface RunReplyInput {
   name: string;
@@ -78,8 +82,8 @@ function actedOn(events: Crossing[], rules: RunRules | undefined): Map<RunRule, 
 }
 
 /** The counts History shows for an entry, or for a pause's crossings, which no entry holds. */
-function countsFor(source: number | Crossing[]): ActivityCounts {
-  if (typeof source === 'number') return countsOf(activityOf(source));
+function countsFor(source: number | Crossing[], reading?: string): ActivityCounts {
+  if (typeof source === 'number') return countsOf(activityOf(source, reading));
   return {
     requests: source.filter(event => event.kind === 'request').length,
     failed: source.filter(event => event.kind === 'request' && (event.status ?? 0) >= 400).length,
@@ -92,8 +96,8 @@ function crossingsFor(source: number | Crossing[]): Crossing[] {
   return typeof source === 'number' ? eventsOf(source) : source;
 }
 
-function causedBy(source: number | Crossing[], rules: RunRules | undefined): string {
-  const counts = countsFor(source);
+function causedBy(source: number | Crossing[], rules: RunRules | undefined, reading?: string): string {
+  const counts = countsFor(source, reading);
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
   const caused = [
     counts.requests ? `${plural(counts.requests, 'request')}${counts.failed ? ` (${counts.failed} failed)` : ''}` : '',
@@ -104,6 +108,70 @@ function causedBy(source: number | Crossing[], rules: RunRules | undefined): str
   for (const [rule, n] of actedOn(crossingsFor(source), rules)) byVerb.set(ACTED[rule.verb], (byVerb.get(ACTED[rule.verb]) ?? 0) + n);
   const acted = [...byVerb].map(([verb, n]) => `${n} ${verb}`).join(', ');
   return acted ? `${caused}: ${acted}` : caused;
+}
+
+/**
+ * A line as the caused column names it. A transform's matrix values run past
+ * the column and read as noise there, so its line keeps the duration and the
+ * frames; the values stay on the line its id looks up.
+ */
+function headlineText({ observation: one, count }: ObservationLine, reading: string | undefined): string {
+  const motion = one.motion;
+  const matrix = motion && !motion.set && [motion.from, motion.to].some(value => value?.startsWith('matrix'));
+  const text = matrix
+    ? `${one.key}  ${CARRIER[motion.type]} over ${Math.round(motion.durationMs)}ms${motion.frames ? `, ${motion.frames} frame${motion.frames === 1 ? '' : 's'}` : ''}`
+    : one.text;
+  const foreign = foreignTo(one, reading);
+  return `${count > 1 ? `${text} ×${count}` : text}${foreign ? ` on ${foreign}` : ''}`;
+}
+
+/**
+ * What a step caused in one line, cut to `most` lines. A library's one-frame
+ * sets come first in time and would push the motion behind `+N more`, so they
+ * are counted in one tag after it.
+ */
+function headlineOf(observations: Observation[], most: number, reading: string | undefined): string {
+  const lines = linesOf(observations);
+  const sets = lines.filter(line => line.observation.motion?.set).reduce((n, line) => n + line.count, 0);
+  const rest = lines.filter(line => !line.observation.motion?.set);
+  const named = rest.slice(0, most).map(line => headlineText(line, reading));
+  const more = rest.length - named.length;
+  return [named.join('; ') + (more > 0 ? `; +${more} more` : ''), sets ? `${sets} set` : ''].filter(Boolean).join(' · ');
+}
+
+/** What a step caused, named and folded from the observation log, with what the run's rules did to it. */
+function causedNamed(index: number, rules: RunRules | undefined, reading: string | undefined): string {
+  const observations = observationsOf(index);
+  if (observations.length === 0) return causedBy(index, rules, reading);
+  const byVerb = new Map<string, number>();
+  for (const [rule, n] of actedOn(crossingsFor(index), rules)) byVerb.set(ACTED[rule.verb], (byVerb.get(ACTED[rule.verb]) ?? 0) + n);
+  const acted = [...byVerb].map(([verb, n]) => `${n} ${verb}`).join(', ');
+  return `${headlineOf(observations, 3, reading).replace(/\|/g, '\\|')}${acted ? `: ${acted}` : ''}`;
+}
+
+/**
+ * Frame loops whose last frame fell between the start of the step before a
+ * row and the row's own start, with no motion of the same key begun after it.
+ * A loop a press stops draws its last frame before the press, so the stop
+ * lands in no step's window; the row states the gap and credits no step.
+ */
+function endsBefore(rows: Row[]): Map<Row, string> {
+  const motions = rows.flatMap(row => observationsOf(row.command.index)).filter(one => one.motion?.frames !== undefined && !one.motion.set);
+  const ends = new Map<Row, string>();
+  rows.forEach((row, i) => {
+    if (i === 0 || observationsOf(row.command.index).length > 0) return;
+    const from = rows[i - 1].command.timestamp;
+    const to = row.command.timestamp;
+    const lines = motions.flatMap(one => {
+      const end = one.at + one.motion!.durationMs;
+      if (end <= from || end >= to) return [];
+      if (motions.some(next => next.key === one.key && next.connection === one.connection && next.at > end && next.at < to)) return [];
+      const foreign = foreignTo(one, readingConnection(row.command));
+      return [`${one.key}  last frame ${Math.round(to - end)}ms before this step, not tied to it by time (${one.id})${foreign ? ` on ${foreign}` : ''}`];
+    });
+    if (lines.length) ends.set(row, lines.join('; ').replace(/\|/g, '\\|'));
+  });
+  return ends;
 }
 
 function secs(ms: number): string {
@@ -143,7 +211,7 @@ function personNotes(person: RunReplyInput['person']): string[] {
   return person.landed.map(({ before, inputs }) => {
     const what = `${inputs.map(describePersonInput).join(', ')} (History ${inputs.map(input => `#${input.index}`).join(', ')})`;
     const did = person.mode === 'pause' && person.pausedBefore === before
-      ? `the run is held before step ${before + 1}${person.held?.length ? `, with the page's ${person.held.join(', ')} held` : ''}; \`replay step\` or \`finish\` releases ${person.held?.length ? 'them' : 'it'} and carries on, \`cancel\` releases ${person.held?.length ? 'them' : 'it'} and ends the run`
+      ? `the run is held before step ${before + 1}${person.held?.length ? `, with the page's ${person.held.join(', ')} held` : ''}; \`run step\` or \`finish\` releases ${person.held?.length ? 'them' : 'it'} and carries on, \`cancel\` releases ${person.held?.length ? 'them' : 'it'} and ends the run`
       : person.mode === 'stop' ? `the run stopped before step ${before + 1}`
       : `the run carried on from step ${before + 1}`;
     return `Person: ${what} landed before step ${before + 1}; ${did}`;
@@ -203,9 +271,17 @@ export function formatRunReply(recorder: CommandRecorder, input: RunReplyInput):
 
   const pauses = input.pauses ?? new Map<number, Crossing[]>();
   const ruled = rulesBlock(rows, input.rules, pauses);
-  const listed = input.steps === 'all' ? rows : rows.filter(row => row.outcome === 'failed' || mismatched(row));
+  // A step that caused something is part of what the run did; one that caused
+  // nothing and matched is listed only when every step is asked for.
+  const ended = endsBefore(rows);
+  const listed = input.steps === 'all' ? rows : rows.filter(row => row.outcome === 'failed' || mismatched(row) || observationsOf(row.command.index).length > 0 || ended.has(row));
+  // Every step the run took is accounted for: those left out of the table are named.
+  const unlisted = input.steps === 'all' ? [] : rows.filter(row => !listed.includes(row));
+  const unlistedLine = unlisted.length
+    ? `not listed (nothing caused): ${unlisted.map(row => row.label).join(', ')} · ${[...new Set(unlisted.map(row => describeCall(row.command).split(' ')[0]))].join(', ')}`
+    : '';
   if (listed.length === 0) {
-    return [reply, [...unrecordedNotes, ...personNotes(input.person)].join('\n'), ruled].filter(Boolean).join('\n\n');
+    return [reply, unlistedLine, [...unrecordedNotes, ...personNotes(input.person)].join('\n'), ruled].filter(Boolean).join('\n\n');
   }
 
   reply += '\n\n| step | history | outcome | matched | caused |\n|---|---|---|---|---|';
@@ -215,12 +291,14 @@ export function formatRunReply(recorder: CommandRecorder, input: RunReplyInput):
   for (const row of listed) {
     while (pauseRows.length && !row.label.includes('.') && pauseRows[0][0] + 1 <= row.step) reply += pauseRow(pauseRows.shift()!);
     const nested = row.command.run !== input.name ? ` (${row.command.run})` : '';
-    reply += `\n| ${row.label}${nested} | #${row.command.index} | ${row.outcome} | ${row.match?.noBaseline ? 'no baseline' : row.match?.kinds ? `${row.match.matched}/${row.match.kinds}` : ''} | ${causedBy(row.command.index, input.rules)} |`;
+    reply += `\n| ${row.label} ${describeCall(row.command)}${nested} | #${row.command.index} | ${row.outcome} | ${row.match?.noBaseline ? 'no baseline' : row.match?.kinds ? `${row.match.matched}/${row.match.kinds}` : ''} | ${ended.get(row) ?? causedNamed(row.command.index, input.rules, readingConnection(row.command))} |`;
   }
   for (const pause of pauseRows) reply += pauseRow(pause);
   if (input.steps === 'all' && left > 0) {
     reply += `\n| ${reached + 1 === input.total ? input.total : `${reached + 1}–${input.total}`} | — | ${input.paused && failedAt === undefined ? 'remaining' : 'not run'} | | |`;
   }
+
+  if (unlistedLine) reply += `\n\n${unlistedLine}`;
 
   const notes: string[] = [...unrecordedNotes];
   for (const row of listed) {
@@ -236,6 +314,53 @@ export function formatRunReply(recorder: CommandRecorder, input: RunReplyInput):
   }
   notes.push(...personNotes(input.person));
   if (notes.length) reply += `\n\n${notes.join('\n')}`;
+
   if (ruled) reply += `\n\n${ruled}`;
   return reply;
+}
+
+/**
+ * The reply to steps written into a run call: a head line, then one line per
+ * step - its history index, what it called, and its reply's first line, an
+ * `inspect` or `check` reading whole, a failed step's reason. Steps written
+ * into the call have no recording to compare with, so the table of matches,
+ * rules and pauses a saved run's reply carries has nothing to show.
+ */
+export function formatStepsReply(recorder: CommandRecorder, input: Pick<RunReplyInput, 'name' | 'total' | 'since' | 'failures'>): string {
+  const rows = rowsOf(recorder, input.name, input.since);
+  const failed = rows.find(row => row.outcome === 'failed');
+  const unrecorded = [...(input.failures ?? [])].find(([step]) => !rows.some(row => row.step === step));
+  const reached = rows.reduce((most, row) => Math.max(most, row.step), 0);
+  const head = failed ? `Failed at step ${failed.label} of ${input.total}`
+    : unrecorded ? `Failed at step ${unrecorded[0]} of ${input.total}`
+    : `Ran ${reached} of ${input.total} step${input.total === 1 ? '' : 's'}`;
+  const lines = rows.map(row => {
+    const call = `${row.command.tool}${row.command.params?.action ? `.${row.command.params.action}` : ''}`;
+    if (row.outcome === 'failed') {
+      const why = (row.label.includes('.') ? undefined : input.failures?.get(row.step)) ?? firstLine(row.command);
+      return `${row.label} #${row.command.index} ${call} ✗${why ? ` - ${why}` : ''}`;
+    }
+    // A check's reading is what the step was for, as an inspect's is; an
+    // inspect reply's lines before its result restate the call this line names.
+    if (row.command.tool === 'inspect' || row.command.tool === 'check') {
+      return `${row.label} #${row.command.index} ${call} ✓${stepReply('inspect', resultOnly(row.command.result))}`;
+    }
+    return `${row.label} #${row.command.index} ${call} ✓${stepReply(row.command.tool, row.command.result)}`;
+  });
+  if (unrecorded) lines.push(`${unrecorded[0]} ✗ - ${unrecorded[1]}`);
+  return [head, ...lines].join('\n');
+}
+
+/** A reply cut to what follows its `Result:` line, where it has one. */
+function resultOnly(response: any): any {
+  const parts = response?.content;
+  if (!Array.isArray(parts)) return response;
+  return {
+    ...response,
+    content: parts.map((part: any) => {
+      if (part?.type !== 'text' || typeof part.text !== 'string') return part;
+      const at = part.text.indexOf('Result:');
+      return at < 0 ? part : { ...part, text: part.text.slice(at + 'Result:'.length).trim() };
+    }),
+  };
 }

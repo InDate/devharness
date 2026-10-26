@@ -9,6 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { animationRecordOf } from './animation-record.js';
 import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync, mkdirSync } from 'fs';
 import { encodePng } from './png.js';
 import { tmpdir } from 'os';
@@ -69,6 +70,8 @@ const DESCRIBED = {
 
 /** A 2×2 PNG: the capture code decodes what it saves, so the fake returns a real one. */
 const TINY_PNG = encodePng({ width: 2, height: 2, data: Buffer.alloc(16, 200) }).toString('base64');
+/** The screen's frame: one image pixel per CSS px, the window 200 by 100. */
+const SCREEN_PNG = encodePng({ width: 200, height: 100, data: Buffer.alloc(200 * 100 * 4, 120) }).toString('base64');
 
 interface SentCall {
   method: string;
@@ -98,6 +101,8 @@ function createFakeClient() {
     /** true = DOM.querySelector finds nothing, as it does once the annotated
      *  element has been re-rendered away. */
     missingNode: false,
+    /** Where the compositor's frame stands under the window, CSS px. */
+    screenScrollY: 0,
     send: vi.fn(async (method: string, params?: any) => {
       sent.push({ method, params });
       if (method === 'DOM.resolveNode') return { object: { objectId: 'obj-1' } };
@@ -105,6 +110,13 @@ function createFakeClient() {
       if (method === 'DOM.querySelector') return { nodeId: client.missingNode ? 0 : 42 };
       if (method === 'Page.captureScreenshot') {
         return { data: TINY_PNG };
+      }
+      if (method === 'Page.startScreencast') {
+        setTimeout(() => client.emit('Page.screencastFrame', {
+          data: SCREEN_PNG, sessionId: 1,
+          metadata: { deviceWidth: 200, deviceHeight: 100, scrollOffsetX: 0, scrollOffsetY: client.screenScrollY, pageScaleFactor: 1 },
+        }), 0);
+        return {};
       }
       if (method === 'Page.getLayoutMetrics') {
         return {
@@ -729,6 +741,8 @@ describe('picking an element', () => {
     // The state a note describes is gone by the time anyone reads it, and the
     // words alone do not bring it back.
     const client = createFakeClient();
+    // An idle page: the hold arms its pause and the page paints on.
+    client.idle = true;
     await start(client);
     await pick(client);
     await captureBenchScreenshot(CONNECTION, { kind: 'element', selector: '#row-3 > span' });
@@ -839,7 +853,7 @@ describe('a pause that is not the bench\'s', () => {
     // Someone else's breakpoint lands - the bench never asked for it - and the
     // debugger connection records it on the code layer as a breakpoint's.
     client.debugger.stop({ reason: 'other', callFrames: [] });
-    recordHeld(CONNECTION, 'code', 'breakpoint');
+    recordHeld(CONNECTION, 'code', { kind: 'outside' });
     // A hold reads a covered layer recorded during its own engage as its own,
     // so the breakpoint lands a tick before the hold.
     await new Promise(r => setTimeout(r, 2));
@@ -1029,6 +1043,7 @@ describe('stepping a sequence', () => {
       calls,
       open: () => open,
       hosts: () => [],
+      runId: () => undefined,
     saveBoundaryRules: async () => undefined,
     siteOf: () => undefined,
     openSiteRules: async () => [],
@@ -1440,6 +1455,8 @@ describe('capturing the page', () => {
     // A clip that caught the wrong element is apparent while it is on screen,
     // not in a directory of files nobody opened.
     const client = createFakeClient();
+    // An idle page: the hold arms its pause and the page paints on.
+    client.idle = true;
     await start(client);
 
     const taken = await captureBenchScreenshot(CONNECTION, { kind: 'page' });
@@ -1450,6 +1467,8 @@ describe('capturing the page', () => {
 
   it('writes the accepted capture and announces where it landed', async () => {
     const client = createFakeClient();
+    // An idle page: the hold arms its pause and the page paints on.
+    client.idle = true;
     await start(client);
     await captureBenchScreenshot(CONNECTION, { kind: 'page' });
 
@@ -1486,7 +1505,7 @@ describe('capturing the page', () => {
     const box = client.calls('Runtime.evaluate')
       .filter((c: any) => String(c.params?.expression ?? '').includes('getBoundingClientRect')).at(-1);
     expect(box.params.expression).toContain('out < 2');
-    expect(client.lastCall('Page.captureScreenshot').params.clip).toBeDefined();
+    expect(client.calls('Page.startScreencast')).toHaveLength(1);
   });
 
   it('refuses to save when nothing is waiting', async () => {
@@ -1498,19 +1517,67 @@ describe('capturing the page', () => {
     });
   });
 
-  it('captures past the viewport for a whole page, and not for a clip', async () => {
+  it('captures a whole page past the viewport from the renderer, and an element from the screen\'s frame', async () => {
     const client = createFakeClient();
+    // An idle page: the hold arms its pause and the page paints on.
+    client.idle = true;
     await start(client);
 
     await captureBenchScreenshot(CONNECTION, { kind: 'page' });
     const whole = client.lastCall('Page.captureScreenshot');
-    await captureBenchScreenshot(CONNECTION, { kind: 'element', selector: '#row-3 > span' });
-    const clipped = client.lastCall('Page.captureScreenshot');
+    const shot: any = await captureBenchScreenshot(CONNECTION, { kind: 'element', selector: '#row-3 > span' });
 
     expect(whole.params.captureBeyondViewport).toBe(true);
     expect(whole.params.clip).toBeUndefined();
-    expect(clipped.params.captureBeyondViewport).toBe(false);
-    expect(clipped.params.clip).toMatchObject({ x: 10, y: 20, width: 100, height: 40 });
+    expect(client.calls('Page.captureScreenshot')).toHaveLength(1);
+    const png = Buffer.from(shot.shot.data, 'base64');
+    expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([100, 40]);
+  });
+
+  it('places an element on the frame by the screen\'s scroll, not the page\'s', async () => {
+    const client = createFakeClient();
+    client.screenScrollY = 10;
+    await start(client);
+
+    const shot: any = await captureBenchScreenshot(CONNECTION, { kind: 'element', selector: '#row-3 > span' });
+
+    expect(client.calls('Page.captureScreenshot')).toHaveLength(0);
+    const png = Buffer.from(shot.shot.data, 'base64');
+    expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([100, 40]);
+  });
+
+  it('captures an element partly off screen whole from the renderer while the page runs', async () => {
+    const client = createFakeClient();
+    // An idle page: the hold arms its pause and the page paints on.
+    client.idle = true;
+    client.screenScrollY = 70;
+    await start(client);
+
+    await captureBenchScreenshot(CONNECTION, { kind: 'element', selector: '#row-3 > span' });
+
+    expect(client.lastCall('Page.captureScreenshot').params).toMatchObject({ captureBeyondViewport: true, clip: { x: 10, y: 20, width: 100, height: 40 } });
+  });
+
+  it('refuses an element wholly off the held screen, naming why, rather than capturing other screen', async () => {
+    const client = createFakeClient();
+    client.screenScrollY = 4000;
+    await start(client);
+
+    const shot = await captureBenchScreenshot(CONNECTION, { kind: 'element', selector: '#row-3 > span' });
+
+    expect(shot).toMatchObject({ failure: expect.stringContaining('off screen') });
+    expect(client.calls('Page.captureScreenshot')).toHaveLength(0);
+  });
+
+  it('refuses a whole-page capture of a held page, naming why, rather than waiting on a frame', async () => {
+    const client = createFakeClient();
+    await start(client);
+    await setHeld(CONNECTION, true);
+
+    const shot = await captureBenchScreenshot(CONNECTION, { kind: 'page' });
+
+    expect(shot).toMatchObject({ failure: expect.stringContaining('held') });
+    expect(client.calls('Page.captureScreenshot')).toHaveLength(0);
   });
 
   it('records the selector on the event, so the picture says what it is of', async () => {
@@ -2343,6 +2410,11 @@ function withClock(client: any, answers: Record<string, unknown> = {}) {
       order.push(`clock ${control}`);
       return { result: { value: answers[control] ?? true } };
     }
+    const guard = method === 'Runtime.evaluate' && /devharness\.input'\)\]\?\.([a-zA-Z]+)/.exec(expression)?.[1];
+    if (guard) {
+      order.push(`input ${guard}`);
+      return { result: { value: true } };
+    }
     return send(method, params);
   });
   const pause = client.debugger.pause;
@@ -2362,8 +2434,8 @@ describe('the frame stop on the page clock', () => {
     await setHeld(CONNECTION, true);
 
     expect(await landFrameStop(session)).toBe('frame');
-    // The pause landing stops the clock again, which a stopped clock takes as nothing.
-    expect(order.slice(0, 3)).toEqual(['clock holdFrames', 'clock pause', 'page pause']);
+    expect(order).toEqual(['clock holdFrames', 'clock pause', 'input hold']);
+    expect(client.debugger.calls('pause')).toHaveLength(0);
   });
 
   it('pauses a page with no clock where it stands, and says so', async () => {
@@ -2390,7 +2462,7 @@ describe('the frame stop on the page clock', () => {
 
     await setHeld(CONNECTION, false);
 
-    expect(order.slice(0, 2)).toEqual(['clock resume', 'page resume']);
+    expect(order.filter(call => call !== 'input release').slice(0, 2)).toEqual(['clock resume', 'page resume']);
     expect(getBenchSession(CONNECTION)).toMatchObject({ frozen: false });
   });
 
@@ -2419,6 +2491,53 @@ describe('the frame stop on the page clock', () => {
     expect(order).not.toContain('page resume');
     expect(tick).toMatchObject({ steps: 1, actualMs: 700 });
     expect(tick!.ran[0]).toMatchObject({ kind: 'setTimeout' });
+  });
+});
+
+describe('the screen hold on the page clock - page time stopped, the main thread running', () => {
+  it('stops page time, queues the app\'s frames and guards input, and pauses nothing', async () => {
+    const client = createFakeClient();
+    await startBare(client);
+    const order = withClock(client);
+
+    await setHeld(CONNECTION, true);
+
+    expect(order).toContain('clock pause');
+    expect(order).toContain('clock holdFrames');
+    expect(order).toContain('input hold');
+    expect(client.lastCall('Animation.setPlaybackRate').params).toEqual({ playbackRate: 0 });
+    expect(client.debugger.calls('pause')).toHaveLength(0);
+    expect(client.debugger.calls('setInstrumentationBreakpoints')).toHaveLength(0);
+    expect(getBenchSession(CONNECTION)).toMatchObject({ frozen: true });
+  });
+
+  it('lets input through and runs page time on at release, resuming nothing', async () => {
+    const client = createFakeClient();
+    await startBare(client);
+    const order = withClock(client);
+    await setHeld(CONNECTION, true);
+    order.length = 0;
+
+    await setHeld(CONNECTION, false);
+
+    expect(order).toEqual(expect.arrayContaining(['input release', 'clock resume']));
+    expect(order.indexOf('input release')).toBeLessThan(order.indexOf('clock resume'));
+    expect(client.debugger.calls('resume')).toHaveLength(0);
+    expect(getBenchSession(CONNECTION)).toMatchObject({ frozen: false });
+  });
+
+  it('reads a step as quiet when the clock holds nothing, without letting the page run', async () => {
+    const client = createFakeClient();
+    await startBare(client);
+    const order = withClock(client, { next: false });
+    await setHeld(CONNECTION, true);
+
+    const tick = await tickBench(CONNECTION, { steps: 1 });
+
+    expect(tick).toMatchObject({ steps: 0, quiet: true });
+    expect(client.debugger.calls('resume')).toHaveLength(0);
+    expect(client.debugger.calls('setInstrumentationBreakpoints')).toHaveLength(0);
+    expect(order).toContain('clock next');
   });
 });
 
@@ -2489,44 +2608,52 @@ describe('the pause the bench reads - the debugger connection\'s, never a copy o
 });
 
 describe('readGroup - the animations an input started, read at the frame stop', () => {
-  /** A session whose animation objects answer with the timing each was given. */
-  function sessionWith(animations: Array<{ id: string; startedAt: number; name: string; element: string; delay: number; duration: number; easing: string }>, groupSince: number | undefined) {
-    const byId = new Map(animations.map(one => [one.id, one]));
-    const send = vi.fn(async (method: string, params?: any) => {
-      if (method === 'Animation.resolveAnimation') return { remoteObject: { objectId: params.animationId } };
-      if (method === 'Runtime.callFunctionOn') {
-        const one = byId.get(params.objectId)!;
-        return { result: { value: { name: one.name, type: 'CSSTransition', duration: one.duration, delay: one.delay, easing: one.easing, element: one.element } } };
-      }
-      // Held before its first frame, a transition reads the timeline's zero as a large negative.
-      if (method === 'Animation.getCurrentTime') return { currentTime: -1e9 };
-      return {};
+  /**
+   * A session whose page answers its animation list's reads with the timing
+   * each was given, and whose record took each animation at `createdAt`.
+   */
+  function sessionWith(animations: Array<{ id: number; createdAt: number; name: string; element: string; delay: number; duration: number; easing: string }>, groupSince: number | undefined) {
+    const connection = `group-page-${Math.random().toString(36).slice(2)}`;
+    const record = animationRecordOf(connection);
+    const read = (one: typeof animations[number]) => ({
+      id: one.id, doc: 'd1', name: one.name, type: 'CSSTransition', element: one.element,
+      duration: one.duration, delay: one.delay, easing: one.easing, looping: false, playState: 'running', currentTime: 0,
     });
-    return {
-      client: { send },
-      groupSince,
-      animations: new Map(animations.map(one => [one.id, { id: one.id, name: one.id, type: 'WebAnimation', startedAt: one.startedAt }])),
-    } as any;
+    for (const one of animations) {
+      vi.setSystemTime(one.createdAt);
+      record.takeSweep({ doc: 'd1', created: [read(one) as any], gone: [] }, undefined);
+    }
+    vi.setSystemTime(2000);
+    const send = vi.fn(async (method: string, params?: any) => {
+      if (method !== 'Runtime.evaluate') return {};
+      const asked = /\.read\((\d+)\)/.exec(String(params?.expression));
+      const one = asked ? animations.find(each => each.id === Number(asked[1])) : undefined;
+      return { result: { value: one ? read(one) : null } };
+    });
+    return { connection, client: { send }, groupSince } as any;
   }
+
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); });
+  afterEach(() => { vi.useRealTimers(); });
 
   it('lists only the animations created since the frame stop was armed, in the order they start', async () => {
     const session = sessionWith([
-      { id: 'before', startedAt: 900, name: 'opacity', element: '#toast', delay: 0, duration: 400, easing: 'linear' },
-      { id: 'late', startedAt: 1001, name: 'transform', element: 'div.item', delay: 260, duration: 300, easing: 'ease-out' },
-      { id: 'first', startedAt: 1002, name: 'transform', element: '#panel', delay: 0, duration: 420, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' },
+      { id: 1, createdAt: 900, name: 'opacity', element: '#toast', delay: 0, duration: 400, easing: 'linear' },
+      { id: 2, createdAt: 1001, name: 'transform', element: 'div.item', delay: 260, duration: 300, easing: 'ease-out' },
+      { id: 3, createdAt: 1002, name: 'transform', element: '#panel', delay: 0, duration: 420, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' },
     ], 1000);
 
     const group = await readGroup(session);
 
     expect(group).toEqual([
-      { id: 'first', name: 'transform', type: 'CSSTransition', element: '#panel', delayMs: 0, durationMs: 420, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)', currentMs: 0 },
-      { id: 'late', name: 'transform', type: 'CSSTransition', element: 'div.item', delayMs: 260, durationMs: 300, easing: 'ease-out', currentMs: 0 },
+      { id: 'd1:3', name: 'transform', type: 'CSSTransition', element: '#panel', delayMs: 0, durationMs: 420, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)', currentMs: 0 },
+      { id: 'd1:2', name: 'transform', type: 'CSSTransition', element: 'div.item', delayMs: 260, durationMs: 300, easing: 'ease-out', currentMs: 0 },
     ]);
   });
 
   it('reads no group where no frame stop was armed', async () => {
     const session = sessionWith([
-      { id: 'any', startedAt: 1001, name: 'opacity', element: '#toast', delay: 0, duration: 400, easing: 'linear' },
+      { id: 1, createdAt: 1001, name: 'opacity', element: '#toast', delay: 0, duration: 400, easing: 'linear' },
     ], undefined);
 
     expect(await readGroup(session)).toEqual([]);

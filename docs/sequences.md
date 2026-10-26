@@ -11,7 +11,7 @@ Everything below is the `replay` tool: `replay({ action: '...' })`.
 Sequences may live in subfolders of the sequences dir:
 
 ```
-.cdp-tools/sequences/
+.devharness/sequences/
   _helpers/      preamble guards, forEach bodies - loaded, never run on their own
   spine/
   story/
@@ -21,13 +21,13 @@ Filenames are relative to that root (`spine/spine-01.json`), and `load` still
 accepts the bare basename, so moving a file into a folder does not break calls
 that name it.
 
-`replay({ action: 'runAll', folder: 'spine' })` loads the WHOLE tree, then runs
+`run({ action: 'all', folder: 'spine' })` loads the WHOLE tree, then runs
 only that folder. Loading everything matters: a check's `{ run }` and
 `forEach`'s `do` resolve by sequence NAME, not by path, so a spine sequence can
 call a helper in `_helpers/` only if that helper was loaded too.
 
 **Tags are the other axis.** `replay({ action: 'declare', name: '...', tags:
-['ui'] })` labels a sequence; `replay({ action: 'runAll', tags: ['ui'] })` runs
+['ui'] })` labels a sequence; `run({ action: 'all', tags: ['ui'] })` runs
 only those, and composes with `folder`. Several tags mean *any of*. Tags are
 lowercased and de-duplicated (a tag is matched, not displayed) and may not
 contain spaces.
@@ -116,8 +116,8 @@ bench, a CLI call, or the steps of a sequence run.
 **Re-run calls from history, without building a sequence** - `repeat`
 
 ```
-replay({ action: 'repeat', indices: [12] })                // one call
-replay({ action: 'repeat', indices: [58, 59, 60, 61] })    // a whole stretch, in order
+run({ action: 'repeat', indices: [12] })                // one call
+run({ action: 'repeat', indices: [58, 59, 60, 61] })    // a whole stretch, in order
 ```
 
 `indices` takes a list, so this replays a run of work in one call - and that is
@@ -149,7 +149,7 @@ is read from here: the call, then each step, repeatable by its index.
   events, and `get` says so rather than ignoring them)
 - `load` / `listSaved` / `deleteSaved` - sequences on disk alone
 - `export` - write to a file as `sequence`, `playwright`, or `puppeteer`
-- `global: true` on `export` saves to `~/.cdp-tools/sequences/` instead of the
+- `global: true` on `export` saves to `~/.devharness/sequences/` instead of the
   working directory
 
 `load` and `create` reject a sequence naming a tool that doesn't exist, listing
@@ -166,15 +166,15 @@ sequence built from history has no file to reload from.
 ## Running
 
 ```
-replay({ action: 'run', sequenceId: 'seq-login', connection: 'my-web-app' })
+run({ action: 'sequence', sequenceId: 'seq-login', connection: 'my-web-app' })
 ```
 
 **`run` does not block** (changed in 0.7): it returns a run id immediately and
 executes in the background.
 
 ```
-replay({ action: 'status', runId: 'run-3-...' })   // progress; full result once settled
-replay({ action: 'cancel', runId: 'run-3-...' })   // stop it
+run({ action: 'status', runId: 'run-3-...' })   // progress; full result once settled
+run({ action: 'cancel', runId: 'run-3-...' })   // stop it
 ```
 
 `cancel` reaches the step that is in flight (including inside sequences
@@ -202,11 +202,11 @@ Several runs can execute concurrently - even of the same sequence - and the
 run id is what tells them apart. Settled runs and their results are kept in
 memory for 30 minutes (max 50); after that, or after a server restart (which
 kills in-flight runs), the id returns `REPLAY_RUN_NOT_FOUND`. Nested sequences
-(a check's `{ run }`, `replay run` steps) are part of their parent run, never
+(a check's `{ run }`, `run sequence` steps) are part of their parent run, never
 separate runs. Pass `wait: true` to block until completion and get the full
 result in one call (the pre-0.7 behaviour). `bench: true` plays it instead in
 the bench open on `connection`, from step 1, so its rows, badges and
-check outcomes show there; `replay status` does not track that play. It
+check outcomes show there; `run status` does not track that play. It
 replaces the sequence showing; no `stop`. An `envFile` passed with it holds
 for every later play in that bench, the pane's Replay button included.
 
@@ -269,7 +269,7 @@ and an explicitly supplied value still wins over the environment.
                            text: '{{env:APP_PASSWORD}}' } }
 ```
 
-`envFile` names a KEY=value file for the run - `replay({ action: 'run', name:
+`envFile` names a KEY=value file for the run - `run({ action: 'sequence', name:
 'login', envFile: 'sequences.env' })`. A relative path resolves against the
 project directory (the one holding `.devharness`); its values win over the
 server's own environment, a name it omits falls through to `process.env`, and
@@ -282,7 +282,7 @@ bench play included - reads `.devharness/sequences.env` when it exists, and
 at that origin. The reply names the file and each name it supplied.
 
 ```
-replay({ action: 'run', sequenceId: 'seq-signup',
+run({ action: 'sequence', sequenceId: 'seq-signup',
          variables: { 'var_2__email': 'new@example.com' } })
 ```
 
@@ -463,7 +463,7 @@ replay({ action: 'pause', name: 'issue-116-bench-play-repro', step: 4, hold: [],
 ```
 
 A run stops before step 4, appends an `instruction` event carrying the note and
-prints it in its reply; carry it out, then `replay({ action: 'finish' })`.
+prints it in its reply; carry it out, then `run({ action: 'finish' })`.
 `hold: []` because a held page refuses the driving the note asks for; `remove:
 true` takes the pause point away. A person sets notify with the bell on the
 pause point line in the bench, without a reason: the reply then says none was
@@ -473,7 +473,7 @@ given, so ask them why before finishing.
 so rebind them:
 
 ```
-replay({ action: 'run', sequenceId: 'duo',
+run({ action: 'sequence', sequenceId: 'duo',
          connections: { 'duo-member-two': 'my-second-browser' } })
 ```
 
@@ -589,7 +589,7 @@ second with its own profile:
 Same `port` in `connection list` means same instance, so shared storage.
 
 Nesting depth is capped by `replay.maxConditionalDepth` (default 10) and regexes
-by `replay.maxRegexLength` (default 500), both in `.cdp-tools/config.json`.
+by `replay.maxRegexLength` (default 500), both in `.devharness/config.json`.
 Oscillating chains (A->B->A) are allowed up to the depth cap. Full detail:
 `docs/replay.md`.
 
@@ -622,7 +622,7 @@ The pause offers a repair:
 - `replay({ action: 'repair', accept: 'element' })` - it changed on purpose:
   the selector stays and the element it reached becomes the fingerprint.
 
-Either rewrites the sequence file; `replay({ action: 'step' })` then runs the
+Either rewrites the sequence file; `run({ action: 'step' })` then runs the
 step again on a page the refused click never touched. A sequence recorded
 before fingerprints carries none, and its clicks go uncompared until it is
 recorded again. The repair's search covers the light DOM; an element inside a
@@ -741,7 +741,7 @@ need it. Three properties, each deliberate:
 - **Their own timeout budget** (`teardownTimeout`, default 60s), not drawn from
   the run's `totalTimeout`. The commonest reason a run needs cleaning up after is
   that it timed out; sharing the budget would skip teardown exactly then.
-- **The run's abort signal is NOT passed down**, so `replay cancel` stops the
+- **The run's abort signal is NOT passed down**, so `run cancel` stops the
   work and not the cleanup. A cancelled run is precisely one that left something
   behind.
 - **The variable store is shared**, so teardown can revoke what setup minted even

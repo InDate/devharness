@@ -34,12 +34,12 @@ function makeReplay() {
     getCommandsSincePause: vi.fn(() => []),
   } as any;
   const executeToolCall = vi.fn(productionShaped(async () => ({ content: [{ type: 'text', text: '' }] })));
-  const { replay } = createReplayTools(recorder, executeToolCall, async () => null, async () => 9222, undefined);
-  return { replay };
+  const { replay, run } = createReplayTools(recorder, executeToolCall, async () => null, async () => 9222, undefined);
+  return { replay, run };
 }
 
-async function pausedRun(replay: any): Promise<string> {
-  const started: any = await replay.handler({ action: 'run', sequenceId: 'seq-pause', connection: 'test-debug-session', stepTo: 1 });
+async function pausedRun(run: any): Promise<string> {
+  const started: any = await run.handler({ action: 'sequence', sequenceId: 'seq-pause', connection: 'test-debug-session', stepTo: 1 });
   const runId = started._meta.replay.runId as string;
   await vi.waitFor(() => expect(runRegistry.get(runId)?.status).toBe('paused'));
   return runId;
@@ -49,28 +49,28 @@ beforeEach(() => runRegistry.clear());
 
 describe('a paused background run', () => {
   it('reads as completed after finish', async () => {
-    const { replay } = makeReplay();
-    const runId = await pausedRun(replay);
+    const { replay, run } = makeReplay();
+    const runId = await pausedRun(run);
 
-    await replay.handler({ action: 'finish' });
+    await run.handler({ action: 'finish' });
 
     expect(runRegistry.get(runId)).toMatchObject({ status: 'completed', endedAt: expect.any(Number) });
   });
 
   it('reads as completed after stepping off its last step', async () => {
-    const { replay } = makeReplay();
-    const runId = await pausedRun(replay);
+    const { replay, run } = makeReplay();
+    const runId = await pausedRun(run);
 
-    await replay.handler({ action: 'step', stepCount: 5 });
+    await run.handler({ action: 'step', stepCount: 5 });
 
     expect(runRegistry.get(runId)?.status).toBe('completed');
   });
 
   it('reads as cancelled after a cancel that names no run', async () => {
-    const { replay } = makeReplay();
-    const runId = await pausedRun(replay);
+    const { replay, run } = makeReplay();
+    const runId = await pausedRun(run);
 
-    await replay.handler({ action: 'cancel' });
+    await run.handler({ action: 'cancel' });
 
     expect(runRegistry.get(runId)?.status).toBe('cancelled');
   });

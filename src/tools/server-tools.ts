@@ -123,7 +123,7 @@ export function createServerTools(serverManager: ServerManager) {
 
   return {
     server: createTool(
-      'Development servers. Actions: start (from a command, or a saved one by id alone; watch: true restarts on file changes in place of --watch/nodemon), stop, restart, list, logs (log paths or docker command), stopAll, setAutoRun (auto-start with devharness), cancelPendingRestart (drop a watch restart queued behind a paused debugger)',
+      'Development servers devharness starts and watches.',
       serverSchema,
       async (args: ServerArgs) => {
         switch (args.action) {
@@ -474,8 +474,13 @@ export function createServerTools(serverManager: ServerManager) {
             const portMonitor = serverManager.getPortMonitor();
             const acknowledged = await portMonitor.acknowledgeFailure(args.port);
 
-            if (!acknowledged) {
+            if (acknowledged === 'unmonitored') {
               return createErrorResponse('PORT_ACK_FAILED', withLogStatus({
+                port: args.port,
+              }));
+            }
+            if (acknowledged === 'up') {
+              return createSuccessResponse('PORT_ACK_RECOVERED', withLogStatus({
                 port: args.port,
               }));
             }

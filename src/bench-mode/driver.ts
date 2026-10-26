@@ -89,6 +89,8 @@ export interface SequenceDriver {
   step: (signal?: AbortSignal, holdNothing?: boolean) => Promise<string | undefined>;
   /** Hold the page as a paused run holds it: `layers` where given, else the run's own choice. */
   holdPaused: (layers?: Array<'code' | 'ui' | 'network'>) => Promise<void>;
+  /** The id of the run standing open, `run-<timestamp>`, which its holds are owned by. */
+  runId: () => string | undefined;
   /**
    * The pause point before step `step`: added, removed, or set to hold
    * `holds`. Absent `on` toggles it.

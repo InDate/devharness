@@ -380,7 +380,7 @@ export async function gateNewStep(
   // The page is held as well as the capture: left running, it re-renders while
   // the step is read, and the element the step names moves underneath it.
   session.heldForStep = !session.frozen;
-  if (session.heldForStep) await holdUi(session);
+  if (session.heldForStep) await holdUi(session, { kind: 'bench-op', op: 'recording' });
 
   await appendEvent(session.session, 'sequence', {
     connection,
@@ -603,7 +603,7 @@ async function announceSettled(
 async function releaseForStep(session: BenchSession): Promise<void> {
   if (!session.heldForStep) return;
   session.heldForStep = false;
-  await releaseUi(session);
+  await releaseUi(session, { kind: 'bench-op', op: 'recording' });
 }
 
 /**

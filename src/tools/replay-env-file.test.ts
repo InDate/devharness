@@ -52,6 +52,7 @@ describe('envFile through a run', () => {
   let dir: string;
   let recorder: CommandRecorder;
   let replay: any;
+  let run: any;
   let typed: string[];
   const original = { ...process.env };
 
@@ -62,7 +63,7 @@ describe('envFile through a run', () => {
     vi.spyOn(recorder, 'getSequencesDir').mockReturnValue(dir);
 
     const fieldValues = new Map<string, string>();
-    ({ replay } = createReplayTools(
+    ({ replay, run } = createReplayTools(
       recorder,
       vi.fn(productionShaped(async (tool: string, params: Record<string, any>) => {
         if (tool === 'input' && params.action === 'type') {
@@ -94,8 +95,8 @@ describe('envFile through a run', () => {
     await fs.rm(dir, { recursive: true, force: true });
   });
 
-  const run = (extra: Record<string, any>) =>
-    replay.handler({ action: 'run', wait: true, name: 'login', connection: 'app', ...extra } as any);
+  const runLogin = (extra: Record<string, any>) =>
+    run.handler({ action: 'sequence', wait: true, name: 'login', connection: 'app', ...extra } as any);
 
   const text = (res: any) => res.content.map((c: any) => c.text).join('\n');
 
@@ -103,7 +104,7 @@ describe('envFile through a run', () => {
     const envPath = join(dir, 'sequences.env');
     await fs.writeFile(envPath, 'APP_PASSWORD=from-file\n');
 
-    const res = await run({ envFile: envPath });
+    const res = await runLogin({ envFile: envPath });
 
     expect(res.isError).toBeUndefined();
     expect(typed).toEqual(['from-file']);
@@ -114,7 +115,7 @@ describe('envFile through a run', () => {
     const abs = join(getProjectDir(), rel);
     await fs.writeFile(abs, 'APP_PASSWORD=from-relative\n');
     try {
-      await run({ envFile: rel });
+      await runLogin({ envFile: rel });
       expect(typed).toEqual(['from-relative']);
     } finally {
       await fs.rm(abs, { force: true });
@@ -126,7 +127,7 @@ describe('envFile through a run', () => {
     const envPath = join(dir, 'sequences.env');
     await fs.writeFile(envPath, 'APP_PASSWORD=from-file\n');
 
-    await run({ envFile: envPath });
+    await runLogin({ envFile: envPath });
 
     expect(typed).toEqual(['from-file']);
   });
@@ -136,7 +137,7 @@ describe('envFile through a run', () => {
     const envPath = join(dir, 'sequences.env');
     await fs.writeFile(envPath, 'SOMETHING_ELSE=x\n');
 
-    await run({ envFile: envPath });
+    await runLogin({ envFile: envPath });
 
     expect(typed).toEqual(['from-ambient']);
   });
@@ -146,13 +147,13 @@ describe('envFile through a run', () => {
     const envPath = join(dir, 'sequences.env');
     await fs.writeFile(envPath, 'APP_PASSWORD=from-file\n');
 
-    await run({ envFile: envPath });
+    await runLogin({ envFile: envPath });
 
     expect(process.env.APP_PASSWORD).toBeUndefined();
   });
 
   it('fails as a parameter error before any step runs when the file is missing', async () => {
-    const res = await run({ envFile: join(dir, 'nope.env') });
+    const res = await runLogin({ envFile: join(dir, 'nope.env') });
 
     expect(res.isError).toBe(true);
     expect(text(res)).toContain('no such file');
@@ -163,7 +164,7 @@ describe('envFile through a run', () => {
     const envPath = join(dir, 'bad.env');
     await fs.writeFile(envPath, 'APP_PASSWORD=ok\njust some words\n');
 
-    const res = await run({ envFile: envPath });
+    const res = await runLogin({ envFile: envPath });
 
     expect(res.isError).toBe(true);
     expect(text(res)).toContain('line 2');

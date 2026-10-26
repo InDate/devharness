@@ -14,7 +14,7 @@ import { getProjectDir } from '../helpers/paths.js';
 import { getSessionInfo } from './dashboard-tools.js';
 import { listSessionRecords } from '../session-endpoint.js';
 import { resolveSessionName } from '../session-identity.js';
-import { appendEvent, getEventStreamPath } from '../session-events.js';
+import { appendEvent, getEventStreamPath, streamReaders, watchCall } from '../session-events.js';
 import type { ToolResponseMeta, MessageToolMeta } from '../tool-response.js';
 import {
   isValidMailboxId,
@@ -66,7 +66,7 @@ function formatMessages(messages: SessionMessage[]): string {
 export function createMessageTools() {
   return {
     message: createTool(
-      'Text between two devharness sessions on this machine. Actions: sessions (who is reachable), send (write to another session, optionally holding the call open for a reply), read (take new messages), reply (answer a message by id).',
+      'Text between devharness sessions on this machine.',
       messageSchema,
       async (args: MessageArgs, abortSignal?: AbortSignal) => {
         const self = resolveSessionName(getSessionInfo()?.shortId);
@@ -210,6 +210,10 @@ export function createMessageTools() {
                 deliveryNote: targetListening
                   ? ''
                   : `\n\n**No session is listening as \`${target}\` right now.** It reads this when it next starts, or the id is a typo and nothing ever will - check \`message({ action: 'sessions' })\`.`,
+                // The reply arrives on this session's event stream; with nothing
+                // reading it, a session that makes no devharness call meanwhile
+                // never hears of it.
+                ...(await streamReaders(self) === 0 ? { watchCall: watchCall(self) } : {}),
               });
               return { ...response, _meta: buildMeta(args.action, self, { sent, targetListening }) };
             }

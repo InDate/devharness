@@ -1,5 +1,5 @@
 /**
- * The reads a replay run makes around its steps: whether the debugger is
+ * The reads a run sequence makes around its steps: whether the debugger is
  * paused, launching or reaching the run's browser, whether a navigation, a
  * typed value or a click did what the step intended, and the page state a
  * failed step reports.

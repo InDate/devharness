@@ -2,8 +2,10 @@
  * The `replay` tool's parameters, and the arguments type every action handler takes.
  */
 import { z } from 'zod';
+import { createErrorResponse } from '../messages.js';
 
-export const replaySchema = z.object({
+/** Every field a replay handler reads, the ones `run` takes among them. */
+const replayArgsSchema = z.object({
   action: z.enum([
     'history', 'create', 'list', 'get', 'delete',
     'export', 'load', 'listSaved', 'deleteSaved',
@@ -18,7 +20,8 @@ export const replaySchema = z.object({
   startUrl: z.string().optional().describe('create: sequence start URL. run: replaces the stored startUrl for this run only'),
   envFile: z.string().optional().describe('run/runAll: KEY=value file supplying the {{env:NAME}} tokens; its values win over the server environment'),
   baseUrl: z.string().optional().describe('run/runAll: origin every absolute URL in the run moves onto, path and query kept'),
-  indices: z.array(z.number()).optional().describe('Command indices'),
+  indices: z.array(z.number()).optional().describe('Command indices; history: the entries to read in full'),
+  ids: z.array(z.string()).optional().describe('history: observations to read in full, by id (r31, m14)'),
   params: z.record(z.any()).optional().describe('repeat, one index: fields replacing the recorded ones; null removes one'),
   lines: z.array(z.number()).optional().describe('Log line numbers'),
   sequenceId: z.string().optional(),
@@ -91,4 +94,102 @@ export const replaySchema = z.object({
   killChromeOnFinish: z.boolean().optional().describe('run/runAll: kill the browsers this run launched once it finishes'),
 }).strict();
 
-export type ReplayArgs = z.infer<typeof replaySchema>;
+/** One step written into a `run steps` call, as a saved sequence stores it. */
+const inlineStep = z.object({
+  tool: z.string(),
+  params: z.record(z.any()).optional(),
+}).strict();
+
+/** Each `run` action, and the `replay` action that carries it out. */
+export const RUN_ACTIONS = {
+  steps: 'run', sequence: 'run', all: 'runAll', repeat: 'repeat', fromLog: 'runFromLog',
+  step: 'step', finish: 'finish', status: 'status', cancel: 'cancel',
+} as const;
+
+export const runSchema = replayArgsSchema.pick({
+  name: true, sequenceId: true, runId: true, connection: true, connections: true,
+  startUrl: true, baseUrl: true, envFile: true, variables: true, stepTimeout: true, totalTimeout: true,
+  startFrom: true, stepTo: true, playing: true, hold: true, stepCount: true, wait: true, bench: true,
+  steps: true, record: true, global: true, folder: true, tags: true, continueOnFailure: true,
+  killChromeOnFinish: true, requireSockets: true, strict: true, indices: true, params: true, lines: true,
+}).extend({
+  action: z.enum(Object.keys(RUN_ACTIONS) as [keyof typeof RUN_ACTIONS, ...Array<keyof typeof RUN_ACTIONS>]),
+  // The fields below are replay's, described for the actions that take them here.
+  wait: z.boolean().optional().describe('steps, sequence: block until the run ends; steps default true, sequence default false (returns a runId)'),
+  startUrl: z.string().optional().describe('sequence: replaces the stored startUrl for this run only'),
+  baseUrl: z.string().optional().describe('sequence, all: origin every absolute URL in the run moves onto, path and query kept'),
+  envFile: z.string().optional().describe('sequence, all: KEY=value file supplying {{env:NAME}} tokens'),
+  variables: z.record(z.string()).optional().describe('sequence, all: replacement text for recorded typed-text steps, keyed var_<0-based step>_<selector with non-alphanumerics as _>'),
+  bench: z.boolean().optional().describe('sequence: play in the bench open on connection'),
+  steps: z.enum(['all']).optional().describe("sequence, step, finish: 'all' lists every step's row; omitted, only the failed and mismatched ones"),
+  connections: z.record(z.string()).optional().describe('sequence: { "<recorded connection>": "<connection here>" }'),
+  tags: z.array(z.string()).optional().describe('all: run only sequences carrying one of these'),
+  indices: z.array(z.number()).optional().describe('repeat: history indices, from the Replay: N footers'),
+  params: z.record(z.any()).optional().describe('repeat, one index: fields replacing the recorded ones; null removes one'),
+  lines: z.array(z.number()).optional().describe('fromLog: history.log line numbers, 1 the newest'),
+  killChromeOnFinish: z.boolean().optional().describe('sequence, all: kill the browsers this run launched once it finishes'),
+  requireSockets: z.boolean().optional().describe('sequence, all: fail the run when a WebSocket closes or errors during it'),
+  strict: z.enum(['errors', 'warnings']).optional().describe("sequence, all: fail the run on console output it produces"),
+  commands: z.array(inlineStep).min(1).optional()
+    .describe('steps: the calls to run in order, [{ tool, params }]; a step naming no connection runs on `connection`'),
+}).strict();
+
+export type RunArgs = z.infer<typeof runSchema>;
+
+/** Each `replay` action that runs calls, and the `run` action it is now. */
+const RUN_ACTION_OF: Record<string, keyof typeof RUN_ACTIONS> = {
+  run: 'sequence', runAll: 'all', repeat: 'repeat', runFromLog: 'fromLog',
+  step: 'step', finish: 'finish', status: 'status', cancel: 'cancel',
+};
+
+/**
+ * A call written as `replay` addressed to the tool that carries it: the
+ * actions that run calls go to `run` under their `run` names, steps written
+ * inline among them; every other action stays on `replay`.
+ */
+export function routedReplayCall(args: Record<string, unknown>): { tool: 'run' | 'replay'; args: Record<string, unknown> } {
+  const action = String(args.action);
+  if (!(action in RUN_ACTION_OF)) return { tool: 'replay', args };
+  const runAction = action === 'run' && args.commands ? 'steps' : RUN_ACTION_OF[action];
+  return { tool: 'run', args: { ...args, action: runAction } };
+}
+
+export type ReplayArgs = z.infer<typeof replayArgsSchema> & { commands?: Array<z.infer<typeof inlineStep>> };
+
+/** The `replay` actions that moved to `run`, each with its `run` action. */
+export const MOVED_TO_RUN: Readonly<Record<string, keyof typeof RUN_ACTIONS>> = {
+  run: 'sequence', runAll: 'all', repeat: 'repeat', runFromLog: 'fromLog',
+  step: 'step', finish: 'finish', status: 'status', cancel: 'cancel',
+};
+
+/** Fields only the actions that run calls take; `replay` offers none of them. */
+const RUN_ONLY_FIELDS = {
+  runId: true, baseUrl: true, envFile: true, variables: true, stepTimeout: true, totalTimeout: true,
+  startFrom: true, stepTo: true, playing: true, stepCount: true, wait: true, bench: true,
+  steps: true, folder: true, continueOnFailure: true, killChromeOnFinish: true, requireSockets: true,
+  strict: true, params: true, lines: true, connections: true,
+} as const;
+
+/** The `replay` tool's parameters: recording and keeping sequences; running them is `run`'s. */
+export const replaySchema = replayArgsSchema.omit(RUN_ONLY_FIELDS).extend({
+  action: z.enum([
+    'history', 'create', 'list', 'get', 'delete', 'export', 'load', 'listSaved', 'deleteSaved',
+    'insert', 'addCheck', 'declare', 'pause', 'repair', 'copy', 'split', 'adopt', 'search', 'recordInteraction',
+  ]),
+}).strict();
+
+/**
+ * The refusal for a `replay` call to an action that now runs through `run`,
+ * carrying that `run` call with the same fields, so a session working from
+ * older text recovers in one step; undefined for any other call.
+ */
+export function movedReplayRefusal(params: Record<string, unknown> | undefined): any | undefined {
+  const moved = MOVED_TO_RUN[String(params?.action)];
+  if (!moved) return undefined;
+  const { action, ...rest } = params ?? {};
+  return createErrorResponse('REPLAY_ACTION_MOVED', {
+    action: String(action),
+    call: `run(${JSON.stringify({ action: moved, ...rest })})`,
+  });
+}
+

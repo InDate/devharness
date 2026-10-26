@@ -20,7 +20,7 @@ import type { ServerManager } from '../server-manager.js';
 import { detectAutoRestartCommand } from '../server-manager.js';
 import { ChromeLauncher, ChromeBinaryAbsentError, ChromeLaunchFailure, InvalidProfileNameError, ProfileInUseError, ProfileLockedError, normalizeProfileName, resolveLaunchPort, decideProfileReuse } from '../chrome-launcher.js';
 import { createTool } from '../validation-helpers.js';
-import { createSuccessResponse, createErrorResponse, responseWithOnce } from '../messages.js';
+import { createSuccessResponse, createErrorResponse, responseWithOnce, withOnce } from '../messages.js';
 import { configManager } from '../config.js';
 import { debugLog } from '../debug-logger.js';
 import { validateReference, requireValidReference, sanitizeReference, UNNAMED_CONNECTION } from '../reference-validator.js';
@@ -28,6 +28,7 @@ import { startProxyFor, shareProxy, getProxy } from '../proxy/registry.js';
 import { loadedViewport, sizeWindowToViewport } from '../window-sizing.js';
 import { allowPersonWatch } from '../person-watch.js';
 import type { ToolResponseMeta, PausedAtMeta } from '../tool-response.js';
+import { openSession } from '../utils/own-session.js';
 
 /**
  * Whether a debugger answers on `port`: Chrome and a Node.js inspector both
@@ -170,12 +171,10 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
     return dialogMonitor;
   }
 
-  /** The launch reply's closing note on the inactivity timeout, empty where none is set. */
+  /** The launch reply's closing note on the inactivity timeout: on the session's first launch, where a timeout is set. */
   function inactivityNote(): string {
     const minutes = configManager.getChromeConfig().inactivityTimeoutMinutes;
-    return minutes > 0
-      ? `\n\nNote: This connection auto-closes after ${minutes} min of no tool activity against it. Any tool call using this connection resets the timer.`
-      : '';
+    return minutes > 0 ? withOnce('', 'CONNECTION_INACTIVITY_REPLY', { minutes }) : '';
   }
 
   async function pausedAtOf(cdpManager: CDPManager): Promise<PausedAtMeta | undefined> {
@@ -339,7 +338,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
           const title = page?.title ?? 'Unknown';
           const pageUrl = page?.url ?? 'about:blank';
 
-          // `reused: true` separates a browser a replay run BORROWED from one
+          // `reused: true` separates a browser a run sequence BORROWED from one
           // it created: the reference already existed, so it belongs to
           // whoever made it and must survive killChromeOnFinish.
           return withLaunchMeta(
@@ -718,7 +717,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
     const context = await browser.createBrowserContext(proxyServer ? { proxyServer, proxyBypassList: ['<-loopback>'] } : {});
     try {
       if (source) {
-        const browserSession = await browser.target().createCDPSession();
+        const browserSession = await openSession(browser.target());
         try {
           const { cookies } = await browserSession.send('Storage.getCookies',
             source.browserContextId ? { browserContextId: source.browserContextId } : {});
@@ -733,7 +732,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
       const page = await context.newPage();
       puppeteerManager.adopt(page);
       if (proxyServer) {
-        const pageSession = await page.createCDPSession();
+        const pageSession = await openSession(page);
         await pageSession.send('Security.setIgnoreCertificateErrors', { ignore: true });
       }
 
@@ -1212,7 +1211,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
 
   return {
     connection: createTool(
-      'Launch, attach to, list, switch, rename and close debugger connections. Actions: launch (start Chrome, or open a tab in the Chrome already on `port`, and connect), attach (connect to a running Chrome or Node.js debugger), list (every connection, with its page), switch (make a connection active and select its page), rename, close (the last connection to a Chrome kills that Chrome), status (one connection\'s debugger state), browsers (the Chrome processes this session launched)',
+      'Debugger connections to Chrome or Node.js; every other tool names one by `connection`.',
       connectionSchema,
       async (args) => {
         const missing = REQUIRED[args.action].filter(key => args[key] === undefined);
@@ -1241,7 +1240,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
     ),
 
     browser: createTool(
-      'The Chrome processes this session launched. Actions: kill (end a Chrome process and every connection in it; every one this session launched when no port is given), resetLauncher (forget every Chrome this session launched)',
+      'The Chrome processes this session launched; apart from connection so allowing connection allows no kill.',
       browserSchema,
       async (args) => (args.action === 'kill' ? kill(args) : resetLauncher(args))
     ),

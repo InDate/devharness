@@ -4,7 +4,7 @@
  */
 import type { CommandRecorder, ActiveSequenceState, CommandSequence } from '../command-recorder.js';
 import type { ExecuteToolCall } from '../types.js';
-import { createSuccessResponse, createErrorResponse } from '../messages.js';
+import { createSuccessResponse, createErrorResponse, withOnce } from '../messages.js';
 import { showReplayOverlay } from '../interaction-recorder.js';
 import { deriveConnectionReference, sanitizeReference } from '../reference-validator.js';
 import { runRegistry, type RunRecord } from './replay-run-registry.js';
@@ -39,7 +39,7 @@ import {
   formatVariablePrompt,
   formatPauseNote,
 } from './replay-formatters.js';
-import { formatRunReply } from './run-table.js';
+import { formatRunReply, formatStepsReply } from './run-table.js';
 import { pausesIn, rulesForRun } from './run-rules.js';
 import { armForRun, keepArmedForRun, originOf } from '../bench-mode/rules.js';
 import { siteReaderOf } from '../bench-mode/sequence-driver.js';
@@ -126,6 +126,49 @@ async function runInBench(args: ReplayArgs, recorder: CommandRecorder) {
   });
 }
 
+/** Input actions that wait, after dispatching, for the page to stop changing. */
+const SETTLING_INPUT = new Set(['click', 'type', 'hover']);
+
+/**
+ * A written step's params, with the input's own settle wait left out where
+ * the step after it waits on the page: a `wait` or `check` holds the run until
+ * the page is ready, so the input's quiet window would only add its 300ms or
+ * more to the step. A step that names `detectChanges` keeps what it names.
+ */
+function settledByNextStep(step: { tool: string; params?: Record<string, any> }, next?: { tool: string }): Record<string, any> {
+  const params = step.params ?? {};
+  const waitsNext = next?.tool === 'wait' || next?.tool === 'check';
+  if (step.tool !== 'input' || !SETTLING_INPUT.has(String(params.action)) || params.detectChanges !== undefined || !waitsNext) return params;
+  return { ...params, detectChanges: false };
+}
+
+/** Tools a written step cannot call: a step that starts or edits runs would nest one run inside another. */
+const RUN_TOOLS = new Set(['replay', 'run']);
+
+/** Why steps written into a run call cannot run, checked before anything does; undefined when they can. */
+function inlineRefusal(args: ReplayArgs): any | undefined {
+  if (args.name || args.sequenceId) {
+    return createErrorResponse('INVALID_PARAMETER', {
+      parameter: 'commands', value: args.name ?? args.sequenceId,
+      message: 'A run takes either the steps written into the call or a saved sequence by name, not both.',
+    });
+  }
+  if (args.bench) {
+    return createErrorResponse('INVALID_PARAMETER', {
+      parameter: 'bench', value: 'true',
+      message: 'The bench plays a saved sequence from its file. Keep the steps first with `replay({ action: \'create\', name, indices })`, then play it by name.',
+    });
+  }
+  const nesting = args.commands!.findIndex(step => RUN_TOOLS.has(step.tool));
+  if (nesting >= 0) {
+    return createErrorResponse('INVALID_PARAMETER', {
+      parameter: 'commands', value: `step ${nesting + 1}: ${args.commands![nesting].tool}`,
+      message: 'A written step calls a page or a tool, never `replay` or `run`: a check with `holds: { run: \'<sequence>\' }` runs a saved sequence from inside a run.',
+    });
+  }
+  return undefined;
+}
+
 export async function handleRun(
   args: ReplayArgs,
   recorder: CommandRecorder,
@@ -140,10 +183,24 @@ export async function handleRun(
    */
   opts?: { validateVariableKeys?: boolean; suite?: { id: string; label: string } }
 ) {
+  if (args.commands) {
+    const refused = inlineRefusal(args);
+    if (refused) return refused;
+    // Steps written into the call are the reason it was made: the caller holds
+    // its result in the same request unless it asks for the background.
+    args = { ...args, wait: args.wait ?? true };
+  }
   if (args.bench) return runInBench(args, recorder);
 
-  // Load sequence
-  const loadResult = await loadSequence({ name: args.name, sequenceId: args.sequenceId }, recorder);
+  // Load sequence: a saved one by name or id, or the steps written into the
+  // call, held in memory under a name of their own so a paused run's `step`
+  // and `finish` find them; nothing reaches disk.
+  const loadResult = args.commands
+    ? { success: true as const, sequence: Object.assign(await recorder.createSequenceFromCommands(
+        `steps-${Date.now().toString(36)}`,
+        args.commands.map((step, i) => ({ tool: step.tool, params: settledByNextStep(step, args.commands![i + 1]) })),
+      ), { inline: true as const }) }
+    : await loadSequence({ name: args.name, sequenceId: args.sequenceId }, recorder);
   if (!loadResult.success) {
     return handleLoadSequenceError(loadResult, 'run');
   }
@@ -175,7 +232,7 @@ export async function handleRun(
   const extractedVariables = extractTextVariables(commands);
   const needsAnswer = Object.values(extractedVariables)
     .some(v => !hasTemplateToken(v.value));
-  if (needsAnswer && args.variables === undefined) {
+  if (needsAnswer && args.variables === undefined && !args.commands) {
     const idParam = args.sequenceId || args.name!;
     // Tagged as a PROMPT, not a run: runAll reads `prompted` to separate
     // "asked a question" from "executed and passed", or a suite goes green for
@@ -576,7 +633,7 @@ export async function handleRun(
   runRegistry.register(record);
 
   // wait: true blocks the call on the run, driven by the MCP request signal. A
-  // nested `replay run` STEP runs this way too (the executor sets wait: true),
+  // nested `run sequence` STEP runs this way too (the executor sets wait: true),
   // so its caller keeps the result. An abort from the caller's own request
   // reaches the run it waits on.
   if (args.wait === true) abortSignal?.addEventListener('abort', () => controller.abort(), { once: true });
@@ -876,6 +933,7 @@ export async function performRun(
       replay: { success: false, totalSteps: sequence.commands.length, failedSteps: failed, paused: false, cancelled: true }
     };
     await release();
+    if (args.commands) recorder.deleteSequence(sequence.id);
     return { response: abortedResponse, outcome: 'cancelled', results: execResult.results };
   }
 
@@ -996,6 +1054,25 @@ export async function performRun(
   const rules = ctx.connection ? rulesForRun(ctx.connection) : undefined;
   const pauses = ctx.connection ? pausesIn(ctx.connection) : undefined;
   await release();
+  // Steps written into the call are kept only while a run can resume them.
+  if (args.commands) recorder.deleteSequence(sequence.id);
+  if (args.commands) {
+    const failedSteps = execResult.results.filter(r => !r.success).length;
+    const text = withOnce(formatStepsReply(recorder, {
+      name: sequence.name, total: execResult.totalCommands, since, failures: failuresOf(execResult.results),
+    }) + proxiedNote, 'RUN_STEPS_REPLY');
+    return {
+      outcome: failedSteps === 0 ? 'completed' : 'failed',
+      results: execResult.results,
+      response: { content: [{ type: 'text', text }], ...(failedSteps > 0 ? { isError: true } : {}),
+        _meta: {
+          tool: 'run', action: 'steps', timestamp: Date.now(),
+          replay: { success: failedSteps === 0, totalSteps: execResult.totalCommands, failedSteps, paused: false },
+        },
+      },
+    };
+  }
+
   let response = formatRunReply(recorder, {
     name: sequence.name, total: execResult.totalCommands, since,
     ...(args.steps ? { steps: args.steps } : {}),

@@ -9,6 +9,7 @@
  */
 
 import type { Page } from 'puppeteer-core';
+import { openSession } from './utils/own-session.js';
 
 export interface ReplayCursor {
   /** Mark the point a click lands on, for a moment. */
@@ -24,7 +25,7 @@ const MARK_MS = 350;
 export async function openReplayCursor(page: Page): Promise<ReplayCursor | null> {
   let client: Awaited<ReturnType<Page['createCDPSession']>>;
   try {
-    client = await page.createCDPSession();
+    client = await openSession(page);
     await client.send('DOM.enable');
     await client.send('Overlay.enable');
   } catch {

@@ -7,7 +7,8 @@ import CDP from 'chrome-remote-interface';
 import type { BreakpointInfo, CallFrame, DebuggerState, RuntimeType, CDPConsoleMessage, ConsoleMessageCallback, DOMBreakpointInfo, DOMBreakpointType, EventListenerBreakpointInfo, XHRBreakpointInfo } from './types.js';
 import type { SourceMapHandler } from './sourcemap-handler.js';
 import { debugLog } from './debug-logger.js';
-import { OWN_SCRIPTS, WRAPS_APP_CODE, ownScript } from './utils/own-script.js';
+import { OWN_SCRIPTS, WRAPS_APP_CODE, ownFunction, ownScript } from './utils/own-script.js';
+import { tagClient } from './utils/own-session.js';
 
 /** Scripts devharness itself runs in a page, which Puppeteer names pptr:…. */
 
@@ -265,11 +266,11 @@ export class CDPManager {
     try {
       // If targetId is provided, connect to that specific target
       // Otherwise, connect to the default target
-      const cdpOptions: any = { host, port };
+      const cdpOptions: CDP.Options = { host, port };
       if (targetId) {
         cdpOptions.target = targetId;
       }
-      this.client = await CDP(cdpOptions);
+      this.client = tagClient(await CDP(cdpOptions));
       // Held so a tool can reach sibling targets on the same browser - a worker
       // has its own target and its own websocket, and only host+port locates it.
       this.endpoint = { host, port };
@@ -1320,7 +1321,7 @@ export class CDPManager {
           const { Runtime } = this.client;
           const cf = await Runtime.callFunctionOn({
             objectId: remote.objectId,
-            functionDeclaration: 'function() { return this; }',
+            functionDeclaration: ownFunction('raw-value', 'function() { return this; }'),
             returnByValue: true,
           });
           if (!cf.exceptionDetails) {

@@ -27,6 +27,7 @@ import { historyPlace } from '../call-origin.js';
 describe('the project envFile', () => {
   let recorder: CommandRecorder;
   let replay: any;
+  let run: any;
   let typed: string[];
   let dropsTyping = false;
   const original = { ...process.env };
@@ -38,7 +39,7 @@ describe('the project envFile', () => {
     typed = [];
     vi.spyOn(recorder, 'getSequencesDir').mockReturnValue(project.dir);
     const fieldValues = new Map<string, string>();
-    ({ replay } = createReplayTools(
+    ({ replay, run } = createReplayTools(
       recorder,
       vi.fn(productionShaped(async (tool: string, params: Record<string, any>) => {
         const place = historyPlace();
@@ -81,7 +82,7 @@ describe('the project envFile', () => {
   it('supplies a run that names no envFile, and the reply names the file and the name, never the value', async () => {
     await fs.writeFile(join(project.dir, '.devharness', 'sequences.env'), 'APP_PASSWORD=from-default\n');
 
-    const res = await replay.handler({ action: 'run', wait: true, name: 'login', connection: 'app' });
+    const res = await run.handler({ action: 'sequence', wait: true, name: 'login', connection: 'app' });
 
     expect(typed).toEqual(['from-default']);
     expect(text(res)).toContain('{{env:}} from .devharness/sequences.env: APP_PASSWORD');
@@ -91,15 +92,15 @@ describe('the project envFile', () => {
   it('carries its values through a pause, so finish resolves the step after it', async () => {
     await fs.writeFile(join(project.dir, '.devharness', 'sequences.env'), 'APP_PASSWORD=from-default\n');
 
-    await replay.handler({ action: 'run', wait: true, name: 'login', connection: 'app', stepTo: 1 });
-    const res = await replay.handler({ action: 'finish' });
+    await run.handler({ action: 'sequence', wait: true, name: 'login', connection: 'app', stepTo: 1 });
+    const res = await run.handler({ action: 'finish' });
 
     expect(res.isError).toBeUndefined();
     expect(typed).toEqual(['from-default']);
   });
 
   it('names the file to add a missing name to, where no envFile was read', async () => {
-    const res = await replay.handler({ action: 'run', wait: true, name: 'login', connection: 'app' });
+    const res = await run.handler({ action: 'sequence', wait: true, name: 'login', connection: 'app' });
 
     expect(res.isError).toBe(true);
     expect(text(res)).toContain('failed at step 2 of 2');
@@ -110,7 +111,7 @@ describe('the project envFile', () => {
     await fs.writeFile(join(project.dir, '.devharness', 'sequences.env'), 'APP_PASSWORD=from-default\n');
     dropsTyping = true;
 
-    const res = await replay.handler({ action: 'run', wait: true, name: 'login', connection: 'app' });
+    const res = await run.handler({ action: 'sequence', wait: true, name: 'login', connection: 'app' });
 
     expect(res.isError).toBe(true);
     expect(text(res)).toContain('Text validation failed for #password: expected 12 characters, not shown');

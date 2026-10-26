@@ -72,14 +72,14 @@ function makeReplay(
     return { content: [{ type: 'text', text: '' }] };
   }));
 
-  const { replay } = createReplayTools(
+  const { replay, run } = createReplayTools(
     recorder,
     executeToolCall,
     async (reference: string) => (opts.launchAnswer === 'bound' && reference === 'declared-b' ? {} : null),
     async (reference: string) => PORTS[reference] ?? null,
     undefined
   );
-  return { replay, calls };
+  return { replay, run, calls };
 }
 
 const killedPorts = (calls: Array<{ tool: string; params: Record<string, any> }>) =>
@@ -92,10 +92,10 @@ const twoSteps = [
 
 describe('declared browsers', () => {
   it('are closed when a cancel ends a paused run', async () => {
-    const { replay, calls } = makeReplay(twoSteps);
+    const { replay, run, calls } = makeReplay(twoSteps);
 
-    const paused: any = await replay.handler({
-      action: 'run', wait: true, sequenceId: 'seq-declared',
+    const paused: any = await run.handler({
+      action: 'sequence', wait: true, sequenceId: 'seq-declared',
       connection: 'run-device', stepTo: 1,
     } as any);
 
@@ -104,7 +104,7 @@ describe('declared browsers', () => {
     // A pause keeps them: that is the state the user stopped to inspect.
     expect(killedPorts(calls)).not.toContain(PORTS['declared-b']);
 
-    await replay.handler({ action: 'cancel' } as any);
+    await run.handler({ action: 'cancel' } as any);
 
     expect(killedPorts(calls)).toContain(PORTS['declared-b']);
     // The reference is released too, or the next run declaring it launches
@@ -116,13 +116,13 @@ describe('declared browsers', () => {
   });
 
   it('are closed when finish ends a paused run', async () => {
-    const { replay, calls } = makeReplay(twoSteps);
+    const { replay, run, calls } = makeReplay(twoSteps);
 
-    await replay.handler({
-      action: 'run', wait: true, sequenceId: 'seq-declared',
+    await run.handler({
+      action: 'sequence', wait: true, sequenceId: 'seq-declared',
       connection: 'run-device', stepTo: 1,
     } as any);
-    await replay.handler({ action: 'finish' } as any);
+    await run.handler({ action: 'finish' } as any);
 
     expect(killedPorts(calls)).toContain(PORTS['declared-b']);
   });
@@ -130,15 +130,15 @@ describe('declared browsers', () => {
   it('are closed when a BACKGROUND run completes', async () => {
     // The default mode. Cleanup used to live in the `wait: true` branch only,
     // so an ordinary suite run leaked one browser per multi-browser sequence.
-    const { replay, calls } = makeReplay(twoSteps);
+    const { replay, run, calls } = makeReplay(twoSteps);
 
-    const started: any = await replay.handler({
-      action: 'run', sequenceId: 'seq-declared', connection: 'run-device',
+    const started: any = await run.handler({
+      action: 'sequence', sequenceId: 'seq-declared', connection: 'run-device',
     } as any);
     const runId = started._meta?.replay?.runId ?? started.content[0].text.match(/run-\d+-\w+/)?.[0];
 
     await vi.waitFor(async () => {
-      const status: any = await replay.handler({ action: 'status', runId } as any);
+      const status: any = await run.handler({ action: 'status', runId } as any);
       expect(status.content[0].text).toMatch(/completed|failed/i);
     }, { timeout: 5000 });
 
@@ -146,21 +146,21 @@ describe('declared browsers', () => {
   });
 
   it('are left running when the launch found the browser already up under that name', async () => {
-    const { replay, calls } = makeReplay(twoSteps, {
+    const { replay, run, calls } = makeReplay(twoSteps, {
       declared: [{ connection: 'declared-b', profile: 'member' }],
       launchAnswer: 'reused',
     });
 
-    await replay.handler({ action: 'run', wait: true, sequenceId: 'seq-declared', connection: 'run-device' } as any);
+    await run.handler({ action: 'sequence', wait: true, sequenceId: 'seq-declared', connection: 'run-device' } as any);
 
     expect(calls.some(c => c.tool === 'connection' && c.params.action === 'launch')).toBe(true);
     expect(killedPorts(calls)).not.toContain(PORTS['declared-b']);
   });
 
   it('reuse a browser already bound to the name, read from the error id', async () => {
-    const { replay, calls } = makeReplay(twoSteps, { launchAnswer: 'bound' });
+    const { replay, run, calls } = makeReplay(twoSteps, { launchAnswer: 'bound' });
 
-    const result: any = await replay.handler({ action: 'run', wait: true, sequenceId: 'seq-declared', connection: 'run-device' } as any);
+    const result: any = await run.handler({ action: 'sequence', wait: true, sequenceId: 'seq-declared', connection: 'run-device' } as any);
 
     expect(result.isError).toBeFalsy();
     expect(killedPorts(calls)).not.toContain(PORTS['declared-b']);

@@ -75,7 +75,7 @@ export function getDuplicateSessionInfo(): DuplicateSessionInfo | null {
 export function createDashboardTools() {
   return {
     dashboard: createTool(
-      'Manage the devharness web dashboard. Actions: open (get URL to open in browser), status (show whether this session is hub or client), stop (stop the hub server if this session is the hub)',
+      'The devharness web dashboard, one page over every devharness session.',
       dashboardSchema,
       async (args: DashboardArgs) => {
         // Use lazy-bound instance

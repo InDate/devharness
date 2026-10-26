@@ -13,7 +13,7 @@ function openBench() {
 }
 
 afterEach(async () => {
-  await release(CONNECTION).catch(() => {});
+  await release(CONNECTION, { by: { kind: 'resume' } }).catch(() => {});
   detach?.(); detach = undefined;
   sessions.delete(CONNECTION);
 });
@@ -21,28 +21,28 @@ afterEach(async () => {
 describe('benchHold on a page a paused run holds', () => {
   it('passes over the run\'s own hold for a call that resumes the run', async () => {
     openBench();
-    await hold(CONNECTION, { source: 'sequence', layers: ['code'] });
+    await hold(CONNECTION, { owner: { kind: 'run-pause' }, layers: ['code'] });
 
     expect(benchHold(CONNECTION, true)).toBeUndefined();
   });
 
   it('refuses any other driving call, naming finish and step as the way on', async () => {
     openBench();
-    await hold(CONNECTION, { source: 'sequence', layers: ['code'] });
+    await hold(CONNECTION, { owner: { kind: 'run-pause' }, layers: ['code'] });
 
     const refusal = benchHold(CONNECTION);
 
-    expect(refusal?.why).toContain('held by the sequence');
-    expect(refusal?.release).toContain("replay({ action: 'finish' })");
+    expect(refusal?.why).toContain('held by a paused run');
+    expect(refusal?.release).toContain("run({ action: 'finish' })");
   });
 
   it('refuses a resuming call while the bench holds the page itself', async () => {
     openBench();
-    await hold(CONNECTION, { source: 'bench', layers: ['code'] });
+    await hold(CONNECTION, { owner: { kind: 'person' }, layers: ['code'] });
 
     const refusal = benchHold(CONNECTION, true);
 
-    expect(refusal?.why).toContain('held by the bench');
-    expect(refusal?.release).toContain("bench({ action: 'release'");
+    expect(refusal?.why).toContain('held by a person, by hand in the bench');
+    expect(refusal?.release).toBe('it runs again when they release it in the bench');
   });
 });

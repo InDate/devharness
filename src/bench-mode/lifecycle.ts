@@ -1,8 +1,9 @@
+import { animationRecordOf, feedFromChrome } from '../animation-record.js';
 import type { Page } from 'puppeteer-core';
 import { debugLog } from '../debug-logger.js';
 import { appendEvent } from '../session-events.js';
 import { PageTime, pageTimeOf } from '../page-time.js';
-import { recordReleased } from '../hold.js';
+import { holdReading, recordReleased } from '../hold.js';
 import { startBenchServer } from '../bench-control.js';
 import { getProxy } from '../proxy/registry.js';
 import type { AnnotationTarget } from '../annotation.js';
@@ -17,7 +18,9 @@ import { watchAnimations } from './animations.js';
 import { readMotionDetect } from './motion-detect.js';
 import { benchRoutes } from './routes.js';
 import { armSavedRules } from './rules.js';
+import { ownFunction } from '../utils/own-script.js';
 import { type BenchReport, type BenchSession, type PageDebugger, getBenchSession, getStateOf, pageGone, sessions } from './session.js';
+import { openSession } from '../utils/own-session.js';
 
 export async function startBench(params: {
   page: Page;
@@ -45,7 +48,7 @@ export async function startBench(params: {
   }
   if (sessions.has(connection)) return getBenchSession(connection)!;
 
-  const client = await page.createCDPSession();
+  const client = await openSession(page);
   await client.send('DOM.enable');
   await client.send('Overlay.enable');
   await client.send('Runtime.enable');
@@ -79,11 +82,13 @@ export async function startBench(params: {
     totalSteps: 0,
     callbacks: [],
     stepBreakpointsSet: false,
-    animations: new Map(),
   };
   sessions.set(connection, session);
   attachUiLayer(session);
   watchAnimations(session);
+  // The page's animation record takes Chrome's reports on this session, where
+  // the Animation domain is enabled, for the animations a running page starts.
+  session.detachRecord = feedFromChrome(animationRecordOf(connection), client);
   // The site's rules answer from the start, before any sequence is opened.
   await armSavedRules(connection).catch(error => debugLog('bench', `site rules not armed: ${error}`));
 
@@ -101,7 +106,7 @@ export async function startBench(params: {
       } as any)) as any;
       const described = (await client.send('Runtime.callFunctionOn', {
         objectId: object.objectId,
-        functionDeclaration: DESCRIBE_ELEMENT,
+        functionDeclaration: ownFunction('describe-element', DESCRIBE_ELEMENT),
         returnByValue: true,
       } as any)) as any;
 
@@ -157,10 +162,11 @@ export async function startBench(params: {
       // run that navigates between two of its steps, and stop a person
       // following a link.
       const wasHeld = session.frozen;
+      const owners = holdReading(connection).held.find(held => held.layer === 'ui')?.owners ?? [];
       session.stepBreakpointsSet = false;
       session.frozen = false;
       recordReleased(connection, 'ui');
-      if (wasHeld) await holdUi(session);
+      if (wasHeld) for (const owner of owners) await holdUi(session, owner);
       session.tickMs = 0;
       session.totalSteps = 0;
       session.lastTick = undefined;

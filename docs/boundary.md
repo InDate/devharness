@@ -13,7 +13,7 @@ Read it with `proxy({ action, connection })`.
 | `events` | what crossed, newest last (`since`, `until`, `urlIncludes`) |
 | `sockets` | what each socket did, and whether arrival on it names a cause |
 | `body` | one event's kept payload (`id`) |
-| `answer` / `answerFrame` | answer a URL, or replace or drop a socket message; `step` bounds either to one replay step |
+| `answer` / `answerFrame` | answer a URL, or replace or drop a socket message; `step` bounds either to one run step |
 | `withdraw` / `answers` | remove one, list what stands |
 | `refuse` | `unmatchedWrites: 'refuse'` answers every POST, PUT, PATCH or DELETE no answer covers with 403, recorded as `refused`; `'forward'` sends them on |
 

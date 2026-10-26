@@ -12,9 +12,12 @@ import { diffFacts, readFacts, type ElementFacts } from '../element-facts.js';
 import { DESCRIBE_ELEMENT, heldAnnotation, matchExpression } from './annotations.js';
 import { request, send, setInspectMode } from './cdp.js';
 import { describePause, holdUi, releaseUi } from './page-hold.js';
-import { holdReading } from '../hold.js';
+import { holdReading, isOutside, type HoldOwner } from '../hold.js';
+
+const CAPTURE: HoldOwner & { kind: 'bench-op' } = { kind: 'bench-op', op: 'capture' };
 import { type BenchSession, type CaptureContext, sessions } from './session.js';
-import { ownScript } from '../utils/own-script.js';
+import { ownFunction, ownScript } from '../utils/own-script.js';
+import { OffScreenError, captureScreen } from '../screen-capture.js';
 
 /**
  * Every capture a live session still holds, by path.
@@ -72,7 +75,7 @@ function pauseOf(session: BenchSession): CapturePause {
   const entry = describePause(session, event, 0);
   const code = holdReading(session.connection).held.find(held => held.layer === 'code');
   const by = event.hitBreakpoints?.length ? 'breakpoint'
-    : code && code.source !== 'breakpoint' ? 'bench'
+    : code && !code.owners.every(isOutside) ? 'bench'
     : event.reason === 'other' ? 'debugger statement'
     : String(event.reason ?? 'other');
   return {
@@ -96,7 +99,7 @@ export async function beginCapture(connection: string, annotationId?: string): P
   const heldBefore = session.shotArmed?.heldBefore ?? session.frozen;
   session.pendingShot = null;
   session.pendingCapture = undefined;
-  await holdUi(session);
+  await holdUi(session, CAPTURE);
   session.shotArmed = { heldBefore, ...(annotationId ? { annotationId } : {}) };
   await setInspectMode(session, true);
 }
@@ -108,12 +111,12 @@ export async function cancelCapture(connection: string): Promise<void> {
   const { heldBefore } = session.shotArmed;
   session.shotArmed = undefined;
   await setInspectMode(session, false).catch(() => {});
-  if (!heldBefore) await releaseUi(session);
+  await releaseUi(session, CAPTURE);
 }
 
 /** Release a hold the capture dialog made, once its capture is saved or dropped. */
 async function endCaptureHold(session: BenchSession, heldBefore: boolean | undefined): Promise<void> {
-  if (heldBefore === false) await releaseUi(session);
+  if (heldBefore !== undefined) await releaseUi(session, CAPTURE);
 }
 
 export function setFactChoice(connection: string, kinds: FactKind[]): void {
@@ -194,9 +197,29 @@ async function shoot(
   kind: CaptureKind,
   clip?: { x: number; y: number; width: number; height: number },
 ): Promise<string | undefined> {
+  // A page whose debugger pause has landed lays out and paints nothing, and
+  // Page.captureScreenshot waits on a frame it never produces; the screen's own
+  // frame answers. A hold on an idle page only arms its pause, and paints on.
+  const stopped = session.debugger?.isPaused() === true;
+  if (kind === 'page' && stopped) {
+    throw new Error('the whole page cannot be captured while the page is held: a capture beyond the window needs it to lay out and paint. The window and element captures read the held screen.');
+  }
+  if (kind !== 'page') {
+    // An element off screen, wholly or in part, is captured whole from the
+    // renderer while the page runs; held, the part on screen is what there is,
+    // and an element with no part on screen has no picture.
+    try {
+      const shot = await captureScreen(pageSession(session), { format: 'png', ...(clip ? { clip, of: 'document' as const } : {}) });
+      if (!shot.clipped || stopped) return shot.data.toString('base64');
+    } catch (error) {
+      if (!(error instanceof OffScreenError) || stopped) {
+        throw error instanceof OffScreenError ? new Error(`the element is off screen while the page is held, and ${error.message}`) : error;
+      }
+    }
+  }
   const shot = await request(pageSession(session), 'Page.captureScreenshot', {
     format: 'png',
-    captureBeyondViewport: kind === 'page',
+    captureBeyondViewport: kind !== 'screen',
     ...(clip ? { clip: { ...clip, scale: 1 } } : {}),
   }, 10_000);
   return shot?.data;
@@ -318,7 +341,7 @@ async function anchorFor(
   if (!objectId) return undefined;
   try {
     const described = await request(session.client, 'Runtime.callFunctionOn', {
-      objectId, functionDeclaration: DESCRIBE_ELEMENT, returnByValue: true,
+      objectId, functionDeclaration: ownFunction('describe-element', DESCRIBE_ELEMENT), returnByValue: true,
     });
     const selector = described?.result?.value?.selector;
     if (typeof selector !== 'string' || !selector) return undefined;
@@ -512,6 +535,7 @@ export async function retakeCapture(
   }
 
   const heldBefore = session.frozen;
+  const ownersBefore = holdReading(session.connection).held.find(held => held.layer === 'ui')?.owners ?? [];
   const current = await layoutOf(session);
   // Puppeteer's record of a size it set - a headless or sized launch - or null
   // for a page that follows its window.
@@ -526,7 +550,7 @@ export async function retakeCapture(
       // with, so the size changes while it runs and it is held again after.
       if (session.frozen) {
         ranToResize = true;
-        await releaseUi(session);
+        await releaseUi(session, { kind: 'resume' });
       }
       await request(pageSession(session), 'Emulation.setDeviceMetricsOverride', {
         width, height, deviceScaleFactor: dpr, mobile: false,
@@ -540,7 +564,7 @@ export async function retakeCapture(
         };
       }
     }
-    if (recipe.frozen || heldBefore) await holdUi(session);
+    if (recipe.frozen || heldBefore) await holdUi(session, CAPTURE);
     if (recipe.kind === 'screen' && recipe.scroll) {
       await request(session.client, 'Runtime.evaluate', {
         expression: ownScript('capture', `scrollTo(${recipe.scroll.x}, ${recipe.scroll.y})`),
@@ -686,7 +710,7 @@ export async function retakeCapture(
       });
     }
     if (resize) {
-      if (session.frozen) await releaseUi(session);
+      if (session.frozen) await releaseUi(session, { kind: 'resume' });
       // Back to the size Puppeteer holds, or to none, so a window-sized page
       // keeps following its window.
       if (pinned) {
@@ -697,8 +721,10 @@ export async function retakeCapture(
       }
       await settleLayout(session);
     }
-    if (heldBefore) await holdUi(session);
-    else if (session.frozen) await releaseUi(session);
+    // The holds the page stood under before the retake go back on, and the
+    // retake's own comes off, so the page ends as the retake found it.
+    if (heldBefore) for (const owner of ownersBefore) await holdUi(session, owner);
+    await releaseUi(session, CAPTURE);
   }
 }
 

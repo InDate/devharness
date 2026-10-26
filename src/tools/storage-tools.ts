@@ -12,6 +12,7 @@ import type { StorageToolMeta } from '../tool-response.js';
 
 export { describeStructuredValue } from '../structured-value.js';
 import { describeStructuredValue } from '../structured-value.js';
+import { openSession } from '../utils/own-session.js';
 
 /**
  * The serializer's own source, injected into the page as a string argument and
@@ -394,7 +395,7 @@ export function createStorageTools(
               await held.session.send('WebAuthn.removeVirtualAuthenticator', { authenticatorId: held.authenticatorId }).catch(() => {});
             }
             const userVerified = args.userVerified !== false;
-            const session = held?.session ?? await (page as any).createCDPSession();
+            const session = held?.session ?? await openSession(page as any);
             await session.send('WebAuthn.enable', { enableUI: false });
             const { authenticatorId } = await session.send('WebAuthn.addVirtualAuthenticator', {
               options: {

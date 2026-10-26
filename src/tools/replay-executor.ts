@@ -14,10 +14,11 @@ import type { StepTraffic } from '../annotation.js';
 import type { CommandRecorder, RecordedCommand, CommandSequence, ActiveSequenceState } from '../command-recorder.js';
 import { markNextCommand, releaseCommand, boundarySettled, getProxy, recordCheckOutcome, noteCallStart, standPausedRun, settleProxies } from '../proxy/registry.js';
 import type { ProxyEvent, ShapeRules } from '../proxy/intercept-proxy.js';
-import { compareStep, isAnimationKind, placePass, type Crossing } from '../bench/step-compare.js';
+import { compareStep, isAnimationKind, type Crossing } from '../bench/step-compare.js';
+import { crossingsOf } from '../step-slice.js';
 import { watchingMotion } from '../bench-mode/motion-detect.js';
 import { applyStepMotion } from '../bench-mode/motion-rules.js';
-import type { MotionSetting } from '../bench/kinds.js';
+import { kindOf, type MotionSetting } from '../bench/kinds.js';
 import { writeEvents } from '../bench-mode/traffic.js';
 import { sessions } from '../bench-mode/session.js';
 import type { ExecuteToolCall } from '../types.js';
@@ -1816,7 +1817,12 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
         // frame, and a run moves to its next step at once, which would take
         // them as the next step's.
         const watch = sessions.get(sanitizeReference(ctx.connection))?.writeWatch;
-        if (watch?.animations) await watch.animationsReported();
+        // Credited to the step with its History entry: the cursor in flight
+        // can have been re-marked without it, and a sweep's finds would then
+        // count on no History row.
+        const entry = ctx.commandRecorder?.getHistory?.(Number.MAX_SAFE_INTEGER)
+          .find(command => command.run === sequence.name && command.runStep === i)?.index;
+        if (watch?.animations) await watch.animationsReported(ctx.stampUnder ? undefined : { ...cursorAt(i), ...(entry !== undefined ? { entry } : {}) });
         if (heldStep) releaseReported = true;
       }
 
@@ -1990,6 +1996,31 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
  * schedule, so its count moves with how long a step happened to take and a
  * difference there says nothing about the step.
  */
+/**
+ * Each step's crossings in this pass, read from the log by the History entry
+ * of the step's newest attempt, moved to the step the sequence lists each kind
+ * at.
+ */
+function passFromLog(
+  run: string, indices: number[], reference: string, placements: Record<string, number> | undefined, recorder: CommandRecorder | undefined
+): { ran: Map<number, Crossing[]>; bodyOf: (crossing: Crossing) => string | undefined } {
+  const history = recorder?.getHistory(Number.MAX_SAFE_INTEGER) ?? [];
+  const ran = new Map<number, Crossing[]>();
+  const bodies: Array<(crossing: Crossing) => string | undefined> = [];
+  for (const index of indices) {
+    const entry = history.filter(command => command.run === run && command.runStep === index)
+      .reduce<number | undefined>((newest, command) => Math.max(newest ?? -1, command.index), undefined);
+    if (entry === undefined) continue;
+    const { crossings, bodyOf } = crossingsOf(entry, reference);
+    bodies.push(bodyOf);
+    for (const crossing of crossings) {
+      const step = placements?.[`${index}|${kindOf(crossing)}`] ?? index;
+      ran.set(step, [...(ran.get(step) ?? []), crossing]);
+    }
+  }
+  return { ran, bodyOf: crossing => bodies.map(read => read(crossing)).find(body => body !== undefined) };
+}
+
 async function compareBehaviour(
   /** The run whose History entries each step's match is attached to. */
   run: string,
@@ -2019,12 +2050,15 @@ async function compareBehaviour(
     .filter(event => event.runId === proxyRun || event.runId === undefined)
     .sort((a, b) => a.at - b.at);
   const under = ctx.stampUnder;
-  const ran = under ? undefined : placePass(events, placements, commands.length);
+  // A top-level pass reads each step from the observation log, by the History
+  // entry of the step's newest attempt, the set a recording counted; a nested
+  // run's steps carry no entry of their own and read the pass's stamps.
+  const logged = under ? undefined : passFromLog(run, indices, reference, placements, ctx.commandRecorder);
   const path = (index: number) => [...(under?.within ?? []), index].join('.');
   const ranAt = (index: number) => (under
     ? events.filter(event => event.runId === proxyRun && event.step === under.step && (event.within ?? []).join('.') === path(index))
-    : ran?.get(index) ?? []);
-  const bodyOf = (event: Crossing) => (event.kind === 'write' ? values.get(event.id) : proxy?.bodyOf(event.id));
+    : logged?.ran.get(index) ?? []);
+  const bodyOf = (event: Crossing) => logged?.bodyOf(event) ?? (event.kind === 'write' ? values.get(event.id) : proxy?.bodyOf(event.id));
   const ruledOut = (event: Crossing) => {
     const shape = (event as ProxyEvent).evidence?.shape;
     const ruled = shape ? rules?.[shape] : undefined;

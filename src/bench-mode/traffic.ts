@@ -2,7 +2,7 @@ import { getProxy } from '../proxy/registry.js';
 import { levelOf, causeOf, type ProxyEvent } from '../proxy/intercept-proxy.js';
 import type { StepTraffic } from '../annotation.js';
 import type { BoundaryEvent, BoundaryTotals } from '../bench/wire.js';
-import { writeKey, writeLine } from '../write-watch.js';
+import { writeKey, writeLine, type PageWrite } from '../write-watch.js';
 import { recordKinds } from '../bench/step-compare.js';
 import { type BenchSession, sessions } from './session.js';
 
@@ -139,26 +139,29 @@ export function writeEvents(connection: string, after = 0): BoundaryEvent[] {
   const watch = sessions.get(connection)?.writeWatch;
   if (!watch) return [];
   return watch.writes.filter(write => write.at > after).map(write => {
-    const row = {
-      id: write.id, at: write.at, kind: 'write' as const, direction: 'out' as const,
-      url: writeKey(write), method: write.store,
-      preview: writeLine(write).slice(write.store.length + 1),
-      size: write.value?.length ?? 0, level: 'unprompted' as const, owned: false,
-    };
-    if (write.cursor?.kind === 'replay') {
-      return {
-        ...row, step: write.cursor.step, runId: write.cursor.runId,
-        ...(write.cursor.within ? { within: write.cursor.within } : {}),
-        ...(write.cursor.entry !== undefined ? { entry: write.cursor.entry } : {}),
-        ...(write.cursor.paused ? { paused: true as const } : {}),
-        owned: true, level: 'positional' as const,
-      };
-    }
-    return {
-      ...row, ...recordedStepOf(connection, { at: write.at } as ProxyEvent),
-      ...(write.cursor?.kind === 'command' ? { commandIndex: write.cursor.index } : {}),
-    } as BoundaryEvent;
+    const row = writeCrossing(write);
+    return write.cursor?.kind === 'replay' ? row : { ...row, ...recordedStepOf(connection, { at: write.at } as ProxyEvent) } as BoundaryEvent;
   });
+}
+
+/** A page write as a row and a comparison read it, stamped with the step its cursor names. */
+export function writeCrossing(write: PageWrite): BoundaryEvent {
+  const row = {
+    id: write.id, at: write.at, kind: 'write' as const, direction: 'out' as const,
+    url: writeKey(write), method: write.store,
+    preview: writeLine(write).slice(write.store.length + 1),
+    size: write.value?.length ?? 0, level: 'unprompted' as const, owned: false,
+  };
+  if (write.cursor?.kind === 'replay') {
+    return {
+      ...row, step: write.cursor.step, runId: write.cursor.runId,
+      ...(write.cursor.within ? { within: write.cursor.within } : {}),
+      ...(write.cursor.entry !== undefined ? { entry: write.cursor.entry } : {}),
+      ...(write.cursor.paused ? { paused: true as const } : {}),
+      owned: true, level: 'positional' as const,
+    };
+  }
+  return { ...row, ...(write.cursor?.kind === 'command' ? { commandIndex: write.cursor.index } : {}) } as BoundaryEvent;
 }
 
 /** The sequence those positions count within. */

@@ -290,10 +290,11 @@ export class WriteWatch {
   /**
    * Resolves once the animations the step created stand in the page's record:
    * the page's own list is swept, pending ones included, and the reads of
-   * Chrome's start reports queued so far have landed.
+   * Chrome's start reports queued so far have landed. What the sweep finds is
+   * credited to `cursor`, else to the one in flight.
    */
-  async animationsReported(): Promise<void> {
-    if (this.connection) await animationRecordOf(this.connection).settle(this.client);
+  async animationsReported(cursor?: ProxyCursor): Promise<void> {
+    if (this.connection) await animationRecordOf(this.connection).settle(this.client, undefined, cursor);
   }
 
   /** Pass over the cancel Chrome reports for an animation a rule acted on, which goes on. */

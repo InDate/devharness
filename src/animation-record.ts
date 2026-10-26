@@ -102,8 +102,8 @@ export class AnimationRecord {
    * then. A page whose code is stopped answers no evaluate, so the sweep is
    * given up on after `boundMs`.
    */
-  async settle(client: CDPSession, boundMs = SETTLE_MS): Promise<void> {
-    const cursor = currentCursor();
+  async settle(client: CDPSession, boundMs = SETTLE_MS, credited?: ProxyCursor): Promise<void> {
+    const cursor = credited ?? currentCursor();
     const swept = client.send('Runtime.evaluate', {
       expression: ownScript('animation-sweep', `globalThis[Symbol.for('${ANIMATIONS_KEY}')]?.sweep() ?? null`), returnByValue: true,
     }).then((answer: any) => this.takeSweep(answer?.result?.value ?? undefined, cursor)).catch(() => undefined);

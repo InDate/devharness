@@ -2,6 +2,7 @@
  * Shared by the command recorder and the bench. Kept apart from `bench-mode`
  * so the recorder takes the shapes without taking the bench's session state.
  */
+import type { SavedObservation } from './step-slice.js';
 
 /** Where a picked element came from, as far as the page will admit. */
 export interface AnnotationTarget {
@@ -85,6 +86,13 @@ export interface StepTraffic {
    * the step is compared against.
    */
   kinds?: Record<string, { n: number; statuses?: number[]; presence?: true; body?: string }>;
+  /**
+   * What the step crossed, one observation each, as the observation log held
+   * it: the line, its connection, a motion's fields and the payload. `kinds`
+   * counts the same set; this keeps what a count drops. Absent on a file
+   * recorded before the log, whose `kinds` compares as it stands.
+   */
+  observations?: SavedObservation[];
   /**
    * How long this step's bucket was held open, in ms.
    *

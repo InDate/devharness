@@ -3,9 +3,8 @@
  * loading and deleting them.
  */
 import { getProxy } from '../proxy/registry.js';
-import { recordKinds } from '../bench/step-compare.js';
-import { RECORDED_BODY_CAP, writeEvents } from '../bench-mode/traffic.js';
-import { sessions } from '../bench-mode/session.js';
+import { kindsOf, sliceOf } from '../step-slice.js';
+import { RECORDED_BODY_CAP } from '../bench-mode/traffic.js';
 import { countStepTraffic } from '../step-traffic.js';
 import type { ExecuteToolCall } from '../types.js';
 import { announceSequenceSaved } from '../sequence-events.js';
@@ -24,11 +23,6 @@ import { generatePuppeteerCode, generatePlaywrightCode } from './replay-codegen.
 import { type ReplayArgs } from './replay-schema.js';
 import { validateSequenceToolNames, handleLoadSequenceError } from './replay-validation.js';
 
-
-/** The bench's write watch on `connection`, which holds the payload each write stored. */
-function writeWatchOf(connection: string) {
-  return sessions.get(connection)?.writeWatch;
-}
 
 export async function handleCreate(
   args: ReplayArgs,
@@ -128,17 +122,11 @@ export async function handleCreate(
       // Counted by kind as a bench recording counts them, so a run outside
       // the bench and the bench's rows compare against the same record.
       const recordedAt = command.recordedAt;
-      const crossed = [
-        ...recordingProxy.eventsForCommand(recordedAt),
-        ...writeEvents(normalized.hoisted!).filter(write => write.commandIndex === recordedAt),
-      ];
-      const values = new Map((writeWatchOf(normalized.hoisted!)?.writes ?? []).map(write => [write.id, write.value]));
-      const kinds = recordKinds(crossed,
-        event => (event.kind === 'write' ? values.get(event.id) : recordingProxy.bodyOf(event.id)), RECORDED_BODY_CAP);
       command.traffic = {
         ...command.traffic,
         ...counted,
-        kinds,
+        kinds: kindsOf(recordedAt, normalized.hoisted, RECORDED_BODY_CAP),
+        observations: sliceOf(recordedAt, normalized.hoisted, began!, RECORDED_BODY_CAP),
         windowMs: ended - began!,
       };
     }

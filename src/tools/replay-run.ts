@@ -90,7 +90,8 @@ async function runInBench(args: ReplayArgs, recorder: CommandRecorder) {
   if (!connection || !bench.isBenchOpen(connection)) {
     return createErrorResponse('REPLAY_BENCH_NOT_OPEN', { connection: connection ?? '(none given)' });
   }
-  const carried = (['baseUrl', 'startUrl', 'variables', 'connections', 'startFrom', 'stepTo'] as const)
+  const carried = (['baseUrl', 'startUrl', 'variables', 'connections', 'startFrom', 'stepTo', 'stepCount', 'stepTimeout',
+    'totalTimeout', 'playing', 'hold', 'record', 'killChromeOnFinish', 'requireSockets', 'strict'] as const)
     .filter(key => args[key] !== undefined);
   if (carried.length) return createErrorResponse('REPLAY_BENCH_UNSUPPORTED', { params: carried.join(', ') });
   if (args.envFile !== undefined) {

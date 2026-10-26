@@ -105,8 +105,8 @@ describe('the steps a reply leaves out', () => {
 });
 
 /** A run of `motion` whose steps start at the given times, one history entry per step from entry 1, on `connection`. */
-function timed(starts: number[], connection?: string): CommandRecorder {
-  const steps = starts.map((timestamp, i) => ({ index: i + 1, run: 'motion', runStep: i, tool: 'input', params: connection ? { connection } : {}, timestamp, result: { content: [] } }));
+function timed(starts: number[], connection?: string, tools: string[] = []): CommandRecorder {
+  const steps = starts.map((timestamp, i) => ({ index: i + 1, run: 'motion', runStep: i, tool: tools[i] ?? 'input', params: connection ? { connection } : {}, timestamp, result: { content: [] } }));
   return { getHistory: () => [...steps].reverse() } as unknown as CommandRecorder;
 }
 
@@ -171,6 +171,15 @@ describe('a frame loop that stopped before a step', () => {
 
     expect(caused(reply, '3')).toBeUndefined();
     expect(reply).toContain('not listed (nothing caused): 3 · input');
+  });
+
+  it('lists no stop on a step that only reads the page', () => {
+    observeWrite(motionWrite(1, 'pixels #gl', 100, loop));
+
+    const reply = formatRunReply(timed([0, 500, 700], undefined, ['input', 'input', 'check']), { name: 'motion', total: 3, since: 0 });
+
+    expect(caused(reply, '3')).toBeUndefined();
+    expect(reply).toContain('not listed (nothing caused): 2, 3 · input, check');
   });
 
   it('lists no stop for a set whose time falls before the step', () => {

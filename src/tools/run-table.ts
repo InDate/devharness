@@ -149,17 +149,22 @@ function causedNamed(index: number, rules: RunRules | undefined, reading: string
   return `${headlineOf(observations, 3, reading).replace(/\|/g, '\\|')}${acted ? `: ${acted}` : ''}`;
 }
 
+/** Steps that read the page and act on nothing, so no motion stops because of them. */
+const READS_ONLY = new Set(['check', 'wait', 'assert']);
+
 /**
  * Frame loops whose last frame fell between the start of the step before a
  * row and the row's own start, with no motion of the same key begun after it.
  * A loop a press stops draws its last frame before the press, so the stop
- * lands in no step's window; the row states the gap and credits no step.
+ * lands in no step's window; the row states the gap and credits no step. A
+ * step that only reads the page takes no such row: a loop that ended before
+ * it ended on its own.
  */
 function endsBefore(rows: Row[]): Map<Row, string> {
   const motions = rows.flatMap(row => observationsOf(row.command.index)).filter(one => one.motion?.frames !== undefined && !one.motion.set);
   const ends = new Map<Row, string>();
   rows.forEach((row, i) => {
-    if (i === 0 || observationsOf(row.command.index).length > 0) return;
+    if (i === 0 || READS_ONLY.has(row.command.tool) || observationsOf(row.command.index).length > 0) return;
     const from = rows[i - 1].command.timestamp;
     const to = row.command.timestamp;
     const lines = motions.flatMap(one => {

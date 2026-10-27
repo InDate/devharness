@@ -30,7 +30,7 @@ import { getEventStreamPath, streamReaders, watchCall } from '../session-events.
 import type { ToolResponseMeta, BenchToolMeta } from '../tool-response.js';
 import { readCapture, versionsOf } from '../capture-file.js';
 import { sweepCaptures } from '../bench-mode/capture-sweep.js';
-import { startBench, stopBench, tickBench, setHeld, setPicker, getBenchSession, getSequenceState, pageHeldElsewhere, runningBench, selectSequence, gotoSequenceStep, keepRecordedStep, dropRecordedStep, flagRecordedStep, type Annotation, type SequenceState, capturesInFlight, retakeCapture } from '../bench-mode.js';
+import { baselineSequence, startBench, stopBench, tickBench, setHeld, setPicker, getBenchSession, getSequenceState, pageHeldElsewhere, runningBench, selectSequence, gotoSequenceStep, keepRecordedStep, dropRecordedStep, flagRecordedStep, type Annotation, type SequenceState, capturesInFlight, retakeCapture } from '../bench-mode.js';
 import { NO_TOOL_VALUES, type ServerLog, type ServerRow, type ToolGroup, type ToolValues } from '../bench/wire.js';
 import { createSequenceDriver, getSequencesRoot, labelFor } from '../bench-mode/sequence-driver.js';
 import { answerCalls, describeDialog, type OpenDialog } from '../dialog-monitor.js';
@@ -38,7 +38,7 @@ import { sanitizeReference } from '../reference-validator.js';
 import { holderWord, holdReading } from '../hold.js';
 
 const benchSchema = z.object({
-  action: z.enum(['start', 'stop', 'tick', 'hold', 'release', 'picker', 'motion', 'list', 'status', 'keepStep', 'dropStep', 'flagStep', 'sweep', 'retake', 'capture']),
+  action: z.enum(['start', 'stop', 'tick', 'hold', 'release', 'picker', 'motion', 'list', 'status', 'keepStep', 'dropStep', 'flagStep', 'sweep', 'retake', 'capture', 'baseline']),
   on: z.boolean().optional().describe('motion: true records each animation the page starts as a MOTION row under its step, false stops; absent reads it'),
   connection: z.string()
     .describe('The connection, by the name connection launch or attach gave it'),
@@ -55,7 +55,7 @@ const benchSchema = z.object({
   url: z.string().optional()
     .describe('start: navigate here first; with no browser on this connection name, one is launched at it'),
   sequence: z.string().optional()
-    .describe('start: open the pane with this sequence selected'),
+    .describe('start: open the pane with this sequence selected. baseline: the sequence to baseline (default the one open)'),
   openTab: z.boolean().optional()
     .describe('start: false starts the bench with no tab of its own, for a bench tab already open to move to (default true)'),
   reason: z.string().optional()
@@ -308,6 +308,27 @@ export function createBenchTools(
         if (browserError) return browserError;
 
         switch (action) {
+          case 'baseline': {
+            // The bench's Baseline button, from a call: the open sequence, or
+            // the one named, played from its first step and each step's
+            // traffic kept as what later plays compare against.
+            if (!runningBench(connection)) return createErrorResponse('BENCH_NOT_ACTIVE', { connection, action });
+            if (args.sequence) {
+              const opened = await selectSequence(connection, args.sequence);
+              if (opened?.failure) return createErrorResponse('BENCH_BASELINE_FAILED', { connection, sequence: args.sequence, failure: opened.failure });
+            }
+            const taken = await baselineSequence(connection);
+            const name = taken?.name ?? args.sequence ?? 'the open sequence';
+            if (!taken || taken.failure) {
+              return createErrorResponse('BENCH_BASELINE_FAILED', { connection, sequence: name, failure: taken?.failure ?? 'no sequence is open in the bench' });
+            }
+            const filling = taken.baseline?.filling ?? [];
+            const response = createSuccessResponse('BENCH_BASELINED', {
+              connection, sequence: name, total: taken.total,
+              filling: filling.length ? `Step${filling.length === 1 ? '' : 's'} ${filling.join(', ')} still had work running when the play ended; each is taken again as it settles.` : undefined,
+            });
+            return { ...response, _meta: buildMeta('baseline', { active: true, connection, ...(filling.length ? { filling } : {}) }) };
+          }
           case 'start': {
             // An open bench is answered as it stands: nothing navigates, no
             // sequence opens, and the picker is left as it is.

@@ -65,4 +65,20 @@ describe('the work outstanding under an input\'s root', () => {
     expect(page.ranTimer).toBe(true);
     expect(reports.filter(one => one.id === root).map(one => one.open)).toEqual([true, false]);
   });
+
+  it('credits a hover the page scrolled under a still pointer to the scroll, not to a root of its own', () => {
+    const { page, fire } = pageWithTracker();
+    const tracker = vm.runInContext("globalThis[Symbol.for('devharness.trigger')]", page);
+    fire('pointerover', { pointerType: 'mouse', clientX: 40, clientY: 60 });
+    const pointerRoot = tracker.rootNow().id;
+    fire('keydown', { key: 'PageDown' });
+    const keyRoot = tracker.rootNow().id;
+    fire('scroll', {});
+
+    fire('pointerover', { pointerType: 'mouse', clientX: 40, clientY: 60 });
+    expect(tracker.rootNow().id).toBe(keyRoot);
+
+    fire('pointerover', { pointerType: 'mouse', clientX: 80, clientY: 60 });
+    expect([keyRoot, pointerRoot]).not.toContain(tracker.rootNow().id);
+  });
 });

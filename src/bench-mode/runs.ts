@@ -185,30 +185,22 @@ export async function baselineSequence(connection: string): Promise<SequenceStat
   });
   session.sequenceFailure = await sequences.saveStepTraffic(take()).catch(error => String(error));
   // What a step caused keeps landing after the play ends, on the entry of
-  // the step whose input caused it, until the step's roots settle. A step
-  // still open is taken again as it settles; the bench lists the steps still
-  // open, and the subscription ends once none is.
+  // the step whose input caused it, until the step's roots settle. The
+  // baseline is taken again whenever one of its steps settles - one still
+  // open at the play's end, and one that reopens after it read as settled -
+  // and the bench lists the steps still open. The next baseline of this
+  // browser replaces the subscription.
   const open = () => stepEntries.flatMap((entry, index) => (entry !== undefined && !entrySettled(entry) ? [index + 1] : []));
   retaking.get(connection)?.();
   retaking.delete(connection);
-  session.baselineFilling = undefined;
-  if (open().length) {
-    session.baselineFilling = { steps: open(), retakes: 0 };
-    const entries = new Set(stepEntries.filter((entry): entry is number => entry !== undefined));
-    const stop = onEntrySettled(entry => {
-      if (!entries.has(entry)) return;
-      void sequences.saveStepTraffic(take()).catch(() => undefined);
-      const steps = open();
-      if (steps.length) {
-        session.baselineFilling = { steps, retakes: (session.baselineFilling?.retakes ?? 0) + 1 };
-        return;
-      }
-      session.baselineFilling = undefined;
-      stop();
-      retaking.delete(connection);
-    });
-    retaking.set(connection, stop);
-  }
+  session.baselineFilling = open().length ? { steps: open(), retakes: 0 } : undefined;
+  const entries = new Set(stepEntries.filter((entry): entry is number => entry !== undefined));
+  retaking.set(connection, onEntrySettled(entry => {
+    if (!entries.has(entry)) return;
+    void sequences.saveStepTraffic(take()).catch(() => undefined);
+    const steps = open();
+    session.baselineFilling = steps.length ? { steps, retakes: (session.baselineFilling?.retakes ?? 0) + 1 } : undefined;
+  }));
   return getSequenceState(connection);
 }
 

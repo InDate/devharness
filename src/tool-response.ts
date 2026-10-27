@@ -359,9 +359,11 @@ export interface ToolResponseMeta {
  *  rendered text. */
 export interface BenchToolMeta {
   action: 'start' | 'stop' | 'tick' | 'hold' | 'release' | 'picker' | 'motion' | 'list' | 'status'
-    | 'keepStep' | 'dropStep' | 'flagStep' | 'sweep' | 'retake' | 'capture';
+    | 'keepStep' | 'dropStep' | 'flagStep' | 'sweep' | 'retake' | 'capture' | 'baseline';
   /** Whether the bench is open on the connection, after this call. */
   active?: boolean;
+  /** baseline: the steps whose work was still running when the play ended, each taken again as it settles. */
+  filling?: number[];
   /** motion: whether each animation the page starts is recorded as a MOTION row. */
   motionDetect?: boolean;
   /** start: the bench was already open, and was answered as it stood. */

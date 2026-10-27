@@ -2132,26 +2132,21 @@ async function compareBehaviour(
     return drift;
   };
   const drift = matchSteps();
-  // A step whose roots have not settled is matched again as they do; the
-  // subscription ends once every step of the pass has settled. A root that
-  // never settles - a loop running on - leaves it open until a pass of the
-  // same steps replaces it.
+  // Each step is matched again whenever its roots settle: one still open at
+  // the pass's end, and one that reopens after it read as settled - a
+  // scroll whose run starts after its call's hold ended. A pass of the same
+  // steps replaces the subscription.
   const key = `${reference}|${run}|${indices.join(',')}`;
   rematching.get(key)?.();
   rematching.delete(key);
-  const open = () => [...(logged?.entries.values() ?? [])].filter(entry => !entrySettled(entry));
-  if (!under && ctx.commandRecorder && open().length) {
+  if (!under && ctx.commandRecorder && logged) {
     const recorder = ctx.commandRecorder;
-    const entries = new Set(logged!.entries.values());
-    const stop = onEntrySettled(entry => {
+    const entries = new Set(logged.entries.values());
+    rematching.set(key, onEntrySettled(entry => {
       if (!entries.has(entry)) return;
       logged = passFromLog(run, indices, reference, placements, recorder);
       matchSteps();
-      if (open().length) return;
-      stop();
-      rematching.delete(key);
-    });
-    rematching.set(key, stop);
+    }));
   }
   return drift;
 }

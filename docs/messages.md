@@ -4765,6 +4765,24 @@ Could not read {{path}}: {{reason}}
 
 ---
 
+## BENCH_BASELINED
+
+**Type:** success
+**Summary:** Baseline taken for {{sequence}} on {{connection}}
+
+All {{total}} steps played from the first and each step's traffic kept as what later plays of "{{sequence}}" compare against.{{#filling}} {{filling}}{{/filling}}
+
+---
+
+## BENCH_BASELINE_FAILED
+
+**Type:** error
+**Code:** BENCH_BASELINE_FAILED
+
+No baseline taken for "{{sequence}}" on `{{connection}}`, and the one before it stands: {{failure}}
+
+---
+
 ## BENCH_NOT_ACTIVE
 
 **Type:** error
@@ -4780,7 +4798,7 @@ Could not read {{path}}: {{reason}}
 
 **Once per session:**
 
-Called directly, a check answers held or failed and the call itself succeeds; `assert` is a check whose failure stops a run, and `wait` a check with a time limit. `owns` counts what is credited to the step `stepsBack` names, by credit in the observation log rather than by time: the default 1 is the call before the check, every call counts, in a run each step, and the answer names where a matching observation credited elsewhere went. A request or frame match follows a pin's rules. With `count`, the operators `equals`, `lte` and `lt` read until `withinMs` ends, since a later crossing can break them. As a sequence step, `connection` comes from the run, and a `{ run }` outcome with no `resumeAt` carries on at the next step.
+Called directly, a check answers held or failed and the call itself succeeds; `assert` is a check whose failure stops a run, and `wait` a check with a time limit. `owns` counts what is credited to the step `stepsBack` names, by credit in the observation log rather than by time: the default 1 is the call before the check, every call counts, in a run each step, and the answer names where a matching observation credited elsewhere went. A request or frame match follows a pin's rules. The count is read once the roots credited to that step settle, its work in the page done, so a later arrival cannot break it; `withinMs` bounds the wait on a step whose work runs on, a loop, at 10s where unset. As a sequence step, `connection` comes from the run, and a `{ run }` outcome with no `resumeAt` carries on at the next step.
 
 ---
 

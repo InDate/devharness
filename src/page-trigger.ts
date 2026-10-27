@@ -252,11 +252,23 @@ function installPageTrigger(g: any): void {
       if (event.isTrusted) markInput(event);
     }, { capture: true, passive: true });
   }
+  // Where the pointer last stood: a pointerover at the same point is the page
+  // moving under a pointer that stayed, which the browser reports as the
+  // pointer arriving. That hover is the moving scroll's, and takes its root.
+  let pointerAt: { x: number; y: number } | undefined;
+  const stayed = (event: any) => pointerAt !== undefined && event.clientX === pointerAt.x && event.clientY === pointerAt.y;
   listen(g, 'pointermove', (event: any) => {
-    if (event.isTrusted && event.buttons) lastInput = mark('input', 'drag', { scrolls: true });
+    if (!event.isTrusted) return;
+    const still = stayed(event);
+    pointerAt = { x: event.clientX, y: event.clientY };
+    if (event.buttons && !still) lastInput = mark('input', 'drag', { scrolls: true });
   }, { capture: true, passive: true });
   listen(g, 'pointerover', (event: any) => {
-    if (event.isTrusted && event.pointerType === 'mouse') { lastHover = mark('pointer', 'hover'); holdThroughTask(lastHover.root); }
+    if (!event.isTrusted || event.pointerType !== 'mouse') return;
+    const scrolledUnder = stayed(event) ? lastScroll?.root : undefined;
+    pointerAt = { x: event.clientX, y: event.clientY };
+    lastHover = mark('pointer', scrolledUnder ? `${lastScroll!.words} · hover` : 'hover', scrolledUnder ? { root: scrolledUnder } : {});
+    if (!scrolledUnder) holdThroughTask(lastHover.root);
   }, { capture: true, passive: true });
   for (const type of ['transitionend', 'animationend']) {
     listen(g, type, (event: any) => {
@@ -285,6 +297,8 @@ function installPageTrigger(g: any): void {
   listen(g, 'scroll', () => {
     const cause = scrollCauseMark();
     lastScroll = mark('scroll', `scroll · ${cause?.words ?? 'browser'}`, cause?.root ? { root: cause.root } : {});
+    const held = cause?.root ? scrollHolds.get(cause.root.id) : undefined;
+    if (held) held.scrolled = true;
   }, { capture: true, passive: true });
 
   /** Wrap a function so each call marks first, as `words`, with what was live when it was called. */
@@ -306,15 +320,24 @@ function installPageTrigger(g: any): void {
   // A smooth scroll runs after the call returns, with no callback of the
   // page's: the call's root is held until the scroll ends, or released at
   // the next frame where no scroll began, a call to where the page stands.
+  // A scroll still running from an earlier input ends with a scrollend of its
+  // own, so a call's hold ends at a scrollend after a scroll credited to it.
+  const scrollHolds = new Map<string, { root: Root; scrolled: boolean }>();
   const untilScrollEnds = (root: Root) => {
+    if (scrollHolds.has(root.id)) return;
     hold(root);
-    let scrolled = false;
-    let done = false;
-    const end = () => { if (done) return; done = true; release(root); };
-    listen(g, 'scroll', () => { scrolled = true; }, { capture: true, passive: true, once: true });
-    listen(g, 'scrollend', end, { capture: true, passive: true, once: true });
-    if (unwrappedFrame) unwrappedFrame(() => nextTask(() => { if (!scrolled) end(); })); else nextTask(end);
+    const held = { root, scrolled: false };
+    scrollHolds.set(root.id, held);
+    const settle = () => { if (!held.scrolled && scrollHolds.get(root.id) === held) { scrollHolds.delete(root.id); release(root); } };
+    if (unwrappedFrame) unwrappedFrame(() => nextTask(settle)); else nextTask(settle);
   };
+  listen(g, 'scrollend', () => {
+    for (const [id, held] of scrollHolds) {
+      if (!held.scrolled) continue;
+      scrollHolds.delete(id);
+      release(held.root);
+    }
+  }, { capture: true, passive: true });
   // A media element plays from its play() promise; an SVG animation begins on
   // the frame after beginElement(): each call's root is held until then.
   const untilSettled = (root: Root, result: any) => {

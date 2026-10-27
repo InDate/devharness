@@ -365,19 +365,6 @@ function objectOnce(text: string | undefined): () => Record<string, unknown> | u
   };
 }
 
-/**
- * A traffic check's count: a match that changes nothing, and how many
- * crossings met it since it was set. Frames are counted when the match names a
- * direction or payload text, requests otherwise.
- */
-interface Counter {
-  match: CrossingMatch;
-  field?: FrameField;
-  frames: boolean;
-  hits: number;
-  /** The record no longer reached back to the counter's start, so the count before it was set is short. */
-  partial: boolean;
-}
 
 /** The key set of a JSON object, or the event name of a JSON array. */
 function shapeOfJson(text: string): string | undefined {
@@ -954,8 +941,6 @@ export class InterceptProxy {
   private framePins = new Map<string, FramePin>();
   /** Crossings kept while the network layer is held. */
   readonly queue = new TrafficQueue();
-  private counters = new Map<string, Counter>();
-  private counterSeq = 0;
   private events: ProxyEvent[] = [];
   private bodies = new Map<string, string>();
   private profiles: SocketProfile[] = [];
@@ -1643,65 +1628,23 @@ export class InterceptProxy {
   }
 
   /**
-   * Count the crossings that match from `since` until released, changing none
-   * of them: those already on the record from that moment, read with the text
-   * each crossing carried, then each one as it crosses. With no `since` the
-   * count starts now.
+   * Whether a crossing on the record matches, read with the text it carried:
+   * a frame where the match names a direction or payload text, a request
+   * otherwise. A check reads what a step owns through it, so it counts
+   * exactly the crossings a pin with the same fields would answer.
    */
-  count(match: CrossingMatch, since?: number): string {
-    const id = `count-${++this.counterSeq}`;
+  matches(match: CrossingMatch, event: ProxyEvent): boolean {
     const frames = match.direction !== undefined || match.textIncludes !== undefined;
-    const field = match.textIncludes !== undefined ? fieldOf(match.textIncludes) : undefined;
-    const counter: Counter = { match, frames, hits: 0, partial: false, ...(field ? { field } : {}) };
-    if (since !== undefined) {
-      const oldest = this.events[0];
-      counter.partial = this.events.length >= MAX_EVENTS && oldest !== undefined && (oldest.startedAt ?? oldest.at) > since;
-      counter.hits = this.events.filter(event => (event.startedAt ?? event.at) >= since && this.recordedMatch(counter, event)).length;
-    }
-    this.counters.set(id, counter);
-    return id;
-  }
-
-  /** Whether a crossing already on the record matches a counter, as it would have as it crossed. */
-  private recordedMatch(counter: Counter, event: ProxyEvent): boolean {
-    if (!counter.frames) return event.kind === 'request' && requestMatches(counter.match, event.url, event.method ?? 'GET');
+    if (!frames) return event.kind === 'request' && requestMatches(match, event.url, event.method ?? 'GET');
     if (event.kind !== 'frame') return false;
     const text = event.binary ? undefined : this.bodies.get(event.id) ?? event.preview;
-    return frameMatches(counter.match, counter.field, event.url,
-      event.direction === 'out' ? 'sent' : 'received', text, objectOnce(text)).matched;
-  }
-
-  /** How many crossings a counter has matched; undefined once released. */
-  hitsOf(id: string): number | undefined {
-    return this.counters.get(id)?.hits;
-  }
-
-  /** Whether a counter's count from before it was set is short, the record having been trimmed past its start. */
-  isPartial(id: string): boolean {
-    return this.counters.get(id)?.partial ?? false;
-  }
-
-  release(id: string): void {
-    this.counters.delete(id);
+    const field = match.textIncludes !== undefined ? fieldOf(match.textIncludes) : undefined;
+    return frameMatches(match, field, event.url, event.direction === 'out' ? 'sent' : 'received', text, objectOnce(text)).matched;
   }
 
   /** Whether a socket whose URL carries this is open now. */
   socketOpen(urlIncludes: string): boolean {
     return [...this.ledgers].some(ledger => ledger.url.includes(urlIncludes));
-  }
-
-  private countRequest(url: string, method: string): void {
-    for (const counter of this.counters.values()) {
-      if (!counter.frames && requestMatches(counter.match, url, method)) counter.hits += 1;
-    }
-  }
-
-  private countFrame(url: string, direction: 'sent' | 'received', text: string | undefined): void {
-    if (!this.counters.size) return;
-    const object = objectOnce(text);
-    for (const counter of this.counters.values()) {
-      if (counter.frames && frameMatches(counter.match, counter.field, url, direction, text, object).matched) counter.hits += 1;
-    }
   }
 
   listPins(): Pin[] {
@@ -1771,7 +1714,6 @@ export class InterceptProxy {
     }
 
     const quiet = this.isQuiet(host);
-    if (!quiet) this.countRequest(url, req.method ?? 'GET');
     const pin = this.matchPin(url, req.method ?? 'GET');
 
     if (pin) {
@@ -1917,7 +1859,6 @@ export class InterceptProxy {
             .join('\n');
           const answer = data ? this.matchFramePin(url, 'received', data) : undefined;
           if (answer) answer.hits += 1;
-          if (data) this.countFrame(url, 'received', data);
           if (data) {
             crossed.push(() => this.record({
               at: Date.now(), kind: 'frame', direction: 'in', url,
@@ -2026,8 +1967,6 @@ export class InterceptProxy {
     const issuedUnder = this.cursor;
     const requestedAt = Date.now();
     const quiet = this.isQuiet(host);
-    // Recorded as the GET it is, so counted as one as it crosses too.
-    if (!quiet) this.countRequest(url, 'GET');
 
     this.upgrades.handleUpgrade(req, socket, head, (client) => {
       client.on('error', () => { /* handled by the close pairing below */ });
@@ -2099,7 +2038,6 @@ export class InterceptProxy {
           const text = binary ? undefined : buf.toString('utf8');
           const answer = this.matchFramePin(url, direction, text);
           if (answer) answer.hits += 1;
-          this.countFrame(url, direction, text);
 
           const answeredAs = answer
             ? (answer.replaceWith === undefined ? 'dropped' as const : 'replaced' as const)

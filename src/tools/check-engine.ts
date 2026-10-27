@@ -19,8 +19,9 @@ import type { ExecuteToolCall } from '../types.js';
 import { isExtendedSelector, parseExtendedSelector } from '../utils/selector-resolver.js';
 import { abortableSleep, isAbortError, throwIfAborted } from '../utils/abort.js';
 import { evaluateCondition, type ExecutionContext } from './replay-executor.js';
-import { callStartedBack, getProxy } from '../proxy/registry.js';
-import type { CrossingMatch } from '../proxy/intercept-proxy.js';
+import { callBack, getProxy } from '../proxy/registry.js';
+import type { CrossingMatch, ProxyEvent } from '../proxy/intercept-proxy.js';
+import { observationsIn, observationsOf, recordOf, type Observation, type ObservationKind } from '../observation-log.js';
 
 export const CHECK_OPERATORS = [
   'equals', 'notEquals', 'exists', 'notExists', 'gt', 'gte', 'lt', 'lte', 'contains', 'matches',
@@ -93,18 +94,17 @@ export interface CheckSpec {
   /** The page's URL, compared by `operator` (equals, contains or matches). */
   url?: string;
   /**
-   * Traffic crossing the proxy from when the check starts: the fields a pin
-   * matches on, counted by the proxy as they cross. `count` with `operator`
-   * says how many; the default is at least one.
+   * What a step owns: the observations whose credit in the log is that step's
+   * History entry, matched by kind, by text in the row, and for a request or
+   * frame by the fields a pin matches on. `count` with `operator` says how
+   * many; the default is at least one.
    */
-  traffic?: CrossingMatch;
+  owns?: OwnsMatch;
   count?: number;
-  /**
-   * Where the count starts: the start of the call this many back, the check
-   * itself being 0. Default 1, the call before the check, whose traffic has
-   * usually crossed by the time the check is called.
-   */
+  /** Which step's credit is read: the call this many back. Default 1, the call before the check. */
   stepsBack?: number;
+  /** `stamped`: an observation counts only where the cause was stamped on its record, not placed by time. */
+  basis?: 'stamped';
   /** A socket whose URL carries this, `condition` `open` (default) or `closed`. */
   socket?: string;
   /**
@@ -124,7 +124,7 @@ export interface CheckSpec {
   pollMs?: number;
 }
 
-export type CheckForm = 'time' | 'value' | 'element' | 'expression' | 'url' | 'cookie' | 'localStorage' | 'indexedDB' | 'traffic' | 'socket' | 'connectionOpen';
+export type CheckForm = 'time' | 'value' | 'element' | 'expression' | 'url' | 'cookie' | 'localStorage' | 'indexedDB' | 'owns' | 'socket' | 'connectionOpen';
 
 /** What an element probe saw. */
 export interface ElementProbe {
@@ -321,7 +321,7 @@ export function formOf(spec: CheckSpec): CheckForm {
   if (spec.cookie !== undefined) return 'cookie';
   if (spec.localStorage !== undefined) return 'localStorage';
   if (spec.indexedDB !== undefined) return 'indexedDB';
-  if (spec.traffic !== undefined) return 'traffic';
+  if (spec.owns !== undefined) return 'owns';
   if (spec.socket !== undefined) return 'socket';
   if (spec.connectionOpen !== undefined) return 'connectionOpen';
   return 'time';
@@ -342,16 +342,45 @@ export function subjectOf(spec: CheckSpec): string {
     case 'cookie': return `cookie ${spec.cookie} ${spec.condition === 'absent' ? 'absent' : 'present'}`;
     case 'localStorage': return `localStorage ${spec.localStorage} ${spec.condition === 'absent' ? 'absent' : 'present'}`;
     case 'indexedDB': return `indexedDB ${spec.indexedDB} ${spec.condition === 'absent' ? 'absent' : 'present'}`;
-    case 'traffic': {
-      const t = spec.traffic!;
-      const what = [t.method, t.direction, t.urlIncludes, t.textIncludes !== undefined ? said(t.textIncludes) : undefined]
+    case 'owns': {
+      const t = spec.owns!;
+      const what = [t.kind, t.method, t.direction, t.urlIncludes, t.includes, t.textIncludes !== undefined ? said(t.textIncludes) : undefined]
         .filter(Boolean).join(' ');
-      return `traffic ${what || 'any'} count ${spec.operator ?? 'gte'} ${spec.count ?? 1}`;
+      return `step ${spec.stepsBack ?? 1} back owns ${what || 'anything'} count ${spec.operator ?? 'gte'} ${spec.count ?? 1}${spec.basis ? `, ${spec.basis}` : ''}`;
     }
     case 'socket': return `socket ${spec.socket} ${spec.condition === 'closed' ? 'closed' : 'open'}`;
     case 'connectionOpen': return `connection ${spec.connectionOpen} ${spec.condition === 'absent' ? 'absent' : 'open'}`;
     case 'time': return `${spec.afterMs ?? 0}ms passed`;
   }
+}
+
+/** What a check of a step's credit matches: a kind, text in the row, and a request's or frame's crossing fields. */
+export type OwnsMatch = CrossingMatch & { kind?: ObservationKind; includes?: string };
+
+/** Whether an observation is one an `owns` check names. */
+function ownsMatches(match: OwnsMatch, one: Observation): boolean {
+  if (match.kind && one.kind !== match.kind) return false;
+  if (match.includes !== undefined && !one.text.includes(match.includes) && !one.key.includes(match.includes)) return false;
+  const crossing = match.urlIncludes !== undefined || match.method !== undefined || match.direction !== undefined || match.textIncludes !== undefined;
+  if (!crossing) return true;
+  const record = recordOf(one);
+  const proxy = one.connection ? getProxy(one.connection) : undefined;
+  return one.ref.source === 'proxy' && !!record && !!proxy && proxy.matches(match, record as ProxyEvent);
+}
+
+/** What placed an observation: the cause stamped on its record, by its evidence, or its time alone. */
+function basisOf(one: Observation): string {
+  return one.stamped ? (one.owned ?? 'stamped') : 'timing';
+}
+
+/** Observations in words by what placed them, with their History entries where `entries` asks. */
+function placesOf(observations: Observation[], entries: boolean): string {
+  const counts = new Map<string, number>();
+  for (const one of observations) {
+    const place = entries ? `${one.entry !== undefined ? `#${one.entry}` : 'no step'} ${basisOf(one)}` : basisOf(one);
+    counts.set(place, (counts.get(place) ?? 0) + 1);
+  }
+  return [...counts].map(([place, n]) => (n > 1 ? `${place} ×${n}` : place)).join(', ');
 }
 
 /** What an element probe found, in words: the fields the condition turns on. */
@@ -410,11 +439,8 @@ export async function runCheck(spec: CheckSpec, deps: CheckDeps): Promise<CheckR
   // missing connection is an error before any time is spent.
   let read: () => Promise<Read>;
   let cdpManager: any;
-  // A traffic check's counter lives in the proxy until the check ends,
-  // however it ends, cancel included.
-  const releases: Array<() => void> = [];
   try {
-    read = await readerFor(spec, form, deps, (manager) => { cdpManager = manager; }, (release) => { releases.push(release); });
+    read = await readerFor(spec, form, deps, (manager) => { cdpManager = manager; });
   } catch (error: any) {
     if (isAbortError(error)) throw error;
     return reading('error', {
@@ -423,11 +449,7 @@ export async function runCheck(spec: CheckSpec, deps: CheckDeps): Promise<CheckR
     });
   }
 
-  try {
-    return await readUntilAnswered();
-  } finally {
-    for (const release of releases) release();
-  }
+  return await readUntilAnswered();
 
   async function readUntilAnswered(): Promise<CheckReading> {
     if (spec.afterMs && spec.afterMs > 0) await abortableSleep(spec.afterMs, deps.abortSignal);
@@ -485,7 +507,6 @@ async function readerFor(
   form: CheckForm,
   deps: CheckDeps,
   onManager: (cdpManager: any) => void,
-  onRelease: (release: () => void) => void,
 ): Promise<() => Promise<Read>> {
   if (form === 'time') return async () => ({ held: true, found: `${spec.afterMs ?? 0}ms passed` });
 
@@ -501,39 +522,45 @@ async function readerFor(
     };
   }
 
-  if (form === 'traffic' || form === 'socket') {
+  if (form === 'socket') {
     const proxy = deps.connection ? getProxy(deps.connection) : undefined;
     if (!proxy) {
       throw new CheckError(
-        `a ${form} check reads what crosses the proxy, and "${deps.connection ?? '(no connection)'}" was not launched through one - connection({ action: 'launch', proxy: true })`,
+        `a socket check reads what crosses the proxy, and "${deps.connection ?? '(no connection)'}" was not launched through one - connection({ action: 'launch', proxy: true })`,
         'no-proxy');
     }
-    if (form === 'socket') {
-      const wantOpen = spec.condition !== 'closed';
-      return async () => {
-        const open = proxy.socketOpen(spec.socket!);
-        return { held: open === wantOpen, found: open ? 'open' : 'closed' };
-      };
-    }
-    // Counted by the proxy from the start of the call `stepsBack` before
-    // this one: what is already on its record, then each crossing as it
-    // passes its pins. With no call that far back, from now.
-    const since = callStartedBack(spec.stepsBack ?? 1) ?? Date.now();
-    const counter = proxy.count(spec.traffic!, since);
-    const partial = proxy.isPartial(counter);
-    onRelease(() => proxy.release(counter));
+    const wantOpen = spec.condition !== 'closed';
+    return async () => {
+      const open = proxy.socketOpen(spec.socket!);
+      return { held: open === wantOpen, found: open ? 'open' : 'closed' };
+    };
+  }
+
+  if (form === 'owns') {
+    const back = spec.stepsBack ?? 1;
+    if (back < 1) throw new CheckError('stepsBack names an earlier call; the check itself owns nothing', 'invalid');
+    const call = callBack(back);
+    if (!call) throw new CheckError(`no call stands ${back} back`, 'invalid');
+    const match = spec.owns!;
     const operator = spec.operator ?? 'gte';
     const target = spec.count ?? 1;
-    // More crossings can break these, so they hold only once the time is up.
+    // More arrivals can break these, so they hold only once the time is up.
     const bounded = operator === 'equals' || operator === 'lte' || operator === 'lt';
     return async () => {
-      const hits = proxy.hitsOf(counter) ?? 0;
-      const held = compare(hits, operator, target).passed;
-      const exceeded = bounded && hits > target;
-      return {
-        held, found: `${hits} crossed`, final: bounded ? exceeded : held,
-        ...(partial ? { detail: 'the proxy had discarded the oldest crossings in the window, so the count may be short' } : {}),
-      };
+      if (call.entry === undefined) return { held: false, found: `the call ${back} back has no History entry` };
+      const owned = observationsOf(call.entry).filter(one => ownsMatches(match, one));
+      const counted = owned.filter(one => spec.basis !== 'stamped' || one.stamped === true);
+      const uncounted = owned.length - counted.length;
+      // What the step should have owned and another entry, or none, holds: the
+      // reading that names where a misplaced observation went.
+      const elsewhere = observationsIn(call.at, Date.now() + 1).filter(one => one.entry !== call.entry && ownsMatches(match, one));
+      const held = compare(counted.length, operator, target).passed;
+      const found = [
+        `${counted.length} owned${counted.length ? ` (${placesOf(counted, false)})` : ''}`,
+        ...(uncounted ? [`${uncounted} placed by time, not counted`] : []),
+        ...(elsewhere.length ? [`${elsewhere.length} elsewhere: ${placesOf(elsewhere, true)}`] : []),
+      ].join(' · ');
+      return { held, found, final: bounded ? counted.length > target : held };
     };
   }
 

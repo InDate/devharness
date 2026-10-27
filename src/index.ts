@@ -82,7 +82,7 @@ import { configManager } from './config.js';
 import { ToolError } from './tool-error.js';
 import type { ServerLog, ServerRow, ToolGroup, ToolValues } from './bench/wire.js';
 import { arriveOn, unlisted, historyPlace, entryChannel, asInnerCall, callOwner } from './call-origin.js';
-import { markNextCommand, releaseCommand, noteCallStart, newlyIdleProxies, attachEntryToCursor } from './proxy/registry.js';
+import { markNextCommand, releaseCommand, noteCallStart, nameNewestCall, newlyIdleProxies, attachEntryToCursor } from './proxy/registry.js';
 import { describePersonInput, isPersonWatchTurnedOn, recordPersonInputInto, takeUnreadPersonInput, watchPersonInput } from './person-watch.js';
 import { activitySummary } from './activity-index.js';
 import { observes } from './observing-tools.js';
@@ -545,7 +545,8 @@ async function executeToolCall(calledName: string, calledParams: Record<string, 
     // A run's step was already counted as a call by the executor that ran it,
     // and a replay call walks steps counted on their own; a second start
     // would stand between a traffic check and the step it counts back to.
-    if (!runsCalls(toolName) && !place.run) noteCallStart();
+    if (!runsCalls(toolName) && !place.run) noteCallStart({ entry: index });
+    else if (place.run) nameNewestCall(index!);
     // A run marked this step before its call was recorded; the entry joins
     // what the step causes to the call that caused it.
     if (place.run) attachEntryToCursor(index);
@@ -844,7 +845,7 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
       commandIndex = commandRecorder.getCurrentHistoryIndex();
       // A replay call walks steps that each start a call of their own; counted
       // too, it would stand between a traffic check and the step it counts back to.
-      if (!runsCalls(toolName)) noteCallStart();
+      if (!runsCalls(toolName)) noteCallStart({ entry: commandIndex });
     }
 
     // Check for failed monitored ports

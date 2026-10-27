@@ -268,25 +268,31 @@ export function currentCursor(): ProxyCursor | undefined {
 }
 
 /**
- * When each call started, newest last: every tool call an agent makes, and
- * every step a run takes. A traffic check counts from the start of a call a
- * given number back, so the list holds calls, not only the ones that mark the
- * proxies: every call counts, read-only ones included.
+ * Each call as it started, newest last: every tool call an agent makes, and
+ * every step a run takes, read-only ones included. A check of what a step
+ * owns names that step by how many calls back it stands, so the list holds
+ * every call, and each carries its History entry once the call is recorded.
  */
-const callStarts: number[] = [];
+export interface CallStart { at: number; entry?: number }
+const callStarts: CallStart[] = [];
 const MAX_CALL_STARTS = 500;
 
-export function noteCallStart(at = Date.now()): void {
-  callStarts.push(at);
+export function noteCallStart(call: Omit<CallStart, 'at'> = {}, at = Date.now()): void {
+  callStarts.push({ at, ...call });
   if (callStarts.length > MAX_CALL_STARTS) callStarts.splice(0, callStarts.length - MAX_CALL_STARTS);
 }
 
+/** The newest call's History entry: a run step is noted before its call is recorded. */
+export function nameNewestCall(entry: number): void {
+  const newest = callStarts[callStarts.length - 1];
+  if (newest && newest.entry === undefined) newest.entry = entry;
+}
+
 /**
- * When the call `back` before the newest began. The newest is the call
- * asking, so 0 is its own start and 1 the call before it; undefined past the
- * first call noted.
+ * The call `back` before the newest. The newest is the call asking, so 0 is
+ * itself and 1 the call before it; undefined past the first call noted.
  */
-export function callStartedBack(back: number): number | undefined {
+export function callBack(back: number): CallStart | undefined {
   const at = callStarts.length - 1 - back;
   return at >= 0 ? callStarts[at] : undefined;
 }

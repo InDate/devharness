@@ -39,14 +39,17 @@ export const checkSchema = z.object({
   cookie: z.string().optional().describe('A cookie name'),
   localStorage: z.string().optional().describe('A localStorage key'),
   indexedDB: z.string().optional().describe('DB/STORE/KEY for one record, or DB/STORE for any record in the store'),
-  traffic: z.object({
-    urlIncludes: z.string().optional().describe("Substring of the request's URL, or of the socket's URL for a frame"),
+  owns: z.object({
+    kind: z.enum(['request', 'frame', 'storage', 'motion']).optional().describe('Only this kind of observation'),
+    includes: z.string().optional().describe("Text the observation's row carries: 'POST /session', 'transform #progress', 'localStorage draft'"),
+    urlIncludes: z.string().optional().describe("A request or frame: substring of its URL, or of the socket's URL for a frame"),
     method: z.string().optional().describe('A request: only this method'),
     direction: z.enum(['sent', 'received']).optional().describe('A frame: only this way'),
     textIncludes: z.string().optional().describe('A frame: what its payload carries. A lone "key":value pair compares that top-level JSON field; anything else is a substring'),
-  }).strict().optional().describe('Traffic crossing the proxy: a request by urlIncludes + method, a frame by urlIncludes + direction + textIncludes. Needs a browser launched with proxy: true'),
-  stepsBack: z.number().int().min(0).optional().describe('traffic: count from the start of the call this many back (default 1, the call before the check; 0, the check itself)'),
-  count: z.number().int().min(0).optional().describe('traffic: how many crossings, compared by operator (default gte)'),
+  }).strict().optional().describe('What a step owns: the observations credited to the step stepsBack names - requests, frames, storage writes, motion - counted by count and operator. Reads the observation log, not a window of time'),
+  stepsBack: z.number().int().min(1).optional().describe('owns: the step whose credit is read, this many calls back (default 1, the call before the check)'),
+  basis: z.enum(['stamped']).optional().describe("owns: count only observations whose cause was stamped on their record, leaving those placed by time out"),
+  count: z.number().int().min(0).optional().describe('owns: how many observations, compared by operator (default gte)'),
   socket: z.string().optional().describe("A socket whose URL carries this, with condition open (default) or closed. Needs proxy: true"),
   connectionOpen: z.string().optional().describe('A connection of this session by name, with condition present (default: open) or absent'),
   afterMs: z.number().int().min(0).max(600000).optional().describe('Read nothing until this much time has passed; alone, a timer'),
@@ -88,7 +91,7 @@ export function asCheckStep<C extends { tool: string; params: Record<string, any
 
 /** Subjects a check names; more than one is a check that means two things. */
 function subjectsOf(args: CheckArgs): string[] {
-  return (['selector', 'value', 'expression', 'url', 'cookie', 'localStorage', 'indexedDB', 'traffic', 'socket', 'connectionOpen'] as const)
+  return (['selector', 'value', 'expression', 'url', 'cookie', 'localStorage', 'indexedDB', 'owns', 'socket', 'connectionOpen'] as const)
     .filter(key => key in args && (key === 'value' || args[key] !== undefined));
 }
 
@@ -98,7 +101,7 @@ export function createCheckTools(
 ) {
   return {
     check: createTool(
-      'Check one thing, answering held or failed: an element (selector + condition), a value ({{var:...}} + operator + right), a JS expression, the URL, a cookie, a localStorage key, an IndexedDB record, proxy traffic (traffic + count), a socket, a connection being open (connectionOpen), or time alone (afterMs). withinMs reads again until it holds. As a sequence step, holds/fails pick continue, stop or running another sequence.',
+      'Check one thing, answering held or failed: an element (selector + condition), a value ({{var:...}} + operator + right), a JS expression, the URL, a cookie, a localStorage key, an IndexedDB record, what a step owns (owns + count, read from the observation log by credit), a socket, a connection being open (connectionOpen), or time alone (afterMs). withinMs reads again until it holds. As a sequence step, holds/fails pick continue, stop or running another sequence.',
       checkSchema,
       async (args: CheckArgs, abortSignal?: AbortSignal) => {
         const subjects = subjectsOf(args);

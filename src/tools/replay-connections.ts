@@ -4,6 +4,7 @@
  * which of them are live in this session.
  */
 
+import { readsCrossings } from '../bench/check-words.js';
 import type { RecordedCommand } from '../command-recorder.js';
 import type { ExecuteToolCall } from '../types.js';
 import type { ConnectionMeta } from '../tool-response.js';
@@ -233,7 +234,7 @@ export function sequenceNeedsProxy(sequence: {
   if (sequence.proxy === true) return true;
   if ((sequence.boundaryRules?.length ?? 0) > 0) return true;
   return [...sequence.commands, ...(sequence.teardown ?? [])].some(step =>
-    step.tool === 'check' && (step.params?.traffic !== undefined || step.params?.socket !== undefined));
+    step.tool === 'check' && (readsCrossings(step.params?.owns) || step.params?.socket !== undefined));
 }
 
 /**

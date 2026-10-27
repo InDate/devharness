@@ -1202,39 +1202,43 @@ A `check` step reads one thing and answers held, failed or error:
 | a JS predicate | `expression`, read in a page or a Node target |
 | the URL | `url`, with `operator` `equals` (default), `contains` or `matches` |
 | a cookie, a localStorage key, an IndexedDB record | `cookie` / `localStorage` / `indexedDB` (`DB/STORE/KEY`, or `DB/STORE` for any record), `condition` `present` (default) or `absent` |
-| traffic crossing the proxy | `traffic: { urlIncludes, method }` for requests, `traffic: { urlIncludes, direction, textIncludes }` for frames, with `count` + `operator` (default at least 1) |
+| what a step owns | `owns: { kind, includes }` for any observation, with `urlIncludes` + `method` for a request or `urlIncludes` + `direction` + `textIncludes` for a frame, and `count` + `operator` (default at least 1); `stepsBack` names the step, `basis: 'stamped'` leaves out what was placed by time |
 | a socket | `socket` (a substring of its URL), `condition` `open` (default) or `closed` |
 | time alone | `afterMs` and nothing else - a timer |
 
 `afterMs` waits before the first read; `withinMs` reads again every `pollMs`
 until it holds, for at most that long. With neither, it reads once.
 
-A traffic check is counted by the proxy itself, matched exactly as a pin
+An `owns` check reads the observation log - requests, frames, storage writes
+and motion - and counts what is credited to one step: the call `stepsBack`
+before the check (default 1, the call just before it). Every call counts -
+every tool call an agent makes, reads included, and every step of a run - so a
+`screenshot` between a click and its check makes the click `stepsBack: 2`. It
+counts by credit, not by time: an observation that crossed after the step but
+was credited to a later step, or to none, is not counted, and the answer names
+where it went (`0 owned · 1 elsewhere: #42 timing`). Each counted observation
+names its basis: the evidence its cause was stamped with (`input`, `script`,
+`reply`) or `timing` where it was placed by time alone; `basis: 'stamped'`
+counts only the stamped ones. A request or frame is matched exactly as a pin
 matches - the same fields, the same code, a lone `"key":value` in
-`textIncludes` compared as a top-level JSON field. The count starts at the
-start of the call `stepsBack` before the check (default 1, the call just
-before it): the proxy counts what is already on its record from then, with
-the full text each crossing carried, then each crossing as it passes until the
-check ends. Every call counts - every tool call an agent makes, reads
-included, and every step of a run - so a `screenshot` between a click and its
-check makes the click `stepsBack: 2`. The default matters because traffic a
-call caused has usually crossed by the time the check is called: a step ends
-once its traffic settles. `count` with `gte` (the default) or `gt` holds as soon as it is met;
-`equals`, `lte` and `lt` read until `withinMs` ends, since a later crossing can
-break them, and fail as soon as they are exceeded:
+`textIncludes` compared as a top-level JSON field. `count` with `gte` (the
+default) or `gt` holds as soon as it is met; `equals`, `lte` and `lt` read
+until `withinMs` ends, since a later arrival can break them, and fail as soon
+as they are exceeded:
 
 ```javascript
-check({ traffic: { urlIncludes: '/api/items', method: 'GET' }, count: 4, operator: 'equals', withinMs: 3000 })
-check({ traffic: { urlIncludes: '/live', direction: 'received', textIncludes: '"tag":"tick"' }, count: 3, withinMs: 5000 })
-check({ traffic: { urlIncludes: '/analytics' }, count: 0, operator: 'equals', withinMs: 2000 })
+check({ owns: { urlIncludes: '/api/items', method: 'GET' }, count: 4, operator: 'equals', withinMs: 3000 })
+check({ owns: { urlIncludes: '/live', direction: 'received', textIncludes: '"tag":"tick"' }, count: 3, withinMs: 5000 })
+check({ owns: { kind: 'motion', includes: 'transform #progress' }, basis: 'stamped' })
+check({ owns: { urlIncludes: '/analytics' }, count: 0, operator: 'equals', withinMs: 2000 })
 check({ socket: '/live', condition: 'closed', withinMs: 10000 })
 ```
 
-Both read through the proxy the browser was launched with, so on a browser
-launched without `proxy: true` they answer an error; the bench says so when a
+A socket check, and an `owns` check of requests or frames, read through the proxy the browser was launched with, so on a browser
+launched without `proxy: true` they find nothing to read; the bench says so when a
 sequence holding one is opened, with a button to relaunch through a proxy. In a
-run, the step before a traffic check stays marked while the check waits, so the
-crossings it counts are listed under the step that caused them. Operators:
+run, the step before an `owns` check stays marked while the check waits, so what
+arrives late is still credited to the step that caused it. Operators:
 `equals`, `notEquals`, `contains`, `matches`, `gt`, `gte`, `lt`, `lte`,
 `exists`, `notExists`.
 

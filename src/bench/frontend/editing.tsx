@@ -13,7 +13,7 @@ import type {
 } from '../wire.js';
 import { useEscape } from './escape.js';
 import { askSection, useGoToAnyTarget } from './goto.js';
-import { comparisonOf } from '../check-words.js';
+import { comparisonOf, readsCrossings } from '../check-words.js';
 import { keyOf, kindOf, type KindCount } from '../kinds.js';
 import { socketName } from './crossing.js';
 import { toggleVariables, useVariablesHidden } from './variables-shown.js';
@@ -558,7 +558,7 @@ export function Editing({ base, onReturn, returnsFromShot, card: askedCard }: {
           browser launched without one it can only answer an error. Said on
           opening the sequence rather than at the step that errors. */}
       {activity.boundary && !activity.boundary.running
-        && steps.some(step => step.tool === 'check' && (step.params?.traffic !== undefined || step.params?.socket !== undefined)) && (
+        && steps.some(step => step.tool === 'check' && (readsCrossings(step.params?.owns as Parameters<typeof readsCrossings>[0]) || step.params?.socket !== undefined)) && (
         <Notice kind="warning">
           <EnableProxy base={base}>
             <span class="grow">This sequence checks traffic, which is read through the proxy, and this page runs outside one.</span>
@@ -1123,7 +1123,7 @@ function limitOf(tool: string, params: Record<string, any>): number {
 
 /** Whether a check's settings read anything; a check that reads nothing is a timer. */
 function checkSubject(params: Record<string, any>): boolean {
-  return ['selector', 'value', 'expression', 'url', 'cookie', 'localStorage', 'indexedDB', 'traffic', 'socket', 'connectionOpen'].some(key => params[key] !== undefined);
+  return ['selector', 'value', 'expression', 'url', 'cookie', 'localStorage', 'indexedDB', 'owns', 'socket', 'connectionOpen'].some(key => params[key] !== undefined);
 }
 
 type CheckAnswer = {
@@ -1215,7 +1215,7 @@ function CheckRow({ step, outcome, number, variables, waiting, onRemove, onSave 
  * other expression gives none and keeps the wait colour.
  */
 function areaOf(params: Record<string, unknown>): string {
-  if (params.traffic !== undefined || params.socket !== undefined) return 'area-traffic';
+  if (params.owns !== undefined || params.socket !== undefined) return 'area-traffic';
   if (params.localStorage !== undefined || params.cookie !== undefined || params.indexedDB !== undefined) return 'area-store';
   if (typeof params.expression === 'string' && /\b(localStorage|sessionStorage)\b/.test(params.expression)) return 'area-store';
   if (params.value !== undefined) return 'area-variable';

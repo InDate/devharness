@@ -1151,7 +1151,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
     // Every step is a call a traffic check can count back to.
     noteCallStart();
     atRunStep(i);
-    const holdsPrevious = cmd.tool === 'check' && cmd.params?.traffic !== undefined && boundaryStep !== undefined;
+    const holdsPrevious = cmd.tool === 'check' && cmd.params?.owns !== undefined && boundaryStep !== undefined;
     if (!holdsPrevious) {
       // The previous step's boundary is released before this one marks, so a
       // step's tail is credited to the step that caused it on this side exactly

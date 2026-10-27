@@ -27,12 +27,12 @@ const WAITED: [string, string] = ['waited', 'waited'];
  * A traffic count's words: arrived for a least-count, none for a count that
  * must stay at 0, and within or over a limit that must not be exceeded.
  */
-function trafficWords(operator: string, count: number): [string, string] {
-  if ((operator === 'equals' || operator === 'lte') && count === 0) return ['none crossed', 'crossed'];
-  if (operator === 'lt' && count <= 1) return ['none crossed', 'crossed'];
+function ownsWords(operator: string, count: number): [string, string] {
+  if ((operator === 'equals' || operator === 'lte') && count === 0) return ['owns none', 'owns some'];
+  if (operator === 'lt' && count <= 1) return ['owns none', 'owns some'];
   if (operator === 'equals') return [`exactly ${count}`, `not ${count}`];
   if (operator === 'lte' || operator === 'lt') return ['within limit', 'over limit'];
-  return ['arrived', 'not arrived'];
+  return ['owned', 'not owned'];
 }
 
 const TRUTHY: [string, string] = ['true', 'false'];
@@ -63,10 +63,18 @@ export function comparisonOf(tool: string, params: Record<string, unknown>): [st
   if (params.value !== undefined) return OPERATORS[String(params.operator)] ?? PASSED;
   if (params.expression !== undefined) return TRUTHY;
   if (params.url !== undefined) return OPERATORS[String(params.operator ?? 'equals')] ?? PASSED;
-  if (params.traffic !== undefined) return trafficWords(String(params.operator ?? 'gte'), Number(params.count ?? 1));
+  if (params.owns !== undefined) return ownsWords(String(params.operator ?? 'gte'), Number(params.count ?? 1));
   if (params.socket !== undefined) return params.condition === 'closed' ? ['closed', 'open'] : ['open', 'closed'];
   if (params.cookie !== undefined || params.localStorage !== undefined || params.indexedDB !== undefined) {
     return params.condition === 'absent' ? CONDITIONS.absent : CONDITIONS.present;
   }
   return WAITED;
+}
+
+
+/** Whether an `owns` check reads requests or frames, which only a proxy sees; storage and motion are read in the page. */
+export function readsCrossings(owns: { kind?: string; urlIncludes?: string; method?: string; direction?: string; textIncludes?: string } | undefined): boolean {
+  if (!owns) return false;
+  return owns.kind === 'request' || owns.kind === 'frame'
+    || owns.urlIncludes !== undefined || owns.method !== undefined || owns.direction !== undefined || owns.textIncludes !== undefined;
 }

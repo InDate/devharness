@@ -519,9 +519,9 @@ one browser and report success.
 
 A `check` step reads one thing - an element (`selector` + `condition`), a value
 (`{{var:...}}` + `operator` + `right`), an `expression`, the `url`, a `cookie`,
-a `localStorage` key, an `indexedDB` record, traffic crossing the proxy
-(`traffic: { urlIncludes, method }` or `{ urlIncludes, direction, textIncludes }`
-with `count`), a `socket` open or closed, or time alone (`afterMs`) - and
+a `localStorage` key, an `indexedDB` record, what a step owns
+(`owns: { kind, includes }`, or a request's or frame's crossing fields, with
+`count`, read from the observation log by credit), a `socket` open or closed, or time alone (`afterMs`) - and
 answers held, failed or error. `withinMs` reads again until it holds. What the
 run does next is the step's `holds` and `fails`:
 

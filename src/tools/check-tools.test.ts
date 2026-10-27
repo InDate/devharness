@@ -167,10 +167,10 @@ describe('check as a step', () => {
     expect(clicks).toEqual(['#first', '#login']);
   });
 
-  it('keeps the step before a traffic check marked while it reads, and marks no step for a plain check', async () => {
-    const traffic = run(HELD);
-    await traffic.execute([click('first'), checkStep({ traffic: { urlIncludes: '/api' } }), click('next')]);
-    expect(traffic.markedDuringCheck).toEqual([0]);
+  it('keeps the step before an owns check marked while it reads, and marks no step for a plain check', async () => {
+    const owns = run(HELD);
+    await owns.execute([click('first'), checkStep({ owns: { urlIncludes: '/api' } }), click('next')]);
+    expect(owns.markedDuringCheck).toEqual([0]);
 
     // A plain check only reads, and its recorded call took no cursor, so what
     // crosses while it reads is credited to no step on either side.

@@ -4770,7 +4770,7 @@ Could not read {{path}}: {{reason}}
 
 **Once per session:**
 
-Called directly, a check answers held or failed and the call itself succeeds; `assert` is a check whose failure stops a run, and `wait` a check with a time limit. `stepsBack` counts traffic from the start of an earlier call: the default 1 is the call before the check, whose traffic has usually crossed by the time the check runs, and every call counts, in a run each step. A traffic match follows a pin's rules. With `count`, the operators `equals`, `lte` and `lt` read until `withinMs` ends, since a later crossing can break them. As a sequence step, `connection` comes from the run, and a `{ run }` outcome with no `resumeAt` carries on at the next step.
+Called directly, a check answers held or failed and the call itself succeeds; `assert` is a check whose failure stops a run, and `wait` a check with a time limit. `owns` counts what is credited to the step `stepsBack` names, by credit in the observation log rather than by time: the default 1 is the call before the check, every call counts, in a run each step, and the answer names where a matching observation credited elsewhere went. A request or frame match follows a pin's rules. With `count`, the operators `equals`, `lte` and `lt` read until `withinMs` ends, since a later crossing can break them. As a sequence step, `connection` comes from the run, and a `{ run }` outcome with no `resumeAt` carries on at the next step.
 
 ---
 

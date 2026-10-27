@@ -232,6 +232,8 @@ export function createBenchTools(
           if (!launched.success) {
             return createErrorResponse(launched.errorType, {
               reference: named,
+              // LAUNCH_FAILED's template reads message, INVALID_REFERENCE's error.
+              message: launched.error,
               error: launched.error,
             });
           }
@@ -361,9 +363,11 @@ export function createBenchTools(
               // hides it, and Chrome drops input sent to a hidden tab; a window
               // covering the app's keeps it rendering, under the launch flags
               // that stop occluded windows backgrounding. It can still be
-              // dragged into Chrome's split view beside the app.
+              // dragged into Chrome's split view beside the app. Opened in the
+              // app's own browser context, so the bench's requests cross the
+              // app's proxy, which reads its own bench as quiet, and no other's.
               openBench: args.openTab === false ? undefined : async (url: string) => {
-                const tab = await openBackgroundPage(page.browser(), { newWindow: true });
+                const tab = await openBackgroundPage(page.browser(), { newWindow: true, browserContextId: page.browserContext().id });
                 const session = await openSession(tab);
                 const send = (method: string, params?: Record<string, unknown>) => session.send(method as any, params as any);
                 const key = benchWindowKey(connection);

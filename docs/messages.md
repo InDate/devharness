@@ -933,6 +933,24 @@ URL: {{url}}, Title: {{title}}
 
 ---
 
+## PAGE_VIEWPORT_SET
+
+**Type:** success
+**Summary:** Page viewport set
+
+Viewport {{width}}×{{height}}, set by emulation; the window stays as it is, so a page larger than it shows in part. A run puts back the viewport it began with when it ends; set outside a run, it stands until `navigate({ action: 'viewport' })` with no size releases it.
+
+---
+
+## PAGE_VIEWPORT_RELEASED
+
+**Type:** success
+**Summary:** Page viewport released
+
+The page follows its window again, at {{width}}×{{height}}.
+
+---
+
 ## PAGE_INFO_PAUSED
 
 **Type:** success

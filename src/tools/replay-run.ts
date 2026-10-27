@@ -42,6 +42,7 @@ import {
 import { formatRunReply, formatStepsReply } from './run-table.js';
 import { pausesIn, rulesForRun } from './run-rules.js';
 import { armForRun, keepArmedForRun, originOf } from '../bench-mode/rules.js';
+import { viewportAtRunStart } from '../sequence-viewport.js';
 import { siteReaderOf } from '../bench-mode/sequence-driver.js';
 import { configManager } from '../config.js';
 import { blankPageUrl } from '../utils/blank-page.js';
@@ -893,9 +894,19 @@ export async function performRun(
   // It arms the site's rules and picks each per-origin variable value.
   ctx.runOrigin = originOf(args.baseUrl ?? sequence.startUrl)
     ?? (ctx.connection ? originOf(await getPageForConnection(ctx.connection).then(page => page?.url?.()).catch(() => undefined)) : undefined);
-  const release = ctx.connection
+  const releaseRules = ctx.connection
     ? await armForRun(ctx.connection, sequence, ctx.runOrigin, siteReaderOf(recorder)).catch(() => async () => {})
     : async () => {};
+  // A viewport step lasts as long as the run: the viewport the page held as it
+  // began is put back with its rules, so a paused run keeps the step's size
+  // until it is finished or cancelled.
+  const restoreViewport = ctx.connection
+    ? await getPageForConnection(ctx.connection)
+      .then(page => (page ? viewportAtRunStart(page) : undefined))
+      .catch(() => undefined)
+    : undefined;
+  const release = async () => { await releaseRules(); await restoreViewport?.().catch(() => {}); };
+  if (abortSignal) abortSignal.addEventListener('abort', () => { void restoreViewport?.().catch(() => {}); }, { once: true });
   const keepArmed = () => { if (runId) keepArmedForRun(runId, release); else void release(); };
 
   // Execute the sequence

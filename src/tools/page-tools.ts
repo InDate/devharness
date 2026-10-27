@@ -15,6 +15,7 @@ import { collectInteractiveElements } from '../element-collector.js';
 import type { ExecuteToolCall } from '../types.js';
 import { raceAbort, throwIfAborted } from '../utils/abort.js';
 import { openSession } from '../utils/own-session.js';
+import { setPageViewport } from '../sequence-viewport.js';
 
 // =============================================================================
 // Types
@@ -148,7 +149,7 @@ function navigationOutcome(result: ActionResult<unknown>, action: string, target
 
 // Consolidated schema for page navigation tools
 const navigateSchema = z.object({
-  action: z.enum(['goto', 'reload', 'back', 'forward', 'info']),
+  action: z.enum(['goto', 'reload', 'back', 'forward', 'info', 'viewport']),
   connection: z.string().describe('The connection, by the name connection launch or attach gave it'),
   // Parameters for goto action
   url: z.string().optional().describe('URL to navigate to (required for goto action)'),
@@ -156,6 +157,8 @@ const navigateSchema = z.object({
   // Parameters for reload action
   ignoreCache: z.boolean().optional().describe('reload: clear the cache first (default false)'),
   timeout: z.number().optional().describe('reload: max wait ms (default 30000)'),
+  width: z.number().int().positive().optional().describe('viewport: CSS px wide; with height. Both omitted, the page follows its window again'),
+  height: z.number().int().positive().optional().describe('viewport: CSS px tall; with width'),
 }).strict();
 
 export function createPageTools(
@@ -178,7 +181,7 @@ export function createPageTools(
 
   return {
     navigate: createTool(
-      'Navigate the page; goto, reload, back and forward return its console and failed-request counts and cache its interactive elements for 5 min. info: URL, title, viewport.',
+      'Navigate the page; goto, reload, back and forward return its console and failed-request counts and cache its interactive elements for 5 min. info: URL, title, viewport. viewport: sets the page\'s viewport by emulation, leaving the window as it is; a run puts back the viewport it began with when it ends.',
       navigateSchema,
       // abortSignal (#110): a cancelled navigation STOPS WAITING only (D4).
       // We deliberately do NOT call Page.stopLoading - a half-loaded page
@@ -398,6 +401,29 @@ export function createPageTools(
               },
             };
 
+            return response;
+          }
+
+          case 'viewport': {
+            const { width, height } = args;
+            if ((width === undefined) !== (height === undefined)) {
+              return createErrorResponse('INVALID_PARAMETER', {
+                parameter: width === undefined ? 'height' : 'width', value: String(width ?? height),
+                message: 'viewport takes width and height together, or neither to let the page follow its window again',
+              });
+            }
+            const size = width !== undefined && height !== undefined ? { width, height } : undefined;
+            // Measuring the page runs page JS, which a page held at a breakpoint never answers.
+            const result = await executeWithPauseDetection(targetCdpManager, () => setPageViewport(page, size), 'setViewport');
+            if (!result.result) return createErrorResponse('PAGE_NOT_LOADED', { toolName: 'navigate.viewport' });
+            const measured = result.result;
+            const response = size
+              ? createSuccessResponse('PAGE_VIEWPORT_SET', { width: measured.width, height: measured.height })
+              : createSuccessResponse('PAGE_VIEWPORT_RELEASED', { width: measured.width, height: measured.height });
+            response._meta = {
+              tool: 'navigate', action: 'viewport', timestamp: Date.now(),
+              navigate: { url: page.url(), action: 'viewport', viewport: measured, emulated: !!size },
+            };
             return response;
           }
 

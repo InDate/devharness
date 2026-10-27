@@ -93,6 +93,9 @@ export interface NavigateActionMeta {
   action: string;
   /** The page is held at a breakpoint, so only what needs no page JS was read. */
   paused?: boolean;
+  /** viewport: the layout viewport the page measures after the call, and whether emulation holds it. */
+  viewport?: { width: number; height: number };
+  emulated?: boolean;
 }
 
 /** Where a paused debugger stands: the top frame, mapped to its original source where a source map covers it. */

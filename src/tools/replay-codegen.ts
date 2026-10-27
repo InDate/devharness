@@ -112,6 +112,9 @@ export function generatePuppeteerCode(commands: Array<{ tool: string; params: Re
       } else if (action === 'reload') {
         lines.push(`  await page.reload();`);
         lines.push('');
+      } else if (action === 'viewport' && params.width && params.height) {
+        lines.push(`  await page.setViewport({ width: ${Number(params.width)}, height: ${Number(params.height)} });`);
+        lines.push('');
       }
     } else if (cmd.tool === 'input') {
       const { action, ...params } = cmd.params;
@@ -223,6 +226,9 @@ export function generatePlaywrightCode(commands: Array<{ tool: string; params: R
         lines.push('');
       } else if (action === 'reload') {
         lines.push(`  await page.reload();`);
+        lines.push('');
+      } else if (action === 'viewport' && params.width && params.height) {
+        lines.push(`  await page.setViewportSize({ width: ${Number(params.width)}, height: ${Number(params.height)} });`);
         lines.push('');
       } else if (action === 'back') {
         lines.push(`  await page.goBack();`);

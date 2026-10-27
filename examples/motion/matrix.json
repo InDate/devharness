@@ -1228,7 +1228,7 @@
       "trigger": "scroll",
       "mechanism": "css-transition",
       "clock": "page time",
-      "fault": "The reveal waits 400ms after the card enters",
+      "fault": "The reveal waits 400ms after the card enters; hovered before its reveal, the card's :hover transform replaces its 24px offset, so it jumps out from under the pointer and flickers in and out of hover, and the revealed card's .late.shown transform overrides the hover lift",
       "cells": {
         "credit": {
           "expect": "The scroll step that brought it in, +400ms"

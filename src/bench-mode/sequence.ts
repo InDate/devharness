@@ -277,16 +277,20 @@ async function withAppInFront<T>(session: BenchSession, drive: () => Promise<T>)
     try { return await drive(); } finally { session.appInFront = (session.appInFront ?? 1) - 1; }
   }
   session.appInFront = 1;
-  // Raised on every play, hidden or not: the bench has a window of its own,
-  // and the app's window behind it keeps rendering and reads visible while
-  // the person watching the play sees only the bench.
-  await session.page.bringToFront().catch(() => {});
+  // Raised only where it reads hidden, the one case Chrome drops its input:
+  // raising a window gives it the keyboard, and a play raised on every run
+  // took the person's typing into the app while they worked elsewhere. A
+  // window behind the bench keeps rendering and reads visible.
+  const hidden = await Promise.resolve()
+    .then(() => session.page.evaluate(() => (globalThis as any).document.visibilityState === 'hidden'))
+    .catch(() => false) === true;
+  if (hidden) await session.page.bringToFront().catch(() => {});
   try {
     return await drive();
   } finally {
     session.appInFront = 0;
-    // The bench comes back in front when the play ends, where its results are.
-    await session.benchPage?.bringToFront().catch(() => {});
+    // The bench comes back in front where the play moved it, where its results are.
+    if (hidden) await session.benchPage?.bringToFront().catch(() => {});
   }
 }
 

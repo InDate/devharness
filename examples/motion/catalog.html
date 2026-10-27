@@ -297,6 +297,7 @@
       <button id="fly">Archive</button> <button id="preview-toggle">Preview</button>
       <button id="smil-go">Move dot</button> <button id="jump">Jump to Labels</button>
       <span id="nudge" style="display:inline-block">Bundle</span> <button id="nudge-go">Nudge</button>
+      <span id="saved-stamp" style="display:inline-block;opacity:0">Saved</span>
     </div>
     <details id="faq"><summary>How long is mail kept?</summary><p>A year in the archive, thirty days in the trash.</p></details>
     <div class="flight"><span id="plane">✈</span></div>
@@ -726,7 +727,7 @@
     '[': toggleVideo, ']': playEnvelope, '-': toggleGl, '=': showPlans,
   };
   document.addEventListener('keydown', e => {
-    if (e.target instanceof HTMLInputElement) return;
+    if (e.target instanceof HTMLInputElement || e.metaKey || e.ctrlKey) return;
     keys[e.key]?.();
   });
 </script>
@@ -738,6 +739,23 @@
     { duration: 400, easing: 'ease-in-out' });
   document.getElementById('nudge-go').addEventListener('click', nudge);
   document.addEventListener('keydown', e => { if (e.key === '\\') nudge(); });
+
+  // A shortcut sequence as Mousetrap runs one: ⌘K starts it, ⌘S within a
+  // second finishes it, and the second key arriving later starts nothing.
+  let sequenceOpen;
+  document.addEventListener('keydown', e => {
+    if (!(e.metaKey || e.ctrlKey)) return;
+    if (e.key === 'k') {
+      e.preventDefault();
+      clearTimeout(sequenceOpen);
+      sequenceOpen = setTimeout(() => { sequenceOpen = undefined; }, 1000);
+    } else if (e.key === 's' && sequenceOpen) {
+      e.preventDefault();
+      clearTimeout(sequenceOpen);
+      sequenceOpen = undefined;
+      document.getElementById('saved-stamp').animate([{ opacity: 0 }, { opacity: 1 }, { opacity: 0 }], { duration: 600 });
+    }
+  });
 </script>
 </body>
 </html>

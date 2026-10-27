@@ -57,6 +57,8 @@ const inputToolSchema = z.object({
 
   // press
   key: z.string().optional(),
+  keys: z.array(z.string()).optional().describe('press: keys pressed in turn in this one step, a shortcut sequence such as ["Meta+k", "Meta+s"], in place of key'),
+  gapsMs: z.array(z.number()).optional().describe('press with keys: ms from each key to the next'),
 
   // focusNext/focusPrevious
   count: z.number().optional().describe('Tab count'),
@@ -1166,7 +1168,8 @@ export function createInputTools(
             }
 
             case 'press': {
-              const { key } = args;
+              const { keys, gapsMs = [] } = args;
+              const key = keys?.length ? keys.join(' ') : args.key;
 
               if (!key) {
                 return {
@@ -1185,7 +1188,13 @@ export function createInputTools(
                 executeWithPauseDetection(
                   targetCdpManager,
                   async () => {
-                    await pressChord(page, key);
+                    // One call for the whole sequence: a step boundary between
+                    // its keys waits on the step's motion, past the timeout
+                    // after which an app drops a half-pressed sequence.
+                    for (const [at, one] of (keys?.length ? keys : [key]).entries()) {
+                      if (at > 0 && gapsMs[at - 1] > 0) await new Promise(resolve => setTimeout(resolve, gapsMs[at - 1]));
+                      await pressChord(page, one);
+                    }
                     return true;
                   },
                   'pressKey'

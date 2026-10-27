@@ -266,6 +266,9 @@ export interface CommandSequence {
   tags?: string[];
 }
 
+/** Longest gap between a person's presses that keeps them one shortcut sequence; the shortest sequence timeout in common use is Mousetrap's 1000ms. */
+const SEQUENCE_KEY_GAP_MS = 1000;
+
 // Internal history tracking (includes index and timestamp)
 export interface HistoryCommand extends RecordedCommand {
   index: number;
@@ -731,9 +734,24 @@ export class CommandRecorder {
   buildCommandsFromHistory(commandIndices: number[]): RecordedCommand[] | null {
     const captures: CaptureEntry[] = [];
     const commands: RecordedCommand[] = [];
+    // The person's press just taken, while the next entry can join it.
+    let pressed: { at: number; step: RecordedCommand } | undefined;
     for (const idx of commandIndices) {
       const cmd = this.getCommand(idx);
       if (!cmd) return null;
+      const personPress = cmd.from === 'person' && cmd.tool === 'input' && cmd.params.action === 'press' && typeof cmd.params.key === 'string';
+      // A person's presses close together are one shortcut sequence, kept as
+      // one step: replayed as steps, the wait on each step's motion falls
+      // between the keys and outruns the app's sequence timeout.
+      if (personPress && pressed && cmd.timestamp - pressed.at < SEQUENCE_KEY_GAP_MS) {
+        const params = pressed.step.params;
+        params.keys = [...(params.keys ?? [params.key]), cmd.params.key];
+        params.gapsMs = [...(params.gapsMs ?? []), cmd.timestamp - pressed.at];
+        delete params.key;
+        pressed.at = cmd.timestamp;
+        continue;
+      }
+      pressed = undefined;
       // A replay call is history, not a step: as a step it would run another
       // sequence in a pass of its own, sharing none of the caller's variables.
       if (cmd.tool === 'replay' || cmd.tool === 'run') continue;
@@ -756,6 +774,7 @@ export class CommandRecorder {
         recordedAt: idx,
         ...(fingerprint && { fingerprint }),
       });
+      if (personPress) pressed = { at: cmd.timestamp, step: commands[commands.length - 1] };
 
       if (cmd.params.saveAs && cmd.result !== undefined) {
         const captured = captureVariable(cmd.tool, cmd.params, cmd.result);

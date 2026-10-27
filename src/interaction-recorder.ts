@@ -1743,8 +1743,16 @@ export function eventsToCommands(
             continue;
           }
         }
-        const key = event.key;
+        // A held key's auto-repeat presses nothing a step replays: the first
+        // keydown stands for the hold.
+        if (event.repeat) {
+          i++;
+          continue;
+        }
         const modifiers = event.modifiers;
+        // Option on macOS turns the key into another character, which no
+        // keyboard layout replays; the physical key does.
+        const key = modifiers?.alt && event.code ? event.code : event.key;
         let keyCombo = key;
         if (modifiers) {
           const parts: string[] = [];

@@ -315,7 +315,8 @@ function selectorInPage(el: any): string | undefined {
 /**
  * The listener the bench installs while it records a person's input. Each
  * click, each field left after typing into it, and each key pressed outside a
- * field - Enter, Escape and Tab inside one - is reported the moment it happens
+ * field - inside one, Enter, Escape, Tab and a Control or Meta shortcut - is
+ * reported, with the modifiers held, the moment it happens
  * through the `__devharnessInput` binding, with the root the trigger tracker
  * gave the input, and with
  * the element's fingerprint and a selector built from it - a point only where
@@ -382,16 +383,35 @@ export function personInputScript(): string {
   };
   listen('focusout', (e) => flush(e.composedPath()[0]), true);
   // Typing into a field reports as the field's text; any other key is a press,
-  // a shortcut the app acts on. A lone modifier presses nothing.
+  // a shortcut the app acts on. A lone modifier presses nothing, and a held
+  // key's auto-repeat presses nothing a step replays.
   const EDITABLE = 'input,textarea,select,[contenteditable],[contenteditable=true],[contenteditable=""]';
   const MODIFIERS = new Set(['Shift', 'Control', 'Alt', 'Meta', 'CapsLock']);
+  // Inside a field, Control or Meta with one of these edits the text, which
+  // the field's text already carries; with any other key it is a shortcut.
+  const EDITING = new Set(['a', 'c', 'x', 'v', 'z', 'y', 'Backspace', 'Delete', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End']);
+  const FIELD_KEYS = new Set(['Enter', 'Escape', 'Tab']);
+  // The key as input press replays it: the modifiers held, then the key.
+  // Option on macOS turns the key into another character, which no keyboard
+  // layout replays, so with Alt held the physical key stands in. Shift is
+  // named for a named key; a character already carries it.
+  const comboOf = (e) => {
+    const key = e.altKey && e.code ? e.code : e.key;
+    const held = [];
+    if (e.ctrlKey) held.push('Control');
+    if (e.altKey) held.push('Alt');
+    if (e.shiftKey && key.length > 1) held.push('Shift');
+    if (e.metaKey) held.push('Meta');
+    return [...held, key].join('+');
+  };
   listen('keydown', (e) => {
-    if (ours() || !e.isTrusted || MODIFIERS.has(e.key)) return;
+    if (ours() || !e.isTrusted || e.repeat || MODIFIERS.has(e.key)) return;
     const target = e.composedPath()[0];
     const typing = target && target.matches && target.matches(EDITABLE);
-    if (typing && e.key !== 'Enter' && e.key !== 'Escape' && e.key !== 'Tab') return;
+    const shortcut = (e.ctrlKey || e.metaKey) && !EDITING.has(e.key.length === 1 ? e.key.toLowerCase() : e.key);
+    if (typing && !shortcut && !FIELD_KEYS.has(e.key)) return;
     flush(target);
-    send({ action: 'press', key: e.key }, e);
+    send({ action: 'press', key: comboOf(e) }, e);
   }, true);
 })();`;
 }

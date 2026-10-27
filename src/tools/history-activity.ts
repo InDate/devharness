@@ -11,8 +11,9 @@ import { foreignTo, formatLines, letterKey, observation, observationsOf, OBSERVA
 export function describeCall(command: Pick<HistoryCommand, 'tool' | 'params'>): string {
   const params = (command.params ?? {}) as Record<string, unknown>;
   const action = typeof params.action === 'string' ? ` ${params.action}` : '';
-  const target = ['key', 'selector', 'url', 'name', 'expression', 'ms', 'afterMs']
-    .map(field => params[field])
+  const keys = Array.isArray(params.keys) ? params.keys.join(' ') : undefined;
+  const target = [keys === undefined ? 'key' : 'keys', 'selector', 'url', 'name', 'expression', 'ms', 'afterMs']
+    .map(field => (field === 'keys' ? keys : params[field]))
     .find(value => value !== undefined && value !== '');
   const shown = target === undefined ? '' : ` ${String(target).replace(/\s+/g, ' ').slice(0, 48)}${String(target).length > 48 ? '…' : ''}`;
   // An input step reads as what it did: `click …`, `press e`.

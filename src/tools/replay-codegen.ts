@@ -79,6 +79,16 @@ function generatedCodeHeader(pages: ReturnType<typeof buildPageVars>): string[] 
   return out;
 }
 
+/** A press step's keys in turn, with the recorded gap before each key after the first. */
+function pressLines(params: Record<string, any>): string[] {
+  const keys: string[] = params.keys?.length ? params.keys : [params.key];
+  const gaps: number[] = params.gapsMs ?? [];
+  return keys.flatMap((key, at) => [
+    ...(at > 0 && gaps[at - 1] > 0 ? [`  await new Promise(resolve => setTimeout(resolve, ${Number(gaps[at - 1])}));`] : []),
+    `  await page.keyboard.press(${jsString(key)});`,
+  ]);
+}
+
 /** Puppeteer test code for a sequence's commands. */
 export function generatePuppeteerCode(commands: Array<{ tool: string; params: Record<string, any> }>, startUrl?: string): string {
   const pages = buildPageVars(commands);
@@ -157,7 +167,7 @@ export function generatePuppeteerCode(commands: Array<{ tool: string; params: Re
           break;
 
         case 'press':
-          lines.push(`  await page.keyboard.press(${jsString(params.key)});`);
+          lines.push(...pressLines(params));
           lines.push('');
           break;
       }
@@ -279,7 +289,7 @@ export function generatePlaywrightCode(commands: Array<{ tool: string; params: R
           break;
 
         case 'press':
-          lines.push(`  await page.keyboard.press(${jsString(params.key)});`);
+          lines.push(...pressLines(params));
           lines.push('');
           break;
 

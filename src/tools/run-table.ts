@@ -61,13 +61,21 @@ interface Row {
   label: string;
   step: number;
   command: HistoryCommand;
-  outcome: 'passed' | 'failed' | 'running';
+  outcome: 'passed' | 'failed' | 'continued' | 'running';
   match?: StepMatch;
 }
 
 function outcomeOf(command: HistoryCommand): Row['outcome'] {
   if (command.stepFailed || command.result?.isError === true) return 'failed';
-  return command.result === undefined ? 'running' : 'passed';
+  if (command.result === undefined) return 'running';
+  // A check whose `fails` carried the run on still failed: read as passed,
+  // its answer would reach no reader of the run.
+  return checkOf(command)?.outcome === 'failed' ? 'continued' : 'passed';
+}
+
+/** A check step's reading, as the check tool recorded it on its result. */
+function checkOf(command: HistoryCommand): { outcome?: string; subject?: string; found?: string } | undefined {
+  return command.tool === 'check' ? (command.result as any)?._meta?.check : undefined;
 }
 
 /** Each rule that acted on these crossings, with how many it acted on. */
@@ -256,6 +264,7 @@ export function formatRunReply(recorder: CommandRecorder, input: RunReplyInput):
   const unrecorded = [...(input.failures ?? [])].filter(([step]) => !own.some(row => row.step === step));
   const failedAt = failedRow?.step ?? unrecorded[0]?.[0];
   const passed = own.filter(row => row.outcome === 'passed').length;
+  const continued = own.filter(row => row.outcome === 'continued').length;
   const mismatches = rows.filter(mismatched).length;
   const compared = rows.some(row => row.match?.kinds);
   const left = input.total - Math.max(reached, ...[...(input.failures?.keys() ?? [])]);
@@ -267,6 +276,7 @@ export function formatRunReply(recorder: CommandRecorder, input: RunReplyInput):
     : `${input.name} stopped at step ${reached} of ${input.total}`;
   const tally = [
     `${passed} passed`,
+    continued ? `${continued} check${continued === 1 ? '' : 's'} failed and continued` : '',
     mismatches ? `${mismatches} mismatched` : compared ? 'all matched' : '',
     left > 0 ? `${left} ${input.paused && failedAt === undefined ? 'remaining' : 'not run'}` : '',
   ].filter(Boolean);
@@ -279,7 +289,7 @@ export function formatRunReply(recorder: CommandRecorder, input: RunReplyInput):
   // A step that caused something is part of what the run did; one that caused
   // nothing and matched is listed only when every step is asked for.
   const ended = endsBefore(rows);
-  const listed = input.steps === 'all' ? rows : rows.filter(row => row.outcome === 'failed' || mismatched(row) || observationsOf(row.command.index).length > 0 || ended.has(row));
+  const listed = input.steps === 'all' ? rows : rows.filter(row => row.outcome === 'failed' || row.outcome === 'continued' || mismatched(row) || observationsOf(row.command.index).length > 0 || ended.has(row));
   // Every step the run took is accounted for: those left out of the table are named.
   const unlisted = input.steps === 'all' ? [] : rows.filter(row => !listed.includes(row));
   const unlistedLine = unlisted.length
@@ -315,6 +325,10 @@ export function formatRunReply(recorder: CommandRecorder, input: RunReplyInput):
     if (row.outcome === 'failed') {
       const why = (row.label.includes('.') ? undefined : input.failures?.get(row.step)) ?? firstLine(row.command);
       if (why) notes.push(`Step ${row.label}: ${why}`);
+    }
+    if (row.outcome === 'continued') {
+      const check = checkOf(row.command)!;
+      notes.push(`Step ${row.label}: check failed, run continued: ${check.subject ?? ''}${check.found ? ` - found ${check.found}` : ''}`);
     }
   }
   notes.push(...personNotes(input.person));

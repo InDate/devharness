@@ -287,7 +287,7 @@ function probeExpression(selector: string, attribute?: string): string | { error
     // Brought into view first, as input does: hit-testing an element below
     // the fold returns null and reads as unreachable, where a user would scroll.
     // Run quietly: devharness's own scroll is not the app's work.
-    (globalThis[Symbol.for('devharness.trigger')]?.quietly ?? ((run) => run()))(() => el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }));
+    (globalThis[Symbol.for('devharness.trigger')]?.quietly ?? ((run) => run()))(() => el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }), ${JSON.stringify(`check ${selector}`)});
     const r = el.getBoundingClientRect();
     const style = getComputedStyle(el);
     const visible = r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none' && Number(style.opacity) !== 0;

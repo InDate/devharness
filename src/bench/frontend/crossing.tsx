@@ -25,6 +25,7 @@ const MAKERS: Record<string, string> = {
   SVG: 'SVG: SMIL markup animating itself',
   MEDIA: 'media: a video or audio element playing',
   ME: 'you: your own scroll, drag or input',
+  HARNESS: 'devharness: a scroll it made for a step, a check, a capture or a hold',
   BROWSER: 'the browser: a scroll it made itself',
 };
 
@@ -1223,14 +1224,14 @@ export function CrossingRow({
   const cause = event.commandIndex ?? event.entry ?? event.openedBy;
   const causeWords = cause === undefined ? undefined
     : `${event.openedBy !== undefined && event.commandIndex === undefined ? 'opened by ' : ''}#${cause}${event.causeLabel ? ` ${event.causeLabel}` : ''}`;
-  // A motion's go-to: ME opens the input in History; anything else made by a
-  // function or an element opens DevTools on it.
-  const madeByMe = event.maker === 'ME';
-  const reveals = !madeByMe && event.makerRef !== undefined;
-  const makerGo = madeByMe && cause !== undefined && onGoToCause ? () => onGoToCause(cause)
+  // A motion's go-to: ME and HARNESS open the History entry that moved the
+  // page; anything else made by a function or an element opens DevTools on it.
+  const madeByEntry = event.maker === 'ME' || event.maker === 'HARNESS';
+  const reveals = !madeByEntry && event.makerRef !== undefined;
+  const makerGo = madeByEntry && cause !== undefined && onGoToCause ? () => onGoToCause(cause)
     : reveals ? () => { void postMotion(base, '/motion/reveal', { ref: event.makerRef }); }
     : undefined;
-  const makerWords = madeByMe ? (cause !== undefined ? `your input, history #${cause}` : undefined)
+  const makerWords = madeByEntry ? (cause !== undefined ? `${event.maker === 'ME' ? 'your input' : 'devharness'}, history #${cause}` : undefined)
     : reveals ? `DevTools: ${event.makerName ?? event.maker}` : undefined;
   const hidable = actions && event.kind !== 'write';
   const intercepting = !!actions && !!rule && !rule.off && (rule.verb === 'answer' || rule.verb === 'block');

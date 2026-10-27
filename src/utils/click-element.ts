@@ -17,10 +17,28 @@ import type { Page } from 'puppeteer-core';
  */
 export async function clickElement(
   page: Pick<Page, 'mouse'>,
-  handle: { scrollIntoView(): Promise<void>; clickablePoint(): Promise<{ x: number; y: number }> },
-  options: { clickCount?: number } = {}
+  handle: OwnScrollHandle & { clickablePoint(): Promise<{ x: number; y: number }> },
+  options: { clickCount?: number; as?: string } = {}
 ): Promise<void> {
-  await handle.scrollIntoView();
+  await scrollIntoViewAs(handle, options.as ?? 'click');
   const { x, y } = await handle.clickablePoint();
-  await page.mouse.click(x, y, options);
+  await page.mouse.click(x, y, { clickCount: options.clickCount });
+}
+
+type OwnScrollHandle = {
+  scrollIntoView(): Promise<void>;
+  evaluate?(run: (element: unknown, words: string) => void, words: string): Promise<unknown>;
+};
+
+/**
+ * Scroll an element into view as devharness's own scroll, named `words`. The
+ * scroll runs over CDP with no page call, so the page's trigger tracker is
+ * marked first; without the mark the scroll, and the app's motion that answers
+ * it, read as the browser's.
+ */
+export async function scrollIntoViewAs(handle: OwnScrollHandle, words: string): Promise<void> {
+  await handle.evaluate?.((_element, said) => {
+    (globalThis as any)[Symbol.for('devharness.trigger')]?.ownScroll?.(said);
+  }, words).catch(() => { /* a page with no tracker scrolls unmarked */ });
+  await handle.scrollIntoView();
 }

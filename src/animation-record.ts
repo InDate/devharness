@@ -31,7 +31,7 @@ import type { ProxyCursor } from './proxy/intercept-proxy.js';
 import { ANIMATIONS_KEY, type PageAnimation, type SweepReading } from './page-animations.js';
 import { debugLog } from './debug-logger.js';
 import { causeAt, causeBefore } from './proxy/cause-timeline.js';
-import type { MotionReport } from './page-motion.js';
+import type { MotionReport, MotionStop } from './page-motion.js';
 import type { MotionType } from './page-animations.js';
 
 /** The history entry a cursor stands for: one step can stand under more than one cursor object. */
@@ -60,6 +60,8 @@ export interface RecordedAnimation {
   /** A motion that ended under another step than it began in: when, and which step. */
   endedAt?: number;
   endedIn?: ProxyCursor;
+  /** What ended it, where the page read one: a pause call, or the media's own end. */
+  stoppedBy?: MotionStop;
 }
 
 /** What a listener hears: an animation added, a motion's reading updated as it closes, an animation ended. */
@@ -164,6 +166,7 @@ export class AnimationRecord {
       ...(report.maker ? { maker: report.maker } : {}),
       ...(report.makerRef !== undefined ? { makerRef: report.makerRef } : {}),
       ...(report.makerName ? { makerName: report.makerName } : {}),
+      ...(report.makerAt ? { makerAt: report.makerAt } : {}),
     };
     // Start and end are each placed after the action they followed, by the
     // same rule, so the two compare as history entries.
@@ -174,7 +177,9 @@ export class AnimationRecord {
     // that step; the step it ended in is read the same way as the one it began in.
     const endedAt = arrivedAt - Math.max(0, report.sentMs - report.endMs);
     const endedIn = closing ? causeBefore(endedAt, namesEntry) : undefined;
-    const ending = endedIn && entryOfCursor(endedIn) !== entryOfCursor(cursor) ? { endedAt, endedIn } : {};
+    const ending = endedIn && entryOfCursor(endedIn) !== entryOfCursor(cursor)
+      ? { endedAt, endedIn, ...(report.stoppedBy ? { stoppedBy: report.stoppedBy } : {}) }
+      : {};
     if (known) {
       Object.assign(known, { read, ...(closing ? { gone: 'finished' as const } : {}), ...ending });
       this.emit(known, 'updated');

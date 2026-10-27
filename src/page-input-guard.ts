@@ -55,7 +55,7 @@ function installPageInputGuard(g: any): void {
 
   const scrollTo = (at: { x: number; y: number }) => {
     const hold = () => g.scrollTo({ left: at.x, top: at.y, behavior: 'instant' });
-    try { if (tracker?.quietly) tracker.quietly(hold); else hold(); } catch { /* a document with nothing to scroll */ }
+    try { if (tracker?.quietly) tracker.quietly(hold, 'hold'); else hold(); } catch { /* a document with nothing to scroll */ }
   };
 
   g[Symbol.for('devharness.input')] = {

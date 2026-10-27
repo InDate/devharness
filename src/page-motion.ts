@@ -48,10 +48,23 @@ export interface MotionReport {
   sentMs: number;
   /** What set it going, as the page's trigger tracker read it when it opened. */
   trigger?: string;
-  /** Who made it - CSS, JS, SVG, MEDIA, ME, BROWSER - with the page's ref to what made it and that thing's name. */
+  /** Who made it - CSS, JS, SVG, MEDIA, ME, HARNESS, BROWSER - with the page's ref to what made it and that thing's name. */
   maker?: string;
   makerRef?: number;
   makerName?: string;
+  /** Where a call that made it stands, when the page holds its script and line but not its function. */
+  makerAt?: { url: string; line: number };
+  /** On a close that something ended - a media element paused or reaching its end - what ended it, in the maker's terms. */
+  stoppedBy?: MotionStop;
+}
+
+/** What ended a motion: the trigger and maker of the pause, or the media's own end. */
+export interface MotionStop {
+  trigger?: string;
+  maker?: string;
+  makerRef?: number;
+  makerName?: string;
+  makerAt?: { url: string; line: number };
 }
 
 function installPageMotion(g: any): void {
@@ -71,7 +84,7 @@ function installPageMotion(g: any): void {
   };
 
   let on = false;
-  interface Run { id: number; source: string; element: string; property: string; from: string; to: string; startMs: number; endMs: number; frames: number; trigger?: string; maker?: string; makerRef?: number; makerName?: string }
+  interface Run { id: number; source: string; element: string; property: string; from: string; to: string; startMs: number; endMs: number; frames: number; trigger?: string; maker?: string; makerRef?: number; makerName?: string; makerAt?: { url: string; line: number }; stoppedBy?: MotionStop }
   // Numbers each motion in this document; the document's own id names which.
   let nextRun = 1;
   const doc = Math.random().toString(36).slice(2, 10);
@@ -181,7 +194,11 @@ function installPageMotion(g: any): void {
     const started = playing.get(element);
     if (!started) return;
     playing.delete(element);
-    report({ ...started, to: Number(element.currentTime).toFixed(3), endMs: now() }, 'close');
+    // A media element reaching its end fires pause, then ended; either reads as the end.
+    const stoppedBy: MotionStop = element.ended
+      ? { ...(tracker()?.maker?.('MEDIA', element) ?? { maker: 'MEDIA' }), trigger: 'ended' }
+      : { ...(tracker()?.mediaMaker?.(element, 'pause') ?? { maker: 'MEDIA' }), trigger: tracker()?.ofCall?.(['pause'], 'paused') ?? 'paused' };
+    report({ ...started, to: Number(element.currentTime).toFixed(3), endMs: now(), stoppedBy }, 'close');
   };
   // One SMIL run is one motion from its begin event to its end event, however
   // long it runs: its frames change the animated value, which no record shows.

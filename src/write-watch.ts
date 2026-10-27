@@ -68,11 +68,13 @@ export interface WriteMotion {
   set: boolean;
   /** What set it going, as the page read it when it started: `click`, `reply POST /draft`, `scroll · wheel`. */
   trigger?: string;
-  /** Who made it: CSS, JS, SVG, MEDIA, ME or BROWSER. */
+  /** Who made it: CSS, JS, SVG, MEDIA, ME, HARNESS or BROWSER. */
   maker?: string;
   /** The page's ref to what made it, which DevTools reveals, and that thing's name: `catalog.html:478`, `#acc-body`. */
   makerRef?: number;
   makerName?: string;
+  /** Where a call that made it stands, when the page holds its script and line but not its function. */
+  makerAt?: { url: string; line: number };
   /** A function maker's first line of source, as Chrome describes it: `() => { masthead.style.height…`. */
   makerSource?: string;
 }
@@ -265,7 +267,9 @@ export class WriteWatch {
         const stopRow = () => {
           if (!entry.endedIn || entry.endedAt === undefined || this.motionStopped.has(entry.key)) return;
           this.motionStopped.add(entry.key);
-          this.push({ store: 'animation', operation: 'stopped', key: entry.kind, value: endingValue(entry.read!) }, entry.endedAt, entry.endedIn);
+          const stop = entry.stoppedBy ? { motion: { type: entry.read!.type, durationMs: 0, set: false, ...entry.stoppedBy } } : {};
+          const row = this.push({ store: 'animation', operation: 'stopped', key: entry.kind, value: endingValue(entry.read!), ...stop }, entry.endedAt, entry.endedIn);
+          if (entry.stoppedBy) void this.locateMaker(`${entry.key}:stopped`, row);
         };
         if (change === 'added') {
           this.animationKeys.set(entry.key, entry.kind);
@@ -345,9 +349,19 @@ export class WriteWatch {
    * Where a function maker stands in the page's source, read from Chrome: its
    * script and line, from the function's [[FunctionLocation]], and its first
    * line of source. An app's handlers are mostly arrow functions with no name,
-   * and its file and line are what find it.
+   * and its file and line are what find it. A maker with `makerAt` stands at
+   * that call's line, inside a function the page could not hand over, so the
+   * line names it and the revealed function's first line is left off.
    */
   private async locateMaker(key: string, row: PageWrite): Promise<void> {
+    const at = row.motion?.makerAt;
+    if (at) {
+      const where = { makerName: `${fileOf(at.url)}:${at.line}` };
+      this.makerWhere.set(key, where);
+      if (row.motion) Object.assign(row.motion, where);
+      observeWrite(row, this.connection);
+      return;
+    }
     const ref = row.motion?.makerRef;
     if (ref === undefined || (row.motion?.maker !== 'JS' && row.motion?.maker !== 'MEDIA')) return;
     const reveal = await call(this.client, 'Runtime.evaluate', {
@@ -359,7 +373,7 @@ export class WriteWatch {
       const props = await call(this.client, 'Runtime.getProperties', { objectId: fn.objectId, ownProperties: true }).catch(() => undefined);
       const location = props?.internalProperties?.find((one: any) => one.name === '[[FunctionLocation]]')?.value?.value;
       const url = location?.scriptId ? this.scriptUrlOf?.(String(location.scriptId)) : undefined;
-      const file = url ? (url.split('?')[0].split('/').pop() || url) : undefined;
+      const file = url ? fileOf(url) : undefined;
       const where = {
         ...(file && typeof location?.lineNumber === 'number' ? { makerName: `${file}:${location.lineNumber + 1}` } : {}),
         ...(typeof fn.description === 'string' ? { makerSource: fn.description.split('\n')[0].slice(0, 80) } : {}),
@@ -719,6 +733,11 @@ export function animationValue(read: PageAnimation): string {
   return `${carrier} ${Math.round(read.duration)}ms${read.delay ? ` after ${Math.round(read.delay)}ms` : ''}${read.looping ? ', looping' : ''}`;
 }
 
+/** A script's file name, query dropped: what a maker's `file:line` shows. */
+function fileOf(url: string): string {
+  return url.split('?')[0].split('/').pop() || url;
+}
+
 export function motionOf(read: PageAnimation): WriteMotion {
   return {
     type: read.type, durationMs: Math.round(read.duration),
@@ -730,6 +749,7 @@ export function motionOf(read: PageAnimation): WriteMotion {
     ...(read.maker ? { maker: read.maker } : {}),
     ...(read.makerRef !== undefined ? { makerRef: read.makerRef } : {}),
     ...(read.makerName ? { makerName: read.makerName } : {}),
+    ...(read.makerAt ? { makerAt: read.makerAt } : {}),
   };
 }
 

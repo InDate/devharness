@@ -567,7 +567,7 @@ export async function retakeCapture(
     if (recipe.frozen || heldBefore) await holdUi(session, CAPTURE);
     if (recipe.kind === 'screen' && recipe.scroll) {
       await request(session.client, 'Runtime.evaluate', {
-        expression: ownScript('capture', `(globalThis[Symbol.for('devharness.trigger')]?.quietly ?? ((run) => run()))(() => scrollTo(${recipe.scroll.x}, ${recipe.scroll.y}))`),
+        expression: ownScript('capture', `(globalThis[Symbol.for('devharness.trigger')]?.quietly ?? ((run) => run()))(() => scrollTo(${recipe.scroll.x}, ${recipe.scroll.y}), 'capture')`),
       });
     }
     const layout = await layoutOf(session);
@@ -706,7 +706,7 @@ export async function retakeCapture(
   } finally {
     if (recipe.kind === 'screen' && recipe.scroll) {
       await send(session.client, 'Runtime.evaluate', {
-        expression: ownScript('capture', `(globalThis[Symbol.for('devharness.trigger')]?.quietly ?? ((run) => run()))(() => scrollTo(${current.scroll.x}, ${current.scroll.y}))`),
+        expression: ownScript('capture', `(globalThis[Symbol.for('devharness.trigger')]?.quietly ?? ((run) => run()))(() => scrollTo(${current.scroll.x}, ${current.scroll.y}), 'capture')`),
       });
     }
     if (resize) {

@@ -129,7 +129,7 @@ export async function dismissModalByStrategy(
         const button = await page.$(btnSelector);
         if (!button) continue;
 
-        await clickElement(page, button);
+        await clickElement(page, button, { as: 'dismiss a modal' });
 
         // Wait for modal to disappear (with timeout)
         try {

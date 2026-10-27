@@ -38,10 +38,12 @@ export interface PageAnimation {
   frames?: number;
   /** What set it going, as the page's trigger tracker read it. */
   trigger?: string;
-  /** Who made it - CSS, JS, SVG, MEDIA, ME, BROWSER - with the page's ref to what made it and that thing's name. */
+  /** Who made it - CSS, JS, SVG, MEDIA, ME, HARNESS, BROWSER - with the page's ref to what made it and that thing's name. */
   maker?: string;
   makerRef?: number;
   makerName?: string;
+  /** Where a call that made it stands, when the page holds its script and line but not its function. */
+  makerAt?: { url: string; line: number };
 }
 
 /** Motion the page makes with no Animation object (`page-motion.ts`), named by what carried it. */

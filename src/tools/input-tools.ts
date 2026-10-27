@@ -15,7 +15,7 @@ import { resolveSelector, isExtendedSelector, cleanupResolvedSelector } from '..
 import { domChangeMonitor, formatDOMChanges, DOMChanges } from '../dom-change-monitor.js';
 import type { ToolResponseMeta, ClickActionMeta } from '../tool-response.js';
 import { abortErrorFor, abortableSleep, isAbortError, throwIfAborted } from '../utils/abort.js';
-import { clickElement } from '../utils/click-element.js';
+import { clickElement, scrollIntoViewAs } from '../utils/click-element.js';
 import { describeFingerprint, readFingerprint, refuseOtherElement, type ElementFingerprint, type ElementRepair } from '../element-fingerprint.js';
 import { hold, type HoldLayer } from '../hold.js';
 import { callOwner } from '../call-origin.js';
@@ -215,13 +215,13 @@ async function clickSelector(
   selector: string,
   options: { clickCount?: number } = {}
 ): Promise<void> {
-  await onElement(page, selector, handle => clickElement(page, handle, options));
+  await onElement(page, selector, handle => clickElement(page, handle, { ...options, as: `click ${selector}` }));
 }
 
 /** Hover without the lifecycle wait - see clickSelector. */
 async function hoverSelector(page: any, selector: string): Promise<void> {
   await onElement(page, selector, async handle => {
-    await handle.scrollIntoView();
+    await scrollIntoViewAs(handle, `hover ${selector}`);
     const { x, y } = await handle.clickablePoint();
     await page.mouse.move(x, y);
   });
@@ -1837,12 +1837,12 @@ export function createInputTools(
                   }
                   selector = resolved.selector;
                 }
-                const box = await page.evaluate((sel: string) => {
+                const box = await page.evaluate((sel: string, words: string) => {
                   const el = (globalThis as any).document.querySelector(sel);
                   if (!el) return null;
                   // Run quietly: devharness's own scroll is not the app's work.
                   const quietly = (globalThis as any)[Symbol.for('devharness.trigger')]?.quietly ?? ((run: () => void) => run());
-                  quietly(() => el.scrollIntoView({ block: 'center', inline: 'center' }));
+                  quietly(() => el.scrollIntoView({ block: 'center', inline: 'center' }), words);
                   const r = el.getBoundingClientRect();
                   const doc = (globalThis as any).document.documentElement;
                   return {
@@ -1850,7 +1850,7 @@ export function createInputTools(
                     width: r.width, height: r.height,
                     viewW: doc.clientWidth, viewH: doc.clientHeight,
                   };
-                }, selector);
+                }, selector, `${args.action} ${rawSelector}`);
                 await cleanupResolvedSelector(page, selector);
                 if (!box) return createErrorResponse('ELEMENT_NOT_FOUND', { selector: rawSelector });
                 start = { x: box.x, y: box.y };

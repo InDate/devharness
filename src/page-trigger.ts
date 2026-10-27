@@ -42,7 +42,11 @@ function installPageTrigger(g: any): void {
   // A carrier's mark holds the cause it was scheduled under as `origin`, where
   // one was live; a call's mark holds its method; an input's, whether the
   // page scrolls on it by itself.
-  interface Mark { kind: string; words: string; at: number; live: boolean; origin?: string; method?: string; scrolls?: boolean; fn?: any }
+  // `site` is where the app made the call that marked; `harness` marks a
+  // scroll devharness made itself.
+  interface Mark { kind: string; words: string; at: number; live: boolean; origin?: string; method?: string; scrolls?: boolean; fn?: any; site?: Site; harness?: boolean }
+  /** An app call's site: its function where the engine hands it over, else its script and line. */
+  interface Site { fn?: any; url?: string; line?: number }
   let last: Mark | undefined;
   /** The newest mark of a kind that starts work rather than carries it. */
   let lastCause: Mark | undefined;
@@ -92,6 +96,34 @@ function installPageTrigger(g: any): void {
   const runAs = (fn: any) => {
     running = fn;
     nextTask(() => { if (running === fn) running = undefined; });
+  };
+  // The send wrapper schedules the app's callback inside one of its own, and
+  // hands the app's on under this symbol.
+  const CALLBACK = Symbol.for('devharness.callback');
+  // A listener the app adds is the outermost of its functions on the stack; a
+  // call it reaches through a plain function, as a key map does, stands below
+  // it. V8's structured stack gives the frame that called `wrapper`: its
+  // function in sloppy code, and its script and line in strict code, where
+  // the engine withholds the function.
+  const siteOf = (wrapper: any): Site | undefined => {
+    const E = g.Error;
+    if (typeof E?.captureStackTrace !== 'function') return undefined;
+    const prepare = E.prepareStackTrace;
+    const holder: { stack?: any } = {};
+    try {
+      E.prepareStackTrace = (_: unknown, sites: any[]) => sites;
+      E.captureStackTrace(holder, wrapper);
+      const frame = Array.isArray(holder.stack) ? holder.stack[0] : undefined;
+      if (!frame) return undefined;
+      const fn = frame.getFunction?.();
+      const url = frame.getScriptNameOrSourceURL?.() ?? frame.getFileName?.();
+      const line = frame.getLineNumber?.();
+      return { ...(fn ? { fn } : {}), ...(url ? { url: String(url) } : {}), ...(typeof line === 'number' ? { line } : {}) };
+    } catch {
+      return undefined;
+    } finally {
+      E.prepareStackTrace = prepare;
+    }
   };
 
   const nameOf = (element: any): string => {
@@ -174,13 +206,14 @@ function installPageTrigger(g: any): void {
   const calls = (owner: any, method: string, kind: string, words: string, after?: (made: Mark) => void) => {
     const original = owner && owner[method];
     if (typeof original !== 'function') return;
-    owner[method] = function (this: any, ...args: unknown[]) {
+    const wrapper = function (this: any, ...args: unknown[]) {
       if (quiet) return original.apply(this, args);
       const under = current(false);
-      const made = mark(kind, under !== undefined ? `${under} · ${words}` : words, { method, fn: running });
+      const made = mark(kind, under !== undefined ? `${under} · ${words}` : words, { method, fn: running, site: siteOf(wrapper) });
       after?.(made);
       return original.apply(this, args);
     };
+    owner[method] = wrapper;
   };
   // The global's own methods stand on the window itself, where a bare
   // `scrollTo()` finds them, not on Window.prototype.
@@ -191,15 +224,13 @@ function installPageTrigger(g: any): void {
   for (const property of ['scrollTop', 'scrollLeft']) {
     const described = g.Element && Object.getOwnPropertyDescriptor(g.Element.prototype, property);
     if (!described?.set) continue;
-    Object.defineProperty(g.Element.prototype, property, {
-      ...described,
-      set(this: any, value: unknown) {
-        if (quiet) { described.set!.call(this, value); return; }
-        const under = current(false);
-        lastScrollCall = mark('scroll-cause', under !== undefined ? `${under} · ${property} =` : `${property} =`, { method: property, fn: running });
-        described.set!.call(this, value);
-      },
-    });
+    const set = function (this: any, value: unknown) {
+      if (quiet) { described.set!.call(this, value); return; }
+      const under = current(false);
+      lastScrollCall = mark('scroll-cause', under !== undefined ? `${under} · ${property} =` : `${property} =`, { method: property, fn: running, site: siteOf(set) });
+      described.set!.call(this, value);
+    };
+    Object.defineProperty(g.Element.prototype, property, { ...described, set });
   }
   // A media element and an SVG animation start on their own events, a task
   // after the call; the call is kept for those events to find.
@@ -273,7 +304,7 @@ function installPageTrigger(g: any): void {
       const origin = under ? (CARRIERS.has(under.kind) ? under.origin : under.words) : undefined;
       const carried = origin !== undefined ? `${origin} · ${said}` : said;
       return original.apply(this, [function (this: any, ...given: unknown[]) {
-        runAs(callback);
+        runAs(callback[CALLBACK] ?? callback);
         mark(method === 'requestAnimationFrame' ? 'frame' : 'timer', carried, origin !== undefined ? { origin } : {});
         return callback.apply(this, given);
       }, ...args]);
@@ -310,19 +341,23 @@ function installPageTrigger(g: any): void {
   // An animation the page creates by call reads the trigger live at the call.
   const byAnimation = new WeakMap<object, string>();
   const animatedBy = new WeakMap<object, any>();
+  const animatedAt = new WeakMap<object, Site>();
   const animate = g.Element?.prototype?.animate;
   if (typeof animate === 'function') {
-    g.Element.prototype.animate = function (this: any, ...args: unknown[]) {
+    const wrapper = function (this: any, ...args: unknown[]) {
       const made = animate.apply(this, args);
       const words = current();
       if (words) byAnimation.set(made, words);
       if (running) animatedBy.set(made, running);
+      const site = siteOf(wrapper);
+      if (site) animatedAt.set(made, site);
       // Its end starts what the app chains on it: the reaction is added here
       // first, so it marks before the app's own `finished` reaction runs.
       const ended = () => mark('chain', `end of ${made.id || 'animation'} on ${nameOf(this)}`);
       made.finished?.then(ended, () => {});
       return made;
     };
+    g.Element.prototype.animate = wrapper;
   }
 
   // A transition or keyframe animation starts at the style recalc after the
@@ -363,22 +398,36 @@ function installPageTrigger(g: any): void {
     }, { capture: true, passive: true });
   }
 
-  /** A motion's maker, with what a go-to reveals and its name. */
-  const made = (maker: string, target?: any) => ({
-    maker,
-    ...(refOf(target) !== undefined ? { makerRef: refOf(target) } : {}),
-    ...(target ? { makerName: typeof target === 'function' ? (target.name ? `${target.name}()` : 'a function') : nameOf(target) } : {}),
-  });
+  /**
+   * A motion's maker, with what a go-to reveals and its name. A call's site
+   * holding its function reveals that function; one holding only its script
+   * and line reveals `target` and carries the line as `makerAt`.
+   */
+  const made = (maker: string, target?: any, site?: Site) => {
+    const shown = site?.fn ?? target;
+    return {
+      maker,
+      ...(refOf(shown) !== undefined ? { makerRef: refOf(shown) } : {}),
+      ...(shown ? { makerName: typeof shown === 'function' ? (shown.name ? `${shown.name}()` : 'a function') : nameOf(shown) } : {}),
+      ...(!site?.fn && site?.url && site.line !== undefined ? { makerAt: { url: site.url, line: site.line } } : {}),
+    };
+  };
 
   g[Symbol.for('devharness.trigger')] = {
     current,
     /** Register a listener of devharness's own, which the listener wrapper leaves as it is. */
     own<T extends object>(fn: T): T { owned.add(fn); return fn; },
-    /** Run devharness's own call, unmarked: a scroll it makes is not the app's. */
-    quietly<T>(run: () => T): T { quiet = true; try { return run(); } finally { quiet = false; } },
+    /** Mark the scroll devharness makes next, over CDP or by a call, as `words`: it is the harness's, not the app's. */
+    ownScroll(words: string): void { lastScrollCall = mark('scroll-cause', words, { harness: true }); },
+    /** Run devharness's own call as `words`: a scroll it makes is the harness's, not the app's. */
+    quietly<T>(run: () => T, words = 'devharness'): T {
+      lastScrollCall = mark('scroll-cause', words, { harness: true });
+      quiet = true;
+      try { return run(); } finally { quiet = false; }
+    },
     /** What reveals the app's work running now: a JS motion begun in it points at the function. */
     runningMaker: () => made('JS', running),
-    /** Who moved the page this scroll: the person, a script's call, or the browser. */
+    /** Who moved the page this scroll: the person, a script's call, devharness, or the browser. */
     scrollMaker() {
       const t = now();
       const newest = [lastInput && t - lastInput.at <= 150 ? lastInput : undefined, lastScrollCall && t - lastScrollCall.at <= SCROLL_CALL_MS ? lastScrollCall : undefined]
@@ -386,20 +435,21 @@ function installPageTrigger(g: any): void {
       // The person scrolls the page by wheel, touch, a drag or a key the page
       // scrolls on; any other input that scrolled it ran the app's code.
       if (newest && newest === lastInput) return newest.scrolls ? made('ME') : made('JS', running);
-      if (newest) return made('JS', newest.fn);
+      if (newest?.harness) return made('HARNESS');
+      if (newest) return made('JS', newest.fn, newest.site);
       return made('BROWSER');
     },
     /** What made an Animation object: a CSS transition or keyframes, else the script that called animate(). */
     animationMaker(animation: any) {
       const target = animation && animation.effect && animation.effect.target;
       if (animation && (animation.transitionProperty !== undefined || animation.animationName !== undefined)) return made('CSS', target);
-      return made('JS', animatedBy.get(animation) ?? target);
+      return made('JS', animatedBy.get(animation) ?? target, animatedAt.get(animation));
     },
-    /** What made a media element play: the function that called play(), else the element. */
-    mediaMaker(element: any) {
+    /** What made a media element play, or pause: the function that called `method`, else the element. */
+    mediaMaker(element: any, method = 'play') {
       const t = now();
-      const call = [...called].reverse().find(one => one.method === 'play' && t - one.at <= 1000);
-      return made('MEDIA', call?.fn ?? element);
+      const call = [...called].reverse().find(one => one.method === method && t - one.at <= 1000);
+      return made('MEDIA', call?.fn ?? element, call?.site);
     },
     /** A maker of `kind` pointing at `target`. */
     maker: made,

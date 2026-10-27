@@ -84,10 +84,15 @@ export const SEND_WRAPPER_SOURCE = `(() => {
     return function (callback) {
       if (typeof callback !== 'function') return original.apply(this, arguments);
       var rest = Array.prototype.slice.call(arguments, 1);
-      return original.apply(this, [function () {
+      var counted = function () {
         g.__devharnessInTimer++;
         try { return callback.apply(this, arguments); } finally { g.__devharnessInTimer--; }
-      }].concat(rest));
+      };
+      // The trigger tracker's scheduler stands below this one and receives
+      // \`counted\`; the app's callback, carried here, is what a motion begun
+      // in it points at.
+      try { counted[Symbol.for('devharness.callback')] = callback; } catch (e) { /* no symbols here */ }
+      return original.apply(this, [counted].concat(rest));
     };
   };
 

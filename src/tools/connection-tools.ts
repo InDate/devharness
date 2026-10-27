@@ -29,6 +29,7 @@ import { loadedViewport, sizeWindowToViewport } from '../window-sizing.js';
 import { allowPersonWatch } from '../person-watch.js';
 import type { ToolResponseMeta, PausedAtMeta } from '../tool-response.js';
 import { openSession } from '../utils/own-session.js';
+import { trackWindow } from '../window-memory.js';
 
 /**
  * Whether a debugger answers on `port`: Chrome and a Node.js inspector both
@@ -387,7 +388,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
           const proxyArgs = args.proxy
             ? (await startProxyFor(proxyKey, url)).chromeArgs
             : [];
-          const result = await chromeLauncher.launch(port, launchUrl, portReserver, args.headless ?? false, [...proxyArgs, ...(args.chromeArgs ?? [])], profileName);
+          const result = await chromeLauncher.launch(port, launchUrl, portReserver, args.headless ?? false, [...proxyArgs, ...(args.chromeArgs ?? [])], profileName, requested ? proxyKey : undefined);
           await debugLog('index', `Chrome launched successfully: ${JSON.stringify(result)}`);
           isNewBrowser = true;
         }
@@ -470,6 +471,13 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
 
               const page = puppeteerManager.getPage();
               dialogMonitor = await monitorPage(page, cdpManager, consoleMonitor, networkMonitor);
+              // The window this launch opened is this connection's; a tab in a
+              // Chrome already running shares a window another connection owns.
+              if (isNewBrowser && requested && !args.headless) {
+                const windowKey = validateReference(requested).sanitized!;
+                const session = await openSession(page);
+                trackWindow(windowKey, (method, params) => session.send(method as any, params as any));
+              }
 
               if (args.width !== undefined || args.height !== undefined) {
                 const current = await page.evaluate(() => {

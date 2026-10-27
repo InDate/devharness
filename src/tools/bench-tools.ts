@@ -15,6 +15,9 @@ import { basename, join, resolve } from 'path';
 import { getOutputPath } from '../helpers/paths.js';
 import { autoLaunchChrome } from './replay-executor.js';
 import { openBackgroundPage } from '../puppeteer-manager.js';
+import { openSession } from '../utils/own-session.js';
+import { debugLog } from '../debug-logger.js';
+import { benchWindowKey, placeWindow, rememberedBounds, trackWindow } from '../window-memory.js';
 import { translateSequence } from './legacy-steps.js';
 import type { SourceMapHandler } from '../sourcemap-handler.js';
 import type { CommandRecorder } from '../command-recorder.js';
@@ -361,6 +364,14 @@ export function createBenchTools(
               // dragged into Chrome's split view beside the app.
               openBench: args.openTab === false ? undefined : async (url: string) => {
                 const tab = await openBackgroundPage(page.browser(), { newWindow: true });
+                const session = await openSession(tab);
+                const send = (method: string, params?: Record<string, unknown>) => session.send(method as any, params as any);
+                const key = benchWindowKey(connection);
+                const remembered = await rememberedBounds(key);
+                if (remembered) {
+                  await placeWindow(send, remembered).catch(error => debugLog('bench', `reopening the bench window where it was last left failed: ${error}`));
+                }
+                trackWindow(key, send);
                 await tab.goto(url);
                 await tab.bringToFront();
                 return tab;

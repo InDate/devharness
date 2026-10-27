@@ -19,6 +19,7 @@ import { boundReply } from './reply-bound.js';
 import { enableRunLog } from './run-log.js';
 import { benchHold, isBenchOpen } from './bench-mode.js';
 import { runAs, appendEvent } from './session-events.js';
+import { releaseWhenHeld } from './utils/terminal-desktop.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
@@ -114,7 +115,7 @@ function runsCalls(toolName: string): boolean {
 import { checkPortFailures, checkBreakpointPause, checkBugBlocking, checkPendingStartups, checkDuplicateSession, prependToResponse, appendToResponse, buildStatusSuffix, type StatusLineItem } from './tool-response.js';
 import { recordBlockEvent, clearBlockEvents } from './block-events.js';
 import { createStartupGate } from './startup-gate.js';
-import { createErrorResponse, getErrorMessage, messages, historyFooter, isParameterError } from './messages.js';
+import { createErrorResponse, createSuccessResponse, getErrorMessage, messages, historyFooter, isParameterError } from './messages.js';
 import { setChromeLauncher } from './error-helpers.js';
 import { createServer } from 'net';
 import { readFile } from 'fs/promises';
@@ -336,6 +337,9 @@ let orchestratorInstance: Orchestrator | null = null;
  * Watch the page a call named for a person's input, once the call has run: a
  * launch has made the page by then, and every later call on it finds it watched.
  */
+/** Each held launch, by the sanitized name of its connection: the call that holds it and the tty its window waits on. */
+const heldLaunches = new Map<string, { call: string; tty: string }>();
+
 async function watchNamedPage(params: Record<string, unknown> | undefined): Promise<void> {
   const named = params?.connection;
   if (typeof named !== 'string') return;
@@ -908,9 +912,33 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
 
     // Pass validated data to handler
     try {
-      const result = await arriveOn('mcp', () => underDialogs(dialogTargetOf(validation.data), toolName, validation.data, extra?.signal, signal => (commandIndex !== null
+      const params = validation.data as Record<string, unknown>;
+      const action = params?.action;
+      const called = `${toolName}${typeof action === 'string' ? ` ${action}` : ''}`;
+      const heldName = typeof params?.connection === 'string' ? sanitizeReference(params.connection) : undefined;
+      // A connection whose launch is held has no browser registered yet, so a
+      // second call on it would launch a second Chrome.
+      const held = heldName !== undefined ? heldLaunches.get(heldName) : undefined;
+      if (held !== undefined) {
+        return createSuccessResponse('CALL_WAITS_ON_HELD_LAUNCH', { call: called, connection: heldName, launching: held.call, tty: held.tty });
+      }
+      const outcome = await releaseWhenHeld(() => arriveOn('mcp', () => underDialogs(dialogTargetOf(validation.data), toolName, validation.data, extra?.signal, signal => (commandIndex !== null
         ? unlisted(() => tool.handler(validation.data, signal))
-        : tool.handler(validation.data, signal))));
+        : tool.handler(validation.data, signal)))));
+      if (!outcome.done) {
+        const session = resolveSessionName();
+        if (heldName !== undefined) heldLaunches.set(heldName, { call: called, tty: outcome.tty });
+        void outcome.rest.then(
+          async finished => {
+            if (commandIndex !== null) commandRecorder.attachResult(commandIndex, finished);
+            await watchNamedPage(params);
+            const reply = finished.content.map((part: { text?: string }) => part.text ?? '').join('\n');
+            await appendEvent(session, 'launch', { call: called, held: false, detail: `${called} finished: ${reply.split('\n')[0]}`, reply });
+          },
+          error => appendEvent(session, 'launch', { call: called, held: false, failed: true, detail: `${called} failed: ${error?.response?.content?.[0]?.text ?? error}` }),
+        ).finally(() => { if (heldName !== undefined) heldLaunches.delete(heldName); });
+      }
+      const result = outcome.done ? outcome.value : createSuccessResponse('CALL_HELD_FOR_DESKTOP', { call: called, tty: outcome.tty });
 
       if (commandIndex !== null) {
         commandRecorder.attachResult(commandIndex, result);
@@ -1543,7 +1571,8 @@ async function main() {
   // uses keeps its port and its recording; the session hears of it once per
   // idle spell, with the call that stops it.
   const idleProxyCheck = setInterval(() => {
-    const inUse = (name: string) => !!connectionManager.findConnectionByReference(name) || isBenchOpen(name);
+    // A held launch starts its proxy before its browser registers a connection.
+    const inUse = (name: string) => !!connectionManager.findConnectionByReference(name) || isBenchOpen(name) || heldLaunches.has(name);
     for (const { names } of newlyIdleProxies(inUse)) {
       void appendEvent(resolveSessionName(), 'proxy', {
         idle: true,

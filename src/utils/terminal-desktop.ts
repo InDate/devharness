@@ -1,6 +1,32 @@
+import { AsyncLocalStorage } from 'async_hooks';
 import { execFile, spawn } from 'child_process';
 import type { ChildProcess } from 'child_process';
 import { debugLog } from '../debug-logger.js';
+
+/**
+ * A wait still holding after this long is one the person ends by switching
+ * desktops: the wait script returns within one check when the Terminal's
+ * desktop is already showing.
+ */
+export const HELD_AFTER_MS = 1000;
+
+/** The MCP call a desktop wait runs under, which returns early once the wait holds. */
+const heldCall = new AsyncLocalStorage<(tty: string) => void>();
+
+export type HeldOrDone<T> = { done: true; value: T } | { done: false; tty: string; rest: Promise<T> };
+
+/**
+ * Runs `call`, and settles early when a desktop wait inside it holds past
+ * HELD_AFTER_MS. The caller is blocked for the whole wait otherwise, with no
+ * channel to the session until the client backgrounds it at 120s; settled
+ * early, the reply carries the hold and `rest` carries the call to its end.
+ */
+export function releaseWhenHeld<T>(call: () => Promise<T>): Promise<HeldOrDone<T>> {
+  return new Promise((resolve, reject) => {
+    const rest = heldCall.run(tty => resolve({ done: false, tty, rest }), call);
+    rest.then(value => resolve({ done: true, value }), reject);
+  });
+}
 
 /**
  * macOS places a new window on the desktop (Space) showing when the window is
@@ -15,11 +41,20 @@ import { debugLog } from '../debug-logger.js';
  * group is ordered out and sits on no Space; the shown tab shares its frame
  * and carries the group's Space.
  *
- * Prints the Space id once that Space is current on any display, or `none`
- * when the tty maps to no Terminal window or to an ambiguous tab group.
+ * A Space showing on one display says nothing of where a new window goes:
+ * macOS opens it on the display holding the pointer. The display holding the
+ * Terminal window's centre is read from NSScreen, whose frames run from the
+ * primary display's bottom-left corner, and turned into the top-left
+ * coordinates Terminal's bounds and Chrome's window bounds share.
+ *
+ * Prints `{"space":<id>,"display":{left,top,width,height},"window":{width,height}}`
+ * once that Space is current on any display, `window` being the Terminal
+ * window's size, or `none` when the tty maps to no Terminal window or to an
+ * ambiguous tab group.
  */
 const WAIT_SCRIPT = `
 ObjC.import('CoreGraphics');
+ObjC.import('AppKit');
 ObjC.bindFunction('CGSMainConnectionID', ['int', []]);
 ObjC.bindFunction('CGSCopySpacesForWindows', ['id', ['int', 'int', 'id']]);
 ObjC.bindFunction('CGSCopyManagedDisplaySpaces', ['id', ['int']]);
@@ -31,26 +66,102 @@ function run(argv) {
   const terminalSpace = () => {
     const ids = terminal.windows.id();
     const ttys = terminal.windows.tabs.tty();
-    const bounds = terminal.windows.bounds().map((b) => JSON.stringify(b));
+    const frames = terminal.windows.bounds();
+    const bounds = frames.map((b) => JSON.stringify(b));
     const index = ttys.findIndex((tabs) => tabs.includes(tty));
     if (index < 0) return undefined;
     const own = spacesOf(ids[index]);
-    if (own.length) return own[0];
+    if (own.length) return { space: own[0], frame: frames[index] };
     const found = new Set();
     ids.forEach((id, i) => {
       if (i !== index && bounds[i] === bounds[index]) spacesOf(id).forEach((s) => found.add(s));
     });
-    return found.size === 1 ? [...found][0] : undefined;
+    return found.size === 1 ? { space: [...found][0], frame: frames[index] } : undefined;
+  };
+  const displayOf = (frame) => {
+    const screens = $.NSScreen.screens;
+    const primaryHeight = screens.objectAtIndex(0).frame.size.height;
+    const x = frame.x + frame.width / 2;
+    const y = frame.y + frame.height / 2;
+    for (let i = 0; i < screens.count; i++) {
+      const f = screens.objectAtIndex(i).frame;
+      const left = f.origin.x;
+      const top = primaryHeight - (f.origin.y + f.size.height);
+      if (x >= left && x < left + f.size.width && y >= top && y < top + f.size.height) {
+        return { left, top, width: f.size.width, height: f.size.height };
+      }
+    }
+    return undefined;
   };
   for (;;) {
-    const space = terminalSpace();
-    if (space === undefined) return 'none';
+    const found = terminalSpace();
+    if (found === undefined) return 'none';
     const current = (ObjC.deepUnwrap($.CGSCopyManagedDisplaySpaces(cid)) || []).map((d) => d['Current Space'].ManagedSpaceID);
-    if (current.includes(space)) return String(space);
+    if (current.includes(found.space)) {
+      return JSON.stringify({ space: found.space, display: displayOf(found.frame), window: { width: found.frame.width, height: found.frame.height } });
+    }
     delay(0.5);
   }
 }
 `;
+
+export interface ScreenRect { left: number; top: number; width: number; height: number }
+
+/** Every connected display, in the top-left coordinates Chrome's window bounds use. */
+const DISPLAYS_SCRIPT = `
+ObjC.import('AppKit');
+function run() {
+  const screens = $.NSScreen.screens;
+  const primaryHeight = screens.objectAtIndex(0).frame.size.height;
+  const out = [];
+  for (let i = 0; i < screens.count; i++) {
+    const f = screens.objectAtIndex(i).frame;
+    out.push({ left: f.origin.x, top: primaryHeight - (f.origin.y + f.size.height), width: f.size.width, height: f.size.height });
+  }
+  return JSON.stringify(out);
+}
+`;
+
+/** The connected displays, or none off macOS or when they cannot be read. */
+export function readDisplays(): Promise<ScreenRect[]> {
+  if (process.platform !== 'darwin') return Promise.resolve([]);
+  return new Promise(resolve => {
+    execFile('osascript', ['-l', 'JavaScript', '-e', DISPLAYS_SCRIPT], { timeout: 5000 }, (err, out) => {
+      if (err) return resolve([]);
+      try {
+        const displays = JSON.parse(out);
+        resolve(Array.isArray(displays) ? displays : []);
+      } catch {
+        resolve([]);
+      }
+    });
+  });
+}
+
+export interface TerminalDisplay {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  /** The Terminal window's size, which the first Chrome window takes. */
+  window?: { width: number; height: number };
+}
+
+const numbers = (...values: unknown[]) => values.every(n => typeof n === 'number' && Number.isFinite(n));
+
+/** The display a wait script's reading names, with the Terminal window's size, or undefined for a reading that names none. */
+export function terminalDisplay(reading: string): TerminalDisplay | undefined {
+  try {
+    const { display, window } = JSON.parse(reading) ?? {};
+    if (!numbers(display?.left, display?.top, display?.width, display?.height)) return undefined;
+    return {
+      left: display.left, top: display.top, width: display.width, height: display.height,
+      ...(numbers(window?.width, window?.height) ? { window: { width: window.width, height: window.height } } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
 
 /** The tty of the nearest ancestor of `pid`, `pid` included, read from a `ps -A -o pid=,ppid=,tty=` table. */
 export function ancestorTty(table: string, pid: number): string | undefined {
@@ -115,7 +226,10 @@ export async function waitForTerminalDesktop(stop: Promise<unknown>, io: Desktop
   }
   const wait = io.startWait(tty);
   await debugLog('TerminalDesktop', `Holding the first window until the desktop of the Terminal on ${tty} is showing`);
+  const release = heldCall.getStore();
+  const holding = release ? setTimeout(() => release(tty), HELD_AFTER_MS) : undefined;
   const reading = await Promise.race([wait.result, stop.then(() => 'stopped')]);
+  clearTimeout(holding);
   wait.kill();
   await debugLog('TerminalDesktop', `Desktop wait for ${tty} returned: ${reading}`);
   return reading;

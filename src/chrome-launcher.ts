@@ -13,7 +13,8 @@ import { getGlobalBase } from './helpers/paths.js';
 import { getErrorMessage } from './messages.js';
 import type { PortReserver } from './port-reserver.js';
 import { debugLog } from './debug-logger.js';
-import { waitForTerminalDesktop } from './utils/terminal-desktop.js';
+import { waitForTerminalDesktop, terminalDisplay, type TerminalDisplay } from './utils/terminal-desktop.js';
+import { rememberedBounds, placeWindow, type WindowBounds } from './window-memory.js';
 import WebSocket from 'ws';
 
 export type ChromeCloseReason = 'inactivity' | 'manual' | 'crash' | 'external' | 'signal' | 'unknown';
@@ -543,9 +544,9 @@ export class ChromeLauncher {
    * Uses atomic release-and-launch to prevent race conditions
    * Waits for Chrome to actually bind to the port before resolving
    */
-  async launch(port: number = 9222, url?: string, portReserver?: PortReserver, headless: boolean = false, extraArgs: string[] = [], profileName?: string): Promise<{ port: number; pid: number }> {
+  async launch(port: number = 9222, url?: string, portReserver?: PortReserver, headless: boolean = false, extraArgs: string[] = [], profileName?: string, windowKey?: string): Promise<{ port: number; pid: number }> {
     if (profileName === undefined) {
-      return this.launchOnPort(port, url, portReserver, headless, extraArgs, profileName);
+      return this.launchOnPort(port, url, portReserver, headless, extraArgs, profileName, windowKey);
     }
 
     // Named profiles are serialised by NAME as well as by port (bug-006 follow-up).
@@ -568,7 +569,7 @@ export class ChromeLauncher {
       }
     }
 
-    const launchPromise = this.launchOnPort(port, url, portReserver, headless, extraArgs, name);
+    const launchPromise = this.launchOnPort(port, url, portReserver, headless, extraArgs, name, windowKey);
     this.profileLaunchLocks.set(name, launchPromise);
     try {
       return await launchPromise;
@@ -583,7 +584,7 @@ export class ChromeLauncher {
    * Port-scoped half of launch(): the per-port lock, the "already running" and
    * profile-ownership guards, and the spawn itself.
    */
-  private async launchOnPort(port: number, url?: string, portReserver?: PortReserver, headless: boolean = false, extraArgs: string[] = [], profileName?: string): Promise<{ port: number; pid: number }> {
+  private async launchOnPort(port: number, url?: string, portReserver?: PortReserver, headless: boolean = false, extraArgs: string[] = [], profileName?: string, windowKey?: string): Promise<{ port: number; pid: number }> {
     await debugLog('ChromeLauncher', `launch() called with port ${port}, portReserver=${!!portReserver}, isReserved=${portReserver?.isReserved()}`);
 
     // CRITICAL: Check if another launch is in progress for this port
@@ -620,7 +621,7 @@ export class ChromeLauncher {
       }
     }
 
-    const launchPromise = this.performLaunch(port, url, portReserver, headless, extraArgs, profileName);
+    const launchPromise = this.performLaunch(port, url, portReserver, headless, extraArgs, profileName, windowKey);
     this.launchLocks.set(port, launchPromise);
 
     try {
@@ -635,7 +636,7 @@ export class ChromeLauncher {
   /**
    * The spawn and readiness wait, run under launchOnPort()'s per-port lock.
    */
-  private async performLaunch(port: number, url?: string, portReserver?: PortReserver, headless: boolean = false, extraArgs: string[] = [], profileName?: string): Promise<{ port: number; pid: number }> {
+  private async performLaunch(port: number, url?: string, portReserver?: PortReserver, headless: boolean = false, extraArgs: string[] = [], profileName?: string, windowKey?: string): Promise<{ port: number; pid: number }> {
     await debugLog('ChromeLauncher', `performLaunch() starting for port ${port}`);
 
     // Check if port is in use by something OTHER than our port reserver
@@ -905,8 +906,9 @@ export class ChromeLauncher {
       chromeProcess.removeListener('error', exitHandler);
 
       if (!headless) {
-        await waitForTerminalDesktop(new Promise(resolve => chromeProcess.once('exit', resolve)));
-        await openBackgroundWindow(port, url ?? 'about:blank');
+        const reading = await waitForTerminalDesktop(new Promise(resolve => chromeProcess.once('exit', resolve)));
+        const remembered = windowKey ? await rememberedBounds(windowKey) : undefined;
+        await openBackgroundWindow(port, url ?? 'about:blank', terminalDisplay(reading), remembered);
       }
 
       // Inspectable, so the startup logs have served their purpose and this
@@ -1452,23 +1454,45 @@ export class ChromeLauncher {
  * which shows the window without activating Chrome. Every later tool attaches
  * to a page target, so a launch that leaves none returns no connection.
  */
-async function openBackgroundWindow(port: number, url: string): Promise<void> {
+async function openBackgroundWindow(port: number, url: string, display?: TerminalDisplay, remembered?: WindowBounds): Promise<void> {
   const version = (await (await fetch(`http://localhost:${port}/json/version`)).json()) as { webSocketDebuggerUrl: string };
   const ws = new WebSocket(version.webSocketDebuggerUrl);
+  let nextId = 0;
+  const send = (method: string, params: Record<string, unknown> = {}) => new Promise<any>((resolve, reject) => {
+    const id = ++nextId;
+    const onMessage = (data: WebSocket.RawData) => {
+      const reply = JSON.parse(data.toString()) as { id?: number; result?: unknown; error?: { message: string } };
+      if (reply.id !== id) return;
+      ws.off('message', onMessage);
+      if (reply.error) reject(new Error(`${method}: ${reply.error.message}`));
+      else resolve(reply.result);
+    };
+    ws.on('message', onMessage);
+    ws.send(JSON.stringify({ id, method, params }));
+  });
   try {
     await new Promise<void>((resolve, reject) => {
       ws.once('open', () => resolve());
       ws.once('error', reject);
     });
-    await new Promise<void>((resolve, reject) => {
-      ws.on('message', (data) => {
-        const reply = JSON.parse(data.toString()) as { id?: number; error?: { message: string } };
-        if (reply.id !== 1) return;
-        if (reply.error) reject(new Error(`Target.createTarget: ${reply.error.message}`));
-        else resolve();
-      });
-      ws.send(JSON.stringify({ id: 1, method: 'Target.createTarget', params: { url, newWindow: true, background: true } }));
-    });
+    const { targetId } = await send('Target.createTarget', { url, newWindow: true, background: true });
+    if (remembered) {
+      await placeWindow(send, remembered, targetId)
+        .catch(error => debugLog('ChromeLauncher', `reopening the first window where it was last left failed: ${error}`));
+      return;
+    }
+    if (!display) return;
+    // macOS opens the window on the display holding the pointer, at a size
+    // Chrome sets from that display; moved here onto the Terminal's display at
+    // the Terminal window's size, kept inside it and clear of the menu bar.
+    const inset = 40;
+    const { windowId, bounds } = await send('Browser.getWindowForTarget', { targetId });
+    const width = Math.min(display.window?.width ?? bounds?.width ?? display.width, display.width - 2 * inset);
+    const height = Math.min(display.window?.height ?? bounds?.height ?? display.height, display.height - 2 * inset);
+    await send('Browser.setWindowBounds', {
+      windowId,
+      bounds: { left: Math.round(display.left + inset), top: Math.round(display.top + inset), width: Math.round(width), height: Math.round(height) },
+    }).catch(error => debugLog('ChromeLauncher', `moving the first window onto the Terminal's display failed: ${error}`));
   } finally {
     ws.close();
   }

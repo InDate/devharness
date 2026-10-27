@@ -202,3 +202,22 @@ describe('a stop placed by its cause, not by when its report arrived', () => {
     expect(record.list()[0].endedIn).toBeUndefined();
   });
 });
+
+describe('a run another step\'s input takes over', () => {
+  it('splits where a root of a later step arrives, and stays one run across one step\'s inputs', () => {
+    const { page, motion, writeStyle, advance, reports } = pageWithMotion();
+    let root: { id: string; step?: string } = { id: 'p:3', step: 'step-14' };
+    page[Symbol.for('devharness.trigger')] = { rootNow: () => root, hold: () => {}, release: () => {} };
+    motion.start();
+    writeStyle('height: 10px;'); advance(16);
+    root = { id: 'p:4', step: 'step-14' };
+    writeStyle('height: 20px;'); advance(16);
+    root = { id: 'p:5', step: 'step-15' };
+    writeStyle('height: 30px;'); advance(16);
+    advance(200);
+
+    const opened = reports.filter(r => r.phase === 'open');
+    expect(opened.map(r => r.root?.id)).toEqual(['p:3', 'p:5']);
+    expect(reports.filter(r => r.phase === 'close').map(r => [r.from, r.to])).toEqual([['', '20px'], ['20px', '30px']]);
+  });
+});

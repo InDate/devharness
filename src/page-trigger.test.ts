@@ -81,4 +81,21 @@ describe('the work outstanding under an input\'s root', () => {
     fire('pointerover', { pointerType: 'mouse', clientX: 80, clientY: 60 });
     expect([keyRoot, pointerRoot]).not.toContain(tracker.rootNow().id);
   });
+
+  it('credits the transition of an element the page scrolled from under the pointer to that scroll', () => {
+    const { page, fire } = pageWithTracker();
+    const tracker = vm.runInContext("globalThis[Symbol.for('devharness.trigger')]", page);
+    const card = { matches: () => false };
+    const below = { matches: () => false };
+    fire('pointerover', { pointerType: 'mouse', clientX: 40, clientY: 60, target: card });
+    fire('keydown', { key: 'PageDown' });
+    const keyRoot = tracker.rootNow().id;
+    fire('scroll', {});
+
+    fire('pointerout', { pointerType: 'mouse', clientX: 40, clientY: 60, target: card });
+    fire('pointerover', { pointerType: 'mouse', clientX: 40, clientY: 60, target: below });
+    fire('transitionrun', { target: card, propertyName: 'transform' });
+
+    expect(tracker.rootOfAnimation({ effect: { target: card }, transitionProperty: 'transform' })?.id).toBe(keyRoot);
+  });
 });

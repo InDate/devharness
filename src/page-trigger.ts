@@ -244,6 +244,7 @@ function installPageTrigger(g: any): void {
       scrolls: type === 'wheel' || type === 'touchmove' || (type === 'keydown' && SCROLL_KEYS.has(event.key)),
     });
     inputMarks.set(event, lastInput);
+    if (lastInput.scrolls) releaseScrollHolds();
     holdThroughTask(lastInput.root);
     return lastInput;
   };
@@ -263,12 +264,20 @@ function installPageTrigger(g: any): void {
     pointerAt = { x: event.clientX, y: event.clientY };
     if (event.buttons && !still) lastInput = mark('input', 'drag', { scrolls: true });
   }, { capture: true, passive: true });
+  // An element the pointer leaves loses its hover by the same cause as the
+  // element it arrives on: the pointerover that follows names it.
+  const leaving: any[] = [];
+  const unhovered = new WeakMap<object, { words: string; root?: Root }>();
+  listen(g, 'pointerout', (event: any) => {
+    if (event.isTrusted && event.pointerType === 'mouse' && event.target) leaving.push(event.target);
+  }, { capture: true, passive: true });
   listen(g, 'pointerover', (event: any) => {
     if (!event.isTrusted || event.pointerType !== 'mouse') return;
     const scrolledUnder = stayed(event) ? lastScroll?.root : undefined;
     pointerAt = { x: event.clientX, y: event.clientY };
     lastHover = mark('pointer', scrolledUnder ? `${lastScroll!.words} · hover` : 'hover', scrolledUnder ? { root: scrolledUnder } : {});
     if (!scrolledUnder) holdThroughTask(lastHover.root);
+    for (const left of leaving.splice(0)) unhovered.set(left, { words: `${lastHover.words} left`, ...(lastHover.root ? { root: lastHover.root } : {}) });
   }, { capture: true, passive: true });
   for (const type of ['transitionend', 'animationend']) {
     listen(g, type, (event: any) => {
@@ -297,12 +306,10 @@ function installPageTrigger(g: any): void {
   listen(g, 'scroll', () => {
     const cause = scrollCauseMark();
     lastScroll = mark('scroll', `scroll · ${cause?.words ?? 'browser'}`, cause?.root ? { root: cause.root } : {});
-    const held = cause?.root ? scrollHolds.get(cause.root.id) : undefined;
-    if (held) held.scrolled = true;
   }, { capture: true, passive: true });
 
   /** Wrap a function so each call marks first, as `words`, with what was live when it was called. */
-  const calls = (owner: any, method: string, kind: string, words: string, after?: (made: Mark) => void, outstanding?: (root: Root, result: any) => void) => {
+  const calls = (owner: any, method: string, kind: string, words: string, after?: (made: Mark) => void, outstanding?: (root: Root, result: any, before: any) => void, prepare?: (self: any, args: unknown[]) => any) => {
     const original = owner && owner[method];
     if (typeof original !== 'function') return;
     const wrapper = function (this: any, ...args: unknown[]) {
@@ -311,29 +318,69 @@ function installPageTrigger(g: any): void {
       const root = liveRoot();
       const made = mark(kind, under !== undefined ? `${under} · ${words}` : words, { method, fn: running, site: siteOf(wrapper), ...(root ? { root } : {}) });
       after?.(made);
+      let before: any;
+      try { before = prepare?.(this, args); } catch { /* a target the page cannot measure */ }
       const result = original.apply(this, args);
-      if (root) outstanding?.(root, result);
+      if (root) outstanding?.(root, result, before);
       return result;
     };
     owner[method] = wrapper;
   };
   // A smooth scroll runs after the call returns, with no callback of the
-  // page's: the call's root is held until the scroll ends, or released at
-  // the next frame where no scroll began, a call to where the page stands.
-  // A scroll still running from an earlier input ends with a scrollend of its
-  // own, so a call's hold ends at a scrollend after a scroll credited to it.
-  const scrollHolds = new Map<string, { root: Root; scrolled: boolean }>();
-  const untilScrollEnds = (root: Root) => {
-    if (scrollHolds.has(root.id)) return;
+  // page's, and a scroll still running from an earlier input fires its own
+  // scrollend when the call interrupts it. So a call's root is held until a
+  // scrollend finds the scroller where the call sent it: the target its
+  // arguments name, or for scrollIntoView the one its element's place and
+  // alignment give. A later scroll call or a scrolling input supersedes the
+  // hold and releases it; a call to where the scroller stands holds nothing.
+  // A target the page's own rules move - scroll-padding, a sticky offset -
+  // stands open until superseded, and its step reads as still arriving.
+  type ScrollTarget = { scroller: any; top?: number; left?: number };
+  const scrollHolds = new Map<string, { root: Root; target: ScrollTarget }>();
+  const releaseScrollHolds = () => {
+    for (const [id, held] of [...scrollHolds]) { scrollHolds.delete(id); release(held.root); }
+  };
+  const reached = (target: ScrollTarget): boolean => {
+    const { scroller } = target;
+    const top = Number(scroller?.scrollTop ?? 0);
+    const left = Number(scroller?.scrollLeft ?? 0);
+    const maxTop = Math.max(0, Number(scroller?.scrollHeight ?? 0) - Number(scroller?.clientHeight ?? 0));
+    const maxLeft = Math.max(0, Number(scroller?.scrollWidth ?? 0) - Number(scroller?.clientWidth ?? 0));
+    const near = (at: number, want: number | undefined, max: number) => want === undefined || Math.abs(at - Math.min(Math.max(want, 0), max)) <= 2;
+    return near(top, target.top, maxTop) && near(left, target.left, maxLeft);
+  };
+  const scrollTargetOf = (method: string) => (self: any, args: unknown[]): ScrollTarget | undefined => {
+    const docScroller = g.document.scrollingElement ?? g.document.documentElement;
+    const windowCall = self === g || self === undefined;
+    if (method === 'scrollIntoView') {
+      const rect = self.getBoundingClientRect();
+      const view = Number(docScroller.clientHeight ?? g.innerHeight);
+      const at = Number(docScroller.scrollTop ?? 0);
+      const options: any = args[0];
+      const block = options === false ? 'end' : (options && typeof options === 'object' && options.block) || 'start';
+      const top = block === 'center' ? at + rect.top + rect.height / 2 - view / 2
+        : block === 'end' ? at + rect.bottom - view
+        : block === 'nearest' ? (rect.top >= 0 && rect.bottom <= view ? at : rect.top < 0 ? at + rect.top : at + rect.bottom - view)
+        : at + rect.top;
+      return { scroller: docScroller, top };
+    }
+    const scroller = windowCall ? docScroller : self;
+    const at = { top: Number(scroller.scrollTop ?? 0), left: Number(scroller.scrollLeft ?? 0) };
+    const given: any = args[0];
+    const asked = given && typeof given === 'object' ? { top: given.top, left: given.left } : { left: given, top: args[1] };
+    const by = method === 'scrollBy';
+    const axis = (value: any, from: number) => (typeof value === 'number' ? (by ? from + value : value) : undefined);
+    return { scroller, top: axis(asked.top, at.top), left: axis(asked.left, at.left) };
+  };
+  const untilScrollEnds = (root: Root, _result: unknown, target: ScrollTarget | undefined) => {
+    releaseScrollHolds();
+    if (!target || reached(target)) return;
     hold(root);
-    const held = { root, scrolled: false };
-    scrollHolds.set(root.id, held);
-    const settle = () => { if (!held.scrolled && scrollHolds.get(root.id) === held) { scrollHolds.delete(root.id); release(root); } };
-    if (unwrappedFrame) unwrappedFrame(() => nextTask(settle)); else nextTask(settle);
+    scrollHolds.set(root.id, { root, target });
   };
   listen(g, 'scrollend', () => {
-    for (const [id, held] of scrollHolds) {
-      if (!held.scrolled) continue;
+    for (const [id, held] of [...scrollHolds]) {
+      if (!reached(held.target)) continue;
       scrollHolds.delete(id);
       release(held.root);
     }
@@ -353,7 +400,7 @@ function installPageTrigger(g: any): void {
   // `scrollTo()` finds them, not on Window.prototype.
   for (const [owner, method] of [[g, 'scrollTo'], [g, 'scrollBy'], [g, 'scroll'],
     [g.Element?.prototype, 'scrollIntoView'], [g.Element?.prototype, 'scrollTo'], [g.Element?.prototype, 'scrollBy']] as Array<[any, string]>) {
-    calls(owner, method, 'scroll-cause', `${method}()`, made => { lastScrollCall = made; }, untilScrollEnds);
+    calls(owner, method, 'scroll-cause', `${method}()`, made => { lastScrollCall = made; }, untilScrollEnds, scrollTargetOf(method));
   }
   for (const property of ['scrollTop', 'scrollLeft']) {
     const described = g.Element && Object.getOwnPropertyDescriptor(g.Element.prototype, property);
@@ -611,7 +658,11 @@ function installPageTrigger(g: any): void {
       if (change && t - change.at <= CHANGE_MS && (!newest || change.at > newest.at)) newest = change;
     }
     if (newest) return newest;
-    try { if (target && target.matches && target.matches(':hover')) return { words: 'hover', root: lastHover?.root }; } catch { /* a node with no matches */ }
+    try { if (target && target.matches && target.matches(':hover')) return { words: lastHover?.words ?? 'hover', root: lastHover?.root }; } catch { /* a node with no matches */ }
+    for (let node = target; node; node = node.parentNode ?? node.host) {
+      const left = unhovered.get(node);
+      if (left) return left;
+    }
     return { words: current(), root: liveRoot() };
   };
   const ofElement = (target: any): string | undefined => causeOfElement(target).words;

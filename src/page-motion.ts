@@ -127,13 +127,29 @@ function installPageMotion(g: any): void {
     if (runs.size && !all) sweepTimer = timers.setTimeout(() => closeQuiet(), QUIET_MS);
   };
   const rootedWrites = new Map<string, { id: string; step?: string }>();
+  // Roots are numbered in the order this document made them: a cause that
+  // takes a run over is one made after the run's own, never an older cause
+  // a recent-cause read turns up again.
+  const newerRoot = (id: string, than: string | undefined): boolean => {
+    if (than === undefined) return true;
+    const [prefix, n] = [id.slice(0, id.lastIndexOf(':')), Number(id.slice(id.lastIndexOf(':') + 1))];
+    const [thanPrefix, thanN] = [than.slice(0, than.lastIndexOf(':')), Number(than.slice(than.lastIndexOf(':') + 1))];
+    return prefix === thanPrefix && n > thanN;
+  };
   const note = (source: string, element: any, property: string, from: string, to: string) => {
     if (!on) return;
     const t = now();
     const name = nameOf(element);
     const key = `${source}|${name}|${property}`;
     const run = runs.get(key);
-    if (run && t - run.endMs < QUIET_MS) {
+    // A run whose frames start arriving under another input's root - a
+    // scroll call taking over a wheel's scroll - splits there, each part
+    // under its own cause, and the new part's from-value is where it was.
+    const taken = run && t - run.endMs < QUIET_MS ? (source === 'scroll' ? tracker()?.rootOfScroll?.() : tracker()?.rootNow?.()) : undefined;
+    // Inputs of one step - the wheel ticks of one scroll step - carry one run.
+    const split = run !== undefined && taken !== undefined && newerRoot(taken.id, run.root?.id) && (taken.step === undefined || taken.step !== run.root?.step);
+    if (split) from = run!.to;
+    if (run && t - run.endMs < QUIET_MS && !split) {
       if (t - run.endMs >= FRAME_GAP_MS) run.frames++;
       run.to = to;
       run.endMs = t;

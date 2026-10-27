@@ -496,7 +496,10 @@
       "fault": "A second press within 400ms starts a burst over the first; scale jumps back to 1",
       "cells": {
         "credit": {
-          "expect": "Press step, +0; a second press adds a second row on the same element"
+          "expect": "Press step, +0; a second press adds a second row on the same element",
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "#heart's web animation credited to press q by root, with presses following at once"
         },
         "source": {
           "expect": "JS, started by key q"
@@ -523,7 +526,10 @@
       "fault": null,
       "cells": {
         "credit": {
-          "expect": "Press step, +0; on ::after"
+          "expect": "Press step, +0; on ::after",
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "#notify's transform and background-color transitions credited to press w by root"
         },
         "source": {
           "expect": "CSS, started by key w"
@@ -591,7 +597,10 @@
       "fault": null,
       "cells": {
         "credit": {
-          "expect": "Press step, +1 frame, after the transition's snapshot"
+          "expect": "Press step, +1 frame, after the transition's snapshot",
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "The view transition's update writes to #tab-ink and every ::view-transition pseudo-element animation credited to press r by root: the tracker runs startViewTransition's update under the call's root, and the pseudo-elements' animations take it while the transition runs"
         },
         "source": {
           "expect": "CSS, started by key r"
@@ -618,7 +627,10 @@
       "fault": "Close removes the class; the modal snaps out",
       "cells": {
         "credit": {
-          "expect": "Open: press step, +0. Close: press step, styles changed, no motion"
+          "expect": "Open: press step, +0. Close: press step, styles changed, no motion",
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "Open: #modal fade and the dialog's zoom credited to the first press t by root. Close: the second press records no motion, the fault the scenario plants"
         },
         "source": {
           "expect": "CSS, started by key t"
@@ -645,7 +657,10 @@
       "fault": "The spinner shows for a 60ms reply; 36px skeleton rows give way to 56px rows",
       "cells": {
         "credit": {
-          "expect": "Press step, from the press until GET /api/messages landed"
+          "expect": "Press step, from the press until GET /api/messages landed",
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "The skeleton shimmer, the spinner, GET /api/messages and each one's end credited to press y by root"
         },
         "source": {
           "expect": "CSS, started by the reply to its request, under key y"
@@ -718,7 +733,10 @@
       "fault": "The failure path never hides the spinner",
       "cells": {
         "credit": {
-          "expect": "Press step: spinner from the press, still running after POST /api/send returned 500"
+          "expect": "Press step: spinner from the press, still running after POST /api/send returned 500",
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "The spinner, Sending text and POST /api/send 500 credited to press i by root; the spinner never stops, the fault the scenario plants"
         },
         "source": {
           "expect": "CSS, started by the reply to its request, under key i"
@@ -749,7 +767,10 @@
       "fault": "The invalid class is never removed; a second invalid press shakes nothing",
       "cells": {
         "credit": {
-          "expect": "First press: press step, +0. Second press: no motion"
+          "expect": "First press: press step, +0. Second press: no motion",
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "#email's shake credited to press o by root"
         },
         "source": {
           "expect": "CSS, started by key o"
@@ -776,7 +797,10 @@
       "fault": "Monday has no starting position and jumps while the rest slide",
       "cells": {
         "credit": {
-          "expect": "Press step, +0, three rows; Monday changed position with no motion"
+          "expect": "Press step, +0, three rows; Monday changed position with no motion",
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "The three slide-in animations credited to press p by root"
         },
         "source": {
           "expect": "JS, started by key p"
@@ -907,7 +931,10 @@
       "fault": null,
       "cells": {
         "credit": {
-          "expect": "Under the hover step, +0"
+          "expect": "Under the hover step, +0",
+          "today": "works",
+          "basis": "sequence:motion-makers-no-waits",
+          "note": "#card's transform and box-shadow transitions credited to the hover step by root, and their reversal when a wheel scroll moves the card from under the pointer credited to the scroll step"
         },
         "source": {
           "expect": "CSS, started by hover",
@@ -944,8 +971,8 @@
         "credit": {
           "expect": "One source row: started at the navigate step, period 3s, stopped by k",
           "today": "gap",
-          "basis": "code",
-          "note": "Each turn is a separate animation row"
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "Press k's toggle text is credited by root; the turns themselves are not measured with ambient motion off"
         },
         "source": {
           "expect": "CSS, started by every 3000ms, the slide timer"
@@ -1269,7 +1296,10 @@
       "fault": null,
       "cells": {
         "credit": {
-          "expect": "Press step: list dims at +0, spinner at +300ms, both end when the 600ms reply lands"
+          "expect": "Press step: list dims at +0, spinner at +300ms, both end when the 600ms reply lands",
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "The list's dim, the spinner set going by a 300ms timer and GET /api/messages credited to press c by root"
         },
         "source": {
           "expect": "CSS, started by the reply to its request, under key c"
@@ -1300,7 +1330,10 @@
       "fault": null,
       "cells": {
         "credit": {
-          "expect": "Press step: list dims; no spinner, the 60ms reply beats the threshold"
+          "expect": "Press step: list dims; no spinner, the 60ms reply beats the threshold",
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "GET /api/messages credited to press v by root"
         },
         "source": {
           "expect": "CSS, started by the reply to its request, under key v"
@@ -1327,7 +1360,10 @@
       "fault": "The star reverts on the 409 but the count keeps its increment",
       "cells": {
         "credit": {
-          "expect": "Press step: fill at +0, revert when POST /api/star returned 409"
+          "expect": "Press step: fill at +0, revert when POST /api/star returned 409",
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "The star's transitions, POST /api/star 409 and the count credited to press b by root"
         },
         "source": {
           "expect": "CSS, started by the reply to its request, under key b"
@@ -1358,7 +1394,10 @@
       "fault": null,
       "cells": {
         "credit": {
-          "expect": "Search step: spinner from the press; Cancel step: spinner ends with the aborted request"
+          "expect": "Search step: spinner from the press; Cancel step: spinner ends with the aborted request",
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "The spinner and Searching credited to press n, Cancelled to press m, each by root"
         },
         "source": {
           "expect": "CSS, started by the reply to its request, under key n, m"
@@ -1387,7 +1426,8 @@
         "credit": {
           "expect": "One source row from the press to the next press, period about 1s",
           "today": "gap",
-          "basis": "code"
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "The dots' frame loop credited to the first press d by root; the second press records nothing, since the loop ends on a flag the press set and its end reads as the loop's own, under the first press"
         },
         "source": {
           "expect": "JS, started by key d · frame loop"
@@ -1414,7 +1454,10 @@
       "fault": "The second notice has no opacity transition; its removal never fires and it stays as an invisible gap",
       "cells": {
         "credit": {
-          "expect": "Press step, +0; then the notice's removal, or its absence"
+          "expect": "Press step, +0; then the notice's removal, or its absence",
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "The leaving notice's opacity and transform transitions credited to press f by root"
         },
         "source": {
           "expect": "CSS, started by key f"
@@ -1479,7 +1522,10 @@
       "fault": null,
       "cells": {
         "credit": {
-          "expect": "Back up step starts the row; Pause, Faster and Cancel steps change it"
+          "expect": "Back up step starts the row; Pause, Faster and Cancel steps change it",
+          "today": "gap",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "Back up's ring and text credited to press j, Cancelled to press x, by root; the pause (l) and the faster rate (z) record no row, since a change of an Animation object's playback is not observed"
         },
         "source": {
           "expect": "JS, started by the playback call under key j, l, z or x",
@@ -1526,7 +1572,10 @@
           "today": "unmeasured"
         },
         "credit": {
-          "expect": "Press step, +0"
+          "expect": "Press step, +0",
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "span.ping's animation credited to press 5 by root"
         },
         "source": {
           "expect": "CSS, started by key 5"
@@ -1561,7 +1610,10 @@
           "today": "unmeasured"
         },
         "credit": {
-          "expect": "Press step, +0"
+          "expect": "Press step, +0",
+          "today": "gap",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "#box in the iframe reads after, placed by time: the tracker runs in the top document alone, so no root reaches the frame"
         },
         "source": {
           "expect": "CSS, started by key 6"
@@ -1597,7 +1649,10 @@
           "today": "unmeasured"
         },
         "credit": {
-          "expect": "The navigate step, +0 on the new page"
+          "expect": "The navigate step, +0 on the new page",
+          "today": "gap",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "The new document's ::view-transition animations read from page load, placed by time: a cross-document view transition starts in a document no root reaches"
         },
         "source": {
           "expect": "CSS, started by page load, the cross-document view transition"
@@ -1624,7 +1679,10 @@
       "fault": null,
       "cells": {
         "credit": {
-          "expect": "Open and close steps, +0 each, including the exit"
+          "expect": "Open and close steps, +0 each, including the exit",
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "Open and close transitions, display and overlay included, credited to each press 7 by root"
         },
         "source": {
           "expect": "CSS, started by key 7"
@@ -1651,7 +1709,10 @@
       "fault": null,
       "cells": {
         "credit": {
-          "expect": "Open and close steps, +0 each"
+          "expect": "Open and close steps, +0 each",
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "Open and close transitions credited to each press 8 by root"
         },
         "source": {
           "expect": "CSS, started by key 8"
@@ -1678,7 +1739,10 @@
       "fault": null,
       "cells": {
         "credit": {
-          "expect": "Press step, +0, on ::details-content"
+          "expect": "Press step, +0, on ::details-content",
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "::details-content's height and content-visibility transitions credited to press 9 by root"
         },
         "source": {
           "expect": "CSS, started by key 9"
@@ -1708,7 +1772,10 @@
       "fault": null,
       "cells": {
         "credit": {
-          "expect": "Press step, +0, on --angle"
+          "expect": "Press step, +0, on --angle",
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "#premium's shine credited to press 0 by root"
         },
         "source": {
           "expect": "CSS, started by key 0"
@@ -1735,7 +1802,10 @@
       "fault": null,
       "cells": {
         "credit": {
-          "expect": "Press step, +0, on offset-distance"
+          "expect": "Press step, +0, on offset-distance",
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "#plane's fly credited to press ; by root"
         },
         "source": {
           "expect": "CSS, started by key ;"
@@ -1762,7 +1832,10 @@
       "fault": null,
       "cells": {
         "credit": {
-          "expect": "Press step, +0, on clip-path"
+          "expect": "Press step, +0, on clip-path",
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "#preview's clip-path transition credited to press ' by root"
         },
         "source": {
           "expect": "CSS, started by key '"
@@ -1865,7 +1938,10 @@
       "fault": null,
       "cells": {
         "credit": {
-          "expect": "Press step, +0"
+          "expect": "Press step, +0",
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "#nudge's web animation credited to press \\ by root"
         },
         "source": {
           "expect": "JS catalog.html:736, the line of the animate() call in strict module code, started by key ; the go-to opens the module’s keydown listener, the outermost function on record"

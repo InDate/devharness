@@ -630,6 +630,40 @@ function installPageTrigger(g: any): void {
     g.Element.prototype.animate = wrapper;
   }
 
+  // A view transition runs its update callback after the browser has taken
+  // its snapshot, a task or more after the call, and animates its
+  // ::view-transition pseudo-elements on the document until it finishes. The
+  // callback runs under the call's root, the pseudo-elements' animations take
+  // it, and the root stays open until the transition finishes.
+  let viewTransition: { words: string; root?: Root } | undefined;
+  const DocumentProto = g.Document?.prototype;
+  const startViewTransition = DocumentProto?.startViewTransition;
+  if (typeof startViewTransition === 'function') {
+    DocumentProto.startViewTransition = function (this: any, given?: any) {
+      const under = current();
+      const root = liveRoot();
+      const words = under !== undefined ? `${under} · view transition` : 'view transition';
+      const update = typeof given === 'function' ? given : given && typeof given.update === 'function' ? given.update : undefined;
+      const wrapped = update ? function (this: any, ...args: unknown[]) {
+        runAs(update);
+        mark('chain', words, root ? { root } : {});
+        return update.apply(this, args);
+      } : undefined;
+      const argument = wrapped ? (typeof given === 'function' ? wrapped : { ...given, update: wrapped }) : given;
+      const transition = startViewTransition.call(this, argument);
+      const own = { words, ...(root ? { root } : {}) };
+      viewTransition = own;
+      hold(root);
+      const ended = () => { if (viewTransition === own) viewTransition = undefined; nextTask(() => release(root)); };
+      transition?.finished?.then(ended, ended);
+      return transition;
+    };
+  }
+  const ofViewTransition = (animation: any): { words: string; root?: Root } | undefined => {
+    const pseudo = animation && animation.effect && animation.effect.pseudoElement;
+    return typeof pseudo === 'string' && pseudo.startsWith('::view-transition') ? viewTransition : undefined;
+  };
+
   // A transition or keyframe animation starts at the style recalc after the
   // change that set it off, outside any task: the change's trigger is kept.
   interface Change { words: string; at: number; root?: Root }
@@ -769,6 +803,8 @@ function installPageTrigger(g: any): void {
       if (animation && animation.timeline && g.document.timeline && animation.timeline !== g.document.timeline) return 'scroll timeline';
       const called = byAnimation.get(animation);
       if (called) return called;
+      const transitioned = ofViewTransition(animation);
+      if (transitioned) return transitioned.words;
       const target = animation && animation.effect && animation.effect.target;
       const name = animation && (animation.transitionProperty || animation.animationName);
       return (target && name && started.get(target)?.get(name)?.words) ?? (target ? ofElement(target) : undefined);
@@ -792,6 +828,8 @@ function installPageTrigger(g: any): void {
     rootOfAnimation(animation: any): Root | undefined {
       const made = animatedRoot.get(animation);
       if (made) return made;
+      const transitioned = ofViewTransition(animation);
+      if (transitioned) return transitioned.root;
       const target = animation && animation.effect && animation.effect.target;
       const name = animation && (animation.transitionProperty || animation.animationName);
       return (target && name && started.get(target)?.get(name)?.root) ?? (target ? causeOfElement(target).root : undefined);

@@ -13,9 +13,19 @@ function pageWithTracker() {
     addEventListener(this: any, type: string, fn: (event: any) => void) { listeners.set(type, [...(listeners.get(type) ?? []), fn]); }
     removeEventListener() {}
   }
+  const transitions: Array<{ update: () => void; finish: () => void }> = [];
+  class Document {
+    startViewTransition(update: () => void) {
+      let finish!: () => void;
+      const finished = new Promise<void>(resolve => { finish = resolve; });
+      transitions.push({ update, finish });
+      return { finished };
+    }
+  }
   const page: any = new EventTarget();
   Object.assign(page, {
     EventTarget,
+    Document,
     document: { readyState: 'complete', documentElement: {}, addEventListener: () => {} },
     performance: { now: () => 0 },
     setTimeout: (run: () => void) => { tasks.push(run); return tasks.length; },
@@ -34,7 +44,7 @@ function pageWithTracker() {
     for (const frame of frames.splice(0)) frame();
     for (let task = tasks.shift(); task; task = tasks.shift()) task();
   };
-  return { page, fire, turn, reports, tasks };
+  return { page, fire, turn, reports, tasks, transitions };
 }
 
 describe('the work outstanding under an input\'s root', () => {
@@ -97,5 +107,27 @@ describe('the work outstanding under an input\'s root', () => {
     fire('transitionrun', { target: card, propertyName: 'transform' });
 
     expect(tracker.rootOfAnimation({ effect: { target: card }, transitionProperty: 'transform' })?.id).toBe(keyRoot);
+  });
+
+  it('runs a view transition\'s update under the root of the input that started it, and credits its pseudo-elements\' animations to it', async () => {
+    const { page, fire, turn, reports, transitions } = pageWithTracker();
+    const tracker = vm.runInContext("globalThis[Symbol.for('devharness.trigger')]", page);
+    fire('keydown', { key: 'r' });
+    const keyRoot = tracker.rootNow().id;
+    vm.runInContext('globalThis.seen = []; new Document().startViewTransition(() => { globalThis.seen.push(globalThis[Symbol.for("devharness.trigger")].rootNow()?.id); })', page);
+    turn();
+    turn();
+    fire('keydown', { key: 'i' });
+
+    transitions[0].update();
+    expect(page.seen).toEqual([keyRoot]);
+    expect(tracker.rootOfAnimation({ effect: { pseudoElement: '::view-transition-old(root)' } })?.id).toBe(keyRoot);
+    expect(reports.filter(one => one.id === keyRoot).map(one => one.open)).toEqual([true]);
+
+    transitions[0].finish();
+    await Promise.resolve();
+    turn();
+    turn();
+    expect(reports.filter(one => one.id === keyRoot).map(one => one.open)).toEqual([true, false]);
   });
 });

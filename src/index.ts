@@ -82,7 +82,8 @@ import { configManager } from './config.js';
 import { ToolError } from './tool-error.js';
 import type { ServerLog, ServerRow, ToolGroup, ToolValues } from './bench/wire.js';
 import { arriveOn, unlisted, historyPlace, entryChannel, asInnerCall, callOwner } from './call-origin.js';
-import { markNextCommand, releaseCommand, noteCallStart, nameNewestCall, newlyIdleProxies, attachEntryToCursor } from './proxy/registry.js';
+import { markNextCommand, releaseCommand, noteCallStart, nameNewestCall, newlyIdleProxies, attachEntryToCursor, getProxy } from './proxy/registry.js';
+import { noteLostConnection } from './lost-connections.js';
 import { describePersonInput, isPersonWatchTurnedOn, recordPersonInputInto, takeUnreadPersonInput, watchPersonInput } from './person-watch.js';
 import { activitySummary } from './activity-index.js';
 import { observes } from './observing-tools.js';
@@ -281,6 +282,7 @@ chromeLauncher.setOnExitCallback(async (event) => {
   for (const conn of connectionsToClose) {
     try {
       await connectionManager.closeConnection(conn.id);
+      if (conn.reference) noteLostConnection(conn.reference, { at: Date.now(), port, reason: event.reason, proxied: getProxy(conn.reference) !== undefined });
       await debugLog('index', `Closed connection ${conn.id} after Chrome exit`);
     } catch (closeError) {
       await debugLog('index', `Failed to close connection ${conn.id}: ${closeError}`);

@@ -424,6 +424,16 @@ The run stopped before its first step, so nothing has been executed yet.
 
 ---
 
+## CONNECTION_LOST
+
+**Type:** error
+**Code:** NO_CONNECTION
+**Summary:** Connection closed with its Chrome
+
+"{{reference}}" closed when the Chrome on port {{port}} exited at {{at}}{{#external}}, closed from outside devharness{{/external}}. No connection is opened in its place here: one opened by this call would take neither "{{reference}}"'s proxy nor its window, so its pages would cross another connection's proxy or none. Reopen it with `{{relaunch}}`.
+
+---
+
 ## CONNECTION_NOT_FOUND
 
 **Type:** error
@@ -4504,7 +4514,7 @@ Could not open a tab for this session: {{message}}
 **Type:** success
 **Summary:** {{call}} is held until the Terminal's desktop is showing
 
-Chrome opens its first window on the desktop of the Terminal on {{tty}}, and that desktop is not showing. Ask the person to switch to it. `{{call}}` carries on in the background, and the event stream reports its reply as a `launch` event once the window opens. A call on this connection before that event starts nothing.
+Chrome opens a new window on the desktop of the Terminal on {{tty}}, and that desktop is not showing. Ask the person to switch to it. `{{call}}` carries on in the background, and the event stream reports its reply as a `launch` event once the window opens. A call on this connection before that event starts nothing.
 
 ---
 

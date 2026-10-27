@@ -225,7 +225,7 @@ export async function waitForTerminalDesktop(stop: Promise<unknown>, io: Desktop
     return 'skipped: no tty';
   }
   const wait = io.startWait(tty);
-  await debugLog('TerminalDesktop', `Holding the first window until the desktop of the Terminal on ${tty} is showing`);
+  await debugLog('TerminalDesktop', `Holding a new window until the desktop of the Terminal on ${tty} is showing`);
   const release = heldCall.getStore();
   const holding = release ? setTimeout(() => release(tty), HELD_AFTER_MS) : undefined;
   const reading = await Promise.race([wait.result, stop.then(() => 'stopped')]);

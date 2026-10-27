@@ -5,19 +5,23 @@
 
 import puppeteer, { Browser, Page } from 'puppeteer-core';
 import { openSession } from './utils/own-session.js';
+import { waitForTerminalDesktop } from './utils/terminal-desktop.js';
 
 /**
  * Browser.newPage() creates the tab in the foreground, which on macOS
  * activates Chrome and moves keyboard focus off the app the user is typing in.
  * Target.createTarget with `background: true` adds the tab without activating.
  * `newWindow` opens it in a window of its own, so the tab it would have joined
- * stays the visible tab of its window.
+ * stays the visible tab of its window. `browserContextId` opens it in that
+ * context, with its proxy and storage; with none it joins the default context.
  */
-export async function openBackgroundPage(browser: Browser, options: { newWindow?: boolean } = {}): Promise<Page> {
+export async function openBackgroundPage(browser: Browser, options: { newWindow?: boolean; browserContextId?: string } = {}): Promise<Page> {
+  if (options.newWindow) await holdForTerminalDesktop(browser);
   const session = await openSession(browser.target());
   try {
     const { targetId } = await session.send('Target.createTarget', {
       url: 'about:blank', background: true, ...(options.newWindow ? { newWindow: true } : {}),
+      ...(options.browserContextId ? { browserContextId: options.browserContextId } : {}),
     });
     const target = await browser.waitForTarget((t) => (t as any)._targetId === targetId);
     const page = await target.page();
@@ -26,6 +30,17 @@ export async function openBackgroundPage(browser: Browser, options: { newWindow?
   } finally {
     await session.detach().catch(() => {});
   }
+}
+
+/**
+ * Holds a window about to open in a running Chrome until the Terminal's
+ * desktop is showing, as a new Chrome's first window is held: macOS places a
+ * window on the desktop showing when it is created. A headless Chrome opens
+ * no window, and is not held.
+ */
+export async function holdForTerminalDesktop(browser: Browser): Promise<void> {
+  if ((await browser.version().catch(() => '')).includes('Headless')) return;
+  await waitForTerminalDesktop(new Promise(resolve => browser.once('disconnected', resolve)));
 }
 
 export class PuppeteerManager {

@@ -7,7 +7,7 @@
 import { z } from 'zod';
 import { createServer } from 'net';
 import { CDPManager } from '../cdp-manager.js';
-import { PuppeteerManager } from '../puppeteer-manager.js';
+import { PuppeteerManager, holdForTerminalDesktop } from '../puppeteer-manager.js';
 import { ConsoleMonitor } from '../console-monitor.js';
 import { NetworkMonitor } from '../network-monitor.js';
 import { DialogMonitor } from '../dialog-monitor.js';
@@ -371,6 +371,15 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
         const profileBlocked = await profileGate(browserAlreadyExists ? port : undefined);
         if (profileBlocked) {
           return profileBlocked;
+        }
+
+        // Chrome routes a whole process through one proxy, scoped to the app
+        // its first launch opened, so a tab added here would share that proxy
+        // and be refused outside its scope. A proxied launch into a running
+        // Chrome takes a window of its own, with its own proxy and storage.
+        if (browserAlreadyExists && args.proxy && requested && !profileName && !args.forceNewInstance) {
+          const { forceNewInstance: _notNew, ...windowArgs } = args;
+          return launchContextWindow({ ...windowArgs, port });
         }
 
         if (!browserAlreadyExists) {
@@ -737,6 +746,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
         }
       }
 
+      await holdForTerminalDesktop(browser);
       const page = await context.newPage();
       puppeteerManager.adopt(page);
       if (proxyServer) {

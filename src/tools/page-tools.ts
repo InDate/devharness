@@ -16,6 +16,9 @@ import type { ExecuteToolCall } from '../types.js';
 import { raceAbort, throwIfAborted } from '../utils/abort.js';
 import { openSession } from '../utils/own-session.js';
 import { setPageViewport } from '../sequence-viewport.js';
+import { lostConnection, lostConnectionResponse } from '../lost-connections.js';
+import { getProxy, listProxies } from '../proxy/registry.js';
+import { sanitizeReference } from '../reference-validator.js';
 
 // =============================================================================
 // Types
@@ -147,6 +150,33 @@ function navigationOutcome(result: ActionResult<unknown>, action: string, target
   return undefined;
 }
 
+/** How often each proxy has refused the host a URL names, keyed by the proxy's connection. */
+function scopeRefusals(url: string): Map<string, number> {
+  const host = hostOf(url);
+  const counts = new Map<string, number>();
+  if (!host) return counts;
+  for (const name of listProxies()) counts.set(name, getProxy(name)?.refusals().find(one => one.host === host)?.count ?? 0);
+  return counts;
+}
+
+/**
+ * The proxy whose scope refused a URL since `before` was read, with what its
+ * scope lets through: a page that ran in another connection's browser crossed
+ * that browser's proxy, and Chrome reports the refusal only as an empty
+ * response.
+ */
+function refusedBy(url: string, before: Map<string, number>): { name: string; allowed: string[] } | undefined {
+  const now = scopeRefusals(url);
+  for (const [name, count] of now) {
+    if (count > (before.get(name) ?? 0)) return { name, allowed: getProxy(name)?.listAllowedHosts() ?? [] };
+  }
+  return undefined;
+}
+
+function hostOf(url: string): string | undefined {
+  try { return new URL(url).host; } catch { return undefined; }
+}
+
 // Consolidated schema for page navigation tools
 const navigateSchema = z.object({
   action: z.enum(['goto', 'reload', 'back', 'forward', 'info', 'viewport']),
@@ -205,6 +235,11 @@ export function createPageTools(
         // Resolve connection from reason
         let resolved = await resolveConnectionByName(connection);
 
+        // A name whose Chrome exited is reopened on purpose, with its own
+        // proxy, not as a tab in the Chrome that runs now.
+        const lost = !resolved ? lostConnection(sanitizeReference(connection)) : undefined;
+        if (lost) return lostConnectionResponse(connection, lost, args.url);
+
         // Auto-launch Chrome for 'goto' action if no connection found
         if (!resolved && action === 'goto' && executeToolCall) {
           const launchResult = await autoLaunchChrome(executeToolCall, connection, 'navigate.goto');
@@ -248,7 +283,15 @@ export function createPageTools(
               async () => {
                 // raceAbort = stop waiting on cancel; the navigation itself
                 // continues in the browser (no Page.stopLoading - see above).
-                await raceAbort(page.goto(args.url!, { waitUntil: args.waitUntil ?? 'load' }), abortSignal);
+                const before = scopeRefusals(args.url!);
+                try {
+                  await raceAbort(page.goto(args.url!, { waitUntil: args.waitUntil ?? 'load' }), abortSignal);
+                } catch (error) {
+                  const refusing = refusedBy(args.url!, before);
+                  if (!refusing) throw error;
+                  const scope = refusing.allowed.length ? `its scope lets through only ${refusing.allowed.join(', ')}` : `it refuses ${hostOf(args.url!)}`;
+                  throw new Error(`${error instanceof Error ? error.message : String(error)} - the proxy of "${refusing.name}" refused it: ${scope}, and this page runs in that proxy's browser`);
+                }
 
                 // Auto-restart monitoring after navigation
                 restartMonitoring(page, targetConsoleMonitor, targetNetworkMonitor);

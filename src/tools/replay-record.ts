@@ -23,6 +23,8 @@ import {
 import { configManager } from '../config.js';
 import { generatePuppeteerCode, generatePlaywrightCode } from './replay-codegen.js';
 import { type ReplayArgs } from './replay-schema.js';
+import { lostConnection, lostConnectionResponse } from '../lost-connections.js';
+import { sanitizeReference } from '../reference-validator.js';
 
 export async function handleRecordInteraction(
   args: ReplayArgs,
@@ -107,6 +109,8 @@ export async function handleRecordInteraction(
       });
     }
 
+    const lost = lostConnection(sanitizeReference(args.connection));
+    if (lost) return lostConnectionResponse(args.connection, lost, startUrl);
     const launchResult = await autoLaunchChrome(executeToolCall, args.connection, 'recordInteraction');
     if (!launchResult.success) {
       return createErrorResponse(launchResult.errorType, {

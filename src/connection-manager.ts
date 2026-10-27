@@ -16,6 +16,7 @@ import type { ChromeLauncher } from './chrome-launcher.js';
 import { disposeWorkerTargetRegistry } from './worker-targets.js';
 import { ownScript } from './utils/own-script.js';
 import { animationRecordOf } from './animation-record.js';
+import { forgetLostConnection } from './lost-connections.js';
 
 export interface Connection {
   id: string;
@@ -75,6 +76,7 @@ export class ConnectionManager {
     pageIndex?: number
   ): string {
     const id = `conn-${++this.connectionCounter}`;
+    if (reference) forgetLostConnection(reference);
     const type = cdpManager.getRuntimeType();
 
     const now = Date.now();

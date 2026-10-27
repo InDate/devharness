@@ -284,23 +284,34 @@ export function forgetAnimationRecord(connection: string): void {
   records.delete(connection);
 }
 
+/** Numbers each feed, so ids from two Chrome sessions never meet in one record. */
+let feeds = 0;
+
 /**
  * Feed a record from Chrome's Animation domain on a session that has it
  * enabled; returns the detach. A start report's object is read by the page's
  * own list, so it takes the id a sweep gives it.
+ *
+ * Chrome numbers its animations per browser process, from the start again in
+ * a Chrome relaunched under the same connection, while the record outlives
+ * it. Each id reaches the record prefixed with its feed, so a relaunched
+ * Chrome's animation 12 is not taken for the one the record already holds as
+ * 12; Chrome is sent its own id.
  */
 export function feedFromChrome(record: AnimationRecord, client: CDPSession): () => void {
-  const created = (event: any) => { if (event?.id) record.chromeCreated(String(event.id)); };
+  const feed = ++feeds;
+  const own = (chromeId: unknown) => `${feed}:${chromeId}`;
+  const created = (event: any) => { if (event?.id) record.chromeCreated(own(event.id)); };
   const started = (event: any) => {
     const chromeId = event?.animation?.id;
     if (!chromeId) return;
     void record.queueRead(async () => {
       const read = await readStarted(client, String(chromeId))
         .catch(error => { debugLog('animation-record', `reading ${chromeId} at its start failed: ${error}`); return undefined; });
-      record.chromeStarted(String(chromeId), read);
+      record.chromeStarted(own(chromeId), read);
     });
   };
-  const canceled = (event: any) => { if (event?.id) record.chromeCanceled(String(event.id)); };
+  const canceled = (event: any) => { if (event?.id) record.chromeCanceled(own(event.id)); };
   client.on('Animation.animationCreated', created);
   client.on('Animation.animationStarted', started);
   client.on('Animation.animationCanceled', canceled);

@@ -44,6 +44,8 @@ export interface PageAnimation {
   makerName?: string;
   /** Where a call that made it stands, when the page holds its script and line but not its function. */
   makerAt?: { url: string; line: number };
+  /** The input at the head of the chain that started it, as the page's trigger tracker carried it. */
+  root?: { id: string; step?: string };
 }
 
 /** Motion the page makes with no Animation object (`page-motion.ts`), named by what carried it. */
@@ -95,6 +97,7 @@ function installPageAnimations(g: any): void {
     const tracker = g[Symbol.for('devharness.trigger')];
     const trigger = tracker?.ofAnimation?.(animation);
     const maker = tracker?.animationMaker?.(animation) ?? {};
+    const root = tracker?.rootOfAnimation?.(animation);
     return {
       id: idOf(animation),
       doc,
@@ -109,6 +112,7 @@ function installPageAnimations(g: any): void {
       currentTime: typeof animation.currentTime === 'number' ? animation.currentTime : 0,
       ...(trigger ? { trigger } : {}),
       ...maker,
+      ...(root ? { root } : {}),
     };
   };
 

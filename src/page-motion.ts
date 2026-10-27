@@ -54,6 +54,8 @@ export interface MotionReport {
   makerName?: string;
   /** Where a call that made it stands, when the page holds its script and line but not its function. */
   makerAt?: { url: string; line: number };
+  /** The input at the head of the chain that started it, as the page's trigger tracker carried it. */
+  root?: { id: string; step?: string };
   /** On a close that something ended - a media element paused or reaching its end - what ended it, in the maker's terms. */
   stoppedBy?: MotionStop;
 }
@@ -84,7 +86,7 @@ function installPageMotion(g: any): void {
   };
 
   let on = false;
-  interface Run { id: number; source: string; element: string; property: string; from: string; to: string; startMs: number; endMs: number; frames: number; trigger?: string; maker?: string; makerRef?: number; makerName?: string; makerAt?: { url: string; line: number }; stoppedBy?: MotionStop }
+  interface Run { id: number; source: string; element: string; property: string; from: string; to: string; startMs: number; endMs: number; frames: number; trigger?: string; maker?: string; makerRef?: number; makerName?: string; makerAt?: { url: string; line: number }; stoppedBy?: MotionStop; root?: { id: string; step?: string } }
   // Numbers each motion in this document; the document's own id names which.
   let nextRun = 1;
   const doc = Math.random().toString(36).slice(2, 10);
@@ -120,7 +122,8 @@ function installPageMotion(g: any): void {
       if (run) { runs.delete(key); report(run, 'close'); }
       const trigger = triggerOf(source);
       const maker = (source === 'scroll' ? tracker()?.scrollMaker?.() : tracker()?.runningMaker?.()) ?? {};
-      const opened: Run = { id: nextRun++, source, element: name, property, from, to, startMs: t, endMs: t, frames: 1, ...(trigger ? { trigger } : {}), ...maker };
+      const root = source === 'scroll' ? tracker()?.rootOfScroll?.() : tracker()?.rootNow?.();
+      const opened: Run = { id: nextRun++, source, element: name, property, from, to, startMs: t, endMs: t, frames: 1, ...(trigger ? { trigger } : {}), ...maker, ...(root ? { root } : {}) };
       runs.set(key, opened);
       report(opened, 'open');
     }
@@ -186,7 +189,8 @@ function installPageMotion(g: any): void {
     if (event.type === 'play') {
       const at = Number(element.currentTime).toFixed(3);
       const trigger = tracker()?.ofCall?.(['play'], tracker()?.current?.() ?? 'autoplay');
-      const opened: Run = { id: nextRun++, source: 'media', element: nameOf(element), property: 'currentTime', from: at, to: at, startMs: now(), endMs: now(), frames: 0, ...(trigger ? { trigger } : {}), ...(tracker()?.mediaMaker?.(element) ?? {}) };
+      const root = tracker()?.rootOfCall?.(['play']);
+      const opened: Run = { id: nextRun++, source: 'media', element: nameOf(element), property: 'currentTime', from: at, to: at, startMs: now(), endMs: now(), frames: 0, ...(trigger ? { trigger } : {}), ...(tracker()?.mediaMaker?.(element) ?? {}), ...(root ? { root } : {}) };
       playing.set(element, opened);
       report(opened, 'open');
       return;
@@ -212,7 +216,8 @@ function installPageMotion(g: any): void {
     if (event.type === 'beginEvent') {
       const target = animate.targetElement ?? animate.parentElement;
       const trigger = tracker()?.ofCall?.(['beginElement', 'beginElementAt'], declared);
-      const opened: Run = { id: nextRun++, source: 'smil', element: nameOf(target), property: animate.getAttribute?.('attributeName') ?? 'smil', from: animate.getAttribute?.('from') ?? '', to: animate.getAttribute?.('to') ?? '', startMs: now(), endMs: now(), frames: 0, ...(trigger ? { trigger } : {}), ...svgMaker(animate) };
+      const root = tracker()?.rootOfCall?.(['beginElement', 'beginElementAt']);
+      const opened: Run = { id: nextRun++, source: 'smil', element: nameOf(target), property: animate.getAttribute?.('attributeName') ?? 'smil', from: animate.getAttribute?.('from') ?? '', to: animate.getAttribute?.('to') ?? '', startMs: now(), endMs: now(), frames: 0, ...(trigger ? { trigger } : {}), ...svgMaker(animate), ...(root ? { root } : {}) };
       begun.set(animate, opened);
       report(opened, 'open');
       return;

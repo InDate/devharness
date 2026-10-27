@@ -44,16 +44,32 @@ function installPageTrigger(g: any): void {
   // page scrolls on it by itself.
   // `site` is where the app made the call that marked; `harness` marks a
   // scroll devharness made itself.
-  interface Mark { kind: string; words: string; at: number; live: boolean; origin?: string; method?: string; scrolls?: boolean; fn?: any; site?: Site; harness?: boolean }
+  // `root` is the input at the head of the chain the mark stands in, carried
+  // from mark to mark as the work it started runs on.
+  interface Mark { kind: string; words: string; at: number; live: boolean; origin?: string; method?: string; scrolls?: boolean; fn?: any; site?: Site; harness?: boolean; root?: Root }
+  /**
+   * The input at the head of a chain: an id this document gives it, and the
+   * step devharness ran it under where devharness drove it. A person's input
+   * has no step here; the person watch reports the id with the input, and the
+   * History entry it becomes is the input's step.
+   */
+  interface Root { id: string; step?: string }
   /** An app call's site: its function where the engine hands it over, else its script and line. */
   interface Site { fn?: any; url?: string; line?: number }
   let last: Mark | undefined;
+  // Ids unique to this document: a reload numbers afresh under a new prefix.
+  const rootPrefix = Math.random().toString(36).slice(2, 10);
+  let nextRoot = 1;
+  // The step a driven input runs under, set by devharness around its dispatch.
+  let drivenBy: string | undefined;
+  const ROOTS = new Set(['input', 'pointer']);
   /** The newest mark of a kind that starts work rather than carries it. */
   let lastCause: Mark | undefined;
   let lastInput: Mark | undefined;
   let lastScrollCall: Mark | undefined;
   let lastHash: Mark | undefined;
   let lastScroll: Mark | undefined;
+  let lastHover: Mark | undefined;
   let loadedAt: number | undefined;
   // A change this soon after the load event belongs to the load: an app's
   // load-time setup runs in callbacks nothing here marks.
@@ -136,12 +152,17 @@ function installPageTrigger(g: any): void {
   };
 
   const mark = (kind: string, words: string, facts: Partial<Mark> = {}): Mark => {
-    const made: Mark = { kind, words, at: now(), live: true, ...facts };
+    const root = facts.root ?? (ROOTS.has(kind) ? { id: `${rootPrefix}:${nextRoot++}`, ...(drivenBy ? { step: drivenBy } : {}) } : undefined);
+    const made: Mark = { kind, words, at: now(), live: true, ...facts, ...(root ? { root } : {}) };
     last = made;
     if (!CARRIERS.has(kind)) lastCause = made;
     nextTask(() => { made.live = false; });
     return made;
   };
+
+  /** The root of the work running now: the live mark's, where a live mark carries one. */
+  const liveRoot = (): Root | undefined =>
+    (last && last.live && (!CARRIERS.has(last.kind) || last.origin !== undefined) ? last.root : undefined);
 
   const loading = (): boolean => g.document.readyState !== 'complete' || (loadedAt !== undefined && now() - loadedAt <= LOAD_TAIL_MS);
 
@@ -164,23 +185,35 @@ function installPageTrigger(g: any): void {
 
   // Input, first in every dispatch: these listeners stand ahead of the app's.
   const INPUT: Record<string, string> = { pointerdown: 'press', click: 'click', keydown: 'key', wheel: 'wheel', touchstart: 'touch', touchmove: 'touch' };
+  // One mark per event, made by whichever listener reaches the event first:
+  // the person watch's listeners stand in the same dispatch, installed from
+  // another CDP session, so their order against these is not fixed.
+  const inputMarks = new WeakMap<object, Mark>();
+  const markInput = (event: any): Mark => {
+    const held = inputMarks.get(event);
+    if (held) return held;
+    const type = event.type;
+    lastInput = mark('input', type === 'keydown' ? `key ${event.key}` : INPUT[type], {
+      scrolls: type === 'wheel' || type === 'touchmove' || (type === 'keydown' && SCROLL_KEYS.has(event.key)),
+    });
+    inputMarks.set(event, lastInput);
+    return lastInput;
+  };
   for (const type of Object.keys(INPUT)) {
     listen(g, type, (event: any) => {
-      if (!event.isTrusted) return;
-      lastInput = mark('input', type === 'keydown' ? `key ${event.key}` : INPUT[type], {
-        scrolls: type === 'wheel' || type === 'touchmove' || (type === 'keydown' && SCROLL_KEYS.has(event.key)),
-      });
+      if (event.isTrusted) markInput(event);
     }, { capture: true, passive: true });
   }
   listen(g, 'pointermove', (event: any) => {
     if (event.isTrusted && event.buttons) lastInput = mark('input', 'drag', { scrolls: true });
   }, { capture: true, passive: true });
   listen(g, 'pointerover', (event: any) => {
-    if (event.isTrusted && event.pointerType === 'mouse') mark('pointer', 'hover');
+    if (event.isTrusted && event.pointerType === 'mouse') lastHover = mark('pointer', 'hover');
   }, { capture: true, passive: true });
   for (const type of ['transitionend', 'animationend']) {
     listen(g, type, (event: any) => {
-      mark('chain', `end of ${event.propertyName || event.animationName} on ${nameOf(event.target)}`);
+      const root = started.get(event.target)?.get(event.propertyName || event.animationName)?.root;
+      mark('chain', `end of ${event.propertyName || event.animationName} on ${nameOf(event.target)}`, root ? { root } : {});
     }, { capture: true, passive: true });
   }
   listen(g, 'hashchange', () => { lastHash = mark('scroll-cause', `#${String(g.location.hash).slice(1)}`); }, { capture: true });
@@ -188,7 +221,8 @@ function installPageTrigger(g: any): void {
   listen(g, 'load', () => { loadedAt = now(); mark('load', 'page load'); }, { capture: true });
 
   /** What moved the page this scroll: the person's input, a script's call, a link to an anchor, or the browser. */
-  const scrollCause = (): string => {
+  const scrollCause = (): string => scrollCauseMark()?.words ?? 'browser';
+  const scrollCauseMark = (): Mark | undefined => {
     const t = now();
     // The newest wins: a key whose handler calls scrollIntoView() reads as the call, which carries the key.
     const candidates = [
@@ -196,11 +230,14 @@ function installPageTrigger(g: any): void {
       lastScrollCall && t - lastScrollCall.at <= SCROLL_CALL_MS ? lastScrollCall : undefined,
       lastHash && t - lastHash.at <= SCROLL_CALL_MS ? lastHash : undefined,
     ].filter((one): one is Mark => one !== undefined);
-    if (candidates.length === 0) return 'browser';
+    if (candidates.length === 0) return undefined;
     // A call made in the input's own handler can share its timestamp; the call, listed later, is the newer.
-    return candidates.reduce((newest, one) => (one.at >= newest.at ? one : newest)).words;
+    return candidates.reduce((newest, one) => (one.at >= newest.at ? one : newest));
   };
-  listen(g, 'scroll', () => { lastScroll = mark('scroll', `scroll · ${scrollCause()}`); }, { capture: true, passive: true });
+  listen(g, 'scroll', () => {
+    const cause = scrollCauseMark();
+    lastScroll = mark('scroll', `scroll · ${cause?.words ?? 'browser'}`, cause?.root ? { root: cause.root } : {});
+  }, { capture: true, passive: true });
 
   /** Wrap a function so each call marks first, as `words`, with what was live when it was called. */
   const calls = (owner: any, method: string, kind: string, words: string, after?: (made: Mark) => void) => {
@@ -209,7 +246,8 @@ function installPageTrigger(g: any): void {
     const wrapper = function (this: any, ...args: unknown[]) {
       if (quiet) return original.apply(this, args);
       const under = current(false);
-      const made = mark(kind, under !== undefined ? `${under} · ${words}` : words, { method, fn: running, site: siteOf(wrapper) });
+      const root = liveRoot();
+      const made = mark(kind, under !== undefined ? `${under} · ${words}` : words, { method, fn: running, site: siteOf(wrapper), ...(root ? { root } : {}) });
       after?.(made);
       return original.apply(this, args);
     };
@@ -227,7 +265,8 @@ function installPageTrigger(g: any): void {
     const set = function (this: any, value: unknown) {
       if (quiet) { described.set!.call(this, value); return; }
       const under = current(false);
-      lastScrollCall = mark('scroll-cause', under !== undefined ? `${under} · ${property} =` : `${property} =`, { method: property, fn: running, site: siteOf(set) });
+      const root = liveRoot();
+      lastScrollCall = mark('scroll-cause', under !== undefined ? `${under} · ${property} =` : `${property} =`, { method: property, fn: running, site: siteOf(set), ...(root ? { root } : {}) });
       described.set!.call(this, value);
     };
     Object.defineProperty(g.Element.prototype, property, { ...described, set });
@@ -247,8 +286,8 @@ function installPageTrigger(g: any): void {
     const Wrapped = function (this: any, callback: any, ...rest: unknown[]) {
       return new Original(function (this: any, ...given: unknown[]) {
         runAs(callback);
-        const scrolled = lastScroll && now() - lastScroll.at <= AFTER_MS ? `${lastScroll.words} · ` : '';
-        mark('observer', `${scrolled}${words}`);
+        const after = lastScroll && now() - lastScroll.at <= AFTER_MS ? lastScroll : undefined;
+        mark('observer', `${after ? `${after.words} · ` : ''}${words}`, after?.root ? { root: after.root } : {});
         return callback.apply(this, given);
       }, ...rest);
     } as any;
@@ -262,18 +301,55 @@ function installPageTrigger(g: any): void {
     g.fetch = function (this: any, resource: any, init?: any) {
       const method = String(init?.method ?? resource?.method ?? 'GET').toUpperCase();
       const url = resource && typeof resource === 'object' && resource.url ? resource.url : resource;
+      // The reply carries the root of the work that asked for it.
+      const root = liveRoot();
       return fetched.apply(this, [resource, init]).then((response: any) => {
-        mark('reply', `reply ${method} ${pathOf(url)}`);
+        mark('reply', `reply ${method} ${pathOf(url)}`, root ? { root } : {});
+        if (root && response) {
+          bodyRoot.set(response, { root, words: `reply ${method} ${pathOf(url)}` });
+          if (response.body) bodyRoot.set(response.body, { root, words: `reply ${method} ${pathOf(url)}` });
+        }
         return response;
       });
     };
+  }
+  // A body read in chunks or whole resolves in a promise job the reply's own
+  // mark is no longer live in: each read marks the reply again with the root
+  // of the fetch that asked for it, ahead of the app's continuation.
+  const bodyRoot = new WeakMap<object, { root: Root; words: string }>();
+  const markBody = <T>(owner: any, read: Promise<T>): Promise<T> => {
+    const body = bodyRoot.get(owner);
+    if (!body || !read || typeof read.then !== 'function') return read;
+    return read.then(value => { mark('reply', body.words, { root: body.root }); return value; });
+  };
+  const Stream = g.ReadableStream?.prototype;
+  if (Stream && typeof Stream.getReader === 'function') {
+    const getReader = Stream.getReader;
+    Stream.getReader = function (this: any, ...args: unknown[]) {
+      const reader = getReader.apply(this, args);
+      const body = bodyRoot.get(this);
+      if (body && reader) bodyRoot.set(reader, body);
+      return reader;
+    };
+  }
+  const Reader = g.ReadableStreamDefaultReader?.prototype;
+  if (Reader && typeof Reader.read === 'function') {
+    const read = Reader.read;
+    Reader.read = function (this: any, ...args: unknown[]) { return markBody(this, read.apply(this, args)); };
+  }
+  const Response = g.Response?.prototype;
+  for (const method of ['json', 'text', 'arrayBuffer', 'blob', 'formData']) {
+    const original = Response && Response[method];
+    if (typeof original !== 'function') continue;
+    Response[method] = function (this: any, ...args: unknown[]) { return markBody(this, original.apply(this, args)); };
   }
   const Xhr = g.XMLHttpRequest;
   if (typeof Xhr === 'function') {
     const open = Xhr.prototype.open;
     Xhr.prototype.open = function (this: any, method: string, url: string, ...rest: unknown[]) {
       // Added at open, ahead of a handler the app adds before send.
-      listen(this, 'readystatechange', () => { if (this.readyState === 4) mark('reply', `reply ${String(method).toUpperCase()} ${pathOf(url)}`); });
+      const root = liveRoot();
+      listen(this, 'readystatechange', () => { if (this.readyState === 4) mark('reply', `reply ${String(method).toUpperCase()} ${pathOf(url)}`, root ? { root } : {}); });
       return open.apply(this, [method, url, ...rest]);
     };
   }
@@ -305,7 +381,7 @@ function installPageTrigger(g: any): void {
       const carried = origin !== undefined ? `${origin} · ${said}` : said;
       return original.apply(this, [function (this: any, ...given: unknown[]) {
         runAs(callback[CALLBACK] ?? callback);
-        mark(method === 'requestAnimationFrame' ? 'frame' : 'timer', carried, origin !== undefined ? { origin } : {});
+        mark(method === 'requestAnimationFrame' ? 'frame' : 'timer', carried, origin !== undefined ? { origin, ...(under?.root ? { root: under.root } : {}) } : {});
         return callback.apply(this, given);
       }, ...args]);
     };
@@ -342,6 +418,7 @@ function installPageTrigger(g: any): void {
   const byAnimation = new WeakMap<object, string>();
   const animatedBy = new WeakMap<object, any>();
   const animatedAt = new WeakMap<object, Site>();
+  const animatedRoot = new WeakMap<object, Root>();
   const animate = g.Element?.prototype?.animate;
   if (typeof animate === 'function') {
     const wrapper = function (this: any, ...args: unknown[]) {
@@ -351,9 +428,11 @@ function installPageTrigger(g: any): void {
       if (running) animatedBy.set(made, running);
       const site = siteOf(wrapper);
       if (site) animatedAt.set(made, site);
+      const root = liveRoot();
+      if (root) animatedRoot.set(made, root);
       // Its end starts what the app chains on it: the reaction is added here
       // first, so it marks before the app's own `finished` reaction runs.
-      const ended = () => mark('chain', `end of ${made.id || 'animation'} on ${nameOf(this)}`);
+      const ended = () => mark('chain', `end of ${made.id || 'animation'} on ${nameOf(this)}`, root ? { root } : {});
       made.finished?.then(ended, () => {});
       return made;
     };
@@ -362,38 +441,43 @@ function installPageTrigger(g: any): void {
 
   // A transition or keyframe animation starts at the style recalc after the
   // change that set it off, outside any task: the change's trigger is kept.
-  const changed = new WeakMap<object, { words: string; at: number }>();
+  interface Change { words: string; at: number; root?: Root }
+  const changed = new WeakMap<object, Change>();
   if (typeof g.MutationObserver === 'function') {
     const observer = new g.MutationObserver((records: any[]) => {
       const words = current();
       if (!words) return;
       const at = now();
+      const root = liveRoot();
+      const change: Change = { words, at, ...(root ? { root } : {}) };
       for (const record of records) {
-        changed.set(record.target, { words, at });
-        for (const node of record.addedNodes ?? []) changed.set(node, { words, at });
+        changed.set(record.target, change);
+        for (const node of record.addedNodes ?? []) changed.set(node, change);
       }
     });
     const watch = () => observer.observe(g.document, { subtree: true, attributes: true, childList: true });
     if (g.document.documentElement) watch(); else listen(g.document, 'readystatechange', watch, { once: true });
   }
-  const ofElement = (target: any): string | undefined => {
+  /** What set an element going: the newest change on it or an ancestor, else a hover, else the work running now. */
+  const causeOfElement = (target: any): { words?: string; root?: Root } => {
     const t = now();
-    let newest: { words: string; at: number } | undefined;
+    let newest: Change | undefined;
     for (let node = target; node; node = node.parentNode ?? node.host) {
       const change = changed.get(node);
       if (change && t - change.at <= CHANGE_MS && (!newest || change.at > newest.at)) newest = change;
     }
-    if (newest) return newest.words;
-    try { if (target && target.matches && target.matches(':hover')) return 'hover'; } catch { /* a node with no matches */ }
-    return current();
+    if (newest) return newest;
+    try { if (target && target.matches && target.matches(':hover')) return { words: 'hover', root: lastHover?.root }; } catch { /* a node with no matches */ }
+    return { words: current(), root: liveRoot() };
   };
-  const started = new WeakMap<object, Map<string, string>>();
+  const ofElement = (target: any): string | undefined => causeOfElement(target).words;
+  const started = new WeakMap<object, Map<string, { words: string; root?: Root }>>();
   for (const type of ['transitionrun', 'animationstart']) {
     listen(g, type, (event: any) => {
-      const words = ofElement(event.target);
-      if (!words) return;
-      const named = started.get(event.target) ?? new Map<string, string>();
-      named.set(event.propertyName || event.animationName, words);
+      const cause = causeOfElement(event.target);
+      if (!cause.words) return;
+      const named = started.get(event.target) ?? new Map<string, { words: string; root?: Root }>();
+      named.set(event.propertyName || event.animationName, { words: cause.words, ...(cause.root ? { root: cause.root } : {}) });
       started.set(event.target, named);
     }, { capture: true, passive: true });
   }
@@ -463,7 +547,7 @@ function installPageTrigger(g: any): void {
       if (called) return called;
       const target = animation && animation.effect && animation.effect.target;
       const name = animation && (animation.transitionProperty || animation.animationName);
-      return (target && name && started.get(target)?.get(name)) ?? (target ? ofElement(target) : undefined);
+      return (target && name && started.get(target)?.get(name)?.words) ?? (target ? ofElement(target) : undefined);
     },
     /** What called one of `methods` within the last second, newest first, else `fallback`. */
     ofCall(methods: string[], fallback: string): string {
@@ -472,6 +556,29 @@ function installPageTrigger(g: any): void {
       return call ? call.words : fallback;
     },
     scrollCause,
+    /** Set by devharness around a driven input's dispatch, so the input's root names its step; undefined clears it. */
+    drive(step: string | undefined): void { drivenBy = step; },
+    /** The root of the work running now. */
+    rootNow: (): Root | undefined => liveRoot(),
+    /** The root of a trusted input event, for the person watch to report with it; marked here when its listener runs first. */
+    rootOfEvent(event: any): Root | undefined {
+      return event && event.isTrusted && INPUT[event.type] ? markInput(event).root : undefined;
+    },
+    /** The root of what started an Animation object: its call's, else the change that set its element going. */
+    rootOfAnimation(animation: any): Root | undefined {
+      const made = animatedRoot.get(animation);
+      if (made) return made;
+      const target = animation && animation.effect && animation.effect.target;
+      const name = animation && (animation.transitionProperty || animation.animationName);
+      return (target && name && started.get(target)?.get(name)?.root) ?? (target ? causeOfElement(target).root : undefined);
+    },
+    /** The root of this scroll's cause. */
+    rootOfScroll: (): Root | undefined => scrollCauseMark()?.root,
+    /** The root of the newest call of one of `methods` within the last second. */
+    rootOfCall(methods: string[]): Root | undefined {
+      const t = now();
+      return [...called].reverse().find(one => one.method !== undefined && methods.includes(one.method) && t - one.at <= 1000)?.root;
+    },
   };
 }
 

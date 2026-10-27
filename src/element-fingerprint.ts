@@ -314,8 +314,10 @@ function selectorInPage(el: any): string | undefined {
 
 /**
  * The listener the bench installs while it records a person's input. Each
- * click, each field left after typing into it, and each Enter, Escape or Tab is
- * reported the moment it happens through the `__devharnessInput` binding, with
+ * click, each field left after typing into it, and each key pressed outside a
+ * field - Enter, Escape and Tab inside one - is reported the moment it happens
+ * through the `__devharnessInput` binding, with the root the trigger tracker
+ * gave the input, and with
  * the element's fingerprint and a selector built from it - a point only where
  * nothing identifies the element. A click reads as its nearest interactive
  * ancestor, through shadow roots. devharness's own input runs with
@@ -329,25 +331,38 @@ export function personInputScript(): string {
   const selectorOf = ${selectorInPage.toString()};
   const INTERACTIVE = 'a[href],button,input,select,textarea,summary,label,[role],[onclick],[contenteditable=""],[contenteditable=true],[tabindex]';
   const ours = () => globalThis.__cdpReplayClickInProgress === true;
-  const send = (input) => { try { globalThis.__devharnessInput(JSON.stringify({ ...input, at: Date.now() })); } catch {} };
+  // The root the trigger tracker gives the event, reported with the input: the
+  // History entry the input becomes names that root's step. The tracker marks
+  // the event on this call where this listener runs ahead of its own.
+  const tracker = globalThis[Symbol.for('devharness.trigger')];
+  const rootOf = (event) => {
+    try {
+      const live = globalThis[Symbol.for('devharness.trigger')];
+      const root = event && live && live.rootOfEvent && live.rootOfEvent(event);
+      return root ? { root: root.id } : {};
+    } catch { return {}; }
+  };
+  const send = (input, event) => { try { globalThis.__devharnessInput(JSON.stringify({ ...input, ...rootOf(event), at: Date.now() })); } catch {} };
+  // Registered as devharness's own, so the tracker does not take them for the app's.
+  const listen = (type, fn, capture) => addEventListener(type, tracker && tracker.own ? tracker.own(fn) : fn, capture);
   const parentOf = (el) => el.parentElement || (el.parentNode && el.parentNode.host) || null;
   const where = (el, point) => {
     const selector = selectorOf(el);
     return selector ? { selector } : point ? { x: Math.round(point.clientX), y: Math.round(point.clientY) } : {};
   };
-  addEventListener('click', (e) => {
+  listen('click', (e) => {
     if (ours() || !e.isTrusted) return;
     let el = e.composedPath()[0];
     while (el && el.nodeType === 1 && !el.matches(INTERACTIVE)) el = parentOf(el);
     if (!el || el.nodeType !== 1 || el === document.body) el = e.composedPath()[0];
     if (!el || el.nodeType !== 1) return;
-    send({ action: 'click', ...where(el, e), fingerprint: fingerprintOf({}, el) });
+    send({ action: 'click', ...where(el, e), fingerprint: fingerprintOf({}, el) }, e);
   }, true);
   const typedInto = new Set();
   // A field that keeps focus never reports on leaving it, so typing that
   // pauses is reported then too.
   const idle = new Map();
-  addEventListener('input', (e) => {
+  listen('input', (e) => {
     if (ours()) return;
     let el = e.composedPath()[0];
     if (!el || !el.matches) return;
@@ -365,12 +380,18 @@ export function personInputScript(): string {
     const text = 'value' in el ? el.value : el.textContent;
     send({ action: 'type', ...where(el), text, fingerprint: fingerprintOf({}, el) });
   };
-  addEventListener('focusout', (e) => flush(e.composedPath()[0]), true);
-  addEventListener('keydown', (e) => {
-    if (ours() || !e.isTrusted) return;
-    if (e.key !== 'Enter' && e.key !== 'Escape' && e.key !== 'Tab') return;
-    flush(e.composedPath()[0]);
-    send({ action: 'press', key: e.key });
+  listen('focusout', (e) => flush(e.composedPath()[0]), true);
+  // Typing into a field reports as the field's text; any other key is a press,
+  // a shortcut the app acts on. A lone modifier presses nothing.
+  const EDITABLE = 'input,textarea,select,[contenteditable],[contenteditable=true],[contenteditable=""]';
+  const MODIFIERS = new Set(['Shift', 'Control', 'Alt', 'Meta', 'CapsLock']);
+  listen('keydown', (e) => {
+    if (ours() || !e.isTrusted || MODIFIERS.has(e.key)) return;
+    const target = e.composedPath()[0];
+    const typing = target && target.matches && target.matches(EDITABLE);
+    if (typing && e.key !== 'Enter' && e.key !== 'Escape' && e.key !== 'Tab') return;
+    flush(target);
+    send({ action: 'press', key: e.key }, e);
   }, true);
 })();`;
 }

@@ -22,6 +22,7 @@
  * and a replay compares it with the recording as it compares a write.
  */
 
+import { onRootNamed, rootCursor, type PageRoot } from './root-credit.js';
 import type { CDPSession, Page, Target, WebWorker } from 'puppeteer-core';
 import { currentCursor, onCursorEnd } from './proxy/registry.js';
 import { animationRecordOf } from './animation-record.js';
@@ -75,6 +76,10 @@ export interface WriteMotion {
   makerName?: string;
   /** Where a call that made it stands, when the page holds its script and line but not its function. */
   makerAt?: { url: string; line: number };
+  /** The input at the head of the chain that started it, as the page carried it. */
+  root?: PageRoot;
+  /** Its step is its root's, not the one standing when its report arrived. */
+  byRoot?: true;
   /** A function maker's first line of source, as Chrome describes it: `() => { masthead.style.height…`. */
   makerSource?: string;
 }
@@ -201,6 +206,16 @@ export class WriteWatch {
   async start(): Promise<void> {
     // A cause added after the fact - a person's input - takes the writes made
     // inside its window with nothing in flight.
+    // A person's input named in History after the motion it started was
+    // recorded: the motion moves to that input's entry.
+    this.detach.push(onRootNamed((id, cursor) => {
+      for (const write of this.writes) {
+        if (write.motion?.root?.id !== id || write.motion.byRoot || write.operation !== 'started') continue;
+        write.cursor = cursor;
+        write.motion.byRoot = true;
+        observeWrite(write, this.connection);
+      }
+    }));
     this.detach.push(onCauseAdded(window => {
       for (const write of this.writes) {
         if (write.cursor || write.at < window.from || (window.to !== undefined && write.at >= window.to)) continue;
@@ -267,13 +282,22 @@ export class WriteWatch {
         const stopRow = () => {
           if (!entry.endedIn || entry.endedAt === undefined || this.motionStopped.has(entry.key)) return;
           this.motionStopped.add(entry.key);
-          const stop = entry.stoppedBy ? { motion: { type: entry.read!.type, durationMs: 0, set: false, ...entry.stoppedBy } } : {};
-          const row = this.push({ store: 'animation', operation: 'stopped', key: entry.kind, value: endingValue(entry.read!), ...stop }, entry.endedAt, entry.endedIn);
+          // A motion stopped by a call of its own - a pause - ends under the
+          // step that made it; one that ran to its end ends in its own chain,
+          // under its root.
+          const rooted = entry.stoppedBy ? undefined : rootCursor(entry.read!.root);
+          const stop = entry.stoppedBy ? { motion: { type: entry.read!.type, durationMs: 0, set: false, ...entry.stoppedBy } }
+            : rooted ? { motion: { type: entry.read!.type, durationMs: 0, set: false, root: entry.read!.root, byRoot: true as const } } : {};
+          const row = this.push({ store: 'animation', operation: 'stopped', key: entry.kind, value: endingValue(entry.read!), ...stop }, entry.endedAt, rooted ?? entry.endedIn);
           if (entry.stoppedBy) void this.locateMaker(`${entry.key}:stopped`, row);
         };
         if (change === 'added') {
           this.animationKeys.set(entry.key, entry.kind);
-          const row = this.push({ store: 'animation', operation: 'started', key: entry.kind, value: animationValue(entry.read), motion: motionOf(entry.read) }, entry.createdAt, entry.createdIn);
+          // Credited to the input at the head of its chain where the page
+          // carried one this side can name, else to the step its report placed it in.
+          const rooted = rootCursor(entry.read.root);
+          const motion = { ...motionOf(entry.read), ...(rooted ? { byRoot: true as const } : {}) };
+          const row = this.push({ store: 'animation', operation: 'started', key: entry.kind, value: animationValue(entry.read), motion }, entry.createdAt, rooted ?? entry.createdIn);
           void this.locateMaker(entry.key, row);
           if (entry.via === 'motion' && !entry.gone) {
             this.motionRows.set(entry.key, row);
@@ -289,7 +313,7 @@ export class WriteWatch {
           const row = this.motionRows.get(entry.key);
           if (row) {
             row.value = animationValue(entry.read).slice(0, VALUE_CHARS);
-            row.motion = { ...motionOf(entry.read), ...this.makerWhere.get(entry.key) };
+            row.motion = { ...motionOf(entry.read), ...this.makerWhere.get(entry.key), ...(row.motion?.byRoot ? { byRoot: true as const } : {}) };
             observeWrite(row, this.connection);
             if (entry.gone) this.motionRows.delete(entry.key);
           }
@@ -299,7 +323,14 @@ export class WriteWatch {
         if (entry.gone !== 'canceled' || !this.animationKeys.has(entry.key)) return;
         this.animationKeys.delete(entry.key);
         if (this.passCancel?.(entry.key)) return;
-        this.push({ store: 'animation', operation: 'stopped', key: entry.kind });
+        // Cancelled by the chain that started it - a loop setting the same
+        // property again - so it stands with its animation's root, not with
+        // the step standing when Chrome reported the cancel.
+        const rooted = rootCursor(entry.read.root);
+        this.push({
+          store: 'animation', operation: 'stopped', key: entry.kind,
+          ...(rooted ? { motion: { type: entry.read.type, durationMs: 0, set: false, root: entry.read.root, byRoot: true as const } } : {}),
+        }, Date.now(), rooted ?? currentCursor());
       }));
     }
 
@@ -750,6 +781,7 @@ export function motionOf(read: PageAnimation): WriteMotion {
     ...(read.makerRef !== undefined ? { makerRef: read.makerRef } : {}),
     ...(read.makerName ? { makerName: read.makerName } : {}),
     ...(read.makerAt ? { makerAt: read.makerAt } : {}),
+    ...(read.root ? { root: read.root } : {}),
   };
 }
 

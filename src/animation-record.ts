@@ -167,6 +167,7 @@ export class AnimationRecord {
       ...(report.makerRef !== undefined ? { makerRef: report.makerRef } : {}),
       ...(report.makerName ? { makerName: report.makerName } : {}),
       ...(report.makerAt ? { makerAt: report.makerAt } : {}),
+      ...(report.root ? { root: report.root } : {}),
     };
     // Start and end are each placed after the action they followed, by the
     // same rule, so the two compare as history entries.

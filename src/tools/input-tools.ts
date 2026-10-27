@@ -2,6 +2,8 @@
  * Input Automation Tools
  */
 
+import { currentCursor } from '../proxy/registry.js';
+import { stepToken } from '../root-credit.js';
 import { bringHiddenPageToFront } from '../utils/front-tab.js';
 import { z } from 'zod';
 import { executeWithPauseDetection, actionFailureResponse, type ActionResult } from '../debugger-aware-wrapper.js';
@@ -229,17 +231,25 @@ async function hoverSelector(page: any, selector: string): Promise<void> {
 
 /**
  * Run an input action with __cdpReplayClickInProgress set, so the replay
- * blocker overlay's event listeners let CDP-dispatched events through.
+ * blocker overlay's event listeners let CDP-dispatched events through. The
+ * page's trigger tracker is handed the step in flight at the same call, so
+ * the input's root names the step that dispatched it.
  */
 async function withReplayBypass<T>(page: any, action: () => Promise<T>): Promise<T> {
-  await page.evaluate(() => { (globalThis as any).__cdpReplayClickInProgress = true; });
+  await page.evaluate((step: string | undefined) => {
+    (globalThis as any).__cdpReplayClickInProgress = true;
+    (globalThis as any)[Symbol.for('devharness.trigger')]?.drive?.(step);
+  }, stepToken(currentCursor()));
   try {
     return await action();
   } finally {
     // Best-effort: never let a failure clearing the flag mask the action's
     // own outcome (in particular an AbortError thrown mid-action).
     try {
-      await page.evaluate(() => { (globalThis as any).__cdpReplayClickInProgress = false; });
+      await page.evaluate(() => {
+        (globalThis as any).__cdpReplayClickInProgress = false;
+        (globalThis as any)[Symbol.for('devharness.trigger')]?.drive?.(undefined);
+      });
     } catch { /* page may have navigated/closed */ }
   }
 }

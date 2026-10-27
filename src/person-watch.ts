@@ -19,6 +19,7 @@ import type { CommandRecorder } from './command-recorder.js';
 import type { ElementFingerprint } from './element-fingerprint.js';
 import { personInputScript } from './element-fingerprint.js';
 import { addCause } from './proxy/cause-timeline.js';
+import { nameRoot } from './root-credit.js';
 import { recordPauseAction } from './pause-actions.js';
 import { ownScript } from './utils/own-script.js';
 
@@ -35,6 +36,8 @@ export interface PersonInput {
   text?: string;
   key?: string;
   fingerprint?: ElementFingerprint;
+  /** The root the page's trigger tracker gave this input, which the History entry it becomes names. */
+  root?: string;
   at: number;
   /** The History entry it was recorded as. */
   index?: number;
@@ -60,7 +63,7 @@ const LANDED_KEPT = 200;
 
 async function record(connection: string, input: PersonInput): Promise<void> {
   if (recorder) {
-    const { fingerprint, at, ...rest } = input;
+    const { fingerprint, at, root, ...rest } = input;
     await recorder.recordCommand('input', { ...rest, connection }, {
       from: 'person',
       result: {
@@ -73,6 +76,7 @@ async function record(connection: string, input: PersonInput): Promise<void> {
     // timeline with the window its page-side time bounds, every capability
     // stamps what began inside it, whenever it stores it.
     const index = recorder.getCurrentHistoryIndex();
+    if (root) nameRoot(root, { kind: 'command', index });
     addCause({ kind: 'command', index }, at, at + PERSON_INPUT_REACH_MS);
     recorder.attachRelease(index, at + PERSON_INPUT_REACH_MS);
     input = { ...input, index };

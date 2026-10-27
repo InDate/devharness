@@ -3,6 +3,8 @@
  * its own tool, and the step labels the bench and the `bench` tool both show.
  */
 
+import { formatRunReply } from '../tools/run-table.js';
+import { pausesIn, rulesForRun } from '../tools/run-rules.js';
 import { standPausedRun } from '../proxy/registry.js';
 import { hold } from '../hold.js';
 import { sweepCaptures } from './capture-sweep.js';
@@ -826,6 +828,14 @@ export function createSequenceDriver(
       const stamp = commandRecorder.getActiveSequence()?.runTimestamp;
       return stamp !== undefined ? `run-${stamp.toString(36)}` : undefined;
     },
+
+    historyIndex: () => commandRecorder.getCurrentHistoryIndex(),
+
+    runReply: ({ name, connection, total, since, failure, paused }) => formatRunReply(commandRecorder, {
+      name, total, since, rules: rulesForRun(connection), pauses: pausesIn(connection),
+      ...(failure ? { failures: new Map([[failure.step, failure.why]]) } : {}),
+      ...(paused ? { paused: true } : {}),
+    }),
 
     setPause: async (step: number, change: { on?: boolean; holds?: Array<'code' | 'ui' | 'network'>; note?: string; notify?: boolean }) => {
       const sequence = openSequence();

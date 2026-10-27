@@ -2788,3 +2788,8 @@ dialog.varmodal::backdrop { background: rgba(0, 0, 0, 0.45); }
 }
 /* A Motion line's reading changes width as it is dragged, so it holds a fixed
    width and the bar stays under the pointer. */
+
+/* An opened motion row: who made it, then every way work entered the page on the way to it. */
+.motionsource { display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; margin: 4px 0 8px; font-size: 12px; }
+.motionsource dt { color: var(--muted); }
+.motionsource dd { margin: 0; overflow-wrap: anywhere; }

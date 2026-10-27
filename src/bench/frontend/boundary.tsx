@@ -137,6 +137,56 @@ function cadence(ms: number): string {
  * same card, the same actions, the same hidden kinds. Repeats still arriving
  * sit above the stream, counted in place.
  */
+/**
+ * Which tab lists an event, by the store that took it: the proxy's requests
+ * and frames are Traffic; the page watch's writes - storage, motion, a socket
+ * closed, a worker - are Browser.
+ */
+export function tabOf(event: BoundaryEvent): 'traffic' | 'browser' {
+  return event.kind === 'write' ? 'browser' : 'traffic';
+}
+
+/**
+ * What the page did inside itself, newest first: its motion, its storage
+ * writes, a socket it closed, a worker it started or stopped - everything the
+ * page watch takes and no proxy carries. A motion row names who made it and
+ * goes to it: the input in History for ME, DevTools for anything a function
+ * or an element made. Read from the page, so it needs no proxy.
+ */
+export function Browser({ base, onGoToEntry }: { base: string; onGoToEntry?: (entry: number) => void }): preact.JSX.Element {
+  const activity = useActivity(base, undefined);
+  const [open, setOpen] = useState<string | null>(null);
+  useEscape(open !== null, () => setOpen(null));
+  const done = useMemo(
+    () => group((activity.boundary?.events ?? []).filter(event => tabOf(event) === 'browser')).sort((a, b) => b.newest.at - a.newest.at),
+    [activity.boundary]);
+  useGoToAnyTarget();
+
+  if (!activity.boundary) return <div class="hint">reading the page…</div>;
+  if (done.length === 0) return <div class="hint">the page has done nothing here yet - storage writes land as they happen, and MOTION in the bar records what it animates</div>;
+  return (
+    <div class="traffic browser">
+      <section class="crossed-all">
+        <div class="sectionhead" title="everything the page did inside itself, newest first">
+          in the page <span class="quiet">{done.length}</span>
+        </div>
+        <ol class="activitycards">{done.map(made => (
+          <CrossingRow
+            key={made.key}
+            event={made.newest}
+            base={base}
+            repeats={made.events.length}
+            cadence={made.periodMs ? cadence(made.periodMs) : undefined}
+            open={open === made.key}
+            onOpen={() => setOpen(open === made.key ? null : made.key)}
+            onGoToCause={onGoToEntry}
+          />
+        ))}</ol>
+      </section>
+    </div>
+  );
+}
+
 export function Traffic({ base, onGoToEntry }: { base: string; onGoToEntry?: (entry: number) => void }): preact.JSX.Element {
   const activity = useActivity(base, undefined);
   const state = activity.boundary;
@@ -166,6 +216,7 @@ export function Traffic({ base, onGoToEntry }: { base: string; onGoToEntry?: (en
   }, []);
 
   const passes = useCallback((event: BoundaryEvent) => {
+    if (tabOf(event) !== 'traffic') return false;
     if (activity.isHidden(event)) return false;
     for (const filter of filters) {
       if (filter.mode === 'out' && fieldValue(event, filter.field) === filter.value) return false;

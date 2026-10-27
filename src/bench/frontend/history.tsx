@@ -9,7 +9,7 @@ import { Markdown } from './markdown.js';
 import { useGoToAnyTarget } from './goto.js';
 import { rowOf, useActivity, type Activity } from './activity.js';
 import { CrossingRow, MissingRow } from './crossing.js';
-import type { BenchView, HistoryDetail, HistoryEntry, ToolFavourite } from '../wire.js';
+import type { BenchView, BoundaryEvent, HistoryDetail, HistoryEntry, ToolFavourite } from '../wire.js';
 import type { ToolSeed } from './tools.js';
 
 /** Each channel in words, for a row's tooltip. */
@@ -39,7 +39,7 @@ export function History({ base, onGoTo, entry: focus, onGoToEvent, onGoToStep }:
   /** The entry a go-to from Traffic asked for: opened, its run unfolded, and scrolled to. */
   entry?: number | null;
   /** Open Traffic on one crossing or write this call caused. */
-  onGoToEvent?: (id: string) => void;
+  onGoToEvent?: (event: BoundaryEvent) => void;
   /** Open `sequence`'s card on the home page with its 0-based `step` marked, leaving from History `entry`. */
   onGoToStep?: (sequence: string, step: number, entry: number) => void;
 }) {
@@ -339,7 +339,7 @@ function CallDetail({ base, entry, activity, onGoToEvent, compared }: {
   base: string;
   entry: HistoryEntry;
   activity: Activity;
-  onGoToEvent?: (id: string) => void;
+  onGoToEvent?: (event: BoundaryEvent) => void;
   /** The step of the open sequence this call ran as, where the verdicts the Sequence tab holds are this call's. */
   compared?: number;
 }) {
@@ -426,7 +426,7 @@ function CallDetail({ base, entry, activity, onGoToEvent, compared }: {
                 onOpen={() => setReading(reading === item.id ? null : item.id)}
                 actions={activity.actions}
                 verdict={compared !== undefined ? activity.verdicts.get(rowOf(compared, event)) : undefined}
-                {...(onGoToEvent && !hidden ? { onGoToTraffic: () => onGoToEvent(item.id) } : {})}
+                {...(onGoToEvent && !hidden ? { onGoToTraffic: () => onGoToEvent(event) } : {})}
               />
             );
           })}

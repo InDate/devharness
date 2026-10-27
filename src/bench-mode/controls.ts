@@ -7,6 +7,7 @@ import { announceHold, releaseHolds } from './page-hold.js';
 import { getSequenceState, playSequence } from './sequence.js';
 import { type BenchReport, type BenchSession, getBenchSession, sessions } from './session.js';
 import { openSession } from '../utils/own-session.js';
+import { ownScript } from '../utils/own-script.js';
 
 /**
  * Whether the bench holds a page a tool would drive, and how to let it go:
@@ -173,6 +174,28 @@ export async function openDevtools(connection: string): Promise<string> {
     return `DevTools did not open: ${error instanceof Error ? error.message : String(error)}`;
   } finally {
     await browserSession.detach().catch(() => {});
+  }
+}
+
+/**
+ * Open DevTools on the page at what made a motion: the function a JS motion
+ * began in, shown in Sources; the element a CSS or SVG motion animates, shown
+ * in Elements with its rules. `inspect()` is DevTools' command-line reveal,
+ * which reaches the frontend once it is attached.
+ */
+export async function revealMaker(connection: string, ref: number): Promise<string> {
+  const opened = await openDevtools(connection);
+  const session = sessions.get(connection);
+  if (!session) return opened;
+  const page = await openSession(session.page.target());
+  try {
+    const answer: any = await page.send('Runtime.evaluate', {
+      expression: ownScript('reveal-maker', `(() => { const made = globalThis[Symbol.for('devharness.trigger')]?.reveal(${Number(ref)}); if (!made) return false; inspect(made); return true; })()`),
+      includeCommandLineAPI: true, returnByValue: true,
+    });
+    return answer?.result?.value === true ? `${opened}, at what made the motion` : `${opened}; what made the motion is gone from the page`;
+  } finally {
+    await page.detach().catch(() => {});
   }
 }
 

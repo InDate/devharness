@@ -62,6 +62,9 @@ export interface RecordedAnimation {
   endedIn?: ProxyCursor;
 }
 
+/** What a listener hears: an animation added, a motion's reading updated as it closes, an animation ended. */
+export type AnimationChange = 'added' | 'updated' | 'gone';
+
 /** An animation kind as rows and comparisons name it: `opacity #toast`. */
 export function animationKind(read: Pick<PageAnimation, 'name' | 'element'>): string {
   return read.element ? `${read.name} ${read.element}` : read.name;
@@ -77,9 +80,8 @@ export class AnimationRecord {
   private readonly byChrome = new Map<string, string>();
   /** Chrome's creation reports not yet read: the step and moment each was created in. */
   private readonly created = new Map<string, { at: number; cursor: ProxyCursor | undefined }>();
-  private readonly listeners = new Set<(entry: RecordedAnimation, change: 'added' | 'gone') => void>();
+  private readonly listeners = new Set<(entry: RecordedAnimation, change: AnimationChange) => void>();
   private reads: Promise<unknown> = Promise.resolve();
-  private motions = 0;
 
   constructor(readonly connection: string) {}
 
@@ -124,8 +126,8 @@ export class AnimationRecord {
     return this.list().filter(entry => entry.read && !entry.gone);
   }
 
-  /** Each animation added, and each that ends, as it happens. */
-  watch(listener: (entry: RecordedAnimation, change: 'added' | 'gone') => void): () => void {
+  /** Each animation added, each motion's reading updated as it closes, and each that ends, as it happens. */
+  watch(listener: (entry: RecordedAnimation, change: AnimationChange) => void): () => void {
     this.listeners.add(listener);
     return () => { this.listeners.delete(listener); };
   }
@@ -139,33 +141,49 @@ export class AnimationRecord {
   }
 
   /**
-   * A motion the page closed with no Animation object behind it, stored as an
-   * entry already ended: a row of its step, and no animation to seek or pause.
-   * It is credited to the step in effect when it began, its start placed on
-   * wall time from the page time its report carries.
+   * A motion the page made with no Animation object behind it: a row of its
+   * step, and no animation to seek or pause. Its open report adds it, credited
+   * to the step in effect when it began, so that step reads it while it is
+   * still moving; its close report fills in how it ran and ends it. Each is
+   * placed on wall time from the page time its report carries. A close whose
+   * open never arrived - motion detection turned on part-way through - adds it
+   * already ended.
    */
   takeMotion(report: MotionReport, arrivedAt: number): void {
+    const key = `motion:${report.doc}:${report.id}`;
     const startedAt = arrivedAt - Math.max(0, report.sentMs - report.startMs);
-    const id = ++this.motions;
+    const ran = Math.max(0, Math.round(report.endMs - report.startMs));
+    const closing = report.phase === 'close';
     const read: PageAnimation = {
-      id, doc: 'motion', name: report.property, type: MOTION_TYPES[report.source],
+      id: report.id, doc: 'motion', name: report.property, type: MOTION_TYPES[report.source],
       ...(report.element ? { element: report.element } : {}),
-      duration: Math.max(0, Math.round(report.endMs - report.startMs)), delay: 0, easing: '', looping: false,
-      playState: 'finished', currentTime: Math.max(0, Math.round(report.endMs - report.startMs)),
+      duration: ran, delay: 0, easing: '', looping: false,
+      playState: closing ? 'finished' : 'running', currentTime: ran,
       from: report.from, to: report.to, frames: report.frames,
+      ...(report.trigger ? { trigger: report.trigger } : {}),
+      ...(report.maker ? { maker: report.maker } : {}),
+      ...(report.makerRef !== undefined ? { makerRef: report.makerRef } : {}),
+      ...(report.makerName ? { makerName: report.makerName } : {}),
     };
     // Start and end are each placed after the action they followed, by the
     // same rule, so the two compare as history entries.
     const namesEntry = (one: ProxyCursor) => entryOfCursor(one) !== undefined;
-    const cursor = causeBefore(startedAt, namesEntry) ?? currentCursor();
+    const known = this.entries.get(key);
+    const cursor = known ? known.createdIn : causeBefore(startedAt, namesEntry) ?? currentCursor();
     // A motion stopped by a later step - a pause press, a toggle - ends under
     // that step; the step it ended in is read the same way as the one it began in.
     const endedAt = arrivedAt - Math.max(0, report.sentMs - report.endMs);
-    const endedIn = causeBefore(endedAt, namesEntry);
+    const endedIn = closing ? causeBefore(endedAt, namesEntry) : undefined;
+    const ending = endedIn && entryOfCursor(endedIn) !== entryOfCursor(cursor) ? { endedAt, endedIn } : {};
+    if (known) {
+      Object.assign(known, { read, ...(closing ? { gone: 'finished' as const } : {}), ...ending });
+      this.emit(known, 'updated');
+      return;
+    }
     const entry: RecordedAnimation = {
-      key: `motion:${id}`, kind: animationKind(read), read, createdAt: startedAt,
-      ...(cursor ? { createdIn: cursor } : {}), via: 'motion', gone: 'finished',
-      ...(endedIn && entryOfCursor(endedIn) !== entryOfCursor(cursor) ? { endedAt, endedIn } : {}),
+      key, kind: animationKind(read), read, createdAt: startedAt,
+      ...(cursor ? { createdIn: cursor } : {}), via: 'motion', ...(closing ? { gone: 'finished' as const } : {}),
+      ...ending,
     };
     this.store(entry);
     this.emit(entry, 'added');
@@ -237,7 +255,7 @@ export class AnimationRecord {
     if (oldest.chromeId) this.byChrome.delete(oldest.chromeId);
   }
 
-  private emit(entry: RecordedAnimation, change: 'added' | 'gone'): void {
+  private emit(entry: RecordedAnimation, change: AnimationChange): void {
     debugLog('animation-record', `${change} ${entry.key} ${entry.kind} via ${entry.via}${entry.gone ? ` ${entry.gone}` : ''} in ${JSON.stringify(entry.createdIn ?? null)}`);
     for (const listener of this.listeners) {
       try { listener(entry, change); } catch { /* one listener's failure leaves the others fed */ }

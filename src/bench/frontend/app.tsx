@@ -3,7 +3,7 @@ import { Fragment, render } from 'preact';
 import type preact from 'preact';
 import { createPortal } from 'preact/compat';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { Traffic, Scope } from './boundary.js';
+import { Browser, Traffic, Scope, tabOf } from './boundary.js';
 import { toggleVariables, useVariablesHidden } from './variables-shown.js';
 import { History } from './history.js';
 import { Tools, type ToolSeed } from './tools.js';
@@ -869,10 +869,10 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
   );
 }
 
-type Tab = 'editing' | 'traffic' | 'history' | 'tools' | 'running' | 'issues';
+type Tab = 'editing' | 'traffic' | 'browser' | 'history' | 'tools' | 'running' | 'issues';
 
 /** The tab's word in the address, and back. A word no tab has opens Sequence; `servers`, the Running tab's earlier word, opens Running. */
-const TAB_WORDS: Record<Tab, string> = { editing: 'sequence', traffic: 'traffic', history: 'history', tools: 'tools', running: 'running', issues: 'issues' };
+const TAB_WORDS: Record<Tab, string> = { editing: 'sequence', traffic: 'traffic', browser: 'browser', history: 'history', tools: 'tools', running: 'running', issues: 'issues' };
 
 /**
  * Where the bench stands, as the address holds it: the tab, the open
@@ -994,7 +994,7 @@ function Bench() {
   // calls in history and how many failed, connections open and servers
   // running, issues open.
   const [counts, setCounts] = useState<{
-    traffic?: number; proxied?: boolean; history?: number; failed?: number; running?: number; issues?: number;
+    traffic?: number; browser?: number; proxied?: boolean; history?: number; failed?: number; running?: number; issues?: number;
   }>({});
   useEffect(() => {
     let live = true;
@@ -1003,7 +1003,7 @@ function Bench() {
     const read = async () => {
       const boundary = await fetch(`${BASE}/proxy/events?since=${encodeURIComponent(trafficSince)}`)
         .then(res => (res.ok ? res.json() : null)).catch(() => null) as
-        { running: boolean; events: Array<{ id: string }>; totals: { events: number } | null } | null;
+        { running: boolean; events: Array<{ id: string }>; totals: { events: number } | null; pageWrites: number } | null;
       if (boundary?.events.length) trafficSince = boundary.events[boundary.events.length - 1].id;
       const [history, servers, running, issues] = await Promise.all([
         fetch(`${BASE}/history`).then(res => (res.ok ? res.json() : null)).catch(() => null),
@@ -1013,7 +1013,7 @@ function Bench() {
       ]) as [Array<{ failed?: boolean }> | null, Array<{ running: boolean }> | null, { connections: unknown[] } | null, unknown[] | null];
       if (!live) return;
       setCounts({
-        ...(boundary && { proxied: boundary.running, ...(boundary.totals && { traffic: boundary.totals.events }) }),
+        ...(boundary && { proxied: boundary.running, browser: boundary.pageWrites, ...(boundary.totals && { traffic: boundary.totals.events }) }),
         ...(history && { history: history.length, failed: history.filter(entry => entry.failed).length }),
         ...(servers && running && { running: servers.filter(server => server.running).length + running.connections.length }),
         ...(issues && { issues: issues.length }),
@@ -1106,6 +1106,11 @@ function Bench() {
               ? 'this page runs outside a proxy, so no traffic is seen; Enable proxy on this tab opens it in a proxied window'
               : counts.traffic === undefined ? undefined : `${counts.traffic} crossings at the proxy`}
             onClick={() => goTab('traffic')} />
+          <TabButton on={tab === 'browser'} word="Browser" mark={<Glyph of="screen" />}
+            count={counts.browser}
+            detail={counts.browser === undefined ? 'what the page did inside itself: motion, storage writes, sockets it closed, workers'
+              : `${counts.browser} things the page did inside itself: motion, storage writes, sockets it closed, workers`}
+            onClick={() => goTab('browser')} />
           <TabButton on={tab === 'history'} word="History" mark={<Glyph of="history" />}
             count={counts.history}
             detail={counts.history === undefined ? undefined : `${counts.history} calls in this session's history, ${counts.failed} failed`}
@@ -1138,9 +1143,13 @@ function Bench() {
         askSection(`history-${entry}`);
         go({ ...TAB_START, tab: 'history', sequence: placeOf().sequence, entry });
       }} />}
-      {tab === 'history' && <History base={BASE} entry={at.entry} onGoToEvent={id => {
-        askSection(`crossing-${id}`);
-        go({ ...TAB_START, tab: 'traffic', sequence: placeOf().sequence });
+      {tab === 'browser' && <Browser base={BASE} onGoToEntry={entry => {
+        askSection(`history-${entry}`);
+        go({ ...TAB_START, tab: 'history', sequence: placeOf().sequence, entry });
+      }} />}
+      {tab === 'history' && <History base={BASE} entry={at.entry} onGoToEvent={event => {
+        askSection(`crossing-${event.id}`);
+        go({ ...TAB_START, tab: tabOf(event), sequence: placeOf().sequence });
       }} onGoToStep={(sequence, step, entry) => {
         // The home page shows with no sequence open, and closing one cancels
         // its run, so a go-to while a run is going stays put as `home` does.

@@ -1099,6 +1099,19 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
     if (comparesBehaviour) stepStartedAt.set(options.openStep.step, options.openStep.markedAt);
     await settleProxies(settleConfig.breakpointResumeQuietMs, settleConfig.breakpointResumeCapMs, Date.now());
   }
+  // A step's window closes when the next step begins, as a recording's does.
+  // A run taken a step at a time compared the step before this call as soon
+  // as it returned, before what it set off - a motion closing, a chained
+  // animation, a video's play - had reported; it is compared again here, from
+  // its History entry, and the later reading replaces the earlier.
+  if (comparesBehaviour && !ctx.stampUnder && startStep > 0 && !stepStartedAt.has(startStep - 1)) {
+    const before = commandRecorder?.getHistory?.(Number.MAX_SAFE_INTEGER)
+      .find(command => command.run === sequence.name && command.runStep === startStep - 1);
+    if (before) {
+      stepStartedAt.set(startStep - 1, before.timestamp);
+      if (before.releasedAt !== undefined) stepReleasedAt.set(startStep - 1, before.releasedAt);
+    }
+  }
   // A resumed run takes down the cursor its pause left standing; its steps mark their own.
   if (!ctx.stampUnder) await standPausedRun(undefined);
   const personLanded: NonNullable<ExecutionResult['personInput']>['landed'] = [];

@@ -46,9 +46,10 @@ describe('the page\'s watch of motion with no Animation object', () => {
     for (const px of [4, 20, 40, 58]) { writeStyle(`height: ${px}px;`); advance(16); }
     advance(200);
 
-    expect(reports).toHaveLength(1);
-    expect(reports[0]).toMatchObject({ source: 'style', element: '#acc-body', property: 'height', from: '', to: '58px', frames: 4 });
-    expect(reports[0].endMs - reports[0].startMs).toBe(48);
+    expect(reports.map(r => r.phase)).toEqual(['open', 'close']);
+    expect(reports[0]).toMatchObject({ source: 'style', element: '#acc-body', property: 'height', from: '', to: '4px', frames: 1 });
+    expect(reports[1]).toMatchObject({ id: reports[0].id, source: 'style', element: '#acc-body', property: 'height', from: '', to: '58px', frames: 4 });
+    expect(reports[1].endMs - reports[1].startMs).toBe(48);
   });
 
   it('starts a new motion after a pause longer than its quiet time', () => {
@@ -59,7 +60,7 @@ describe('the page\'s watch of motion with no Animation object', () => {
     writeStyle('height: 0px;');
     advance(300);
 
-    expect(reports.map(r => r.to)).toEqual(['10px', '0px']);
+    expect(reports.filter(r => r.phase === 'close').map(r => r.to)).toEqual(['10px', '0px']);
   });
 
   it('counts a canvas\'s drawing frames, and watches nothing before it starts', () => {
@@ -73,20 +74,38 @@ describe('the page\'s watch of motion with no Animation object', () => {
     for (let frame = 0; frame < 3; frame++) { context.fillRect(); context.fillRect(); advance(16); }
     advance(200);
 
-    expect(reports).toHaveLength(1);
-    expect(reports[0]).toMatchObject({ source: 'canvas', element: '#sky', frames: 3 });
+    expect(reports.filter(r => r.phase === 'close')).toHaveLength(1);
+    expect(reports[1]).toMatchObject({ phase: 'close', source: 'canvas', element: '#sky', frames: 3 });
   });
 });
 
 describe('a motion report in the page\'s record', () => {
   it('stands as an ended entry of its kind, with its change for the row', () => {
     const record = new AnimationRecord('conn');
-    record.takeMotion({ source: 'style', element: '#acc-body', property: 'height', from: '0px', to: '58px', startMs: 1000, endMs: 1300, frames: 19, sentMs: 1420 }, 50_000);
+    record.takeMotion({ id: 1, doc: 'd', phase: 'close', source: 'style', element: '#acc-body', property: 'height', from: '0px', to: '58px', startMs: 1000, endMs: 1300, frames: 19, sentMs: 1420 }, 50_000);
 
     const [entry] = record.list();
     expect(entry).toMatchObject({ kind: 'height #acc-body', via: 'motion', gone: 'finished', createdAt: 49_580 });
     expect(entry.read).toMatchObject({ type: 'StyleWrites', duration: 300, from: '0px', to: '58px', frames: 19 });
     expect(record.live()).toHaveLength(0);
+  });
+
+  it('stands from its open report, under the step it began in, and its close fills in the same entry', () => {
+    markedNow({ kind: 'replay', runId: 'r', step: 1, entry: 29 }, 300_000);
+    const record = new AnimationRecord('conn');
+    const changes: string[] = [];
+    record.watch((_, change) => changes.push(change));
+    record.takeMotion({ id: 7, doc: 'd', phase: 'open', source: 'style', element: '#acc-body', property: 'height', from: '', to: '4px', startMs: 1000, endMs: 1000, frames: 1, sentMs: 1000 }, 300_016);
+
+    expect(record.live()).toHaveLength(1);
+    expect(record.list()[0]).toMatchObject({ createdIn: { entry: 29 }, read: { playState: 'running' } });
+
+    markedNow(undefined, 300_200);
+    record.takeMotion({ id: 7, doc: 'd', phase: 'close', source: 'style', element: '#acc-body', property: 'height', from: '', to: '58px', startMs: 1000, endMs: 1300, frames: 19, sentMs: 1420 }, 300_436);
+
+    expect(record.list()).toHaveLength(1);
+    expect(record.list()[0]).toMatchObject({ createdIn: { entry: 29 }, gone: 'finished', read: { duration: 300, to: '58px', frames: 19, playState: 'finished' } });
+    expect(changes).toEqual(['added', 'updated']);
   });
 });
 
@@ -96,7 +115,7 @@ describe('a motion a later step stopped', () => {
     markedNow({ kind: 'command', index: 11 }, 100_900);
     const record = new AnimationRecord('conn');
     // Played at page 1000 under #9, paused at page 1900 under #11, reported at 1910.
-    record.takeMotion({ source: 'media', element: '#promo', property: 'currentTime', from: '0.015', to: '0.900', startMs: 1000, endMs: 1900, frames: 0, sentMs: 1910 }, 100_910);
+    record.takeMotion({ id: 2, doc: 'd', phase: 'close', source: 'media', element: '#promo', property: 'currentTime', from: '0.015', to: '0.900', startMs: 1000, endMs: 1900, frames: 0, sentMs: 1910 }, 100_910);
 
     const [entry] = record.list();
     expect(entry.createdIn).toMatchObject({ index: 9 });
@@ -110,7 +129,7 @@ describe('a motion that ends under the step it began in', () => {
     markedNow({ kind: 'replay', runId: 'r', step: 1, entry: 3 }, 200_000);
     markedNow({ kind: 'replay', runId: 'r', step: 1, entry: 3 }, 200_100);
     const record = new AnimationRecord('conn');
-    record.takeMotion({ source: 'style', element: '#acc-body', property: 'height', from: '', to: '58px', startMs: 1000, endMs: 1300, frames: 19, sentMs: 1420 }, 200_500);
+    record.takeMotion({ id: 3, doc: 'd', phase: 'close', source: 'style', element: '#acc-body', property: 'height', from: '', to: '58px', startMs: 1000, endMs: 1300, frames: 19, sentMs: 1420 }, 200_500);
 
     expect(record.list()[0].endedIn).toBeUndefined();
   });

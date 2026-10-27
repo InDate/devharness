@@ -66,6 +66,15 @@ export interface WriteMotion {
   to?: string;
   /** One change in one frame: a value set, not motion. */
   set: boolean;
+  /** What set it going, as the page read it when it started: `click`, `reply POST /draft`, `scroll · wheel`. */
+  trigger?: string;
+  /** Who made it: CSS, JS, SVG, MEDIA, ME or BROWSER. */
+  maker?: string;
+  /** The page's ref to what made it, which DevTools reveals, and that thing's name: `catalog.html:478`, `#acc-body`. */
+  makerRef?: number;
+  makerName?: string;
+  /** A function maker's first line of source, as Chrome describes it: `() => { masthead.style.height…`. */
+  makerSource?: string;
 }
 
 const MAX_WRITES = 2000;
@@ -154,10 +163,16 @@ export class WriteWatch {
   private passCancel?: (id: string) => boolean;
   /** Each animation taken, by its record key, for its cancel to be named by. */
   private animationKeys = new Map<string, string>();
+  /** Each motion's start row, by its record key, for its close to fill in; and the motions whose stop row is written. */
+  private motionRows = new Map<string, PageWrite>();
+  private motionStopped = new Set<string>();
+  private scriptUrlOf?: (scriptId: string) => string | undefined;
+  /** Each function maker's place in the source, by its record key, kept across its motion's close. */
+  private makerWhere = new Map<string, { makerName?: string; makerSource?: string }>();
 
   constructor(private client: CDPSession, private page: Page, private connection?: string) {}
 
-  private push(write: Omit<PageWrite, 'id' | 'at' | 'cursor'>, at = Date.now(), cursor = currentCursor()): void {
+  private push(write: Omit<PageWrite, 'id' | 'at' | 'cursor'>, at = Date.now(), cursor = currentCursor()): PageWrite {
     // Nothing in flight when it was made: the timeline answers, which holds a
     // cause added after the fact.
     if (!cursor) cursor = causeAt(at);
@@ -169,7 +184,9 @@ export class WriteWatch {
       ...(cursor ? { cursor } : {}),
     });
     if (this.writes.length > MAX_WRITES) this.writes.splice(0, this.writes.length - MAX_WRITES);
-    observeWrite(this.writes[this.writes.length - 1], this.connection);
+    const pushed = this.writes[this.writes.length - 1];
+    observeWrite(pushed, this.connection);
+    return pushed;
   }
 
   /** Run a read after the ones queued before it, stamped with the moment it was asked for. */
@@ -245,12 +262,34 @@ export class WriteWatch {
     if (this.connection) {
       this.detach.push(animationRecordOf(this.connection).watch((entry, change) => {
         if (!this.animationsOn || !entry.read) return;
+        const stopRow = () => {
+          if (!entry.endedIn || entry.endedAt === undefined || this.motionStopped.has(entry.key)) return;
+          this.motionStopped.add(entry.key);
+          this.push({ store: 'animation', operation: 'stopped', key: entry.kind, value: endingValue(entry.read!) }, entry.endedAt, entry.endedIn);
+        };
         if (change === 'added') {
           this.animationKeys.set(entry.key, entry.kind);
-          this.push({ store: 'animation', operation: 'started', key: entry.kind, value: animationValue(entry.read), motion: motionOf(entry.read) }, entry.createdAt, entry.createdIn);
-          if (entry.endedIn && entry.endedAt !== undefined) {
-            this.push({ store: 'animation', operation: 'stopped', key: entry.kind, value: endingValue(entry.read) }, entry.endedAt, entry.endedIn);
+          const row = this.push({ store: 'animation', operation: 'started', key: entry.kind, value: animationValue(entry.read), motion: motionOf(entry.read) }, entry.createdAt, entry.createdIn);
+          void this.locateMaker(entry.key, row);
+          if (entry.via === 'motion' && !entry.gone) {
+            this.motionRows.set(entry.key, row);
+            // A motion the page navigated away from mid-run never closes.
+            if (this.motionRows.size > MAX_WRITES) this.motionRows.delete(this.motionRows.keys().next().value as string);
           }
+          stopRow();
+          return;
+        }
+        // A motion closing: its start row takes how it ran, and the log files
+        // that same row again, so one motion stays one line.
+        if (change === 'updated') {
+          const row = this.motionRows.get(entry.key);
+          if (row) {
+            row.value = animationValue(entry.read).slice(0, VALUE_CHARS);
+            row.motion = { ...motionOf(entry.read), ...this.makerWhere.get(entry.key) };
+            observeWrite(row, this.connection);
+            if (entry.gone) this.motionRows.delete(entry.key);
+          }
+          stopRow();
           return;
         }
         if (entry.gone !== 'canceled' || !this.animationKeys.has(entry.key)) return;
@@ -295,6 +334,43 @@ export class WriteWatch {
    */
   async animationsReported(cursor?: ProxyCursor): Promise<void> {
     if (this.connection) await animationRecordOf(this.connection).settle(this.client, undefined, cursor);
+  }
+
+  /** Where a parsed script was loaded from, by its id: the page's debugger connection keeps that map. */
+  setScriptUrl(of: (scriptId: string) => string | undefined): void {
+    this.scriptUrlOf = of;
+  }
+
+  /**
+   * Where a function maker stands in the page's source, read from Chrome: its
+   * script and line, from the function's [[FunctionLocation]], and its first
+   * line of source. An app's handlers are mostly arrow functions with no name,
+   * and its file and line are what find it.
+   */
+  private async locateMaker(key: string, row: PageWrite): Promise<void> {
+    const ref = row.motion?.makerRef;
+    if (ref === undefined || (row.motion?.maker !== 'JS' && row.motion?.maker !== 'MEDIA')) return;
+    const reveal = await call(this.client, 'Runtime.evaluate', {
+      expression: ownScript('maker-where', `globalThis[Symbol.for('devharness.trigger')]?.reveal(${Number(ref)})`),
+    }).catch(() => undefined);
+    const fn = reveal?.result;
+    if (fn?.type !== 'function' || !fn.objectId) return;
+    try {
+      const props = await call(this.client, 'Runtime.getProperties', { objectId: fn.objectId, ownProperties: true }).catch(() => undefined);
+      const location = props?.internalProperties?.find((one: any) => one.name === '[[FunctionLocation]]')?.value?.value;
+      const url = location?.scriptId ? this.scriptUrlOf?.(String(location.scriptId)) : undefined;
+      const file = url ? (url.split('?')[0].split('/').pop() || url) : undefined;
+      const where = {
+        ...(file && typeof location?.lineNumber === 'number' ? { makerName: `${file}:${location.lineNumber + 1}` } : {}),
+        ...(typeof fn.description === 'string' ? { makerSource: fn.description.split('\n')[0].slice(0, 80) } : {}),
+      };
+      if (!Object.keys(where).length) return;
+      this.makerWhere.set(key, where);
+      if (row.motion) Object.assign(row.motion, where);
+      observeWrite(row, this.connection);
+    } finally {
+      await call(this.client, 'Runtime.releaseObject', { objectId: fn.objectId }).catch(() => {});
+    }
   }
 
   /** Pass over the cancel Chrome reports for an animation a rule acted on, which goes on. */
@@ -633,6 +709,8 @@ export function animationValue(read: PageAnimation): string {
   const carrier = CARRIER[read.type];
   if (read.frames !== undefined) {
     const change = read.from ? ` ${clip(read.from)} → ${clip(read.to ?? '')}` : read.to ? ` → ${clip(read.to)}` : '';
+    // Open, its close not yet reported: how it ran is not known yet.
+    if (read.playState === 'running') return `${carrier}${change}, moving`;
     // One change in one frame is a value set, not motion: what a snap or a library's set-up looks like.
     if (read.frames === 1 && read.duration === 0) return `${carrier} set${change}`;
     const frames = read.frames ? `, ${read.frames} frame${read.frames === 1 ? '' : 's'}` : '';
@@ -647,7 +725,11 @@ export function motionOf(read: PageAnimation): WriteMotion {
     ...(read.frames !== undefined ? { frames: read.frames } : {}),
     ...(read.from !== undefined ? { from: read.from } : {}),
     ...(read.to !== undefined ? { to: read.to } : {}),
-    set: read.frames === 1 && read.duration === 0,
+    set: read.frames === 1 && read.duration === 0 && read.playState !== 'running',
+    ...(read.trigger ? { trigger: read.trigger } : {}),
+    ...(read.maker ? { maker: read.maker } : {}),
+    ...(read.makerRef !== undefined ? { makerRef: read.makerRef } : {}),
+    ...(read.makerName ? { makerName: read.makerName } : {}),
   };
 }
 

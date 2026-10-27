@@ -36,6 +36,12 @@ export interface PageAnimation {
   from?: string;
   to?: string;
   frames?: number;
+  /** What set it going, as the page's trigger tracker read it. */
+  trigger?: string;
+  /** Who made it - CSS, JS, SVG, MEDIA, ME, BROWSER - with the page's ref to what made it and that thing's name. */
+  maker?: string;
+  makerRef?: number;
+  makerName?: string;
 }
 
 /** Motion the page makes with no Animation object (`page-motion.ts`), named by what carried it. */
@@ -84,6 +90,9 @@ function installPageAnimations(g: any): void {
     const specified = effect && typeof effect.getTiming === 'function' ? effect.getTiming() : {};
     const type = animation.transitionProperty !== undefined ? 'CSSTransition' : animation.animationName !== undefined ? 'CSSAnimation' : 'WebAnimation';
     const element = elementName(effect && effect.target);
+    const tracker = g[Symbol.for('devharness.trigger')];
+    const trigger = tracker?.ofAnimation?.(animation);
+    const maker = tracker?.animationMaker?.(animation) ?? {};
     return {
       id: idOf(animation),
       doc,
@@ -96,6 +105,8 @@ function installPageAnimations(g: any): void {
       looping: timing.iterations === Infinity,
       playState: String(animation.playState),
       currentTime: typeof animation.currentTime === 'number' ? animation.currentTime : 0,
+      ...(trigger ? { trigger } : {}),
+      ...maker,
     };
   };
 

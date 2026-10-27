@@ -812,6 +812,13 @@ export interface BoundaryEvent {
   kind: 'request' | 'frame' | 'write';
   direction: 'out' | 'in';
   url: string;
+  /** A motion row's trigger: what set the motion going, as the page read it when it started. */
+  trigger?: string;
+  /** A motion row's maker - CSS, JS, SVG, MEDIA, ME, BROWSER - and what its go-to reveals. */
+  maker?: string;
+  makerRef?: number;
+  makerName?: string;
+  makerSource?: string;
   method?: string;
   status?: number;
   size: number;
@@ -1016,6 +1023,8 @@ export interface HiddenKind {
 
 /** What `GET /proxy/events` answers with. */
 export interface BoundaryState {
+  /** How many writes the page watch holds - storage, motion, sockets closed, workers: the Browser tab's count. */
+  pageWrites: number;
   /** What was done while a run stood paused - a person's inputs, hold steps - listed in that pause beside its traffic. */
   pauseActions?: Array<{ runId: string; step: number; at: number; kind: 'input' | 'hold' | 'callback'; line: string; index?: number }>;
   /** Every hidden kind held for the site, each marked as the open sequence uses it. */

@@ -1,4 +1,5 @@
 import { debugLog } from '../debug-logger.js';
+import { appendEvent } from '../session-events.js';
 import { currentCursor } from '../proxy/registry.js';
 import type { SequenceCard, SequenceState, SequenceStep } from '../bench/wire.js';
 import type { MotionSetting } from '../bench/kinds.js';
@@ -563,9 +564,15 @@ function holdRecordingNote(session: BenchSession, index: number, comment: string
  * `throughHolds` carries a play past a breakpoint the sequence did not set, for
  * a pass that runs unattended: the next step resumes the page.
  */
-export async function playSequence(connection: string, options: { throughHolds?: boolean } = {}): Promise<SequenceState | undefined> {
+/**
+ * `announce: false` for a play an MCP call started, whose reply already
+ * carries the run table; any other play - a person's, a baseline - puts its
+ * reply on the session's event stream, so the session reads the same run.
+ */
+export async function playSequence(connection: string, options: { throughHolds?: boolean; announce?: boolean } = {}): Promise<SequenceState | undefined> {
   const session = sessions.get(connection);
   if (!session?.sequences) return undefined;
+  const since = session.sequences.historyIndex();
 
   session.sequenceHalt = false;
   session.sequencePaused = false;
@@ -645,6 +652,16 @@ export async function playSequence(connection: string, options: { throughHolds?:
       ...(ended.failure ? { failure: ended.failure } : {}),
       ...withTallies(connection, startedAt, ended.total, benchReadings(ended), stepTimes(session.playStepStarts ?? [], playEnded)),
     });
+    if (options.announce !== false) {
+      const reply = session.sequences.runReply({
+        name: ended.name, connection, total: ended.total, since,
+        ...(ended.failure ? { failure: { step: ended.currentStep + 1, why: ended.failure } } : {}),
+        ...(session.sequencePaused ? { paused: true } : {}),
+      });
+      void appendEvent(session.session, 'run', {
+        sequence: ended.name, connection, detail: reply.split('\n')[0], reply,
+      });
+    }
   }
   return ended;
 }

@@ -184,6 +184,7 @@ export async function startBench(params: {
   });
   session.writeWatch.setAnimations(await readMotionDetect());
   session.writeWatch.setCancelFilter(id => session.motionTouched?.has(id) === true);
+  session.writeWatch.setScriptUrl(scriptId => session.debugger?.scriptUrl(scriptId));
   // Enabled while the page runs: CSS.enable goes unanswered on a held page,
   // and the element facts read the rules while it is held.
   await trackStyleSheets(client, session.sheets).catch((error) => {

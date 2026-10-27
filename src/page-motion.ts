@@ -14,7 +14,9 @@
  * the first change and closes once no change has come for QUIET_MS of page
  * time, so a 60-frame loop reads as one row and not sixty. A held page's time
  * stands still, so a motion it interrupts stays open until the page runs on.
- * Each closed motion is reported once, through the binding devharness adds.
+ * Each motion is reported twice through the binding devharness adds: as it
+ * opens, so its step reads it while the step's comparison runs, and as it
+ * closes, with its duration, frames and last value.
  *
  * It watches only while started, as the bench's motion detection is.
  */
@@ -25,8 +27,13 @@ export const MOTION_KEY = 'devharness.motion';
 /** The binding each closed motion is reported through. */
 export const MOTION_BINDING = '__devharnessMotion';
 
-/** One closed motion, as the page reports it. */
+/** One motion as the page reports it, opening or closing. */
 export interface MotionReport {
+  /** The page's own number for it, in document `doc`: its open and close reports share it. */
+  id: number;
+  doc: string;
+  /** `open` at its first change; `close` once it has stopped, with how it ran. */
+  phase: 'open' | 'close';
   source: 'style' | 'attribute' | 'text' | 'canvas' | 'media' | 'smil' | 'scroll';
   element: string;
   property: string;
@@ -39,6 +46,12 @@ export interface MotionReport {
   frames: number;
   /** Page time the report was sent, ms: devharness places the motion on wall time from it. */
   sentMs: number;
+  /** What set it going, as the page's trigger tracker read it when it opened. */
+  trigger?: string;
+  /** Who made it - CSS, JS, SVG, MEDIA, ME, BROWSER - with the page's ref to what made it and that thing's name. */
+  maker?: string;
+  makerRef?: number;
+  makerName?: string;
 }
 
 function installPageMotion(g: any): void {
@@ -58,20 +71,25 @@ function installPageMotion(g: any): void {
   };
 
   let on = false;
-  interface Run { source: string; element: string; property: string; from: string; to: string; startMs: number; endMs: number; frames: number }
+  interface Run { id: number; source: string; element: string; property: string; from: string; to: string; startMs: number; endMs: number; frames: number; trigger?: string; maker?: string; makerRef?: number; makerName?: string }
+  // Numbers each motion in this document; the document's own id names which.
+  let nextRun = 1;
+  const doc = Math.random().toString(36).slice(2, 10);
+  const tracker = () => g[Symbol.for('devharness.trigger')];
+  const triggerOf = (source: string): string | undefined => (source === 'scroll' ? tracker()?.scrollCause?.() : tracker()?.current?.());
   const runs = new Map<string, Run>();
   let sweepTimer: unknown;
 
-  const report = (run: Run) => {
+  const report = (run: Run, phase: 'open' | 'close') => {
     const send = g.__devharnessMotion;
     if (typeof send !== 'function') return;
-    try { send(JSON.stringify({ ...run, sentMs: now() })); } catch { /* the binding went with a navigation */ }
+    try { send(JSON.stringify({ ...run, doc, phase, sentMs: now() })); } catch { /* the binding went with a navigation */ }
   };
   const closeQuiet = (all = false) => {
     sweepTimer = undefined;
     const t = now();
     for (const [key, run] of runs) {
-      if (all || t - run.endMs >= QUIET_MS) { runs.delete(key); report(run); }
+      if (all || t - run.endMs >= QUIET_MS) { runs.delete(key); report(run, 'close'); }
     }
     if (runs.size && !all) sweepTimer = timers.setTimeout(() => closeQuiet(), QUIET_MS);
   };
@@ -86,8 +104,12 @@ function installPageMotion(g: any): void {
       run.to = to;
       run.endMs = t;
     } else {
-      if (run) { runs.delete(key); report(run); }
-      runs.set(key, { source, element: name, property, from, to, startMs: t, endMs: t, frames: 1 });
+      if (run) { runs.delete(key); report(run, 'close'); }
+      const trigger = triggerOf(source);
+      const maker = (source === 'scroll' ? tracker()?.scrollMaker?.() : tracker()?.runningMaker?.()) ?? {};
+      const opened: Run = { id: nextRun++, source, element: name, property, from, to, startMs: t, endMs: t, frames: 1, ...(trigger ? { trigger } : {}), ...maker };
+      runs.set(key, opened);
+      report(opened, 'open');
     }
     if (sweepTimer === undefined) sweepTimer = timers.setTimeout(() => closeQuiet(), QUIET_MS);
   };
@@ -144,28 +166,44 @@ function installPageMotion(g: any): void {
   // Media and SMIL events do not bubble; a capture listener on the document hears them.
   // One play is one motion from its play event to its pause or end: the frames
   // it shows change no DOM, so the run is bounded by the element's own events.
-  const playing = new Map<any, { from: number; startMs: number }>();
+  const playing = new Map<any, Run>();
   const onMedia = (event: any) => {
     const element = event.target;
     if (!on || !element || typeof element.currentTime !== 'number') return;
-    if (event.type === 'play') { playing.set(element, { from: element.currentTime, startMs: now() }); return; }
+    if (event.type === 'play') {
+      const at = Number(element.currentTime).toFixed(3);
+      const trigger = tracker()?.ofCall?.(['play'], tracker()?.current?.() ?? 'autoplay');
+      const opened: Run = { id: nextRun++, source: 'media', element: nameOf(element), property: 'currentTime', from: at, to: at, startMs: now(), endMs: now(), frames: 0, ...(trigger ? { trigger } : {}), ...(tracker()?.mediaMaker?.(element) ?? {}) };
+      playing.set(element, opened);
+      report(opened, 'open');
+      return;
+    }
     const started = playing.get(element);
     if (!started) return;
     playing.delete(element);
-    report({ source: 'media', element: nameOf(element), property: 'currentTime', from: started.from.toFixed(3), to: Number(element.currentTime).toFixed(3), startMs: started.startMs, endMs: now(), frames: 0 });
+    report({ ...started, to: Number(element.currentTime).toFixed(3), endMs: now() }, 'close');
   };
   // One SMIL run is one motion from its begin event to its end event, however
   // long it runs: its frames change the animated value, which no record shows.
-  const begun = new Map<any, number>();
+  const begun = new Map<any, Run>();
+  const svgMaker = (animate: any) => tracker()?.maker?.('SVG', animate.targetElement ?? animate.parentElement) ?? { maker: 'SVG' };
   const onSmil = (event: any) => {
     const animate = event.target;
     if (!on || !animate) return;
-    if (event.type === 'beginEvent') { begun.set(animate, now()); return; }
-    const startMs = begun.get(animate);
-    if (startMs === undefined) return;
+    // Begun by a call, else by its own begin attribute: a time or an event the markup names.
+    const declared = `begin ${animate.getAttribute?.('begin') || '0s'}`;
+    if (event.type === 'beginEvent') {
+      const target = animate.targetElement ?? animate.parentElement;
+      const trigger = tracker()?.ofCall?.(['beginElement', 'beginElementAt'], declared);
+      const opened: Run = { id: nextRun++, source: 'smil', element: nameOf(target), property: animate.getAttribute?.('attributeName') ?? 'smil', from: animate.getAttribute?.('from') ?? '', to: animate.getAttribute?.('to') ?? '', startMs: now(), endMs: now(), frames: 0, ...(trigger ? { trigger } : {}), ...svgMaker(animate) };
+      begun.set(animate, opened);
+      report(opened, 'open');
+      return;
+    }
+    const opened = begun.get(animate);
+    if (opened === undefined) return;
     begun.delete(animate);
-    const target = animate.targetElement ?? animate.parentElement;
-    report({ source: 'smil', element: nameOf(target), property: animate.getAttribute?.('attributeName') ?? 'smil', from: animate.getAttribute?.('from') ?? '', to: animate.getAttribute?.('to') ?? '', startMs, endMs: now(), frames: 0 });
+    report({ ...opened, endMs: now() }, 'close');
   };
   let lastScroll = { x: g.scrollX ?? 0, y: g.scrollY ?? 0 };
   const onScroll = () => {
@@ -185,6 +223,8 @@ function installPageMotion(g: any): void {
         subtree: true, attributes: true, attributeOldValue: true, attributeFilter: ['style', ...SVG_ATTRIBUTES],
         characterData: true, characterDataOldValue: true, childList: true,
       });
+      // Registered as devharness's own, so the trigger tracker leaves them unwrapped.
+      tracker()?.own?.(onMedia); tracker()?.own?.(onSmil); tracker()?.own?.(onScroll);
       for (const type of ['play', 'pause', 'ended']) g.document.addEventListener(type, onMedia, true);
       for (const type of ['beginEvent', 'endEvent']) g.document.addEventListener(type, onSmil, true);
       g.addEventListener('scroll', onScroll, { passive: true });

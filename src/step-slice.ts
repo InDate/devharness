@@ -111,6 +111,11 @@ export function writeCrossing(write: PageWrite): BoundaryEvent {
   const row = {
     id: write.id, at: write.at, kind: 'write' as const, direction: 'out' as const,
     url: writeKey(write), method: write.store,
+    ...(write.motion?.trigger ? { trigger: write.motion.trigger } : {}),
+    ...(write.motion?.maker ? { maker: write.motion.maker } : {}),
+    ...(write.motion?.makerRef !== undefined ? { makerRef: write.motion.makerRef } : {}),
+    ...(write.motion?.makerName ? { makerName: write.motion.makerName } : {}),
+    ...(write.motion?.makerSource ? { makerSource: write.motion.makerSource } : {}),
     preview: writeLine(write).slice(write.store.length + 1),
     size: write.value?.length ?? 0, level: 'unprompted' as const, owned: false,
   };

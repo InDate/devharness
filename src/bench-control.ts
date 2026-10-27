@@ -76,6 +76,8 @@ export interface BenchHandlers {
   stepTraffic: () => Promise<void>;
   releaseWaiting: (id: number) => Promise<void>;
   openDevtools: () => Promise<string>;
+  /** Open DevTools at what made a motion, by the page's ref to it. */
+  revealMaker: (ref: number) => Promise<string>;
   changeHold: (action: 'hold' | 'release' | 'step', layers?: Array<'code' | 'ui' | 'network'>) => Promise<void>;
   setPicker: (armed: boolean) => Promise<void>;
   seek: (ms: number) => Promise<void>;
@@ -579,6 +581,10 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
             case '/hold/let': await handlers.releaseWaiting(Number(body.id)); break;
             case '/devtools': {
               const said = await handlers.openDevtools();
+              return send(res, 200, said, 'text/plain; charset=utf-8');
+            }
+            case '/motion/reveal': {
+              const said = await handlers.revealMaker(Number(body.ref));
               return send(res, 200, said, 'text/plain; charset=utf-8');
             }
             case '/hold': {

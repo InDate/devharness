@@ -49,10 +49,13 @@ function installPageInputGuard(g: any): void {
     event.stopImmediatePropagation();
     if (!KEEPS_DEFAULT.has(event.type) && event.cancelable) event.preventDefault();
   };
-  for (const type of GUARDED) g.addEventListener(type, guard, { capture: true, passive: false });
+  // Registered as devharness's own, so the trigger tracker leaves it unwrapped.
+  const tracker = g[Symbol.for('devharness.trigger')];
+  for (const type of GUARDED) g.addEventListener(type, tracker?.own ? tracker.own(guard) : guard, { capture: true, passive: false });
 
   const scrollTo = (at: { x: number; y: number }) => {
-    try { g.scrollTo({ left: at.x, top: at.y, behavior: 'instant' }); } catch { /* a document with nothing to scroll */ }
+    const hold = () => g.scrollTo({ left: at.x, top: at.y, behavior: 'instant' });
+    try { if (tracker?.quietly) tracker.quietly(hold); else hold(); } catch { /* a document with nothing to scroll */ }
   };
 
   g[Symbol.for('devharness.input')] = {

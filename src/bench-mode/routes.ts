@@ -16,7 +16,7 @@ import type { ActivityMove, ExpectedValue, KindCount } from '../bench/kinds.js';
 import { discardPick, highlightAnnotation, moveAnnotation, noteAtStep, noteTargetFor, notifyAnnotation, removeAnnotation, rewordAnnotation, saveAnnotation } from './annotations.js';
 import { beginCapture, cancelCapture, captureBenchScreenshot, discardBenchScreenshot, readMoreFacts, retakeCapture, saveBenchScreenshot, seriesOfNotes, setFactChoice } from './captures.js';
 import { setInspectMode } from './cdp.js';
-import { changeHold, haltSequence, openDevtools, resumePausedRun, setHeld, setPicker } from './controls.js';
+import { changeHold, haltSequence, openDevtools, resumePausedRun, revealMaker, setHeld, setPicker } from './controls.js';
 import { setPersonInput } from './person-input.js';
 import { dismissBurst, motionOf, seekBench, seekOne, setBenchRate } from './motion.js';
 import { setMotionDetect } from './motion-detect.js';
@@ -138,6 +138,7 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
     stepTraffic: async () => { await stepTraffic(connection); },
     releaseWaiting: async (id: number) => { getProxy(connection)?.queue.releaseOne(id); },
     openDevtools: async () => openDevtools(connection),
+    revealMaker: async (ref: number) => revealMaker(connection, ref),
     changeHold: async (action, layers) => {
       await changeHold(connection, action, layers);
       const named = layers?.length ? layers.map(layer => layer === 'ui' ? 'screen' : layer).join(' and ') : 'page';
@@ -348,6 +349,7 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
           checkOutcomes: checkOutcomesFor(connection),
           pauseActions: pauseActionsFor(connection),
           events: writeEvents(connection), totals: null, steps: openSteps(connection),
+          pageWrites: sessions.get(connection)?.writeWatch?.writes.length ?? 0,
           ...(sessions.get(connection)?.site ? { site: sessions.get(connection)!.site } : {}),
           hidden: hiddenOf(connection),
           ...(openSequence(connection) ? { forSequence: openSequence(connection) } : {}),
@@ -360,6 +362,7 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
       const at = sinceId ? all.findIndex(e => e.id === sinceId) : -1;
       return {
         running: true,
+        pageWrites: sessions.get(connection)?.writeWatch?.writes.length ?? 0,
         allowed: proxy.listAllowedHosts(),
         refused: proxy.blocked,
         refusals: proxy.refusals(),

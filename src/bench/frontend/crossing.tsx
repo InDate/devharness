@@ -18,6 +18,16 @@ import { Glyph } from './glyph.js';
  */
 
 /** The shortest thing that tells one socket from another. */
+/** Who made a motion, in words, for the column's tooltip and the opened row. */
+const MAKERS: Record<string, string> = {
+  CSS: 'CSS: a transition, keyframes or a scroll timeline',
+  JS: 'JavaScript: a script wrote it, animated it or drew it',
+  SVG: 'SVG: SMIL markup animating itself',
+  MEDIA: 'media: a video or audio element playing',
+  ME: 'you: your own scroll, drag or input',
+  BROWSER: 'the browser: a scroll it made itself',
+};
+
 export function socketName(url: string): string {
   try {
     const parsed = new URL(url);
@@ -1213,6 +1223,15 @@ export function CrossingRow({
   const cause = event.commandIndex ?? event.entry ?? event.openedBy;
   const causeWords = cause === undefined ? undefined
     : `${event.openedBy !== undefined && event.commandIndex === undefined ? 'opened by ' : ''}#${cause}${event.causeLabel ? ` ${event.causeLabel}` : ''}`;
+  // A motion's go-to: ME opens the input in History; anything else made by a
+  // function or an element opens DevTools on it.
+  const madeByMe = event.maker === 'ME';
+  const reveals = !madeByMe && event.makerRef !== undefined;
+  const makerGo = madeByMe && cause !== undefined && onGoToCause ? () => onGoToCause(cause)
+    : reveals ? () => { void postMotion(base, '/motion/reveal', { ref: event.makerRef }); }
+    : undefined;
+  const makerWords = madeByMe ? (cause !== undefined ? `your input, history #${cause}` : undefined)
+    : reveals ? `DevTools: ${event.makerName ?? event.maker}` : undefined;
   const hidable = actions && event.kind !== 'write';
   const intercepting = !!actions && !!rule && !rule.off && (rule.verb === 'answer' || rule.verb === 'block');
   // A storage write never reaches the proxy, so no rule can intercept or hide it.
@@ -1221,7 +1240,7 @@ export function CrossingRow({
     ...(actions?.rename ? ['rename'] as const : []),
     ...(actions?.report ? ['send'] as const : []),
     ...(moves ? ['up', 'down'] as const : []),
-    ...(onGoToTraffic || (cause !== undefined && onGoToCause) ? ['open'] as const : []),
+    ...(onGoToTraffic || makerGo || (cause !== undefined && onGoToCause) ? ['open'] as const : []),
   ];
   return (
     <Row
@@ -1238,15 +1257,16 @@ export function CrossingRow({
         event.verdict === 'background' || event.verdict === 'unknown' ? 'ruled' : '',
       ]}
       source={event.kind === 'request' ? (event.method ?? 'GET')
-        : event.kind === 'write' ? (event.method === 'animation' ? 'MOTION' : event.method)
+        : event.kind === 'write' ? (event.method === 'animation' ? (event.maker ?? 'MOTION') : event.method)
         : socketName(event.url)}
-      sourceTitle={event.url}
+      sourceTitle={event.maker ? MAKERS[event.maker] ?? event.maker : event.url}
       way={event.kind === 'frame' ? (event.direction === 'out' ? '→' : '←') : ''}
       title={attribution(event)}
       badge={<Badge verdict={verdict} ignored={hidden} />}
       onEnter={() => setPointing(true)}
       onLeave={() => setPointing(false)}
-      label={pointing && causeWords && onGoToCause ? <span class="what">{causeWords}</span> : <>
+      label={pointing && makerGo && makerWords ? <span class="what">{makerWords}</span>
+        : pointing && causeWords && onGoToCause ? <span class="what">{causeWords}</span> : <>
         {renaming && actions?.rename
           ? <LabelInput
               value={named ?? ''}
@@ -1311,7 +1331,7 @@ export function CrossingRow({
         )}
       </>}
       slots={{
-        ...(onGoToTraffic ? { open: onGoToTraffic } : cause !== undefined && onGoToCause ? { open: () => onGoToCause(cause) } : {}),
+        ...(onGoToTraffic ? { open: onGoToTraffic } : makerGo ? { open: makerGo } : cause !== undefined && onGoToCause ? { open: () => onGoToCause(cause) } : {}),
         ...(actions?.rename ? { rename: () => setRenaming(true) } : {}),
         ...(actions?.report ? { send: () => actions.report!(event) } : {}),
         ...(moves?.up ? { up: moves.up } : {}),
@@ -1329,9 +1349,9 @@ export function CrossingRow({
           : hidden ? { hide: () => actions!.unhide?.(actions!.ignoredBy?.(event) ?? keyOf(event)) }
           : hidable ? { hide: () => actions!.hide(event) } : {}),
       }}
-      glyphs={{ open: onGoToTraffic ? 'goto:request' : 'goto:history', ...(hidden ? { hide: 'eye' } : {}) }}
+      glyphs={{ open: onGoToTraffic ? 'goto:request' : reveals ? 'goto:code' : 'goto:history', ...(hidden ? { hide: 'eye' } : {}) }}
       titles={{
-        ...(onGoToTraffic ? { open: 'go to this in Traffic' } : cause !== undefined ? { open: event.commandIndex === undefined && event.openedBy !== undefined
+        ...(onGoToTraffic ? { open: 'go to this in Traffic' } : makerGo && makerWords ? { open: `go to ${makerWords}` } : cause !== undefined ? { open: event.commandIndex === undefined && event.openedBy !== undefined
           ? `go to history #${cause}, the call that opened the stream this arrived on`
           : `go to history #${cause}, the call this crossed under` } : {}),
         remove: rule?.mode === 'local' ? 'remove this interception' : 'stop intercepting this in this sequence',
@@ -1342,6 +1362,13 @@ export function CrossingRow({
       onMenu={onMenu}
       extra={extra}
     >
+      {(event.trigger || event.makerName) && (
+        <dl class="motionsource">
+          {event.maker && <><dt>made by</dt><dd>{MAKERS[event.maker] ?? event.maker}{event.makerName ? ` · ${event.makerName}` : ''}</dd></>}
+          {event.makerSource && <><dt>code</dt><dd><code>{event.makerSource}</code></dd></>}
+          {event.trigger && <><dt>source</dt><dd title="every way work entered the page on the way to this motion, first to last">{event.trigger}</dd></>}
+        </dl>
+      )}
       {motion
         ? <MotionEditor row={motion} />
         : <CrossingBody event={event} base={base} rule={rule} actions={actions} verdict={verdict} />}

@@ -114,7 +114,7 @@ let writes = 0;
 type Read = Pick<PageAnimation, 'type' | 'duration'> & Partial<Pick<PageAnimation, 'frames' | 'from' | 'to'>>;
 /** A motion the write watch took, stamped to `entry`, with its value and motion built as the write watch builds them. */
 function motionWrite(entry: number, key: string, at: number, read: Read): PageWrite {
-  const animation: PageAnimation = { id: ++writes, doc: 'd1', name: key, delay: 0, easing: 'linear', looping: false, playState: 'running', currentTime: 0, ...read };
+  const animation: PageAnimation = { id: ++writes, doc: 'd1', name: key, delay: 0, easing: 'linear', looping: false, playState: 'finished', currentTime: 0, ...read };
   return { id: `w${writes}`, at, store: 'animation', operation: 'started', key, value: animationValue(animation), motion: motionOf(animation), cursor: { kind: 'command', index: entry } };
 }
 

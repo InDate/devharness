@@ -7,6 +7,7 @@ import { Page, HTTPRequest, HTTPResponse } from 'puppeteer-core';
 import type { InitiatorRoot } from './proxy/intercept-proxy.js';
 import { SEND_BINDING, SEND_WRAPPER_SOURCE, type SocketSendReport, type RequestOriginReport } from './proxy/send-provenance.js';
 import { PAGE_CLOCK_SOURCE } from './page-clock.js';
+import { PAGE_TRIGGER_SOURCE } from './page-trigger.js';
 import { PAGE_ANIMATIONS_SOURCE } from './page-animations.js';
 import { PAGE_INPUT_GUARD_SOURCE } from './page-input-guard.js';
 import { MOTION_BINDING, PAGE_MOTION_SOURCE, type MotionReport } from './page-motion.js';
@@ -454,6 +455,14 @@ export class NetworkMonitor {
         .catch(() => { /* no Page here: a worker keeps wall time */ });
       void client.send('Runtime.evaluate', {
         expression: ownScript('page-clock', PAGE_CLOCK_SOURCE), awaitPromise: false, returnByValue: true,
+      }).catch(() => { /* nothing to evaluate against yet */ });
+      // What starts each motion, marked as work enters the page: after the
+      // clock, so it wraps the clock's schedulers, and ahead of the motion
+      // watches, which read it as a motion starts.
+      void client.send('Page.addScriptToEvaluateOnNewDocument', { source: ownScript('page-trigger', PAGE_TRIGGER_SOURCE) })
+        .catch(() => { /* no Page here: a worker draws nothing */ });
+      void client.send('Runtime.evaluate', {
+        expression: ownScript('page-trigger', PAGE_TRIGGER_SOURCE), awaitPromise: false, returnByValue: true,
       }).catch(() => { /* nothing to evaluate against yet */ });
       // The page's own list of its animations, which the clock's held steps sweep.
       void client.send('Page.addScriptToEvaluateOnNewDocument', { source: ownScript('page-animations', PAGE_ANIMATIONS_SOURCE) })

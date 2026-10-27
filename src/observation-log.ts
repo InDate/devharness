@@ -300,7 +300,7 @@ export function formatLines(observations: Observation[], reading?: string): stri
     // Owned by the step's window is what the indent says; only stronger evidence is named.
     const evidence = one.owned && one.owned !== 'window' ? `<${one.owned}>` : '';
     const foreign = foreignTo(one, reading);
-    const tail = [evidence, foreign ? `on ${foreign}` : '', one.rule ? `rule: ${one.rule}` : '', one.failed ? 'failed' : ''].filter(Boolean).join(' · ');
+    const tail = [evidence, one.motion?.maker ? `${one.motion.maker}${one.motion.makerName ? ` ${one.motion.makerName}` : ''}` : '', one.motion?.trigger ? `from ${one.motion.trigger}` : '', foreign ? `on ${foreign}` : '', one.rule ? `rule: ${one.rule}` : '', one.failed ? 'failed' : ''].filter(Boolean).join(' · ');
     const indent = one.owned ? '       ' : '     ';
     return `${(indent + text).padEnd(41)} ${id.padEnd(9)}${tail}`.trimEnd();
   });

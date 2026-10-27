@@ -1840,7 +1840,9 @@ export function createInputTools(
                 const box = await page.evaluate((sel: string) => {
                   const el = (globalThis as any).document.querySelector(sel);
                   if (!el) return null;
-                  el.scrollIntoView({ block: 'center', inline: 'center' });
+                  // Run quietly: devharness's own scroll is not the app's work.
+                  const quietly = (globalThis as any)[Symbol.for('devharness.trigger')]?.quietly ?? ((run: () => void) => run());
+                  quietly(() => el.scrollIntoView({ block: 'center', inline: 'center' }));
                   const r = el.getBoundingClientRect();
                   const doc = (globalThis as any).document.documentElement;
                   return {

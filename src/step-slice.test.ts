@@ -60,3 +60,30 @@ describe('a step read from the observation log', () => {
     expect(sliceIn(4000, 4100, 'socket-app-page', 1000).map(one => [one.text, one.atMs])).toEqual([['POST /draft 200', 10], ['localStorage socket-app:draft set', 20]]);
   });
 });
+
+describe('a motion still moving when its step is read', () => {
+  it('stands in the step with no body, so neither a baseline nor a comparison is taken on frames still arriving', () => {
+    observeWrite(write({
+      store: 'animation', operation: 'started', key: 'height #masthead', value: 'js style → 71.5px, moving',
+      motion: { type: 'StyleWrites', durationMs: 0, frames: 1, to: '71.5px', set: false, moving: true },
+      cursor: { kind: 'command', index: 14 }, at: 4010,
+    }), 'motion-catalog-page');
+
+    const { crossings, bodyOf } = crossingsOf(14, 'motion-catalog-page');
+    expect(crossings).toHaveLength(1);
+    expect(bodyOf(crossings[0])).toBeUndefined();
+    expect(kindsOf(14, 'motion-catalog-page', 1000)).toEqual({ 'animation height #masthead': { n: 1 } });
+  });
+});
+
+describe('a motion credited by the root of the property\'s last write', () => {
+  it('reads property, not root, as what ties it to its step', () => {
+    const one = observeWrite(write({
+      store: 'animation', operation: 'started', key: 'left #plan-pick', value: 'js style -4px → 128px over 283ms, 18 frames',
+      motion: { type: 'StyleWrites', durationMs: 283, frames: 18, set: false, byRoot: true, rootFrom: 'property', root: { id: 'p:1' } },
+      cursor: { kind: 'command', index: 15 }, at: 5010,
+    }), 'motion-catalog-page');
+
+    expect(one).toMatchObject({ entry: 15, stamped: true, owned: 'property' });
+  });
+});

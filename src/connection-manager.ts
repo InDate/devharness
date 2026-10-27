@@ -3,6 +3,7 @@
  * Manages multiple debugger connections (Chrome, Node.js, etc.)
  */
 
+import { noteRoot } from './root-credit.js';
 import { CDPManager } from './cdp-manager.js';
 import { getProxy } from './proxy/registry.js';
 import { attachLayer, isHeld, recordHeld, recordReleased } from './hold.js';
@@ -116,6 +117,7 @@ export class ConnectionManager {
       networkMonitor.onMotion = (report, arrivedAt) => {
         animationRecordOf(reference).takeMotion(report, arrivedAt);
       };
+      networkMonitor.onRoot = (root, open) => noteRoot(reference, root, open);
     }
 
     // Track browser instance

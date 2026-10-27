@@ -253,6 +253,8 @@ export class NetworkMonitor {
   onSocketSend?: (report: SocketSendReport) => void;
   /** A motion the page made with no `Animation` object, closed, with the moment it arrived. */
   onMotion?: (report: MotionReport, arrivedAt: number) => void;
+  /** The page's trigger tracker reported a root open, with work outstanding, or settled. */
+  onRoot?: (root: { id: string; step?: string }, open: boolean) => void;
   /** Where a request started inside a trusted dispatch goes. */
   onRequestOrigin?: (report: RequestOriginReport) => void;
   private wsClient: any = null;
@@ -418,7 +420,11 @@ export class NetworkMonitor {
     try {
       client.on('Runtime.bindingCalled', (e: any) => {
         if (e?.name === MOTION_BINDING) {
-          try { this.onMotion?.(JSON.parse(String(e.payload)) as MotionReport, Date.now()); } catch { /* a payload this build does not produce */ }
+          try {
+            const payload = JSON.parse(String(e.payload));
+            if (payload.phase === 'root') this.onRoot?.({ id: String(payload.id), ...(payload.step ? { step: String(payload.step) } : {}) }, payload.open === true);
+            else this.onMotion?.(payload as MotionReport, Date.now());
+          } catch { /* a payload this build does not produce */ }
           return;
         }
         if (e?.name !== SEND_BINDING) return;

@@ -25,6 +25,7 @@
  * through this record alone.
  */
 
+import { rootCursor } from './root-credit.js';
 import type { CDPSession } from 'puppeteer-core';
 import { currentCursor } from './proxy/registry.js';
 import type { ProxyCursor } from './proxy/intercept-proxy.js';
@@ -168,6 +169,7 @@ export class AnimationRecord {
       ...(report.makerName ? { makerName: report.makerName } : {}),
       ...(report.makerAt ? { makerAt: report.makerAt } : {}),
       ...(report.root ? { root: report.root } : {}),
+      ...(report.rootFrom ? { rootFrom: report.rootFrom } : {}),
     };
     // Start and end are each placed after the action they followed, by the
     // same rule, so the two compare as history entries.
@@ -176,9 +178,16 @@ export class AnimationRecord {
     const cursor = known ? known.createdIn : causeBefore(startedAt, namesEntry) ?? currentCursor();
     // A motion stopped by a later step - a pause press, a toggle - ends under
     // that step; the step it ended in is read the same way as the one it began in.
+    // Both ends stand by root where they carry one: a stop made by a call
+    // under the root of the input behind the call, an end the motion reached
+    // by itself under its own root, so it adds no row to the step it began
+    // in however the steps are paced. The page clock runs tens of ms off this
+    // side's, so a pause made just after a step began falls into the step
+    // before it by time.
     const endedAt = arrivedAt - Math.max(0, report.sentMs - report.endMs);
-    const endedIn = closing ? causeBefore(endedAt, namesEntry) : undefined;
-    const ending = endedIn && entryOfCursor(endedIn) !== entryOfCursor(cursor)
+    const endRoot = report.stoppedBy ? report.stoppedBy.root : report.root;
+    const endedIn = closing ? rootCursor(endRoot) ?? causeBefore(endedAt, namesEntry) : undefined;
+    const ending = endedIn && entryOfCursor(endedIn) !== entryOfCursor(rootCursor(report.root) ?? cursor)
       ? { endedAt, endedIn, ...(report.stoppedBy ? { stoppedBy: report.stoppedBy } : {}) }
       : {};
     if (known) {

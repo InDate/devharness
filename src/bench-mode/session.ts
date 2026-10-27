@@ -252,6 +252,8 @@ export interface BenchSession extends BenchReport {
   driving?: AbortController;
   /** Why the last step stopped, when it failed. */
   sequenceFailure?: string;
+  /** The steps of the last baseline whose motion is still running, and how often it was taken again as their rows landed. */
+  baselineFilling?: { steps: number[]; retakes: number };
   /**
    * The page's one debugger connection, the debugger tools' own. The page's
    * JS is paused, resumed and stepped through it alone: a second debugger

@@ -12,6 +12,7 @@ import { resolveSessionName } from '../session-identity.js';
 
 import type { StepTraffic } from '../annotation.js';
 import type { CommandRecorder, RecordedCommand, CommandSequence, ActiveSequenceState } from '../command-recorder.js';
+import { entrySettled, onEntrySettled } from '../root-credit.js';
 import { markNextCommand, releaseCommand, boundarySettled, getProxy, recordCheckOutcome, noteCallStart, standPausedRun, settleProxies } from '../proxy/registry.js';
 import type { ProxyEvent, ShapeRules } from '../proxy/intercept-proxy.js';
 import { compareStep, isAnimationKind, type Crossing } from '../bench/step-compare.js';
@@ -2016,14 +2017,16 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
  */
 function passFromLog(
   run: string, indices: number[], reference: string, placements: Record<string, number> | undefined, recorder: CommandRecorder | undefined
-): { ran: Map<number, Crossing[]>; bodyOf: (crossing: Crossing) => string | undefined } {
+): { ran: Map<number, Crossing[]>; entries: Map<number, number>; bodyOf: (crossing: Crossing) => string | undefined } {
   const history = recorder?.getHistory(Number.MAX_SAFE_INTEGER) ?? [];
   const ran = new Map<number, Crossing[]>();
+  const entries = new Map<number, number>();
   const bodies: Array<(crossing: Crossing) => string | undefined> = [];
   for (const index of indices) {
     const entry = history.filter(command => command.run === run && command.runStep === index)
       .reduce<number | undefined>((newest, command) => Math.max(newest ?? -1, command.index), undefined);
     if (entry === undefined) continue;
+    entries.set(index, entry);
     const { crossings, bodyOf } = crossingsOf(entry, reference);
     bodies.push(bodyOf);
     for (const crossing of crossings) {
@@ -2031,7 +2034,7 @@ function passFromLog(
       ran.set(step, [...(ran.get(step) ?? []), crossing]);
     }
   }
-  return { ran, bodyOf: crossing => bodies.map(read => read(crossing)).find(body => body !== undefined) };
+  return { ran, entries, bodyOf: crossing => bodies.map(read => read(crossing)).find(body => body !== undefined) };
 }
 
 async function compareBehaviour(
@@ -2066,7 +2069,7 @@ async function compareBehaviour(
   // A top-level pass reads each step from the observation log, by the History
   // entry of the step's newest attempt, the set a recording counted; a nested
   // run's steps carry no entry of their own and read the pass's stamps.
-  const logged = under ? undefined : passFromLog(run, indices, reference, placements, ctx.commandRecorder);
+  let logged = under ? undefined : passFromLog(run, indices, reference, placements, ctx.commandRecorder);
   const path = (index: number) => [...(under?.within ?? []), index].join('.');
   const ranAt = (index: number) => (under
     ? events.filter(event => event.runId === proxyRun && event.step === under.step && (event.within ?? []).join('.') === path(index))
@@ -2077,46 +2080,84 @@ async function compareBehaviour(
     const ruled = shape ? rules?.[shape] : undefined;
     return ruled === 'background' || ruled === 'unknown';
   };
-  const drift: NonNullable<ExecutionResult['behaviourDrift']> = [];
+  const matchSteps = (): NonNullable<ExecutionResult['behaviourDrift']> => {
+    const drift: NonNullable<ExecutionResult['behaviourDrift']> = [];
 
-  for (const [position, index] of indices.entries()) {
-    const traffic = commands[index].traffic;
-    if (!traffic) continue;
-    const from = stepStartedAt.get(index)!;
-    const to = stepReleasedAt.get(index) ?? stepStartedAt.get(indices[position + 1]) ?? Date.now();
-    const heldMs = traffic.windowMs !== undefined ? { heldMs: { recorded: traffic.windowMs, replayed: to - from } } : {};
-    if (!traffic.kinds) {
-      ctx.commandRecorder?.noteStepMatch?.(run, index, { matched: 0, kinds: 0, unmatched: [], noBaseline: true, ...heldMs });
-      continue;
-    }
-    const compared = compareStep({
-      recorded: traffic.kinds, ran: ranAt(index), step: index, ignores, bodyOf, ruledOut,
-      unwatched: kind => isAnimationKind(kind) && !(ctx.connection && watchingMotion(sanitizeReference(ctx.connection))),
-      ...(commands[index].expected ? { expected: commands[index].expected } : {}),
-    });
-    const unmatched = [
-      ...compared.kinds.filter(one => one.verdict !== 'match').map(one => ({
-        kind: one.kind,
-        reasons: one.verdict === 'unexpected' ? ['new'] : one.verdict === undefined ? ['payload not held'] : one.reasons,
-      })),
-      ...compared.missing.map(one => ({ kind: one.kind, reasons: ['missing'] })),
-    ];
-    ctx.commandRecorder?.noteStepMatch?.(run, index, {
-      matched: compared.kinds.length - compared.kinds.filter(one => one.verdict !== 'match').length,
-      kinds: compared.kinds.length + compared.missing.length,
-      unmatched, ...heldMs,
-    });
-    if (unmatched.length) {
-      drift.push({
-        step: index + 1,
-        ...(under ? { path: [under.step, ...under.within, index].map(n => n + 1).join('.') } : {}),
-        label: `${commands[index].tool}.${commands[index].params?.action ?? ''}`.replace(/\.$/, ''),
-        unmatched,
+    for (const [position, index] of indices.entries()) {
+      const traffic = commands[index].traffic;
+      if (!traffic) continue;
+      const from = stepStartedAt.get(index)!;
+      const to = stepReleasedAt.get(index) ?? stepStartedAt.get(indices[position + 1]) ?? Date.now();
+      const heldMs = traffic.windowMs !== undefined ? { heldMs: { recorded: traffic.windowMs, replayed: to - from } } : {};
+      if (!traffic.kinds) {
+        ctx.commandRecorder?.noteStepMatch?.(run, index, { matched: 0, kinds: 0, unmatched: [], noBaseline: true, ...heldMs });
+        continue;
+      }
+      const compared = compareStep({
+        recorded: traffic.kinds, ran: ranAt(index), step: index, ignores, bodyOf, ruledOut,
+        unwatched: kind => isAnimationKind(kind) && !(ctx.connection && watchingMotion(sanitizeReference(ctx.connection))),
+        ...(commands[index].expected ? { expected: commands[index].expected } : {}),
       });
+      // Until every root credited to the step has settled, what it caused is
+      // still landing: a recorded kind absent, or counted fewer times than
+      // recorded, is still arriving, and the step is matched again when its
+      // roots settle.
+      const entry = logged?.entries.get(index);
+      const arriving = entry !== undefined && !entrySettled(entry);
+      const short = (kind: string, recorded: number) => ranAt(index).filter(event => kindOf(event) === kind).length < recorded;
+      const unmatched = [
+        ...compared.kinds.filter(one => one.verdict !== 'match').map(one => ({
+          kind: one.kind,
+          reasons: one.verdict === 'unexpected' ? ['new']
+            : one.verdict === undefined ? ['payload not held']
+            : arriving && one.recorded && short(one.kind, one.recorded.n) ? ['still arriving']
+            : one.reasons,
+        })),
+        ...compared.missing.map(one => ({ kind: one.kind, reasons: [arriving ? 'still arriving' : 'missing'] })),
+      ];
+      ctx.commandRecorder?.noteStepMatch?.(run, index, {
+        matched: compared.kinds.length - compared.kinds.filter(one => one.verdict !== 'match').length,
+        kinds: compared.kinds.length + compared.missing.length,
+        unmatched, ...heldMs,
+      });
+      if (unmatched.length) {
+        drift.push({
+          step: index + 1,
+          ...(under ? { path: [under.step, ...under.within, index].map(n => n + 1).join('.') } : {}),
+          label: `${commands[index].tool}.${commands[index].params?.action ?? ''}`.replace(/\.$/, ''),
+          unmatched,
+        });
+      }
     }
+    return drift;
+  };
+  const drift = matchSteps();
+  // A step whose roots have not settled is matched again as they do; the
+  // subscription ends once every step of the pass has settled. A root that
+  // never settles - a loop running on - leaves it open until a pass of the
+  // same steps replaces it.
+  const key = `${reference}|${run}|${indices.join(',')}`;
+  rematching.get(key)?.();
+  rematching.delete(key);
+  const open = () => [...(logged?.entries.values() ?? [])].filter(entry => !entrySettled(entry));
+  if (!under && ctx.commandRecorder && open().length) {
+    const recorder = ctx.commandRecorder;
+    const entries = new Set(logged!.entries.values());
+    const stop = onEntrySettled(entry => {
+      if (!entries.has(entry)) return;
+      logged = passFromLog(run, indices, reference, placements, recorder);
+      matchSteps();
+      if (open().length) return;
+      stop();
+      rematching.delete(key);
+    });
+    rematching.set(key, stop);
   }
   return drift;
 }
+
+/** Each pass's subscription that matches its steps again as their roots settle, by browser, sequence and steps; a pass of the same steps replaces it. */
+const rematching = new Map<string, () => void>();
 
 /**
  * Run a sequence's `teardown` steps, if it has any.

@@ -22,6 +22,7 @@ import { evaluateCondition, type ExecutionContext } from './replay-executor.js';
 import { callBack, getProxy } from '../proxy/registry.js';
 import type { CrossingMatch, ProxyEvent } from '../proxy/intercept-proxy.js';
 import { observationsIn, observationsOf, recordOf, type Observation, type ObservationKind } from '../observation-log.js';
+import { whenSettled } from '../root-credit.js';
 
 export const CHECK_OPERATORS = [
   'equals', 'notEquals', 'exists', 'notExists', 'gt', 'gte', 'lt', 'lte', 'contains', 'matches',
@@ -38,6 +39,8 @@ export type SocketCondition = typeof SOCKET_CONDITIONS[number];
 /** A wait's time limit and read interval when its call names none. */
 export const WAIT_TIMEOUT_MS = 15000;
 const WAIT_POLL_MS = 100;
+// How long an owns check waits on a step whose roots have not settled: what bounds a loop that runs on.
+const OWNS_SETTLE_BOUND_MS = 10000;
 
 /**
  * The check an assert is: its DOM form read until it holds or `timeoutMs`
@@ -544,10 +547,13 @@ async function readerFor(
     const match = spec.owns!;
     const operator = spec.operator ?? 'gte';
     const target = spec.count ?? 1;
-    // More arrivals can break these, so they hold only once the time is up.
+    // What the step caused lands until its roots settle, so the count is read
+    // once they have. A root that never settles - a loop running on - is read
+    // at the bound, and a count that more arrivals can break holds only then.
     const bounded = operator === 'equals' || operator === 'lte' || operator === 'lt';
     return async () => {
       if (call.entry === undefined) return { held: false, found: `the call ${back} back has no History entry` };
+      const settled = await whenSettled(call.entry, spec.withinMs ?? OWNS_SETTLE_BOUND_MS);
       const owned = observationsOf(call.entry).filter(one => ownsMatches(match, one));
       const counted = owned.filter(one => spec.basis !== 'stamped' || one.stamped === true);
       const uncounted = owned.length - counted.length;
@@ -559,8 +565,9 @@ async function readerFor(
         `${counted.length} owned${counted.length ? ` (${placesOf(counted, false)})` : ''}`,
         ...(uncounted ? [`${uncounted} placed by time, not counted`] : []),
         ...(elsewhere.length ? [`${elsewhere.length} elsewhere: ${placesOf(elsewhere, true)}`] : []),
+        ...(settled ? [] : ['the step\'s work still running']),
       ].join(' · ');
-      return { held, found, final: bounded ? counted.length > target : held };
+      return { held, found, final: settled || (bounded ? counted.length > target : held) };
     };
   }
 

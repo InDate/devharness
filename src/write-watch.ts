@@ -22,7 +22,7 @@
  * and a replay compares it with the recording as it compares a write.
  */
 
-import { onRootNamed, rootCursor, type PageRoot } from './root-credit.js';
+import { onRootNamed, rootCursor, setSettleGate, type PageRoot } from './root-credit.js';
 import type { CDPSession, Page, Target, WebWorker } from 'puppeteer-core';
 import { currentCursor, onCursorEnd } from './proxy/registry.js';
 import { animationRecordOf } from './animation-record.js';
@@ -80,8 +80,12 @@ export interface WriteMotion {
   root?: PageRoot;
   /** Its step is its root's, not the one standing when its report arrived. */
   byRoot?: true;
+  /** See `MotionReport.rootFrom`. */
+  rootFrom?: 'property';
   /** A function maker's first line of source, as Chrome describes it: `() => { masthead.style.height…`. */
   makerSource?: string;
+  /** Its frames are still coming: how it runs is read when its close report arrives. */
+  moving?: true;
 }
 
 const MAX_WRITES = 2000;
@@ -203,14 +207,20 @@ export class WriteWatch {
     this.reads = this.reads.then(() => read(at, cursor)).catch(() => {});
   }
 
+  /** Resolves once every read queued so far has been taken. */
+  drained(): Promise<void> {
+    return this.reads;
+  }
+
   async start(): Promise<void> {
     // A cause added after the fact - a person's input - takes the writes made
     // inside its window with nothing in flight.
-    // A person's input named in History after the motion it started was
-    // recorded: the motion moves to that input's entry.
+    // A person's input named in History after a motion it started or stopped
+    // was recorded: the row moves to that input's entry.
+    if (this.connection) this.detach.push(setSettleGate(this.connection, () => this.drained()));
     this.detach.push(onRootNamed((id, cursor) => {
       for (const write of this.writes) {
-        if (write.motion?.root?.id !== id || write.motion.byRoot || write.operation !== 'started') continue;
+        if (write.motion?.root?.id !== id || write.motion.byRoot) continue;
         write.cursor = cursor;
         write.motion.byRoot = true;
         observeWrite(write, this.connection);
@@ -283,10 +293,11 @@ export class WriteWatch {
           if (!entry.endedIn || entry.endedAt === undefined || this.motionStopped.has(entry.key)) return;
           this.motionStopped.add(entry.key);
           // A motion stopped by a call of its own - a pause - ends under the
-          // step that made it; one that ran to its end ends in its own chain,
+          // root of the input that made the call, else under the step its
+          // report arrived in; one that ran to its end ends in its own chain,
           // under its root.
-          const rooted = entry.stoppedBy ? undefined : rootCursor(entry.read!.root);
-          const stop = entry.stoppedBy ? { motion: { type: entry.read!.type, durationMs: 0, set: false, ...entry.stoppedBy } }
+          const rooted = rootCursor(entry.stoppedBy ? entry.stoppedBy.root : entry.read!.root);
+          const stop = entry.stoppedBy ? { motion: { type: entry.read!.type, durationMs: 0, set: false, ...entry.stoppedBy, ...(rooted ? { byRoot: true as const } : {}) } }
             : rooted ? { motion: { type: entry.read!.type, durationMs: 0, set: false, root: entry.read!.root, byRoot: true as const } } : {};
           const row = this.push({ store: 'animation', operation: 'stopped', key: entry.kind, value: endingValue(entry.read!), ...stop }, entry.endedAt, rooted ?? entry.endedIn);
           if (entry.stoppedBy) void this.locateMaker(`${entry.key}:stopped`, row);
@@ -782,6 +793,8 @@ export function motionOf(read: PageAnimation): WriteMotion {
     ...(read.makerName ? { makerName: read.makerName } : {}),
     ...(read.makerAt ? { makerAt: read.makerAt } : {}),
     ...(read.root ? { root: read.root } : {}),
+    ...(read.rootFrom ? { rootFrom: read.rootFrom } : {}),
+    ...(read.frames !== undefined && read.playState === 'running' ? { moving: true as const } : {}),
   };
 }
 

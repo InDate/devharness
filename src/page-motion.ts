@@ -56,6 +56,8 @@ export interface MotionReport {
   makerAt?: { url: string; line: number };
   /** The input at the head of the chain that started it, as the page's trigger tracker carried it. */
   root?: { id: string; step?: string };
+  /** `property`: the run began under no root of its own and took the root of the input whose call last wrote this property on this element. */
+  rootFrom?: 'property';
   /** On a close that something ended - a media element paused or reaching its end - what ended it, in the maker's terms. */
   stoppedBy?: MotionStop;
 }
@@ -67,6 +69,8 @@ export interface MotionStop {
   makerRef?: number;
   makerName?: string;
   makerAt?: { url: string; line: number };
+  /** The root of the input whose call stopped it. */
+  root?: { id: string; step?: string };
 }
 
 function installPageMotion(g: any): void {
@@ -86,7 +90,7 @@ function installPageMotion(g: any): void {
   };
 
   let on = false;
-  interface Run { id: number; source: string; element: string; property: string; from: string; to: string; startMs: number; endMs: number; frames: number; trigger?: string; maker?: string; makerRef?: number; makerName?: string; makerAt?: { url: string; line: number }; stoppedBy?: MotionStop; root?: { id: string; step?: string } }
+  interface Run { id: number; source: string; element: string; property: string; from: string; to: string; startMs: number; endMs: number; frames: number; trigger?: string; maker?: string; makerRef?: number; makerName?: string; makerAt?: { url: string; line: number }; stoppedBy?: MotionStop; root?: { id: string; step?: string }; rootFrom?: 'property' }
   // Numbers each motion in this document; the document's own id names which.
   let nextRun = 1;
   const doc = Math.random().toString(36).slice(2, 10);
@@ -95,19 +99,34 @@ function installPageMotion(g: any): void {
   const runs = new Map<string, Run>();
   let sweepTimer: unknown;
 
+  // An open run is work outstanding under its root, reported before the
+  // root's count changes so its open report reaches the record first.
   const report = (run: Run, phase: 'open' | 'close') => {
     const send = g.__devharnessMotion;
-    if (typeof send !== 'function') return;
-    try { send(JSON.stringify({ ...run, doc, phase, sentMs: now() })); } catch { /* the binding went with a navigation */ }
+    if (typeof send === 'function') {
+      try { send(JSON.stringify({ ...run, doc, phase, sentMs: now() })); } catch { /* the binding went with a navigation */ }
+    }
+    if (phase === 'open') tracker()?.hold?.(run.root);
+    else tracker()?.release?.(run.root);
+  };
+  // The callback whose frames drew each open run, for the cancel that ends it.
+  const drawnBy = new Map<Run, any>();
+  const closeRun = (run: Run) => {
+    const cancel = tracker()?.cancelOf?.(drawnBy.get(run), run.startMs);
+    drawnBy.delete(run);
+    report(cancel ? { ...run, stoppedBy: { ...cancel.maker, trigger: cancel.trigger, ...(cancel.root ? { root: cancel.root } : {}) } } : run, 'close');
+    // The cancelling root was held open for this stop, once however many runs one loop drew.
+    if (cancel?.held) { cancel.held = undefined; tracker()?.release?.(cancel.root); }
   };
   const closeQuiet = (all = false) => {
     sweepTimer = undefined;
     const t = now();
     for (const [key, run] of runs) {
-      if (all || t - run.endMs >= QUIET_MS) { runs.delete(key); report(run, 'close'); }
+      if (all || t - run.endMs >= QUIET_MS) { runs.delete(key); closeRun(run); }
     }
     if (runs.size && !all) sweepTimer = timers.setTimeout(() => closeQuiet(), QUIET_MS);
   };
+  const rootedWrites = new Map<string, { id: string; step?: string }>();
   const note = (source: string, element: any, property: string, from: string, to: string) => {
     if (!on) return;
     const t = now();
@@ -119,12 +138,22 @@ function installPageMotion(g: any): void {
       run.to = to;
       run.endMs = t;
     } else {
-      if (run) { runs.delete(key); report(run, 'close'); }
+      if (run) { runs.delete(key); closeRun(run); }
       const trigger = triggerOf(source);
       const maker = (source === 'scroll' ? tracker()?.scrollMaker?.() : tracker()?.runningMaker?.()) ?? {};
-      const root = source === 'scroll' ? tracker()?.rootOfScroll?.() : tracker()?.rootNow?.();
-      const opened: Run = { id: nextRun++, source, element: name, property, from, to, startMs: t, endMs: t, frames: 1, ...(trigger ? { trigger } : {}), ...maker, ...(root ? { root } : {}) };
+      // A library's ticker runs one frame loop from load, so a tween it starts
+      // later runs under no root of its own; the input whose call last wrote
+      // this property on this element - the tween's from-value - roots it.
+      // Only a run whose trigger names no cause but a frame loop inherits: a
+      // run the browser or another cause set going is that cause's.
+      const live = source === 'scroll' ? tracker()?.rootOfScroll?.() : tracker()?.rootNow?.();
+      const inherited = live || source === 'scroll' || (trigger !== undefined && trigger !== 'frame loop') ? undefined : rootedWrites.get(key);
+      const root = live ?? inherited;
+      if (root && source !== 'scroll') rootedWrites.set(key, root);
+      const opened: Run = { id: nextRun++, source, element: name, property, from, to, startMs: t, endMs: t, frames: 1, ...(trigger ? { trigger } : {}), ...maker, ...(root ? { root } : {}), ...(inherited ? { rootFrom: 'property' as const } : {}) };
       runs.set(key, opened);
+      const callback = tracker()?.runningCallback?.();
+      if (callback) drawnBy.set(opened, callback);
       report(opened, 'open');
     }
     if (sweepTimer === undefined) sweepTimer = timers.setTimeout(() => closeQuiet(), QUIET_MS);
@@ -183,6 +212,7 @@ function installPageMotion(g: any): void {
   // One play is one motion from its play event to its pause or end: the frames
   // it shows change no DOM, so the run is bounded by the element's own events.
   const playing = new Map<any, Run>();
+  const withRoot = (root: { id: string; step?: string } | undefined) => (root ? { root } : {});
   const onMedia = (event: any) => {
     const element = event.target;
     if (!on || !element || typeof element.currentTime !== 'number') return;
@@ -201,7 +231,7 @@ function installPageMotion(g: any): void {
     // A media element reaching its end fires pause, then ended; either reads as the end.
     const stoppedBy: MotionStop = element.ended
       ? { ...(tracker()?.maker?.('MEDIA', element) ?? { maker: 'MEDIA' }), trigger: 'ended' }
-      : { ...(tracker()?.mediaMaker?.(element, 'pause') ?? { maker: 'MEDIA' }), trigger: tracker()?.ofCall?.(['pause'], 'paused') ?? 'paused' };
+      : { ...(tracker()?.mediaMaker?.(element, 'pause') ?? { maker: 'MEDIA' }), trigger: tracker()?.ofCall?.(['pause'], 'paused') ?? 'paused', ...withRoot(tracker()?.rootOfCall?.(['pause'])) };
     report({ ...started, to: Number(element.currentTime).toFixed(3), endMs: now(), stoppedBy }, 'close');
   };
   // One SMIL run is one motion from its begin event to its end event, however
@@ -264,6 +294,8 @@ function installPageMotion(g: any): void {
       return true;
     },
     state() { return { on, open: runs.size }; },
+    /** Whether `fn`'s frames are drawing a run still open: a cancel of its loop ends that run. */
+    drawing(fn: any): boolean { return [...drawnBy.values()].includes(fn); },
   };
 }
 

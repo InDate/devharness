@@ -588,6 +588,15 @@ export function Editing({ base, onReturn, returnsFromShot, card: askedCard }: {
         </Notice>
       )}
 
+      {sequence?.baseline && (
+        <Notice kind="info">
+          <span class="grow">
+            Baseline filling in: work still running from step {sequence.baseline.filling.join(', ')}
+            {sequence.baseline.retakes ? ` · taken again ${sequence.baseline.retakes}×` : ''}
+          </span>
+        </Notice>
+      )}
+
       {sequence?.failure && !sequence.repair && (
         <Notice kind="error">
           <span class="grow">{sequence.failure}</span>

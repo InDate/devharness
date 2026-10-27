@@ -134,3 +134,71 @@ describe('a motion that ends under the step it began in', () => {
     expect(record.list()[0].endedIn).toBeUndefined();
   });
 });
+
+/** The page above with a trigger tracker standing in: what it holds open per root, and how a loop's cancel reads. */
+function pageWithTracker() {
+  const made = pageWithMotion();
+  const held: Array<[string, string]> = [];
+  const drawing = () => undefined;
+  const cancel: { trigger: string; root?: { id: string; step?: string }; at: number; maker: Record<string, unknown>; held?: true } = {
+    trigger: 'key - · cancelAnimationFrame()', root: { id: 'p:2', step: 'step-5' }, at: 0, maker: { maker: 'JS' }, held: true,
+  };
+  let cancelled = false;
+  made.page[Symbol.for('devharness.trigger')] = {
+    rootNow: () => ({ id: 'p:1', step: 'step-4' }),
+    runningCallback: () => drawing,
+    cancelOf: (fn: unknown) => (cancelled && fn === drawing ? cancel : undefined),
+    hold: (root?: { id: string }) => root && held.push(['hold', root.id]),
+    release: (root?: { id: string }) => root && held.push(['release', root.id]),
+  };
+  return { ...made, held, cancelNow: () => { cancelled = true; } };
+}
+
+describe('a motion run in the count of work outstanding under its root', () => {
+  it('holds its root open from its open report until its close', () => {
+    const { motion, writeStyle, advance, held } = pageWithTracker();
+    motion.start();
+    writeStyle('height: 4px;');
+    expect(held).toEqual([['hold', 'p:1']]);
+    advance(200);
+    expect(held).toEqual([['hold', 'p:1'], ['release', 'p:1']]);
+  });
+
+  it('closes a loop a later input cancelled as stopped by that input, releasing the cancelling root once', () => {
+    const { page, motion, advance, held, reports, Context2D, cancelNow } = pageWithTracker();
+    motion.start();
+    const sky = new Context2D({ id: 'sky' });
+    sky.fillRect();
+    sky.fillRect();
+    expect(motion.drawing(page[Symbol.for('devharness.trigger')].runningCallback())).toBe(true);
+    cancelNow();
+    advance(200);
+
+    expect(reports[1]).toMatchObject({ phase: 'close', stoppedBy: { trigger: 'key - · cancelAnimationFrame()', root: { id: 'p:2', step: 'step-5' } } });
+    expect(held.filter(([, id]) => id === 'p:2')).toEqual([['release', 'p:2']]);
+  });
+});
+
+describe('a stop placed by its cause, not by when its report arrived', () => {
+  it('ends under the step whose call stopped it, though by time it falls in the step before', () => {
+    markedNow({ kind: 'command', index: 9 }, 400_000);
+    markedNow({ kind: 'command', index: 11 }, 400_900);
+    const record = new AnimationRecord('conn');
+    // Paused 2ms into #11 by the page's clock, which runs behind: by time the pause lands in #9.
+    record.takeMotion({ id: 4, doc: 'd', phase: 'close', source: 'media', element: '#promo', property: 'currentTime', from: '0.015', to: '0.050', startMs: 1000, endMs: 1050, frames: 0, sentMs: 1051,
+      root: { id: 'p:9', step: JSON.stringify({ kind: 'command', index: 9 }) },
+      stoppedBy: { maker: 'MEDIA', trigger: 'key [ · pause()', root: { id: 'p:11', step: JSON.stringify({ kind: 'command', index: 11 }) } } }, 400_051);
+
+    expect(record.list()[0].endedIn).toMatchObject({ index: 11 });
+  });
+
+  it('adds no end where the motion ended by itself under its own root, however late the step after began', () => {
+    markedNow({ kind: 'command', index: 20 }, 500_000);
+    markedNow({ kind: 'command', index: 21 }, 500_100);
+    const record = new AnimationRecord('conn');
+    record.takeMotion({ id: 5, doc: 'd', phase: 'close', source: 'text', element: '#counter', property: 'text', from: '0', to: '1248', startMs: 1000, endMs: 1624, frames: 39, sentMs: 1625,
+      root: { id: 'p:20', step: JSON.stringify({ kind: 'command', index: 20 }) } }, 500_625);
+
+    expect(record.list()[0].endedIn).toBeUndefined();
+  });
+});

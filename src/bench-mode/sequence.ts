@@ -138,6 +138,7 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
     })(),
     ...(active.heldAt ? { heldAt: active.heldAt } : {}),
     ...(active.repair ? { repair: active.repair } : {}),
+    ...(session.baselineFilling ? { baseline: { filling: session.baselineFilling.steps, retakes: session.baselineFilling.retakes } } : {}),
     ...(session.recordingSequence ? { recording: true } : {}),
     variables: active.variables,
     secrets: await secretsFor(active.steps.map((step, index) => ({ ...step, index } as SequenceStep))),

@@ -46,6 +46,8 @@ export interface PageAnimation {
   makerAt?: { url: string; line: number };
   /** The input at the head of the chain that started it, as the page's trigger tracker carried it. */
   root?: { id: string; step?: string };
+  /** See `MotionReport.rootFrom`. */
+  rootFrom?: 'property';
 }
 
 /** Motion the page makes with no Animation object (`page-motion.ts`), named by what carried it. */

@@ -343,7 +343,13 @@ export function personInputScript(): string {
       return root ? { root: root.id } : {};
     } catch { return {}; }
   };
-  const send = (input, event) => { try { globalThis.__devharnessInput(JSON.stringify({ ...input, ...rootOf(event), at: Date.now() })); } catch {} };
+  // Wall time from the clock the page clock keeps native: a held or slowed
+  // page reads its own time from Date, which runs behind.
+  const wallNow = () => {
+    const native = globalThis[Symbol.for('devharness.clock')] && globalThis[Symbol.for('devharness.clock')].native;
+    return native && native.dateNow ? native.dateNow() : Date.now();
+  };
+  const send = (input, event) => { try { globalThis.__devharnessInput(JSON.stringify({ ...input, ...rootOf(event), at: wallNow() })); } catch {} };
   // Registered as devharness's own, so the tracker does not take them for the app's.
   const listen = (type, fn, capture) => addEventListener(type, tracker && tracker.own ? tracker.own(fn) : fn, capture);
   const parentOf = (el) => el.parentElement || (el.parentNode && el.parentNode.host) || null;

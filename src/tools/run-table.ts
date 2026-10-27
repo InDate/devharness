@@ -231,7 +231,9 @@ function personNotes(person: RunReplyInput['person']): string[] {
   });
 }
 
-const mismatched = (row: Row) => (row.match?.unmatched.length ?? 0) > 0;
+const arriving = (kind: { reasons: string[] }) => kind.reasons.length === 1 && kind.reasons[0] === 'still arriving';
+const mismatched = (row: Row) => (row.match?.unmatched.some(kind => !arriving(kind)) ?? false);
+const stillArriving = (row: Row) => (row.match?.unmatched.some(arriving) ?? false);
 
 /** Each rule acting on the run, with the steps it acted at; empty where no rule acts. */
 function rulesBlock(rows: Row[], rules: RunRules | undefined, pauses: Map<number, Crossing[]>): string {
@@ -266,6 +268,7 @@ export function formatRunReply(recorder: CommandRecorder, input: RunReplyInput):
   const passed = own.filter(row => row.outcome === 'passed').length;
   const continued = own.filter(row => row.outcome === 'continued').length;
   const mismatches = rows.filter(mismatched).length;
+  const arrivingSteps = rows.filter(stillArriving).length;
   const compared = rows.some(row => row.match?.kinds);
   const left = input.total - Math.max(reached, ...[...(input.failures?.keys() ?? [])]);
 
@@ -277,7 +280,8 @@ export function formatRunReply(recorder: CommandRecorder, input: RunReplyInput):
   const tally = [
     `${passed} passed`,
     continued ? `${continued} check${continued === 1 ? '' : 's'} failed and continued` : '',
-    mismatches ? `${mismatches} mismatched` : compared ? 'all matched' : '',
+    mismatches ? `${mismatches} mismatched` : compared && !arrivingSteps ? 'all matched' : '',
+    arrivingSteps ? `${arrivingSteps} still arriving` : '',
     left > 0 ? `${left} ${input.paused && failedAt === undefined ? 'remaining' : 'not run'}` : '',
   ].filter(Boolean);
   let reply = [head, ...tally].join(' · ');
@@ -289,7 +293,7 @@ export function formatRunReply(recorder: CommandRecorder, input: RunReplyInput):
   // A step that caused something is part of what the run did; one that caused
   // nothing and matched is listed only when every step is asked for.
   const ended = endsBefore(rows);
-  const listed = input.steps === 'all' ? rows : rows.filter(row => row.outcome === 'failed' || row.outcome === 'continued' || mismatched(row) || observationsOf(row.command.index).length > 0 || ended.has(row));
+  const listed = input.steps === 'all' ? rows : rows.filter(row => row.outcome === 'failed' || row.outcome === 'continued' || mismatched(row) || stillArriving(row) || observationsOf(row.command.index).length > 0 || ended.has(row));
   // Every step the run took is accounted for: those left out of the table are named.
   const unlisted = input.steps === 'all' ? [] : rows.filter(row => !listed.includes(row));
   const unlistedLine = unlisted.length
@@ -318,9 +322,13 @@ export function formatRunReply(recorder: CommandRecorder, input: RunReplyInput):
   const notes: string[] = [...unrecordedNotes];
   for (const row of listed) {
     if (mismatched(row)) {
-      const kinds = row.match!.unmatched.map(kind => `${kind.kind} ${kind.reasons.join(', ')}`).join('; ');
+      const kinds = row.match!.unmatched.filter(kind => !arriving(kind)).map(kind => `${kind.kind} ${kind.reasons.join(', ')}`).join('; ');
       const held = row.match!.heldMs ? ` (held ${secs(row.match!.heldMs.recorded)} recording, ${secs(row.match!.heldMs.replayed)} replaying)` : '';
       notes.push(`Step ${row.label} unmatched: ${kinds}${held}`);
+    }
+    if (stillArriving(row)) {
+      const kinds = row.match!.unmatched.filter(arriving).map(kind => kind.kind).join('; ');
+      notes.push(`Step ${row.label} still arriving, its roots not settled when the run ended: ${kinds}; the bench matches it again as they settle`);
     }
     if (row.outcome === 'failed') {
       const why = (row.label.includes('.') ? undefined : input.failures?.get(row.step)) ?? firstLine(row.command);

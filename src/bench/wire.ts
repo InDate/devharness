@@ -527,6 +527,8 @@ export interface SequenceState {
   into?: { name: string; after: number; labels: string[] };
   /** Set when the last step failed, which ends replay's session. */
   failure?: string;
+  /** The last baseline is still filling in: the steps whose motion is still running, and how often it was taken again. */
+  baseline?: { filling: number[]; retakes: number };
   /** Origin every absolute URL in the run is rewritten onto, when set. */
   baseUrl?: string;
   /** Set while clicks in the page are being recorded into a new sequence. */

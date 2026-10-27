@@ -53,7 +53,9 @@ function taken(observations: Observation[], connection: string | undefined): Tak
     if (connection !== undefined && observation.connection !== undefined && observation.connection !== connection) return [];
     const record = recordOf(observation);
     if (!record) return [];
-    if (isWrite(record)) return [{ observation, crossing: writeCrossing(record), body: record.value }];
+    // A motion still moving has no body yet: one read now would be compared,
+    // or kept as a baseline, on frames that are still arriving.
+    if (isWrite(record)) return [{ observation, crossing: writeCrossing(record), body: record.motion?.moving ? undefined : record.value }];
     const proxy = observation.connection ? getProxy(observation.connection) : undefined;
     return [{ observation, crossing: record, body: proxy?.bodyOf(record.id) }];
   });

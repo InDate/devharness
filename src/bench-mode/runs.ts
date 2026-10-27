@@ -1,3 +1,4 @@
+import { entrySettled, onEntrySettled } from '../root-credit.js';
 import { getOutputPath } from '../helpers/paths.js';
 import { debugLog } from '../debug-logger.js';
 import { getProxy } from '../proxy/registry.js';
@@ -152,7 +153,12 @@ export async function baselineSequence(connection: string): Promise<SequenceStat
   const sequenceName = played.name ?? session.sequences.active()?.name;
   const history = session.sequences.history();
   const at = Date.now();
-  const entries = Array.from({ length: played.total }, (_, index) => {
+  const sequences = session.sequences;
+  const fingerprints = sequenceName && session.playStepStarts
+    ? sequences.clickFingerprints(sequenceName, Array.from({ length: played.total }, (_, i) => session.playStepStarts?.[i] ?? at), Date.now())
+    : [];
+  const stepEntries = Array.from({ length: played.total }, (_, index) => history.find(one => one.run === sequenceName && one.runStep === index)?.index);
+  const take = () => Array.from({ length: played.total }, (_, index) => {
     const call = history.find(one => one.run === sequenceName && one.runStep === index);
     const entry = call?.index;
     const { crossings: crossed, bodyOf } = entry !== undefined ? crossingsOf(entry, connection) : { crossings: [], bodyOf: () => undefined };
@@ -175,16 +181,39 @@ export async function baselineSequence(connection: string): Promise<SequenceStat
       ...(entry !== undefined ? { observations: sliceOf(entry, connection, call!.at, RECORDED_BODY_CAP) } : {}),
       recordedAt: at,
     };
-    return { index, traffic };
+    return { index, traffic, ...(fingerprints[index] ? { fingerprint: fingerprints[index] } : {}) };
   });
-  const fingerprints = sequenceName && session.playStepStarts
-    ? session.sequences.clickFingerprints(sequenceName, Array.from({ length: played.total }, (_, i) => session.playStepStarts?.[i] ?? at), Date.now())
-    : [];
-  session.sequenceFailure = await session.sequences.saveStepTraffic(entries.map((entry, index) => ({
-    ...entry, ...(fingerprints[index] ? { fingerprint: fingerprints[index] } : {}),
-  }))).catch(error => String(error));
+  session.sequenceFailure = await sequences.saveStepTraffic(take()).catch(error => String(error));
+  // What a step caused keeps landing after the play ends, on the entry of
+  // the step whose input caused it, until the step's roots settle. A step
+  // still open is taken again as it settles; the bench lists the steps still
+  // open, and the subscription ends once none is.
+  const open = () => stepEntries.flatMap((entry, index) => (entry !== undefined && !entrySettled(entry) ? [index + 1] : []));
+  retaking.get(connection)?.();
+  retaking.delete(connection);
+  session.baselineFilling = undefined;
+  if (open().length) {
+    session.baselineFilling = { steps: open(), retakes: 0 };
+    const entries = new Set(stepEntries.filter((entry): entry is number => entry !== undefined));
+    const stop = onEntrySettled(entry => {
+      if (!entries.has(entry)) return;
+      void sequences.saveStepTraffic(take()).catch(() => undefined);
+      const steps = open();
+      if (steps.length) {
+        session.baselineFilling = { steps, retakes: (session.baselineFilling?.retakes ?? 0) + 1 };
+        return;
+      }
+      session.baselineFilling = undefined;
+      stop();
+      retaking.delete(connection);
+    });
+    retaking.set(connection, stop);
+  }
   return getSequenceState(connection);
 }
+
+/** Each browser's subscription that takes its last baseline again as its steps settle; the next baseline replaces it. */
+const retaking = new Map<string, () => void>();
 
 /** A URL's path, or the URL where it does not parse as one. */
 function pathOf(url: string): string {

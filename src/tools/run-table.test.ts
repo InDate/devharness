@@ -191,3 +191,19 @@ describe('a frame loop that stopped before a step', () => {
     expect(reply).toContain('not listed (nothing caused): 2, 3 · input');
   });
 });
+
+describe('a step whose roots had not settled when the run ended', () => {
+  it('reads as still arriving, apart from a mismatch, and is not counted as one', () => {
+    const steps = [
+      { index: 3, run: 'motion', runStep: 0, stepMatch: { matched: 1, kinds: 1, unmatched: [] } },
+      { index: 4, run: 'motion', runStep: 1, stepMatch: { matched: 0, kinds: 1, unmatched: [{ kind: 'animation left #plan-pick', reasons: ['still arriving'] }] } },
+    ].map(step => ({ ...step, tool: 'input', params: {}, timestamp: step.index, result: { content: [] } }));
+    const history = { getHistory: () => [...steps].reverse() } as unknown as CommandRecorder;
+
+    const reply = formatRunReply(history, { name: 'motion', total: 2, since: 2 });
+
+    expect(reply.split('\n')[0]).toBe('motion completed 2 of 2 · 2 passed · 1 still arriving');
+    expect(reply).toContain('Step 2 still arriving, its roots not settled when the run ended: animation left #plan-pick; the bench matches it again as they settle');
+    expect(reply).not.toContain('unmatched');
+  });
+});

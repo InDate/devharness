@@ -1856,12 +1856,12 @@ export function createInputTools(
                   }
                   selector = resolved.selector;
                 }
-                const box = await page.evaluate((sel: string, words: string) => {
+                const box = await page.evaluate((sel: string, words: string, step: string | undefined) => {
                   const el = (globalThis as any).document.querySelector(sel);
                   if (!el) return null;
                   // Run quietly: devharness's own scroll is not the app's work.
                   const quietly = (globalThis as any)[Symbol.for('devharness.trigger')]?.quietly ?? ((run: () => void) => run());
-                  quietly(() => el.scrollIntoView({ block: 'center', inline: 'center' }), words);
+                  quietly(() => el.scrollIntoView({ block: 'center', inline: 'center' }), words, step);
                   const r = el.getBoundingClientRect();
                   const doc = (globalThis as any).document.documentElement;
                   return {
@@ -1869,7 +1869,7 @@ export function createInputTools(
                     width: r.width, height: r.height,
                     viewW: doc.clientWidth, viewH: doc.clientHeight,
                   };
-                }, selector, `${args.action} ${rawSelector}`);
+                }, selector, `${args.action} ${rawSelector}`, stepToken(currentCursor()));
                 await cleanupResolvedSelector(page, selector);
                 if (!box) return createErrorResponse('ELEMENT_NOT_FOUND', { selector: rawSelector });
                 start = { x: box.x, y: box.y };

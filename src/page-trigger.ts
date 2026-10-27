@@ -33,6 +33,7 @@ function installPageTrigger(g: any): void {
   // a mark that set one would mark again on every task.
   const unwrappedTimeout: (run: () => void, ms: number) => unknown = native?.setTimeout ?? g.setTimeout.bind(g);
   const nextTask = (run: () => void) => { unwrappedTimeout(run, 0); };
+  const unwrappedFrame: ((run: () => void) => unknown) | undefined = native?.requestAnimationFrame ?? (typeof g.requestAnimationFrame === 'function' ? g.requestAnimationFrame.bind(g) : undefined);
   // A trigger the last of these named reads as `after <it>` on a callback that carries none.
   const AFTER_MS = 100;
   // A smooth scroll runs for up to a second after the call that began it.
@@ -160,6 +161,52 @@ function installPageTrigger(g: any): void {
     return made;
   };
 
+  // Work outstanding under each root: callbacks scheduled and not yet run,
+  // replies and body reads not yet resolved, animations and motion runs not
+  // yet ended. A root whose count falls to zero and stays there through the
+  // next rendering opportunity - the style recalc that starts a transition
+  // its last task queued - has settled: nothing it started can still land.
+  // Each change between open and settled is reported, so a reader of a step
+  // takes what the step caused once its roots have settled.
+  const outstanding = new Map<string, { root: Root; n: number }>();
+  const reportRoot = (root: Root, open: boolean) => {
+    const send = g.__devharnessMotion;
+    if (typeof send !== 'function') return;
+    try { send(JSON.stringify({ phase: 'root', id: root.id, ...(root.step ? { step: root.step } : {}), open })); } catch { /* the binding went with a navigation */ }
+  };
+  const hold = (root: Root | undefined): void => {
+    if (!root) return;
+    const held = outstanding.get(root.id) ?? { root, n: 0 };
+    held.n++;
+    outstanding.set(root.id, held);
+    if (held.n === 1) reportRoot(root, true);
+  };
+  const release = (root: Root | undefined): void => {
+    const held = root ? outstanding.get(root.id) : undefined;
+    if (!held || --held.n > 0) return;
+    const settle = () => {
+      if (held.n > 0 || outstanding.get(held.root.id) !== held) return;
+      outstanding.delete(held.root.id);
+      reportRoot(held.root, false);
+    };
+    if (unwrappedFrame) unwrappedFrame(() => nextTask(settle)); else nextTask(settle);
+  };
+
+  // An input's handler can leave work the browser starts after it returns:
+  // a class change starts its transition at the next style recalc. Its root
+  // is held through the task, and `release` keeps it open through the next
+  // rendering opportunity after that.
+  const holdThroughTask = (root: Root | undefined): void => {
+    if (!root) return;
+    hold(root);
+    nextTask(() => release(root));
+  };
+  const harnessRoot = (step: string | undefined): Root => {
+    const root: Root = { id: `${rootPrefix}:${nextRoot++}`, ...(step ?? drivenBy ? { step: step ?? drivenBy } : {}) };
+    holdThroughTask(root);
+    return root;
+  };
+
   /** The root of the work running now: the live mark's, where a live mark carries one. */
   const liveRoot = (): Root | undefined =>
     (last && last.live && (!CARRIERS.has(last.kind) || last.origin !== undefined) ? last.root : undefined);
@@ -197,6 +244,7 @@ function installPageTrigger(g: any): void {
       scrolls: type === 'wheel' || type === 'touchmove' || (type === 'keydown' && SCROLL_KEYS.has(event.key)),
     });
     inputMarks.set(event, lastInput);
+    holdThroughTask(lastInput.root);
     return lastInput;
   };
   for (const type of Object.keys(INPUT)) {
@@ -208,7 +256,7 @@ function installPageTrigger(g: any): void {
     if (event.isTrusted && event.buttons) lastInput = mark('input', 'drag', { scrolls: true });
   }, { capture: true, passive: true });
   listen(g, 'pointerover', (event: any) => {
-    if (event.isTrusted && event.pointerType === 'mouse') lastHover = mark('pointer', 'hover');
+    if (event.isTrusted && event.pointerType === 'mouse') { lastHover = mark('pointer', 'hover'); holdThroughTask(lastHover.root); }
   }, { capture: true, passive: true });
   for (const type of ['transitionend', 'animationend']) {
     listen(g, type, (event: any) => {
@@ -240,7 +288,7 @@ function installPageTrigger(g: any): void {
   }, { capture: true, passive: true });
 
   /** Wrap a function so each call marks first, as `words`, with what was live when it was called. */
-  const calls = (owner: any, method: string, kind: string, words: string, after?: (made: Mark) => void) => {
+  const calls = (owner: any, method: string, kind: string, words: string, after?: (made: Mark) => void, outstanding?: (root: Root, result: any) => void) => {
     const original = owner && owner[method];
     if (typeof original !== 'function') return;
     const wrapper = function (this: any, ...args: unknown[]) {
@@ -249,15 +297,40 @@ function installPageTrigger(g: any): void {
       const root = liveRoot();
       const made = mark(kind, under !== undefined ? `${under} · ${words}` : words, { method, fn: running, site: siteOf(wrapper), ...(root ? { root } : {}) });
       after?.(made);
-      return original.apply(this, args);
+      const result = original.apply(this, args);
+      if (root) outstanding?.(root, result);
+      return result;
     };
     owner[method] = wrapper;
+  };
+  // A smooth scroll runs after the call returns, with no callback of the
+  // page's: the call's root is held until the scroll ends, or released at
+  // the next frame where no scroll began, a call to where the page stands.
+  const untilScrollEnds = (root: Root) => {
+    hold(root);
+    let scrolled = false;
+    let done = false;
+    const end = () => { if (done) return; done = true; release(root); };
+    listen(g, 'scroll', () => { scrolled = true; }, { capture: true, passive: true, once: true });
+    listen(g, 'scrollend', end, { capture: true, passive: true, once: true });
+    if (unwrappedFrame) unwrappedFrame(() => nextTask(() => { if (!scrolled) end(); })); else nextTask(end);
+  };
+  // A media element plays from its play() promise; an SVG animation begins on
+  // the frame after beginElement(): each call's root is held until then.
+  const untilSettled = (root: Root, result: any) => {
+    if (!result || typeof result.then !== 'function') return;
+    hold(root);
+    result.then(() => nextTask(() => release(root)), () => release(root));
+  };
+  const throughFrame = (root: Root) => {
+    hold(root);
+    if (unwrappedFrame) unwrappedFrame(() => nextTask(() => release(root))); else nextTask(() => release(root));
   };
   // The global's own methods stand on the window itself, where a bare
   // `scrollTo()` finds them, not on Window.prototype.
   for (const [owner, method] of [[g, 'scrollTo'], [g, 'scrollBy'], [g, 'scroll'],
     [g.Element?.prototype, 'scrollIntoView'], [g.Element?.prototype, 'scrollTo'], [g.Element?.prototype, 'scrollBy']] as Array<[any, string]>) {
-    calls(owner, method, 'scroll-cause', `${method}()`, made => { lastScrollCall = made; });
+    calls(owner, method, 'scroll-cause', `${method}()`, made => { lastScrollCall = made; }, untilScrollEnds);
   }
   for (const property of ['scrollTop', 'scrollLeft']) {
     const described = g.Element && Object.getOwnPropertyDescriptor(g.Element.prototype, property);
@@ -275,8 +348,8 @@ function installPageTrigger(g: any): void {
   // after the call; the call is kept for those events to find.
   const called: Mark[] = [];
   const keep = (made: Mark) => { called.push(made); if (called.length > 8) called.shift(); };
-  for (const method of ['play', 'pause']) calls(g.HTMLMediaElement?.prototype, method, 'media', `${method}()`, keep);
-  for (const method of ['beginElement', 'beginElementAt']) calls(g.SVGAnimationElement?.prototype, method, 'media', `${method}()`, keep);
+  for (const method of ['play', 'pause']) calls(g.HTMLMediaElement?.prototype, method, 'media', `${method}()`, keep, method === 'play' ? untilSettled : throughFrame);
+  for (const method of ['beginElement', 'beginElementAt']) calls(g.SVGAnimationElement?.prototype, method, 'media', `${method}()`, keep, throughFrame);
 
   // An observer's callback is the cause of what it changes: an element coming
   // into view, mostly by a scroll, or an element resized.
@@ -303,14 +376,17 @@ function installPageTrigger(g: any): void {
       const url = resource && typeof resource === 'object' && resource.url ? resource.url : resource;
       // The reply carries the root of the work that asked for it.
       const root = liveRoot();
+      hold(root);
       return fetched.apply(this, [resource, init]).then((response: any) => {
         mark('reply', `reply ${method} ${pathOf(url)}`, root ? { root } : {});
         if (root && response) {
           bodyRoot.set(response, { root, words: `reply ${method} ${pathOf(url)}` });
           if (response.body) bodyRoot.set(response.body, { root, words: `reply ${method} ${pathOf(url)}` });
         }
+        // Released after this job, so the app's continuation runs under the open root.
+        nextTask(() => release(root));
         return response;
-      });
+      }, (error: unknown) => { release(root); throw error; });
     };
   }
   // A body read in chunks or whole resolves in a promise job the reply's own
@@ -320,7 +396,12 @@ function installPageTrigger(g: any): void {
   const markBody = <T>(owner: any, read: Promise<T>): Promise<T> => {
     const body = bodyRoot.get(owner);
     if (!body || !read || typeof read.then !== 'function') return read;
-    return read.then(value => { mark('reply', body.words, { root: body.root }); return value; });
+    hold(body.root);
+    return read.then(value => {
+      mark('reply', body.words, { root: body.root });
+      nextTask(() => release(body.root));
+      return value;
+    }, (error: unknown) => { release(body.root); throw error; });
   };
   const Stream = g.ReadableStream?.prototype;
   if (Stream && typeof Stream.getReader === 'function') {
@@ -349,6 +430,8 @@ function installPageTrigger(g: any): void {
     Xhr.prototype.open = function (this: any, method: string, url: string, ...rest: unknown[]) {
       // Added at open, ahead of a handler the app adds before send.
       const root = liveRoot();
+      hold(root);
+      listen(this, 'loadend', () => nextTask(() => release(root)));
       listen(this, 'readystatechange', () => { if (this.readyState === 4) mark('reply', `reply ${String(method).toUpperCase()} ${pathOf(url)}`, root ? { root } : {}); });
       return open.apply(this, [method, url, ...rest]);
     };
@@ -379,16 +462,52 @@ function installPageTrigger(g: any): void {
       const said = words(args);
       const origin = under ? (CARRIERS.has(under.kind) ? under.origin : under.words) : undefined;
       const carried = origin !== undefined ? `${origin} · ${said}` : said;
-      return original.apply(this, [function (this: any, ...given: unknown[]) {
-        runAs(callback[CALLBACK] ?? callback);
-        mark(method === 'requestAnimationFrame' ? 'frame' : 'timer', carried, origin !== undefined ? { origin, ...(under?.root ? { root: under.root } : {}) } : {});
-        return callback.apply(this, given);
+      const family = method === 'requestAnimationFrame' ? 'frame' : 'timer';
+      const fn = callback[CALLBACK] ?? callback;
+      const root = origin !== undefined ? under?.root : undefined;
+      // Released after the callback returns, so one that schedules its next
+      // keeps its root open across the gap.
+      const id = original.apply(this, [function (this: any, ...given: unknown[]) {
+        if (method !== 'setInterval') pending.delete(`${family}:${id}`);
+        runAs(fn);
+        mark(family, carried, origin !== undefined ? { origin, ...(root ? { root } : {}) } : {});
+        try { return callback.apply(this, given); } finally { if (method !== 'setInterval') release(root); }
       }, ...args]);
+      pending.set(`${family}:${id}`, { fn, root });
+      hold(root);
+      return id;
+    };
+  };
+  // A frame loop or timer cancelled ends the motion its callback drew: the
+  // cancel's cause, root included, is held against that callback, so the end
+  // stands under the input that cancelled it rather than the one that began it.
+  const pending = new Map<string, { fn: any; root?: Root }>();
+  const cancels = new WeakMap<object, { trigger: string; root?: Root; at: number; maker: Record<string, unknown>; held?: true }>();
+  const cancelling = (method: string, family: string) => {
+    const original = g[method];
+    if (typeof original !== 'function') return;
+    g[method] = function (this: any, id: unknown, ...args: unknown[]) {
+      const scheduled = pending.get(`${family}:${id}`);
+      if (scheduled) {
+        pending.delete(`${family}:${id}`);
+        const under = current();
+        const root = liveRoot();
+        // A loop drawing a motion run ends it at the run's close: the
+        // cancelling root stays open until that stop is reported.
+        const drawing = g[Symbol.for('devharness.motion')]?.drawing?.(scheduled.fn) === true;
+        if (drawing) hold(root);
+        cancels.set(scheduled.fn, { trigger: under !== undefined ? `${under} · ${method}()` : `${method}()`, at: now(), maker: made('JS', running), ...(root ? { root } : {}), ...(drawing && root ? { held: true } : {}) });
+        release(scheduled.root);
+      }
+      return original.apply(this, [id, ...args]);
     };
   };
   scheduled('setTimeout', args => `timer ${Math.round(Number(args[0]) || 0)}ms`);
   scheduled('setInterval', args => `every ${Math.round(Number(args[0]) || 0)}ms`);
   scheduled('requestAnimationFrame', () => 'frame loop');
+  cancelling('clearTimeout', 'timer');
+  cancelling('clearInterval', 'timer');
+  cancelling('cancelAnimationFrame', 'frame');
 
   // A listener the app adds runs as the app's function, for a motion it starts
   // to point at; the same wrapper is handed back to remove it.
@@ -433,7 +552,9 @@ function installPageTrigger(g: any): void {
       // Its end starts what the app chains on it: the reaction is added here
       // first, so it marks before the app's own `finished` reaction runs.
       const ended = () => mark('chain', `end of ${made.id || 'animation'} on ${nameOf(this)}`, root ? { root } : {});
-      made.finished?.then(ended, () => {});
+      hold(root);
+      // Released after the app's own reaction to the end has run in this job.
+      made.finished?.then(() => { ended(); nextTask(() => release(root)); }, () => release(root));
       return made;
     };
     g.Element.prototype.animate = wrapper;
@@ -477,8 +598,22 @@ function installPageTrigger(g: any): void {
       const cause = causeOfElement(event.target);
       if (!cause.words) return;
       const named = started.get(event.target) ?? new Map<string, { words: string; root?: Root }>();
-      named.set(event.propertyName || event.animationName, { words: cause.words, ...(cause.root ? { root: cause.root } : {}) });
+      const name = event.propertyName || event.animationName;
+      if (named.get(name)?.root) release(named.get(name)!.root);
+      named.set(name, { words: cause.words, ...(cause.root ? { root: cause.root } : {}) });
       started.set(event.target, named);
+      hold(cause.root);
+    }, { capture: true, passive: true });
+  }
+  // A transition or keyframe animation ending or cancelled releases its root once.
+  for (const type of ['transitionend', 'transitioncancel', 'animationend', 'animationcancel']) {
+    listen(g, type, (event: any) => {
+      const named = started.get(event.target);
+      const name = event.propertyName || event.animationName;
+      const begun = named?.get(name);
+      if (!begun?.root) return;
+      named!.set(name, { words: begun.words });
+      nextTask(() => release(begun.root));
     }, { capture: true, passive: true });
   }
 
@@ -501,16 +636,31 @@ function installPageTrigger(g: any): void {
     current,
     /** Register a listener of devharness's own, which the listener wrapper leaves as it is. */
     own<T extends object>(fn: T): T { owned.add(fn); return fn; },
-    /** Mark the scroll devharness makes next, over CDP or by a call, as `words`: it is the harness's, not the app's. */
-    ownScroll(words: string): void { lastScrollCall = mark('scroll-cause', words, { harness: true }); },
-    /** Run devharness's own call as `words`: a scroll it makes is the harness's, not the app's. */
-    quietly<T>(run: () => T, words = 'devharness'): T {
-      lastScrollCall = mark('scroll-cause', words, { harness: true });
+    /**
+     * Mark the scroll devharness makes next, over CDP or by a call, as `words`:
+     * it is the harness's, not the app's. Under a step, `step` roots it there,
+     * so what the scroll sets going is credited to the step that made it.
+     */
+    ownScroll(words: string, step?: string): void { lastScrollCall = mark('scroll-cause', words, { harness: true, root: harnessRoot(step) }); },
+    /** Run devharness's own call as `words`, rooted under `step` as `ownScroll` is: a scroll it makes is the harness's, not the app's. */
+    quietly<T>(run: () => T, words = 'devharness', step?: string): T {
+      lastScrollCall = mark('scroll-cause', words, { harness: true, root: harnessRoot(step) });
       quiet = true;
       try { return run(); } finally { quiet = false; }
     },
     /** What reveals the app's work running now: a JS motion begun in it points at the function. */
     runningMaker: () => made('JS', running),
+    /** Count work outstanding under a root: a motion run opened under it. */
+    hold,
+    /** End one piece of outstanding work under a root: a motion run closed. */
+    release,
+    /** The app's callback running now, the loop a motion begun in it is drawn by. */
+    runningCallback: () => running,
+    /** How the loop drawn by `fn` was cancelled at or after `since`: the cancel's trigger, maker and root. */
+    cancelOf(fn: any, since: number) {
+      const cancel = fn ? cancels.get(fn) : undefined;
+      return cancel && cancel.at >= since ? cancel : undefined;
+    },
     /** Who moved the page this scroll: the person, a script's call, devharness, or the browser. */
     scrollMaker() {
       const t = now();

@@ -14,7 +14,7 @@
       "default": {
         "today": "gap",
         "basis": "code",
-        "note": "Rows are placed by the time their report arrives (animation-record.ts, takeMotion and chromeCreated); no root mark reaches the record"
+        "note": "A row carries the root of the input that started its chain (page-trigger.ts, root-credit.ts) and is credited to that input's step: a driven input's step is written into the page around its dispatch, a person's input names its History entry, devharness's own scroll takes the step that made it. A reader takes a step once every root credited to it has settled, its work outstanding in the page counted to zero. A row with no root falls back to the step standing when its report arrives and reads as after, not owned; a person's hover, promise continuations past a fetch body read, workers and iframes carry no root yet"
       },
       "rule": "A motion is credited to the action at the root of its cause, recorded as it starts. A credit names one action, several, or none: two actions that both caused a motion are both named. Each row records its basis: the evidence at capture, a shape across the sequence, code read at a file and line, or a person. A cell reads works when the default credit stands right on root evidence, or when a claim of the basis its expect names puts it right; a row placed by timing alone reads as a gap. What a credit rests on and who may change it: docs/landscapes/attribution.landscape."
     },
@@ -551,9 +551,9 @@
       "cells": {
         "credit": {
           "expect": "Press step, +1 frame",
-          "today": "gap",
-          "basis": "sequence:motion-seen-without-animation-objects",
-          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet; with the waits taken out (sequence:motion-makers-no-waits), a slow motion lands under whichever later step is running. Credited by timing, which the Credit rule reads as a gap"
+          "today": "works",
+          "basis": "sequence:motion-makers-no-waits",
+          "note": "The height #acc-body frame loop is credited to press e by root with no waits after it, and its end adds no row: a motion that ends by itself ends under its own root"
         },
         "source": {
           "expect": "JS, started by key e · frame loop",
@@ -676,7 +676,10 @@
       "fault": null,
       "cells": {
         "credit": {
-          "expect": "Press step: one bar row driven by bytes read over the stream, then the check at stream end"
+          "expect": "Press step: one bar row driven by bytes read over the stream, then the check at stream end",
+          "today": "works",
+          "basis": "sequence:credit-sync-not-on-next-key",
+          "note": "The #progress rows are credited to press u by root and none to the press h that follows with no wait; the same holds with the page's UI held for 5s (sequence:credit-across-a-held-page) and at playback rate 0.25 (sequence:credit-on-a-slowed-page). The rows started after await reader.read() carry the root through the body read"
         },
         "source": {
           "expect": "CSS, started by the reply to its request, under key u",
@@ -801,9 +804,9 @@
       "cells": {
         "credit": {
           "expect": "Press step: text counting over 640ms",
-          "today": "gap",
+          "today": "works",
           "basis": "sequence:motion-seen-without-animation-objects",
-          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet; with the waits taken out (sequence:motion-makers-no-waits), a slow motion lands under whichever later step is running. Credited by timing, which the Credit rule reads as a gap"
+          "note": "The text #counter run is credited to press a by root through its every-16ms interval, with presses following at once"
         },
         "source": {
           "expect": "JS, started by key a · the count interval"
@@ -1191,9 +1194,9 @@
       "cells": {
         "credit": {
           "expect": "Under each scroll step",
-          "today": "gap",
-          "basis": "sequence:motion-seen-without-animation-objects",
-          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet; with the waits taken out (sequence:motion-makers-no-waits), a slow motion lands under whichever later step is running. Credited by timing, which the Credit rule reads as a gap"
+          "today": "works",
+          "basis": "sequence:motion-makers-no-waits",
+          "note": "Under a wheel scroll, press . and the scroll devharness makes to bring a hover target into view, the rows are credited by root: devharness's scroll is rooted under the step that made it"
         },
         "source": {
           "expect": "JS, started by scroll · wheel, the scroll listener",
@@ -1438,7 +1441,10 @@
       "fault": null,
       "cells": {
         "credit": {
-          "expect": "Press step: five animations at their offsets, each after the one before"
+          "expect": "Press step: five animations at their offsets, each after the one before",
+          "today": "works",
+          "basis": "sequence:credit-sync-not-on-next-key",
+          "note": "The five #tour-ring rows are credited to press h by root and none to the earlier press u. A person's press of h during a run is its own History entry owning its five rows by root (sequence:credit-person-input-during-play)"
         },
         "source": {
           "expect": "JS, started by the end of the previous ring, under key h",
@@ -1784,9 +1790,9 @@
       "cells": {
         "credit": {
           "expect": "Press step, +0",
-          "today": "gap",
-          "basis": "sequence:motion-seen-without-animation-objects",
-          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet; with the waits taken out (sequence:motion-makers-no-waits), a slow motion lands under whichever later step is running. Credited by timing, which the Credit rule reads as a gap"
+          "today": "works",
+          "basis": "sequence:motion-makers-no-waits",
+          "note": "The cx circle run is credited to press , by root through beginElement(), with presses following at once"
         },
         "source": {
           "expect": "SVG, started by beginElement() under key ,",
@@ -1822,9 +1828,9 @@
       "cells": {
         "credit": {
           "expect": "Press step: the scroll, and under it every scroll row it drives",
-          "today": "gap",
+          "today": "works",
           "basis": "sequence:motion-seen-without-animation-objects",
-          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet; with the waits taken out (sequence:motion-makers-no-waits), a slow motion lands under whichever later step is running. Credited by timing, which the Credit rule reads as a gap"
+          "note": "The scrollY html run and every row it drives - #masthead, #hero-bg, the #late-card reveal - are credited to press . by root through scrollIntoView()"
         },
         "source": {
           "expect": "JS, started by key . through scrollIntoView() or scrollTo()",
@@ -1878,9 +1884,9 @@
       "cells": {
         "credit": {
           "expect": "Play press: playing from +0. Pause press: paused at its time",
-          "today": "gap",
+          "today": "works",
           "basis": "sequence:motion-seen-without-animation-objects",
-          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet; with the waits taken out (sequence:motion-makers-no-waits), a slow motion lands under whichever later step is running. Credited by timing, which the Credit rule reads as a gap"
+          "note": "The play is credited to the first press [ and the pause row to the second, each by the root of its play() or pause() call; by time, the page clock running tens of ms off the server's put a pause made just after the second press into the first"
         },
         "source": {
           "expect": "MEDIA, started by the play() or pause() call under key [",
@@ -1916,9 +1922,9 @@
       "cells": {
         "credit": {
           "expect": "Press step, +0, 2s",
-          "today": "gap",
+          "today": "works",
           "basis": "sequence:motion-seen-without-animation-objects",
-          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet; with the waits taken out (sequence:motion-makers-no-waits), a slow motion lands under whichever later step is running. Credited by timing, which the Credit rule reads as a gap"
+          "note": "The Lottie transform g run is credited to press ] by root through its frame loop, with presses following at once"
         },
         "source": {
           "expect": "JS, started by key ]"
@@ -1946,9 +1952,9 @@
       "cells": {
         "credit": {
           "expect": "One source row from the press to the next press",
-          "today": "gap",
+          "today": "works",
           "basis": "sequence:motion-seen-without-animation-objects",
-          "note": "Its start sits under the press. Its end shows on the stopping press's row in both cases: as pixels #gl stopped when the last frame falls inside that step, and as last frame N ms before this step, not tied to it by time, when it falls before. The second credits no step, since time alone cannot separate a stopped loop from one that ended on its own; with the waits taken out (sequence:motion-makers-no-waits), a slow motion lands under whichever later step is running. Credited by timing, which the Credit rule reads as a gap"
+          "note": "The pixels #gl run is credited to the first press - by root, and its end to the second: the cancelAnimationFrame() call holds the cancelling input's root against the loop's callback."
         },
         "source": {
           "expect": "JS, started by key - · frame loop, drawGl"
@@ -1976,9 +1982,9 @@
       "cells": {
         "credit": {
           "expect": "Press step: three cards staggered 100ms, then the highlight",
-          "today": "gap",
+          "today": "works",
           "basis": "sequence:motion-seen-without-animation-objects",
-          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet; with the waits taken out (sequence:motion-makers-no-waits), a slow motion lands under whichever later step is running. Credited by timing, which the Credit rule reads as a gap"
+          "note": "The card rows are credited to press = by root. GSAP's ticker runs one frame loop from load, so the highlight's tween begins under no root of its own; it takes the root of the press that last wrote its property on the element, and reads <property>, not <root>"
         },
         "source": {
           "expect": "JS, started by key ="

@@ -1,3 +1,5 @@
+import { currentCursor } from '../proxy/registry.js';
+import { stepToken } from '../root-credit.js';
 import type { Page } from 'puppeteer-core';
 
 /**
@@ -37,8 +39,12 @@ type OwnScrollHandle = {
  * it, read as the browser's.
  */
 export async function scrollIntoViewAs(handle: OwnScrollHandle, words: string): Promise<void> {
-  await handle.evaluate?.((_element, said) => {
-    (globalThis as any)[Symbol.for('devharness.trigger')]?.ownScroll?.(said);
-  }, words).catch(() => { /* a page with no tracker scrolls unmarked */ });
+  // The step it runs under roots the scroll there: what the scroll sets
+  // going - a sticky header, a reveal - is credited to the step.
+  const said = JSON.stringify({ words, step: stepToken(currentCursor()) });
+  await handle.evaluate?.((_element, given) => {
+    const { words: named, step } = JSON.parse(given);
+    (globalThis as any)[Symbol.for('devharness.trigger')]?.ownScroll?.(named, step);
+  }, said).catch(() => { /* a page with no tracker scrolls unmarked */ });
   await handle.scrollIntoView();
 }

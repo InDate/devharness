@@ -175,8 +175,10 @@ export function fromWrite(write: PageWrite, entry: number | undefined): Omit<Obs
     return {
       kind: 'motion', text: `${write.key ?? ''}${write.value ? `  ${write.value}` : ''}`.trim(), key: `${write.key ?? ''}${ended ? ' ended' : ''}`,
       at: write.at, entry, ...(write.motion ? { motion: write.motion } : {}), ref: { source: 'write', id: write.id },
-      // Credited by the identity of the input that started it: the strongest basis a motion has.
-      ...(write.motion?.byRoot ? { stamped: true as const, owned: 'root' } : {}),
+      // Credited by the identity of the input that started it, the strongest
+      // basis a motion has; `property` where the root came from the input
+      // that last wrote the property, the motion itself starting under none.
+      ...(write.motion?.byRoot ? { stamped: true as const, owned: write.motion.rootFrom ?? 'root' } : {}),
     };
   }
   const text = `${write.store} ${write.key ?? ''} ${write.operation}`.replace(/\s+/g, ' ').trim();

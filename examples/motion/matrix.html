@@ -58,6 +58,7 @@
 
   const cellOf = (data, scenario, cap) => ({
     ...(cap.default ?? {}),
+    ...(data.triggers?.[scenario.trigger]?.[cap.id] ?? {}),
     ...(data.mechanisms[scenario.mechanism]?.[cap.id] ?? {}),
     ...(scenario.cells?.[cap.id] ?? {}),
   });

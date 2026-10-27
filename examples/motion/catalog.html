@@ -296,6 +296,7 @@
       <span id="premium">Premium</span> <button id="premium-shine">Shine</button>
       <button id="fly">Archive</button> <button id="preview-toggle">Preview</button>
       <button id="smil-go">Move dot</button> <button id="jump">Jump to Labels</button>
+      <span id="nudge" style="display:inline-block">Bundle</span> <button id="nudge-go">Nudge</button>
     </div>
     <details id="faq"><summary>How long is mail kept?</summary><p>A year in the archive, thirty days in the trash.</p></details>
     <div class="flight"><span id="plane">✈</span></div>
@@ -728,6 +729,15 @@
     if (e.target instanceof HTMLInputElement) return;
     keys[e.key]?.();
   });
+</script>
+<script type="module">
+  // A bundled app ships modules, and module code is strict: a stack read of a
+  // call in it carries the script and line, never the calling function.
+  const nudge = () => document.getElementById('nudge').animate(
+    [{ transform: 'translateX(0)' }, { transform: 'translateX(24px)' }, { transform: 'translateX(0)' }],
+    { duration: 400, easing: 'ease-in-out' });
+  document.getElementById('nudge-go').addEventListener('click', nudge);
+  document.addEventListener('keydown', e => { if (e.key === '\\') nudge(); });
 </script>
 </body>
 </html>

@@ -73,6 +73,7 @@ The carousel and the canvas start at page load and run for the whole session. `?
 | ' | Platform: Preview | press | CSS transition on `clip-path` | Clean. |
 | , | Platform: Move dot | press | SVG SMIL `<animate>` | Clean. SMIL runs outside the CSS and Web Animations models. |
 | . | Platform: Jump to Labels | press | `scrollIntoView({ behavior: 'smooth' })` and `scrollTo` | Clean. The page itself moves, which drives every scroll row above. |
+| \\ | Platform: Nudge | press | `animate()` called from a `<script type="module">`, so the calling code is strict | Clean. A stack read gives the call's script and line and no function, the case a bundled app presents. |
 
 | [ | Media: Play promo | press | `<video>` of `media/promo.webm`, 3s, looping | Clean. Pixels only; the element never moves. |
 | ] | Media: Play envelope | press, after an XHR for `media/envelope.json` | lottie-web's SVG renderer, writing SVG `transform` attributes each frame | Clean. No CSS or Web Animations object exists. |
@@ -85,6 +86,6 @@ Not covered: an animated GIF or WebP, and a spring library (react-spring, Motion
 
 ## Capability matrix
 
-`matrix.json` holds every scenario on both pages against each capability of the workbench loop: seen, row placement, solo, hold and step, slow, snapshot crop, text flag, tune, and viewport and environment. Each cell carries what devharness is expected to do and how that stands today: works, gap, unmeasured or n/a, with its basis, `code` or `sequence:<name>`. A cell reads works only on a sequence basis. Defaults are written once per mechanism and per capability, and a scenario carries only what differs.
+`matrix.json` holds every scenario on both pages against each capability of the workbench loop: seen, credit (which step owns a motion, and on what evidence), compare (whether a replay reads as matched at any pace and window size, measured on `motion-makers-no-waits`), source, solo, hold and step, slow, snapshot crop, text flag, tune, and viewport and environment. Each cell carries what devharness is expected to do and how that stands today: works, gap, unmeasured or n/a, with its basis, `code` or `sequence:<name>`. A cell reads works only on a sequence basis. Defaults are written once per capability, per trigger and per mechanism, and a scenario carries only what differs. A scenario with no key is a case the demo does not stage yet: two motions with different roots at once, two back to back on one element, and a motion whose cause changes while it runs. What a credit rests on, who may change it and how a replay weighs it stand as conditions in `docs/landscapes/attribution.landscape`.
 
 `matrix.html` renders it as a grid filtered by page, trigger, mechanism and standing: `http://127.0.0.1:4720/matrix.html`.

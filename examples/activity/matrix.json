@@ -1,0 +1,505 @@
+{
+  "about": "Each scenario of a page activity other than network and motion - storage, console, page errors, dialogs and navigations - against each capability devharness offers for it. A cell holds what devharness is expected to do and how that stands today: works, gap, unmeasured or n/a. A cell’s basis is code (read from src/) or sequence:<name> (shown by a run), and a cell reads works only on a sequence basis. A scenario’s cell is merged over its carrier’s default, then its kind’s, then the capability’s. A scenario with no control is a case no demo page stages yet. The conditions behind Credit, Compare and Log stand in docs/landscapes/attribution.landscape; motion has its own matrix in examples/motion/matrix.json.",
+  "capabilities": [
+    {
+      "id": "seen",
+      "name": "Seen",
+      "question": "Does devharness register it, and through what?"
+    },
+    {
+      "id": "log",
+      "name": "Log",
+      "question": "Does it stand in the observation log as an observation, beside requests, frames and motion?",
+      "default": {
+        "today": "gap",
+        "basis": "code",
+        "note": "ObservationKind holds request, frame, storage and motion (observation-log.ts:29)"
+      },
+      "rule": "An activity in the log is read by every view, by History ids and by a replay’s comparison; one outside it reaches none of them."
+    },
+    {
+      "id": "credit",
+      "name": "Credit",
+      "question": "Which step owns it, and on what evidence?",
+      "default": {
+        "today": "gap",
+        "basis": "code",
+        "note": "Credited by the cursor standing when its report arrives, with no root mark from the page"
+      },
+      "rule": "Credited to the action at the root of its cause, recorded as it happens. A credit names one action, several, or none, and each row records its basis: the evidence at capture, a shape across the sequence, code read at a file and line, or a person. A cell reads works on root evidence or stronger, or where a claim of the basis its expect names puts it right; a row placed by timing alone reads as a gap."
+    },
+    {
+      "id": "compare",
+      "name": "Compare",
+      "question": "Does a replay of the same app read as matched, at any pace?",
+      "default": {
+        "today": "unmeasured"
+      },
+      "rule": "Measured on a sequence with no waits between its actions, so a pass cannot rest on the gaps between steps, and compared by the weight each credit’s evidence carries."
+    },
+    {
+      "id": "source",
+      "name": "Source",
+      "question": "Which code made it, and what started it?",
+      "default": {
+        "today": "gap",
+        "basis": "code",
+        "note": "The trigger tracker marks motion alone; no write, log call, throw, dialog or navigation carries a maker or a trigger"
+      },
+      "rule": "Each row names the function or call site that made it, opened in DevTools by its go-to, and the trigger chain it ran under, as a motion row does."
+    },
+    {
+      "id": "rule",
+      "name": "Rule",
+      "question": "Can a sequence rule act on it: answer it, refuse it, ignore it or hold it?"
+    }
+  ],
+  "kinds": {
+    "storage": {
+      "name": "Storage",
+      "seen": {
+        "expect": "A page write row naming the store and key, with its value"
+      },
+      "rule": {
+        "expect": "Refused or ignored by a sequence rule, as a network write is",
+        "today": "gap",
+        "basis": "code",
+        "note": "No rule acts on a page write; refusesWrites acts on HTTP writes at the proxy"
+      },
+      "log": {
+        "expect": "A storage observation with an s id, read by History and the comparison",
+        "today": "works",
+        "basis": "sequence:slice-recording-page",
+        "note": "The draft’s localStorage write stood in its step’s saved slice beside POST /draft"
+      }
+    },
+    "console": {
+      "name": "Console",
+      "seen": {
+        "expect": "A console row with level and text"
+      },
+      "rule": {
+        "expect": "Ignored by a sequence rule, so known noise leaves the comparison"
+      }
+    },
+    "error": {
+      "name": "Page error",
+      "seen": {
+        "expect": "An error row with message and stack, its source mapped"
+      },
+      "rule": {
+        "expect": "Ignored or held to fail the run, by a sequence rule"
+      }
+    },
+    "dialog": {
+      "name": "Dialog",
+      "seen": {
+        "expect": "A dialog row with its type and message, and the answer it took"
+      },
+      "rule": {
+        "expect": "Answered by the sequence: accept, dismiss, or text for a prompt"
+      }
+    },
+    "navigation": {
+      "name": "Navigation",
+      "seen": {
+        "expect": "A navigation row with from, to and what started it"
+      },
+      "rule": {
+        "expect": "Held or allowed by a sequence rule"
+      },
+      "credit": {
+        "expect": "The step whose action started it, or the page itself"
+      }
+    }
+  },
+  "carriers": {
+    "localStorage": {
+      "name": "localStorage",
+      "seen": {
+        "expect": "DOMStorage events (write-watch.ts:212)"
+      },
+      "credit": {
+        "note": "Credited by the cursor when the DOMStorage event arrives (write-watch.ts:177)"
+      }
+    },
+    "sessionStorage": {
+      "name": "sessionStorage",
+      "seen": {
+        "expect": "DOMStorage events (write-watch.ts:212)"
+      },
+      "credit": {
+        "note": "Credited by the cursor when the DOMStorage event arrives (write-watch.ts:177)"
+      }
+    },
+    "cookie": {
+      "name": "cookie",
+      "seen": {
+        "expect": "A cookie read every 500ms (write-watch.ts:84)"
+      },
+      "credit": {
+        "note": "Credited to the step standing at the poll, up to 500ms after the write (write-watch.ts:316)"
+      }
+    },
+    "indexedDB": {
+      "name": "IndexedDB",
+      "seen": {
+        "expect": "Storage.indexedDB events, then a read of the store (write-watch.ts:224)"
+      }
+    },
+    "cacheStorage": {
+      "name": "Cache Storage",
+      "seen": {
+        "expect": "Storage.cacheStorage events, then a read (write-watch.ts:230)"
+      }
+    },
+    "file": {
+      "name": "file",
+      "seen": {
+        "expect": "The origin’s files read every 1000ms (write-watch.ts:86)"
+      },
+      "credit": {
+        "note": "Credited to the step standing at the poll, up to 1000ms after the write"
+      }
+    },
+    "worker": {
+      "name": "service worker",
+      "seen": {
+        "expect": "A worker started row (write-watch.ts:626)"
+      }
+    },
+    "consoleApi": {
+      "name": "console API",
+      "seen": {
+        "expect": "Runtime.consoleAPICalled, read by the console monitor"
+      },
+      "log": {
+        "note": "Console output reaches the write watch only as logpoints (write-watch.ts:251)"
+      }
+    },
+    "exception": {
+      "name": "uncaught exception",
+      "seen": {
+        "expect": "Runtime.exceptionThrown"
+      }
+    },
+    "rejection": {
+      "name": "unhandled rejection",
+      "seen": {
+        "expect": "Runtime.exceptionThrown for an unhandled rejection"
+      }
+    },
+    "resource": {
+      "name": "failed resource",
+      "seen": {
+        "expect": "A failed request at the proxy, with the console line Chrome writes for it"
+      }
+    },
+    "nativeDialog": {
+      "name": "native dialog",
+      "seen": {
+        "expect": "Page.javascriptDialogOpening"
+      },
+      "rule": {
+        "expect": "Answered by a modal step or handleModals",
+        "today": "works",
+        "basis": "sequence:native-dialogs",
+        "note": "modal({ action: answer }) answered the forget-upload confirm"
+      }
+    },
+    "pageNavigation": {
+      "name": "page navigation",
+      "seen": {
+        "expect": "Page.frameNavigated"
+      }
+    },
+    "historyApi": {
+      "name": "history API",
+      "seen": {
+        "expect": "A same-document navigation: Page.navigatedWithinDocument"
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "id": "local-write",
+      "kind": "storage",
+      "carrier": "localStorage",
+      "name": "Write localStorage",
+      "url": "http://localhost:7788/",
+      "control": "write-local",
+      "trigger": "action",
+      "fault": null,
+      "cells": {}
+    },
+    {
+      "id": "session-write",
+      "kind": "storage",
+      "carrier": "sessionStorage",
+      "name": "Write sessionStorage",
+      "url": "http://localhost:7788/",
+      "control": "write-session",
+      "trigger": "action",
+      "fault": null,
+      "cells": {}
+    },
+    {
+      "id": "cookie-write",
+      "kind": "storage",
+      "carrier": "cookie",
+      "name": "Write a cookie",
+      "url": "http://localhost:7788/",
+      "control": "write-cookie",
+      "trigger": "action",
+      "fault": null,
+      "cells": {}
+    },
+    {
+      "id": "idb-write",
+      "kind": "storage",
+      "carrier": "indexedDB",
+      "name": "Write IndexedDB",
+      "url": "http://localhost:7788/",
+      "control": "write-idb",
+      "trigger": "action",
+      "fault": null,
+      "cells": {}
+    },
+    {
+      "id": "cache-write",
+      "kind": "storage",
+      "carrier": "cacheStorage",
+      "name": "Write Cache Storage",
+      "url": "http://localhost:7788/",
+      "control": "write-cache",
+      "trigger": "action",
+      "fault": null,
+      "cells": {}
+    },
+    {
+      "id": "file-write",
+      "kind": "storage",
+      "carrier": "file",
+      "name": "Write a file",
+      "url": "http://localhost:7788/",
+      "control": "write-file",
+      "trigger": "action",
+      "fault": null,
+      "cells": {}
+    },
+    {
+      "id": "sw-register",
+      "kind": "storage",
+      "carrier": "worker",
+      "name": "Register a service worker",
+      "url": "http://localhost:7788/",
+      "control": "register-sw",
+      "trigger": "action",
+      "fault": null,
+      "cells": {}
+    },
+    {
+      "id": "clear-state",
+      "kind": "storage",
+      "carrier": "localStorage",
+      "name": "Remove all of these",
+      "url": "http://localhost:7788/",
+      "control": "clear-state",
+      "trigger": "action",
+      "fault": "Every store cleared in one press: the removals of seven carriers under one step",
+      "cells": {}
+    },
+    {
+      "id": "draft",
+      "kind": "storage",
+      "carrier": "localStorage",
+      "name": "Write a draft, then POST it",
+      "url": "http://localhost:7788/",
+      "control": "save-draft",
+      "trigger": "action",
+      "fault": null,
+      "cells": {
+        "seen": {
+          "today": "works",
+          "basis": "sequence:slice-recording-page",
+          "note": "localStorage socket-app:draft with its value, beside POST /draft 200 on the same step"
+        }
+      }
+    },
+    {
+      "id": "whats-new",
+      "kind": "storage",
+      "carrier": "localStorage",
+      "name": "Dismiss what’s new",
+      "url": "http://localhost:7788/",
+      "control": "whats-new-dismiss",
+      "trigger": "action",
+      "fault": "The flag it writes gates the panel on every later load",
+      "cells": {}
+    },
+    {
+      "id": "cookie-banner-log",
+      "kind": "console",
+      "carrier": "consoleApi",
+      "name": "Accept cookies, logged",
+      "url": "examples/modals/modal-test.html",
+      "control": "btn-accept",
+      "trigger": "action",
+      "fault": null,
+      "cells": {}
+    },
+    {
+      "id": "console-error",
+      "kind": "console",
+      "carrier": "consoleApi",
+      "name": "A console.error from a handler",
+      "url": null,
+      "control": null,
+      "trigger": "action",
+      "fault": null,
+      "cells": {}
+    },
+    {
+      "id": "console-noise",
+      "kind": "console",
+      "carrier": "consoleApi",
+      "name": "A log line every second",
+      "url": null,
+      "control": null,
+      "trigger": "repeating",
+      "fault": "Background output a comparison must leave out",
+      "cells": {}
+    },
+    {
+      "id": "throw",
+      "kind": "error",
+      "carrier": "exception",
+      "name": "A handler throws",
+      "url": null,
+      "control": null,
+      "trigger": "action",
+      "fault": null,
+      "cells": {}
+    },
+    {
+      "id": "rejection",
+      "kind": "error",
+      "carrier": "rejection",
+      "name": "A fetch rejects unhandled",
+      "url": null,
+      "control": null,
+      "trigger": "reply",
+      "fault": null,
+      "cells": {}
+    },
+    {
+      "id": "favicon-404",
+      "kind": "error",
+      "carrier": "resource",
+      "name": "The page’s favicon 404s",
+      "url": "http://127.0.0.1:4721/catalog.html",
+      "control": null,
+      "trigger": "load",
+      "fault": "Every load of the motion catalog asks for /favicon.ico and gets 404",
+      "cells": {}
+    },
+    {
+      "id": "forget-confirm",
+      "kind": "dialog",
+      "carrier": "nativeDialog",
+      "name": "Forget the upload (asks first)",
+      "url": "http://localhost:7788/",
+      "control": "upload-clear",
+      "trigger": "action",
+      "fault": null,
+      "cells": {
+        "seen": {
+          "today": "works",
+          "basis": "sequence:native-dialogs",
+          "note": "The confirm opened and was answered by the next step"
+        }
+      }
+    },
+    {
+      "id": "alert",
+      "kind": "dialog",
+      "carrier": "nativeDialog",
+      "name": "An alert from a handler",
+      "url": null,
+      "control": null,
+      "trigger": "action",
+      "fault": null,
+      "cells": {
+        "rule": {
+          "today": "unmeasured",
+          "note": "No demo page stages this case yet"
+        }
+      }
+    },
+    {
+      "id": "prompt",
+      "kind": "dialog",
+      "carrier": "nativeDialog",
+      "name": "A prompt that takes text",
+      "url": null,
+      "control": null,
+      "trigger": "action",
+      "fault": null,
+      "cells": {
+        "rule": {
+          "today": "unmeasured",
+          "note": "No demo page stages this case yet"
+        }
+      }
+    },
+    {
+      "id": "beforeunload",
+      "kind": "dialog",
+      "carrier": "nativeDialog",
+      "name": "Leave the page with unsaved changes",
+      "url": null,
+      "control": null,
+      "trigger": "action",
+      "fault": "The dialog stands between the navigate and the new document",
+      "cells": {
+        "rule": {
+          "today": "unmeasured",
+          "note": "No demo page stages this case yet"
+        }
+      }
+    },
+    {
+      "id": "navigate-away",
+      "kind": "navigation",
+      "carrier": "pageNavigation",
+      "name": "Navigate with sockets open",
+      "url": "http://localhost:7788/",
+      "control": "navigate-away",
+      "trigger": "action",
+      "fault": "The page sets location.href with sockets open, so their closes and the new document cross in one step",
+      "cells": {}
+    },
+    {
+      "id": "push-state",
+      "kind": "navigation",
+      "carrier": "historyApi",
+      "name": "A client-side route change",
+      "url": null,
+      "control": null,
+      "trigger": "action",
+      "fault": null,
+      "cells": {}
+    },
+    {
+      "id": "back",
+      "kind": "navigation",
+      "carrier": "pageNavigation",
+      "name": "Back to the previous page",
+      "url": null,
+      "control": null,
+      "trigger": "action",
+      "fault": null,
+      "cells": {}
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 {
-  "about": "Each scenario on the motion demo against each capability of the workbench loop. A cell holds what devharness is expected to do and how that stands today: works, gap, unmeasured or n/a. A cell's basis is code (read from src/), research:<file> (a report under docs/research/) or sequence:<name> (shown by a run). A cell reads works only on a sequence basis. A capability's rule applies to every scenario. A scenario's cell is merged over its mechanism's default, then over the capability's default.",
+  "about": "Each scenario on the motion demo against each capability of the workbench loop. A cell holds what devharness is expected to do and how that stands today: works, gap, unmeasured or n/a. A cell’s basis is code (read from src/), research:<file> (a report under docs/research/) or sequence:<name> (shown by a run). A cell reads works only on a sequence basis. A capability’s rule applies to every scenario. A scenario’s cell is merged over its mechanism’s default, then its trigger’s, then the capability’s default. A scenario with no key is a case the demo does not stage yet. The conditions behind Credit and Compare stand in docs/landscapes/attribution.landscape.",
   "capabilities": [
     {
       "id": "seen",
@@ -8,9 +8,33 @@
       "rule": "By mechanism: CSS and Web Animations through Chrome's Animation reports; JS writing styles or SVG attributes through a page-side MutationObserver, a run of changes on one element read as one motion; canvas, WebGL and video as a region redrawing per frame, plus the media element's state; SVG <animate> through its begin and end events and the SVG's animation time; smooth scroll through scroll offsets to scrollend; and a style change with no animation reported as changed with no motion."
     },
     {
-      "id": "row",
-      "name": "Row",
-      "question": "Under which step, at what offset, or in which lane does its row land?"
+      "id": "credit",
+      "name": "Credit",
+      "question": "Which step owns it, and on what evidence?",
+      "default": {
+        "today": "gap",
+        "basis": "code",
+        "note": "Rows are placed by the time their report arrives (animation-record.ts, takeMotion and chromeCreated); no root mark reaches the record"
+      },
+      "rule": "A motion is credited to the action at the root of its cause, recorded as it starts. A credit names one action, several, or none: two actions that both caused a motion are both named. Each row records its basis: the evidence at capture, a shape across the sequence, code read at a file and line, or a person. A cell reads works when the default credit stands right on root evidence, or when a claim of the basis its expect names puts it right; a row placed by timing alone reads as a gap. What a credit rests on and who may change it: docs/landscapes/attribution.landscape."
+    },
+    {
+      "id": "compare",
+      "name": "Compare",
+      "question": "Does a replay of the same app read as matched, at any pace and any window size?",
+      "default": {
+        "today": "unmeasured"
+      },
+      "rule": "Measured on sequence:motion-makers-no-waits, the sequence with its waits taken out, so a pass cannot rest on the gaps between steps. A replay is compared by the weight each credit’s evidence carries, so a timing guess and a measured cause count apart; a repeating source is compared as a track, on its start, period and stop, and ambient motion as background against the recording’s background. Cells measured before the comparison reads weights say so in their note."
+    },
+    {
+      "id": "source",
+      "name": "Source",
+      "question": "Who made it, and what started it?",
+      "default": {
+        "today": "unmeasured"
+      },
+      "rule": "The row label names the maker: CSS for a transition, keyframes, view transition or scroll timeline; JS for a script that wrote styles or attributes, called animate(), drew or scrolled; SVG for SMIL; MEDIA for a playing video; ME for the person’s own scroll, drag or hover; BROWSER for a scroll the browser makes itself. The go-to opens DevTools on the function or element behind a maker, and History for ME. The opened row holds the trigger chain, headed by the mark of the scenario’s trigger: a key, the end of an earlier motion, a reply, a push, hover or drag, a timer or frame loop, page load, a scroll, or a playback call."
     },
     {
       "id": "solo",
@@ -331,9 +355,12 @@
       "clock": "page time",
       "fault": "The pop keyframes dip to scale(0.6) for about 15ms",
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Press step, +0",
           "today": "unmeasured"
+        },
+        "source": {
+          "expect": "CSS, started by key 1"
         },
         "crop": {
           "expect": "#count, the button the badge sits on"
@@ -364,11 +391,14 @@
           "today": "works",
           "basis": "sequence:animation-list-at-frame-steps"
         },
-        "row": {
+        "credit": {
           "expect": "Press step: fade-in +2 frames, fade-out +700ms",
           "today": "gap",
           "basis": "sequence:animation-list-at-frame-steps",
           "note": "Credited to the frame step that ran the callback"
+        },
+        "source": {
+          "expect": "CSS, started by the end of the save motion before it"
         },
         "crop": {
           "expect": "The toast's box with a margin; its ancestor is the page"
@@ -396,11 +426,14 @@
           "today": "works",
           "basis": "sequence:animation-sweep-probes"
         },
-        "row": {
+        "credit": {
           "expect": "Press step, +0, as one group",
           "today": "gap",
           "basis": "sequence:motion-group-at-stop",
           "note": "Under a held press, credited to the next frame step"
+        },
+        "source": {
+          "expect": "CSS, started by key 3"
         },
         "hold": {
           "expect": "Held at the frame stop; the group reads at 0ms",
@@ -435,8 +468,11 @@
           "expect": "No animation; height, margin and opacity change at once",
           "today": "unmeasured"
         },
-        "row": {
+        "credit": {
           "expect": "Press step: styles changed, no motion"
+        },
+        "source": {
+          "expect": "CSS, started by key 4"
         },
         "crop": {
           "expect": "#list"
@@ -459,8 +495,11 @@
       "clock": "page time",
       "fault": "A second press within 400ms starts a burst over the first; scale jumps back to 1",
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Press step, +0; a second press adds a second row on the same element"
+        },
+        "source": {
+          "expect": "JS, started by key q"
         },
         "crop": {
           "expect": "#like"
@@ -483,8 +522,11 @@
       "clock": "page time",
       "fault": null,
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Press step, +0; on ::after"
+        },
+        "source": {
+          "expect": "CSS, started by key w"
         },
         "crop": {
           "expect": "#notify"
@@ -507,11 +549,17 @@
       "clock": "page time",
       "fault": "A press mid-way restarts from the full or empty height; height lays out every frame",
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Press step, +1 frame",
-          "today": "works",
+          "today": "gap",
           "basis": "sequence:motion-seen-without-animation-objects",
-          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet"
+          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet; with the waits taken out (sequence:motion-makers-no-waits), a slow motion lands under whichever later step is running. Credited by timing, which the Credit rule reads as a gap"
+        },
+        "source": {
+          "expect": "JS, started by key e · frame loop",
+          "today": "works",
+          "basis": "sequence:motion-makers-and-triggers",
+          "note": "JS catalog.html:370, the tick function · from key e · frame loop"
         },
         "crop": {
           "expect": "The section holding the panel and the content it pushes"
@@ -524,6 +572,11 @@
         },
         "env": {
           "expect": "Text wraps, so the open height changes with width"
+        },
+        "compare": {
+          "today": "works",
+          "basis": "sequence:motion-makers-no-waits",
+          "note": "Step 3 (press e) matched 1/1 with no wait after it. Measured by count: the comparison does not yet read weights"
         }
       }
     },
@@ -537,8 +590,11 @@
       "clock": "page time",
       "fault": null,
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Press step, +1 frame, after the transition's snapshot"
+        },
+        "source": {
+          "expect": "CSS, started by key r"
         },
         "crop": {
           "expect": "The tab strip and pane"
@@ -561,8 +617,11 @@
       "clock": "page time",
       "fault": "Close removes the class; the modal snaps out",
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Open: press step, +0. Close: press step, styles changed, no motion"
+        },
+        "source": {
+          "expect": "CSS, started by key t"
         },
         "crop": {
           "expect": "The dialog box with a margin; its ancestor is the page"
@@ -585,8 +644,11 @@
       "clock": "page time",
       "fault": "The spinner shows for a 60ms reply; 36px skeleton rows give way to 56px rows",
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Press step, from the press until GET /api/messages landed"
+        },
+        "source": {
+          "expect": "CSS, started by the reply to its request, under key y"
         },
         "hold": {
           "expect": "The proxy holds the reply, so spinner and skeleton stay; release ends them",
@@ -613,8 +675,14 @@
       "clock": "page time",
       "fault": null,
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Press step: one bar row driven by bytes read over the stream, then the check at stream end"
+        },
+        "source": {
+          "expect": "CSS, started by the reply to its request, under key u",
+          "today": "gap",
+          "basis": "sequence:motion-makers-no-waits",
+          "note": "With the waits, the #progress transitions read CSS · from after reply GET /api/sync; without them they read from page load, from after key , · beginElement(), from after scroll · hover #late-card. The after form names the last cause within 100ms, so the trigger rests on timing. The JS scaleX row reads catalog.html:406 · from key u either way"
         },
         "hold": {
           "expect": "Holding the stream at the proxy holds the bar where the bytes stopped",
@@ -628,6 +696,11 @@
         },
         "tune": {
           "expect": "Bar transition duration, in the stylesheet"
+        },
+        "compare": {
+          "today": "gap",
+          "basis": "sequence:motion-makers-no-waits",
+          "note": "Step 4 (press u) matched 1/2: its #progress transitions ran on under press h, the hover of #late-card and later steps. Measured by count: the comparison does not yet read weights"
         }
       }
     },
@@ -641,8 +714,11 @@
       "clock": "page time",
       "fault": "The failure path never hides the spinner",
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Press step: spinner from the press, still running after POST /api/send returned 500"
+        },
+        "source": {
+          "expect": "CSS, started by the reply to its request, under key i"
         },
         "hold": {
           "expect": "The proxy holds the 500; release shows the spinner outliving the reply",
@@ -669,8 +745,11 @@
       "clock": "page time",
       "fault": "The invalid class is never removed; a second invalid press shakes nothing",
       "cells": {
-        "row": {
+        "credit": {
           "expect": "First press: press step, +0. Second press: no motion"
+        },
+        "source": {
+          "expect": "CSS, started by key o"
         },
         "crop": {
           "expect": "The Join controls row"
@@ -693,8 +772,11 @@
       "clock": "page time",
       "fault": "Monday has no starting position and jumps while the rest slide",
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Press step, +0, three rows; Monday changed position with no motion"
+        },
+        "source": {
+          "expect": "JS, started by key p"
         },
         "crop": {
           "expect": "#flip-list"
@@ -717,11 +799,14 @@
       "clock": "page time",
       "fault": "Ends at 1248, not 1280",
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Press step: text counting over 640ms",
-          "today": "works",
+          "today": "gap",
           "basis": "sequence:motion-seen-without-animation-objects",
-          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet"
+          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet; with the waits taken out (sequence:motion-makers-no-waits), a slow motion lands under whichever later step is running. Credited by timing, which the Credit rule reads as a gap"
+        },
+        "source": {
+          "expect": "JS, started by key a · the count interval"
         },
         "crop": {
           "expect": "#counter"
@@ -744,11 +829,17 @@
       "clock": "page time",
       "fault": "Items below each new item jump down with no motion",
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Under the source opened by the press, one row per pushed event at its arrival",
           "today": "gap",
           "basis": "code",
           "note": "No source rows exist"
+        },
+        "source": {
+          "expect": "CSS, started by push /api/events",
+          "today": "works",
+          "basis": "sequence:motion-makers-and-triggers",
+          "note": "CSS div.feed-item · from push /api/events"
         },
         "hold": {
           "expect": "Holding a pushed frame at the proxy holds its item back",
@@ -762,6 +853,11 @@
         },
         "tune": {
           "expect": "A height animation on insert, in the source"
+        },
+        "compare": {
+          "today": "gap",
+          "basis": "sequence:motion-makers-no-waits",
+          "note": "Step 5 (press s): the stream and its pushed messages read new or missing on every run. Measured by count: the comparison does not yet read weights"
         }
       }
     },
@@ -775,10 +871,13 @@
       "clock": "pointer",
       "fault": "A drag released past 120px snaps shut",
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Drag: under the pointer steps, following the pointer. Release: release step, spring or snap. g: press step, spring",
           "today": "gap",
           "basis": "code"
+        },
+        "source": {
+          "expect": "JS, started by drag"
         },
         "crop": {
           "expect": "The sheet's box with a margin; its ancestor is the page"
@@ -804,8 +903,14 @@
       "clock": "pointer",
       "fault": null,
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Under the hover step, +0"
+        },
+        "source": {
+          "expect": "CSS, started by hover",
+          "today": "works",
+          "basis": "sequence:motion-makers-and-triggers",
+          "note": "CSS #card · from hover"
         },
         "crop": {
           "expect": "The Pointer section"
@@ -815,6 +920,11 @@
         },
         "tune": {
           "expect": "Duration and lift, in the stylesheet"
+        },
+        "compare": {
+          "today": "works",
+          "basis": "sequence:motion-makers-no-waits",
+          "note": "The hover of #card matched 4/4. Measured by count: the comparison does not yet read weights"
         }
       }
     },
@@ -828,11 +938,14 @@
       "clock": "page time",
       "fault": "Keeps turning with the tab hidden and under reduced motion",
       "cells": {
-        "row": {
+        "credit": {
           "expect": "One source row: started at the navigate step, period 3s, stopped by k",
           "today": "gap",
           "basis": "code",
           "note": "Each turn is a separate animation row"
+        },
+        "source": {
+          "expect": "CSS, started by every 3000ms, the slide timer"
         },
         "crop": {
           "expect": ".carousel"
@@ -845,6 +958,9 @@
         },
         "env": {
           "expect": "Reduced motion should stop it, and does not"
+        },
+        "compare": {
+          "expect": "Compared as background against the recording’s background, its start, period and stop"
         }
       }
     },
@@ -858,8 +974,11 @@
       "clock": "page time",
       "fault": null,
       "cells": {
-        "row": {
+        "credit": {
           "expect": "One source row from the navigate step, infinite"
+        },
+        "source": {
+          "expect": "CSS, started by page load"
         },
         "crop": {
           "expect": ".marquee"
@@ -872,6 +991,9 @@
         },
         "env": {
           "expect": "Stops under reduced motion"
+        },
+        "compare": {
+          "expect": "Compared as background against the recording’s background, its start, period and stop"
         }
       }
     },
@@ -885,10 +1007,13 @@
       "clock": "page time",
       "fault": "Every 120th frame runs a 90ms busy loop, so frames drop every two seconds",
       "cells": {
-        "row": {
+        "credit": {
           "expect": "One source row from the navigate step",
           "today": "gap",
           "basis": "code"
+        },
+        "source": {
+          "expect": "JS, started by page load · frame loop, drawSky"
         },
         "hold": {
           "expect": "The page clock owns its frame loop",
@@ -903,6 +1028,9 @@
         },
         "tune": {
           "expect": "The busy loop, in the source"
+        },
+        "compare": {
+          "expect": "Compared as background against the recording’s background, its start, period and stop"
         }
       }
     },
@@ -916,8 +1044,14 @@
       "clock": "page time",
       "fault": null,
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Navigate step, +100ms"
+        },
+        "source": {
+          "expect": "CSS, started by page load",
+          "today": "works",
+          "basis": "sequence:motion-makers-and-triggers",
+          "note": "CSS h2 · from page load"
         },
         "crop": {
           "expect": ".hero"
@@ -927,6 +1061,11 @@
         },
         "tune": {
           "expect": "Delay and duration, in the stylesheet"
+        },
+        "compare": {
+          "today": "works",
+          "basis": "sequence:motion-makers-no-waits",
+          "note": "The navigate matched 9/9. Measured by count: the comparison does not yet read weights"
         }
       }
     },
@@ -940,8 +1079,14 @@
       "clock": "scroll position",
       "fault": null,
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Under each scroll step, progress against scroll position"
+        },
+        "source": {
+          "expect": "CSS, started by scroll timeline",
+          "today": "works",
+          "basis": "sequence:motion-makers-and-triggers",
+          "note": "CSS #scroll-bar · from scroll timeline"
         },
         "crop": {
           "expect": "#scroll-bar"
@@ -951,6 +1096,11 @@
         },
         "tune": {
           "expect": "Not tuned in time"
+        },
+        "compare": {
+          "today": "works",
+          "basis": "sequence:motion-makers-no-waits",
+          "note": "The navigate matched 9/9. Measured by count: the comparison does not yet read weights"
         }
       }
     },
@@ -964,8 +1114,14 @@
       "clock": "scroll position",
       "fault": null,
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Under the scroll step that brings each card in, progress against its view range"
+        },
+        "source": {
+          "expect": "CSS, started by scroll timeline",
+          "today": "works",
+          "basis": "sequence:motion-makers-and-triggers",
+          "note": "CSS div.card.reveal · from scroll timeline"
         },
         "crop": {
           "expect": "The Scroll section"
@@ -978,6 +1134,11 @@
         },
         "env": {
           "expect": "The viewport height changes where each reveal starts"
+        },
+        "compare": {
+          "today": "works",
+          "basis": "sequence:motion-makers-no-waits",
+          "note": "The navigate matched 9/9. Measured by count: the comparison does not yet read weights"
         }
       }
     },
@@ -991,10 +1152,16 @@
       "clock": "scroll position",
       "fault": null,
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Under each scroll step",
           "today": "gap",
           "basis": "code"
+        },
+        "source": {
+          "expect": "JS, started by scroll · wheel, the scroll listener",
+          "today": "works",
+          "basis": "sequence:motion-makers-and-triggers",
+          "note": "JS catalog.html:531, the scroll listener · from scroll · wheel"
         },
         "crop": {
           "expect": ".hero"
@@ -1004,6 +1171,11 @@
         },
         "tune": {
           "expect": "The 0.4 factor, in the source"
+        },
+        "compare": {
+          "today": "gap",
+          "basis": "sequence:motion-makers-no-waits",
+          "note": "The scroll matched 4/5, one motion still moving when the step was read. Measured by count: the comparison does not yet read weights"
         }
       }
     },
@@ -1017,11 +1189,17 @@
       "clock": "scroll position",
       "fault": "height lays out on every scroll event",
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Under each scroll step",
-          "today": "works",
+          "today": "gap",
           "basis": "sequence:motion-seen-without-animation-objects",
-          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet"
+          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet; with the waits taken out (sequence:motion-makers-no-waits), a slow motion lands under whichever later step is running. Credited by timing, which the Credit rule reads as a gap"
+        },
+        "source": {
+          "expect": "JS, started by scroll · wheel, the scroll listener",
+          "today": "works",
+          "basis": "sequence:motion-makers-and-triggers",
+          "note": "JS catalog.html:531 · from scroll · key . · scrollTo(); the trigger follows the scroll’s own cause"
         },
         "crop": {
           "expect": "#masthead"
@@ -1031,6 +1209,11 @@
         },
         "tune": {
           "expect": "A transform in place of height, in the source"
+        },
+        "compare": {
+          "today": "gap",
+          "basis": "sequence:motion-makers-no-waits",
+          "note": "The scroll matched 4/5, one motion still moving when the step was read. Measured by count: the comparison does not yet read weights"
         }
       }
     },
@@ -1044,8 +1227,14 @@
       "clock": "page time",
       "fault": "The reveal waits 400ms after the card enters",
       "cells": {
-        "row": {
+        "credit": {
           "expect": "The scroll step that brought it in, +400ms"
+        },
+        "source": {
+          "expect": "CSS, started by the IntersectionObserver callback under scroll · wheel, through timer 400ms",
+          "today": "works",
+          "basis": "sequence:motion-makers-and-triggers",
+          "note": "CSS #late-card · from scroll · hover #late-card · in view · timer 400ms: the hover step’s own scroll brings the card into view"
         },
         "crop": {
           "expect": "The Scroll section"
@@ -1058,6 +1247,11 @@
         },
         "env": {
           "expect": "The viewport height changes when it enters"
+        },
+        "compare": {
+          "today": "gap",
+          "basis": "sequence:motion-makers-no-waits",
+          "note": "The hover of #late-card matched 1/14: earlier steps’ motion landed under it. Measured by count: the comparison does not yet read weights"
         }
       }
     },
@@ -1071,8 +1265,11 @@
       "clock": "page time",
       "fault": null,
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Press step: list dims at +0, spinner at +300ms, both end when the 600ms reply lands"
+        },
+        "source": {
+          "expect": "CSS, started by the reply to its request, under key c"
         },
         "hold": {
           "expect": "The proxy holds the reply; the spinner appears at 300ms and stays",
@@ -1099,8 +1296,11 @@
       "clock": "page time",
       "fault": null,
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Press step: list dims; no spinner, the 60ms reply beats the threshold"
+        },
+        "source": {
+          "expect": "CSS, started by the reply to its request, under key v"
         },
         "crop": {
           "expect": "#refreshed with its button"
@@ -1123,8 +1323,11 @@
       "clock": "page time",
       "fault": "The star reverts on the 409 but the count keeps its increment",
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Press step: fill at +0, revert when POST /api/star returned 409"
+        },
+        "source": {
+          "expect": "CSS, started by the reply to its request, under key b"
         },
         "hold": {
           "expect": "The proxy holds the 409; the star stays filled until release",
@@ -1151,8 +1354,11 @@
       "clock": "page time",
       "fault": null,
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Search step: spinner from the press; Cancel step: spinner ends with the aborted request"
+        },
+        "source": {
+          "expect": "CSS, started by the reply to its request, under key n, m"
         },
         "crop": {
           "expect": "The search controls row"
@@ -1175,10 +1381,13 @@
       "clock": "page time",
       "fault": null,
       "cells": {
-        "row": {
+        "credit": {
           "expect": "One source row from the press to the next press, period about 1s",
           "today": "gap",
           "basis": "code"
+        },
+        "source": {
+          "expect": "JS, started by key d · frame loop"
         },
         "crop": {
           "expect": "The dots' span"
@@ -1201,8 +1410,11 @@
       "clock": "page time",
       "fault": "The second notice has no opacity transition; its removal never fires and it stays as an invisible gap",
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Press step, +0; then the notice's removal, or its absence"
+        },
+        "source": {
+          "expect": "CSS, started by key f"
         },
         "crop": {
           "expect": "#notices"
@@ -1225,8 +1437,14 @@
       "clock": "page time",
       "fault": null,
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Press step: five animations at their offsets, each after the one before"
+        },
+        "source": {
+          "expect": "JS, started by the end of the previous ring, under key h",
+          "today": "works",
+          "basis": "sequence:motion-makers-and-triggers",
+          "note": "JS catalog.html:601, the tour listener · from key h, then from end of animation on #tour-ring, through timer 300ms for the later rings"
         },
         "crop": {
           "expect": ".tour-row"
@@ -1236,6 +1454,11 @@
         },
         "tune": {
           "expect": "Per-step duration and the gap, in the source"
+        },
+        "compare": {
+          "today": "gap",
+          "basis": "sequence:motion-makers-no-waits",
+          "note": "Step 6 (press h) matched 1/3: the chained rings landed under the second press [, the hover of #late-card and the scroll. Measured by count: the comparison does not yet read weights"
         }
       }
     },
@@ -1249,8 +1472,14 @@
       "clock": "page time",
       "fault": null,
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Back up step starts the row; Pause, Faster and Cancel steps change it"
+        },
+        "source": {
+          "expect": "JS, started by the playback call under key j, l, z or x",
+          "today": "gap",
+          "basis": "sequence:motion-makers-and-triggers",
+          "note": "The ring reads JS catalog.html:614, startBackup · from key j. The text set under key j reads catalog.html:727, the keydown dispatcher: a text or style write runs through no call the tracker wraps, so the outermost listener is the only function on record. The text set under key z reads from end of animation on #ring-arc, with no function and no key"
         },
         "hold": {
           "expect": "Held with the page; the app's own pause stays a pause on release",
@@ -1268,6 +1497,11 @@
         },
         "tune": {
           "expect": "Duration live; the 4× in the source"
+        },
+        "compare": {
+          "today": "gap",
+          "basis": "sequence:motion-makers-no-waits",
+          "note": "Press j matched 2/2; press z matched 0/1: Backed up landed under the hover of #late-card. Measured by count: the comparison does not yet read weights"
         }
       }
     },
@@ -1285,8 +1519,11 @@
           "expect": "Animation object inside an open shadow root, named through the host",
           "today": "unmeasured"
         },
-        "row": {
+        "credit": {
           "expect": "Press step, +0"
+        },
+        "source": {
+          "expect": "CSS, started by key 5"
         },
         "crop": {
           "expect": "mail-chip"
@@ -1317,8 +1554,11 @@
           "expect": "Held with the parent page",
           "today": "unmeasured"
         },
-        "row": {
+        "credit": {
           "expect": "Press step, +0"
+        },
+        "source": {
+          "expect": "CSS, started by key 6"
         },
         "crop": {
           "expect": "#frame"
@@ -1350,8 +1590,11 @@
           "expect": "The cross-document transition's animations on the new document",
           "today": "unmeasured"
         },
-        "row": {
+        "credit": {
           "expect": "The navigate step, +0 on the new page"
+        },
+        "source": {
+          "expect": "CSS, started by page load, the cross-document view transition"
         },
         "crop": {
           "expect": "The viewport"
@@ -1374,8 +1617,11 @@
       "clock": "page time",
       "fault": null,
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Open and close steps, +0 each, including the exit"
+        },
+        "source": {
+          "expect": "CSS, started by key 7"
         },
         "crop": {
           "expect": "The dialog box with a margin; its ancestor is the top layer"
@@ -1398,8 +1644,11 @@
       "clock": "page time",
       "fault": null,
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Open and close steps, +0 each"
+        },
+        "source": {
+          "expect": "CSS, started by key 8"
         },
         "crop": {
           "expect": "#menu with a margin"
@@ -1422,8 +1671,11 @@
       "clock": "page time",
       "fault": null,
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Press step, +0, on ::details-content"
+        },
+        "source": {
+          "expect": "CSS, started by key 9"
         },
         "crop": {
           "expect": "#faq"
@@ -1449,8 +1701,11 @@
       "clock": "page time",
       "fault": null,
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Press step, +0, on --angle"
+        },
+        "source": {
+          "expect": "CSS, started by key 0"
         },
         "crop": {
           "expect": "#premium"
@@ -1473,8 +1728,11 @@
       "clock": "page time",
       "fault": null,
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Press step, +0, on offset-distance"
+        },
+        "source": {
+          "expect": "CSS, started by key ;"
         },
         "crop": {
           "expect": ".flight"
@@ -1497,8 +1755,11 @@
       "clock": "page time",
       "fault": null,
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Press step, +0, on clip-path"
+        },
+        "source": {
+          "expect": "CSS, started by key '"
         },
         "crop": {
           "expect": "#preview"
@@ -1521,11 +1782,17 @@
       "clock": "page time",
       "fault": null,
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Press step, +0",
-          "today": "works",
+          "today": "gap",
           "basis": "sequence:motion-seen-without-animation-objects",
-          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet"
+          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet; with the waits taken out (sequence:motion-makers-no-waits), a slow motion lands under whichever later step is running. Credited by timing, which the Credit rule reads as a gap"
+        },
+        "source": {
+          "expect": "SVG, started by beginElement() under key ,",
+          "today": "works",
+          "basis": "sequence:motion-makers-and-triggers",
+          "note": "SVG circle · from key , · beginElement()"
         },
         "crop": {
           "expect": "The dot's svg"
@@ -1535,6 +1802,11 @@
         },
         "tune": {
           "expect": "dur, on the animate element"
+        },
+        "compare": {
+          "today": "works",
+          "basis": "sequence:motion-makers-no-waits",
+          "note": "Press , matched 1/1. Measured by count: the comparison does not yet read weights"
         }
       }
     },
@@ -1548,11 +1820,17 @@
       "clock": "page time",
       "fault": null,
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Press step: the scroll, and under it every scroll row it drives",
-          "today": "works",
+          "today": "gap",
           "basis": "sequence:motion-seen-without-animation-objects",
-          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet"
+          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet; with the waits taken out (sequence:motion-makers-no-waits), a slow motion lands under whichever later step is running. Credited by timing, which the Credit rule reads as a gap"
+        },
+        "source": {
+          "expect": "JS, started by key . through scrollIntoView() or scrollTo()",
+          "today": "works",
+          "basis": "sequence:motion-makers-and-triggers",
+          "note": "JS catalog.html:665, jump · from key . · scrollTo(). Run straight after the wheel scroll (sequence:motion-makers-no-waits), the two scrolls of scrollY html and #hero-bg merge into one run and the jump’s rows read missing"
         },
         "crop": {
           "expect": "The viewport"
@@ -1562,6 +1840,29 @@
         },
         "tune": {
           "expect": "Not tunable; browser-defined"
+        },
+        "compare": {
+          "today": "gap",
+          "basis": "sequence:motion-makers-no-waits",
+          "note": "Press . matched 0/3: the wheel scroll and the jump merged into one run of scrollY html and #hero-bg. Measured by count: the comparison does not yet read weights"
+        }
+      }
+    },
+    {
+      "id": "nudge",
+      "page": "catalog.html",
+      "key": "\\",
+      "name": "Nudge",
+      "trigger": "action",
+      "mechanism": "waapi",
+      "clock": "page time",
+      "fault": null,
+      "cells": {
+        "credit": {
+          "expect": "Press step, +0"
+        },
+        "source": {
+          "expect": "JS catalog.html:736, the line of the animate() call in strict module code, started by key ; the go-to opens the module’s keydown listener, the outermost function on record"
         }
       }
     },
@@ -1575,11 +1876,17 @@
       "clock": "media clock",
       "fault": null,
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Play press: playing from +0. Pause press: paused at its time",
-          "today": "works",
+          "today": "gap",
           "basis": "sequence:motion-seen-without-animation-objects",
-          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet"
+          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet; with the waits taken out (sequence:motion-makers-no-waits), a slow motion lands under whichever later step is running. Credited by timing, which the Credit rule reads as a gap"
+        },
+        "source": {
+          "expect": "MEDIA, started by the play() or pause() call under key [",
+          "today": "works",
+          "basis": "sequence:motion-makers-and-triggers",
+          "note": "MEDIA catalog.html:669, toggleVideo · from key [ · play(); the pause row reads MEDIA catalog.html:669 · from key [ · pause()"
         },
         "crop": {
           "expect": "#promo"
@@ -1589,6 +1896,11 @@
         },
         "tune": {
           "expect": "Not tuned; the media is fixed"
+        },
+        "compare": {
+          "today": "works",
+          "basis": "sequence:motion-makers-no-waits",
+          "note": "Both presses of [ matched 1/1, the video running 50ms between them. Measured by count: the comparison does not yet read weights"
         }
       }
     },
@@ -1602,11 +1914,14 @@
       "clock": "page time",
       "fault": null,
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Press step, +0, 2s",
-          "today": "works",
+          "today": "gap",
           "basis": "sequence:motion-seen-without-animation-objects",
-          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet"
+          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet; with the waits taken out (sequence:motion-makers-no-waits), a slow motion lands under whichever later step is running. Credited by timing, which the Credit rule reads as a gap"
+        },
+        "source": {
+          "expect": "JS, started by key ]"
         },
         "crop": {
           "expect": "#envelope"
@@ -1629,11 +1944,14 @@
       "clock": "page time",
       "fault": null,
       "cells": {
-        "row": {
+        "credit": {
           "expect": "One source row from the press to the next press",
-          "today": "works",
+          "today": "gap",
           "basis": "sequence:motion-seen-without-animation-objects",
-          "note": "Its start sits under the press. Its end shows on the stopping press's row in both cases: as pixels #gl stopped when the last frame falls inside that step, and as last frame N ms before this step, not tied to it by time, when it falls before. The second credits no step, since time alone cannot separate a stopped loop from one that ended on its own"
+          "note": "Its start sits under the press. Its end shows on the stopping press's row in both cases: as pixels #gl stopped when the last frame falls inside that step, and as last frame N ms before this step, not tied to it by time, when it falls before. The second credits no step, since time alone cannot separate a stopped loop from one that ended on its own; with the waits taken out (sequence:motion-makers-no-waits), a slow motion lands under whichever later step is running. Credited by timing, which the Credit rule reads as a gap"
+        },
+        "source": {
+          "expect": "JS, started by key - · frame loop, drawGl"
         },
         "crop": {
           "expect": "#gl"
@@ -1656,11 +1974,14 @@
       "clock": "page time",
       "fault": "The highlight animates left, which lays out every frame",
       "cells": {
-        "row": {
+        "credit": {
           "expect": "Press step: three cards staggered 100ms, then the highlight",
-          "today": "works",
+          "today": "gap",
           "basis": "sequence:motion-seen-without-animation-objects",
-          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet"
+          "note": "Placed after the action it followed, by time; no evidence ties it to that action yet; with the waits taken out (sequence:motion-makers-no-waits), a slow motion lands under whichever later step is running. Credited by timing, which the Credit rule reads as a gap"
+        },
+        "source": {
+          "expect": "JS, started by key ="
         },
         "crop": {
           "expect": ".plans"
@@ -1672,6 +1993,101 @@
           "expect": "Timeline durations and x in place of left, in the source"
         }
       }
+    },
+    {
+      "id": "overlap",
+      "page": "catalog.html",
+      "key": null,
+      "name": "Two motions, two roots, at once",
+      "trigger": "action",
+      "mechanism": "css-transition",
+      "clock": "page time",
+      "fault": "A second press starts a transition while the first press’s is still running; each must keep its own root",
+      "cells": {
+        "credit": {
+          "expect": "Each motion credited to its own press; a motion both presses shaped names both"
+        }
+      }
+    },
+    {
+      "id": "same-element",
+      "page": "catalog.html",
+      "key": null,
+      "name": "Back to back on one element",
+      "trigger": "action",
+      "mechanism": "smooth-scroll",
+      "clock": "page time",
+      "fault": "A second scroll of the same element starts as the first ends, with no quiet gap between them",
+      "cells": {
+        "credit": {
+          "expect": "Two motions, each on the step of its own cause, not one run"
+        }
+      }
+    },
+    {
+      "id": "cause-change",
+      "page": "catalog.html",
+      "key": null,
+      "name": "Cause changes mid-run",
+      "trigger": "chain",
+      "mechanism": "frame-loop",
+      "clock": "page time",
+      "fault": "A frame loop a press started is retargeted by a later press while it runs",
+      "cells": {
+        "credit": {
+          "expect": "The run splits where the second press takes it over, each part on its own step"
+        }
+      }
     }
-  ]
+  ],
+  "triggers": {
+    "action": {
+      "credit": {
+        "expect": "The step of the action"
+      }
+    },
+    "chain": {
+      "credit": {
+        "expect": "The step of the action at the chain’s root"
+      }
+    },
+    "reply": {
+      "credit": {
+        "expect": "The step whose action sent the request"
+      }
+    },
+    "push": {
+      "credit": {
+        "expect": "Background, or the step that opened the stream"
+      }
+    },
+    "pointer": {
+      "credit": {
+        "expect": "The hover or drag step"
+      }
+    },
+    "repeating": {
+      "credit": {
+        "expect": "A track: started at its root step, with its period, stopped where it stops; its ticks are not counted per step"
+      },
+      "compare": {
+        "expect": "Compared as a track: its start, period and stop against the recording’s, never tick by tick"
+      }
+    },
+    "load": {
+      "credit": {
+        "expect": "The navigate step"
+      }
+    },
+    "scroll": {
+      "credit": {
+        "expect": "The step that started the scroll"
+      }
+    },
+    "app-controlled": {
+      "credit": {
+        "expect": "The step whose call changed its playback"
+      }
+    }
+  }
 }

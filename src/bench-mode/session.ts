@@ -1,7 +1,7 @@
 import type { Page, CDPSession } from 'puppeteer-core';
 import type { BenchServer } from '../bench-control.js';
 import type { Annotation, AnnotationTarget, StepTraffic } from '../annotation.js';
-import type { BoundaryRule, BurstView, CallbackEntry, HiddenKind, CaptureRecord, FactKind, PendingShot, TickResult } from '../bench/wire.js';
+import type { BoundaryRule, BurstView, FilmView, CallbackEntry, HiddenKind, CaptureRecord, FactKind, PendingShot, TickResult } from '../bench/wire.js';
 import { WriteWatch } from '../write-watch.js';
 import type { ElementFacts, StyleSheets } from '../element-facts.js';
 import { type SequenceDriver } from './driver.js';
@@ -299,6 +299,12 @@ export interface BenchSession extends BenchReport {
   recordingMotion?: Map<number, Record<string, MotionSetting>>;
   /** A burst a step filmed, waiting on the person to keep or drop it. */
   burst?: BurstView;
+  /** Motions marked to be filmed on their step's next run, as `step|kind`; each mark is taken when its film starts. */
+  filmMarks?: Set<string>;
+  /** Films still recording, as `step|kind`. */
+  filming?: Set<string>;
+  /** The latest film of each motion, as `step|kind`. */
+  films?: Record<string, FilmView>;
 }
 
 export const sessions = new Map<string, BenchSession>();

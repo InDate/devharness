@@ -36,10 +36,13 @@ import { createSequenceDriver, getSequencesRoot, labelFor } from '../bench-mode/
 import { answerCalls, describeDialog, type OpenDialog } from '../dialog-monitor.js';
 import { sanitizeReference } from '../reference-validator.js';
 import { holderWord, holdReading } from '../hold.js';
+import { markFilm, settledFilms } from '../bench-mode/motion-film.js';
+import { sessions } from '../bench-mode/session.js';
 
 const benchSchema = z.object({
-  action: z.enum(['start', 'stop', 'tick', 'hold', 'release', 'picker', 'motion', 'list', 'status', 'keepStep', 'dropStep', 'flagStep', 'sweep', 'retake', 'capture', 'baseline']),
-  on: z.boolean().optional().describe('motion: true records each animation the page starts as a MOTION row under its step, false stops; absent reads it'),
+  action: z.enum(['start', 'stop', 'tick', 'hold', 'release', 'picker', 'motion', 'film', 'list', 'status', 'keepStep', 'dropStep', 'flagStep', 'sweep', 'retake', 'capture', 'baseline']),
+  on: z.boolean().optional().describe('motion: true records each animation the page starts as a MOTION row under its step, false stops; absent reads it. film: false takes a mark away'),
+  kind: z.string().optional().describe('film: the motion row to film on its step\'s next run, as `animation transform #progress`; absent lists the films once none is recording'),
   connection: z.string()
     .describe('The connection, by the name connection launch or attach gave it'),
   steps: z.number().int().positive().max(1000).optional()
@@ -68,13 +71,13 @@ const benchSchema = z.object({
   })).optional()
     .describe('flagStep: selectors checked against the page, one row each, for the person to lock in with one click'),
   step: z.number().int().min(0).optional()
-    .describe('start: with sequence, run it to this 0-based step and hold there'),
+    .describe('start: with sequence, run it to this 0-based step and hold there. film: the 0-based step the motion runs under'),
   capture: z.string().optional()
     .describe('retake/capture: path of a capture file, any version of its series'),
   against: z.number().int().positive().optional()
     .describe('retake: the version to compare with (default 1)'),
   saveAs: z.string().optional()
-    .describe('Sequence step only (start): stores { url } of the bench page for later steps as {{var:name.url}}'),
+    .describe('Sequence step only. start: stores { url } of the bench page as {{var:name.url}}. film: stores the newest film, as {{var:name.slides}}'),
 }).strict();
 
 type BenchArgs = z.infer<typeof benchSchema>;
@@ -541,6 +544,29 @@ export function createBenchTools(
                 ? `Motion detection is on for "${connection}": each animation the page starts is recorded as a MOTION row under the step that started it, and kept on across restarts.`
                 : `Motion detection is off for "${connection}": animations are not recorded, and a replay does not compare the MOTION rows a recording holds.` }],
               _meta: buildMeta('motion', { active: true, motionDetect: on }),
+            };
+          }
+          case 'film': {
+            const session = sessions.get(connection);
+            if (!session) return createErrorResponse('BENCH_NOT_ACTIVE', { connection, action });
+            if (args.kind !== undefined) {
+              if (args.step === undefined) return createErrorResponse('VALIDATION_ERROR', { message: 'film with kind needs the step the motion runs under' });
+              markFilm(session, args.step, args.kind, args.on !== false);
+              const marked = args.on !== false;
+              return {
+                content: [{ type: 'text', text: marked
+                  ? `Marked "${args.kind}" at step ${args.step + 1}: the next run of that step films it, then the mark is taken.`
+                  : `Took the mark off "${args.kind}" at step ${args.step + 1}.` }],
+                _meta: buildMeta('film', { active: true, filmMarked: marked }),
+              };
+            }
+            const films = await settledFilms(session);
+            const latest = films[films.length - 1];
+            return {
+              content: [{ type: 'text', text: films.length
+                ? films.map(one => `step ${one.step + 1} ${one.kind}: ${one.frames} frames, ${one.slides} animation${one.slides === 1 ? '' : 's'}, ended ${one.endedBy}${one.outside ? `, outside the page: ${one.outside}` : ''} · ${one.dir}`).join('\n')
+                : 'No film taken in this bench yet.' }],
+              _meta: buildMeta('film', { active: true, films, ...(latest ? { film: latest } : {}) }),
             };
           }
           case 'picker': {

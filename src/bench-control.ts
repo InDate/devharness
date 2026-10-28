@@ -31,6 +31,7 @@ import { diffPixels, sideBySide } from './pixel-diff.js';
 import type { BenchView, BoundaryState, CaptureKind, CaptureRect, FactKind, RuleCatalogueEntry, SequenceOutline, HistoryEntry, HistoryDetail, ToolGroup, ToolRun, ToolValues, IssueRow, SequenceNote, ToolFavourite, ServerRow, ServerLog, RunningView } from './bench/wire.js';
 import type { RunsView } from './bench/wire.js';
 import type { ActivityMove, ExpectedValue, KindCount, MotionSetting } from './bench/kinds.js';
+import { shareFilm } from './bench-mode/motion-film.js';
 
 const FACT_KINDS: FactKind[] = ['events', 'css', 'html', 'a11y'];
 
@@ -85,6 +86,8 @@ export interface BenchHandlers {
   dismissBurst: (drop: boolean) => Promise<void>;
   setMotionDetect: (on: boolean) => Promise<void>;
   setStepMotion: (step: number, kind: string, setting: MotionSetting | null) => Promise<void>;
+  /** Mark one motion of a step to be filmed on its next run, or take the mark away. */
+  markFilm: (step: number, kind: string, on: boolean) => Promise<void>;
   replayMotionStep: (step: number) => Promise<void>;
   seekOne: (id: string, currentMs: number) => Promise<void>;
   setPersonInput: (on: boolean) => Promise<void>;
@@ -389,10 +392,22 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
             // beside the picture. A capture with no clean copy is its picture.
             const clean = asked.get('clean') === '1' ? (await readCapture(file).catch(() => undefined))?.clean : undefined;
             const bytes = clean ? encodePng(clean) : await readFile(file);
-            res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-store' });
+            res.writeHead(200, { 'content-type': file.endsWith('.jpg') ? 'image/jpeg' : 'image/png', 'cache-control': 'no-store' });
             return res.end(bytes);
           } catch {
             return send(res, 404, 'No such capture', 'text/plain');
+          }
+        }
+
+        // A film's frames and their details, read from its folder under the screenshots directory.
+        if (req.method === 'GET' && route === '/film') {
+          const root = resolve(getOutputPath('screenshots'));
+          const dir = resolve(new URL(req.url ?? '/', 'http://127.0.0.1').searchParams.get('dir') ?? '');
+          if (!dir.startsWith(root + sep)) return send(res, 403, 'Outside the screenshots directory', 'text/plain');
+          try {
+            return send(res, 200, await readFile(join(dir, 'film.json'), 'utf8'), 'application/json');
+          } catch {
+            return send(res, 404, 'No such film', 'text/plain');
           }
         }
 
@@ -619,6 +634,19 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
               const step = Number(body.step);
               if (!Number.isInteger(step) || step < 0 || typeof body.kind !== 'string') break;
               await handlers.setStepMotion(step, body.kind, motionSettingOf(body.setting));
+              break;
+            }
+            case '/film/share': {
+              const root = resolve(getOutputPath('screenshots'));
+              const dir = resolve(String(body.dir ?? ''));
+              if (!dir.startsWith(root + sep) || !Number.isInteger(body.from) || !Number.isInteger(body.to)) break;
+              await shareFilm(dir, body.from as number, body.to as number);
+              break;
+            }
+            case '/motion/film': {
+              const step = Number(body.step);
+              if (!Number.isInteger(step) || step < 0 || typeof body.kind !== 'string') break;
+              await handlers.markFilm(step, body.kind, body.on === true);
               break;
             }
             case '/motion/replay': {

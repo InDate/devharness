@@ -62,6 +62,16 @@ import { ignoreMatches, isFrame, keyOf, leavesOf, marksFields, samePayload, shap
 import { lineDiff, sideBySide } from './diff.js';
 import { jsonLines } from './json-lines.js';
 import { Fold, LabelInput, Row, type RowSlots } from './row.js';
+import { FilmStrip } from './film-strip.js';
+
+/** A motion row's film: the key it is marked under, and where it stands. */
+export interface FilmRow {
+  step: number;
+  kind: string;
+  marked: boolean;
+  filming: boolean;
+  taken?: { dir: string; frames: number };
+}
 
 /**
  * The same text with the origin taken off every URL in it.
@@ -1175,8 +1185,10 @@ function attribution(event: BoundaryEvent): string {
  */
 export function CrossingRow({
   event, base, rule, repeats, cadence: every, seen, stale, open, onOpen, actions, extra,
-  onMenu, verdict, moves, hidden, onGoToCause, onGoToTraffic, motion,
+  onMenu, verdict, moves, hidden, onGoToCause, onGoToTraffic, motion, film,
 }: {
+  /** An animation row's film: marked for the next play, filming now, or filmed. */
+  film?: FilmRow;
   /** An animation's row: how it is set to behave under its step, with the controls that set it. */
   motion?: MotionRow;
   /** Open History on the call this crossed under, where it carries one. */
@@ -1241,6 +1253,7 @@ export function CrossingRow({
     ...(actions?.rename ? ['rename'] as const : []),
     ...(actions?.report ? ['send'] as const : []),
     ...(moves ? ['up', 'down'] as const : []),
+    ...(film ? ['film'] as const : []),
     ...(onGoToTraffic || makerGo || (cause !== undefined && onGoToCause) ? ['open'] as const : []),
   ];
   return (
@@ -1335,6 +1348,7 @@ export function CrossingRow({
         ...(onGoToTraffic ? { open: onGoToTraffic } : makerGo ? { open: makerGo } : cause !== undefined && onGoToCause ? { open: () => onGoToCause(cause) } : {}),
         ...(actions?.rename ? { rename: () => setRenaming(true) } : {}),
         ...(actions?.report ? { send: () => actions.report!(event) } : {}),
+        ...(film ? { film: () => void postMotion(base, '/motion/film', { step: film.step, kind: film.kind, on: !film.marked }) } : {}),
         ...(moves?.up ? { up: moves.up } : {}),
         ...(moves?.down ? { down: moves.down } : {}),
         // On an intercepted row, × takes the interception away here: a local
@@ -1350,13 +1364,16 @@ export function CrossingRow({
           : hidden ? { hide: () => actions!.unhide?.(actions!.ignoredBy?.(event) ?? keyOf(event)) }
           : hidable ? { hide: () => actions!.hide(event) } : {}),
       }}
-      glyphs={{ open: onGoToTraffic ? 'goto:request' : reveals ? 'goto:code' : 'goto:history', ...(hidden ? { hide: 'eye' } : {}) }}
+      glyphs={{ open: onGoToTraffic ? 'goto:request' : reveals ? 'goto:code' : 'goto:history', ...(hidden ? { hide: 'eye' } : {}), ...(film?.marked || film?.filming ? { film: 'record' } : {}) }}
       titles={{
         ...(onGoToTraffic ? { open: 'go to this in Traffic' } : makerGo && makerWords ? { open: `go to ${makerWords}` } : cause !== undefined ? { open: event.commandIndex === undefined && event.openedBy !== undefined
           ? `go to history #${cause}, the call that opened the stream this arrived on`
           : `go to history #${cause}, the call this crossed under` } : {}),
         remove: rule?.mode === 'local' ? 'remove this interception' : 'stop intercepting this in this sequence',
         hide: hidden ? 'stop ignoring this - it is listed and compared again' : 'ignore this kind: out of the list and out of comparisons',
+        film: film?.filming ? 'filming this motion now'
+          : film?.marked ? 'marked: the next play of this step films it - press to take the mark away'
+          : film?.taken ? `filmed, ${film.taken.frames} frames - press to film it again on the next play` : 'film this motion on the next play of its step',
       }}
       open={open}
       onOpen={onOpen}
@@ -1370,6 +1387,7 @@ export function CrossingRow({
           {event.trigger && <><dt>source</dt><dd title="every way work entered the page on the way to this motion, first to last">{event.trigger}</dd></>}
         </dl>
       )}
+      {film?.taken && <FilmStrip base={base} dir={film.taken.dir} />}
       {motion
         ? <MotionEditor row={motion} />
         : <CrossingBody event={event} base={base} rule={rule} actions={actions} verdict={verdict} />}

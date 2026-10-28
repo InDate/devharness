@@ -206,7 +206,7 @@ export function Editing({ base, onReturn, returnsFromShot, card: askedCard }: {
     if (!next.delete(index)) next.add(index);
     return next;
   });
-  const activity = useActivity(base, state?.sequence, state?.motionDetect);
+  const activity = useActivity(base, state?.sequence, state?.motionDetect, state?.film);
   useEscape(activity.reading !== null, () => activity.setReading(null));
   useEscape(selection !== null, () => setSelection(null));
 

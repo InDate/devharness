@@ -17,6 +17,8 @@ export function Glyph({ of }: { of: string }) {
     play: <path d="M4 3l9 5-9 5z" />,
     headless: <><path d="M3 2.5l8 4.5-8 4.5z" /><rect x="10.6" y="10.6" width="3.8" height="3.8" rx="0.6" /></>,
     stop: <rect x="4" y="4" width="8" height="8" rx="1" />,
+    // Hollow while nothing is marked; the solid `record` once the next play films it.
+    film: <circle cx="8" cy="8" r="4.2" />,
     held: <><path d="M6 4v8" /><path d="M10 4v8" /></>,
     // A bell: the run tells the session something at this point.
     notify: <><path d="M4 11.5V7.5a4 4 0 0 1 8 0v4l1.2 1.3H2.8z" /><path d="M6.6 14a1.5 1.5 0 0 0 2.8 0" /></>,

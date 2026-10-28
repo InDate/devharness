@@ -26,6 +26,7 @@ import { clearBoundaryRule, hiddenOf, hideKind, nameTarget, namesOf, persistRule
 import { baselineSequence, playHere, playToStep, renameFromHome, runFromHome, runsView, stopRun } from './runs.js';
 import type { MotionSetting } from '../bench/kinds.js';
 import { answerBenchDialog, cancelSequence, replayMotionStep, setStepMotion, discardUnsavedSequence, undoSequence, saveUnsavedSequence, untitledName, commentSequenceStep, describeSequence, dismissSequenceFailure, repairSequenceStep, editSequenceStep, getSequenceState, gotoSequenceStep, insertSequenceCheck, insertSequenceTimer, moveSequenceStep, playSequence, removeSequence, removeSequenceStep, removeSequenceVariable, selectSequence, setSequenceBaseUrl, setSequenceSecret, setSequenceVariable, stepSequence, setPausePoint } from './sequence.js';
+import { markFilm } from './motion-film.js';
 import { type BenchSession, sessions } from './session.js';
 import { openSequence, openSteps, recordedStepOf, summariseBoundary, writeEvents } from './traffic.js';
 import { openerEntryOf } from '../activity-index.js';
@@ -108,6 +109,11 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
         motion: await motionOf(session),
         motionDetect: session.writeWatch?.animations ?? false,
         ...(session.burst ? { burst: session.burst } : {}),
+        film: {
+          marked: [...session.filmMarks ?? []],
+          filming: [...session.filming ?? []],
+          taken: Object.fromEntries(Object.entries(session.films ?? {}).map(([key, one]) => [key, { dir: one.dir, frames: one.frames.length, endedBy: one.endedBy }])),
+        },
         looseShots: session.pickShots ?? [],
         ...(session.recordingSequence ? { recordingPaused: session.recordingPaused === true } : {}),
       };
@@ -117,6 +123,7 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
     dismissBurst: async (drop: boolean) => { await dismissBurst(connection, drop); },
     setMotionDetect: async (on: boolean) => { await setMotionDetect(connection, on); },
     setStepMotion: async (step: number, kind: string, setting: MotionSetting | null) => { await setStepMotion(connection, step, kind, setting); },
+    markFilm: async (step: number, kind: string, on: boolean) => { markFilm(session, step, kind, on); },
     replayMotionStep: async (step: number) => { await replayMotionStep(connection, step); },
     seekOne: async (id: string, currentMs: number) => { await seekOne(connection, id, currentMs); },
     save: async (comment: string) => { await saveAnnotation(connection, comment); },

@@ -19,6 +19,7 @@ import { compareStep, isAnimationKind, type Crossing } from '../bench/step-compa
 import { crossingsOf } from '../step-slice.js';
 import { watchingMotion } from '../bench-mode/motion-detect.js';
 import { applyStepMotion } from '../bench-mode/motion-rules.js';
+import { startStepFilms } from '../bench-mode/motion-film.js';
 import { kindOf, type MotionSetting } from '../bench/kinds.js';
 import { writeEvents } from '../bench-mode/traffic.js';
 import { sessions } from '../bench-mode/session.js';
@@ -96,8 +97,10 @@ const CAPTURE_SOURCES: Record<string, (meta: any) => { found: boolean; value?: u
     : { found: false },
   // The bench page's address changes with every start, so a step that drives
   // the bench page reads it as {{var:<name>.url}} rather than a recorded literal.
+  // A film listing stores its newest film, so a check reads {{var:<name>.slides}}.
   bench: (meta) => meta?.bench?.state?.benchUrl
     ? { found: true, value: { url: meta.bench.state.benchUrl } }
+    : meta?.bench?.film ? { found: true, value: meta.bench.film }
     : { found: false },
 };
 
@@ -1406,6 +1409,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
       // starts; a check or a wait reads the moment the step before it left.
       if (stepConnection && !['check', 'assert', 'wait'].includes(cmd.tool)) {
         await applyStepMotion(sanitizeReference(stepConnection), (cmd as { motion?: Record<string, MotionSetting> }).motion);
+        await startStepFilms(sanitizeReference(stepConnection), i);
       }
       if (cmd.tool === 'input' && params.action === 'click' && typeof params.x === 'number' && typeof params.y === 'number') {
         await replayCursorCallbacks.onClickBefore?.(params.x, params.y, false);

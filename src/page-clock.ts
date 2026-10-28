@@ -310,7 +310,7 @@ function installPageClock(g: any): void {
       return rate;
     },
     /** Wall-time scheduling for devharness's own page scripts, out of page time and out of the callbacks a step runs. */
-    native: { setTimeout: native.setTimeout, clearTimeout: native.clearTimeout },
+    native: { setTimeout: native.setTimeout, clearTimeout: native.clearTimeout, perfNow: native.perfNow, requestAnimationFrame: native.requestAnimationFrame },
     /** Where page time stands, and how far behind wall time holds and slower speeds have left it. */
     state() {
       const now = pageNow();

@@ -4,7 +4,7 @@ import { ANIMATIONS_KEY, PAGE_ANIMATIONS_SOURCE } from './page-animations.js';
 import { PAGE_CLOCK_SOURCE, CLOCK_KEY } from './page-clock.js';
 
 /** An animation object as the page's own list hands it out, with the controls the record acts through. */
-function fakeAnimation(props: { transitionProperty?: string; animationName?: string; target?: any; duration?: number; delay?: number; easing?: string }) {
+function fakeAnimation(props: { transitionProperty?: string; animationName?: string; target?: any; duration?: number; delay?: number; easing?: string; keyframes?: Record<string, unknown>[] }) {
   const timing = { duration: props.duration ?? 300, delay: props.delay ?? 0, easing: props.easing ?? 'ease' };
   return {
     ...(props.transitionProperty !== undefined ? { transitionProperty: props.transitionProperty } : {}),
@@ -15,6 +15,7 @@ function fakeAnimation(props: { transitionProperty?: string; animationName?: str
       target: props.target,
       getComputedTiming: () => ({ duration: timing.duration, delay: timing.delay, iterations: 1 }),
       getTiming: () => ({ easing: timing.easing }),
+      getKeyframes: () => props.keyframes ?? [],
       updateTiming: (next: { duration?: number; delay?: number }) => Object.assign(timing, next),
     },
     pause() { this.playState = 'paused'; },
@@ -43,6 +44,21 @@ function pageWithAnimations() {
 }
 
 describe('the page\'s own animation list', () => {
+  it('reads a transition\'s start and end values from its keyframes, keyed by the property in camel case', () => {
+    const { animations, documentList } = pageWithAnimations();
+    documentList.push(fakeAnimation({
+      transitionProperty: 'stroke-dashoffset', target: element('path'),
+      keyframes: [{ offset: 0, strokeDashoffset: '24' }, { offset: 1, strokeDashoffset: '0' }],
+    }));
+    documentList.push(fakeAnimation({ animationName: 'rise', target: element('h2'), keyframes: [{ offset: 0, opacity: '0' }, { offset: 1, opacity: '1' }] }));
+
+    const [transition, keyframed] = animations.sweep().created;
+
+    expect(transition).toMatchObject({ name: 'stroke-dashoffset', from: '24', to: '0' });
+    expect(keyframed.from).toBeUndefined();
+    expect(keyframed.to).toBeUndefined();
+  });
+
   it('reports each animation once, named by what animates and on which element', () => {
     const { animations, documentList } = pageWithAnimations();
     documentList.push(fakeAnimation({ transitionProperty: 'opacity', target: element('div', { id: 'toast' }), duration: 1000 }));

@@ -2793,3 +2793,18 @@ dialog.varmodal::backdrop { background: rgba(0, 0, 0, 0.45); }
 .motionsource { display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; margin: 4px 0 8px; font-size: 12px; }
 .motionsource dt { color: var(--muted); }
 .motionsource dd { margin: 0; overflow-wrap: anywhere; }
+
+.filmstrip { margin: 4px 0 8px; outline: none; }
+.filmstrip:focus-visible { box-shadow: 0 0 0 1px var(--accent); }
+.filmframe { display: block; max-width: 100%; image-rendering: pixelated; border: 1px solid var(--line); background: var(--panel); }
+.filmcontrols { display: flex; align-items: center; gap: 6px; margin: 6px 0; }
+.filmcount { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.filmfacts dd code { overflow-wrap: anywhere; }
+.filmcut { position: relative; overflow: hidden; max-width: 100%; }
+.filmcut img { position: absolute; max-width: none; height: auto; }
+.filmtrack { position: relative; flex: 1; min-width: 0; height: 22px; cursor: pointer; touch-action: none; }
+.filmrail { position: absolute; left: 0; right: 0; top: 10px; height: 2px; background: var(--line); }
+.filmkept { position: absolute; top: 9px; height: 4px; background: var(--store); opacity: 0.35; }
+.filmat { position: absolute; top: 4px; width: 2px; height: 14px; margin-left: -1px; background: var(--fg); pointer-events: none; }
+.filmhandle { position: absolute; top: 2px; width: 8px; height: 18px; margin-left: -4px; border-radius: 2px; background: var(--store); cursor: ew-resize; }
+.filmshare { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 4px; }

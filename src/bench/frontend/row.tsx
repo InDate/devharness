@@ -37,6 +37,8 @@ export interface RowSlots {
   stop?: () => void;
   /** Empty what this row has gathered, such as a server's logs. */
   clear?: () => void;
+  /** Film this motion on the next play of its step. */
+  film?: () => void;
   remove?: () => void;
 }
 
@@ -56,6 +58,7 @@ export interface RowSlotTitles {
   sequence?: string;
   stop?: string;
   clear?: string;
+  film?: string;
 }
 
 /**
@@ -69,6 +72,7 @@ const SLOTS: Array<{ key: keyof RowSlots; glyph?: string; text?: string; title: 
   { key: 'remove', glyph: 'cross', title: 'remove this', off: 'nothing on this row to remove' },
   { key: 'hide', glyph: 'eyeoff', title: 'hide this kind of traffic from the list', off: 'this row cannot be hidden' },
   { key: 'rename', glyph: 'pen', title: 'name this', off: 'this row cannot be named' },
+  { key: 'film', glyph: 'film', title: 'film this motion on the next play of its step', off: 'only a motion can be filmed' },
   { key: 'capture', glyph: 'capture', title: 'take a capture for this', off: 'this row cannot carry a capture' },
   { key: 'send', glyph: 'arrow', title: 'hand this to the session', off: 'nothing on this row to hand to the session' },
   { key: 'up', glyph: 'up', title: 'list this under the step above, on every run', off: 'no step above to list this under' },

@@ -32,7 +32,7 @@ export interface PageAnimation {
   looping: boolean;
   playState: string;
   currentTime: number;
-  /** A motion with no Animation object: the value it started and ended at, and the frames it changed in. */
+  /** The value it started and ended at: a transition's keyframes, or a motion with no Animation object as it changed. Frames only on the latter. */
   from?: string;
   to?: string;
   frames?: number;
@@ -90,6 +90,15 @@ function installPageAnimations(g: any): void {
     return target.tagName.toLowerCase() + classes.map((one: string) => `.${one}`).join('');
   };
 
+  // A transition's keyframes hold its start and end values, keyed by the property in camel case.
+  const transitionEnds = (effect: any, property: string): { from: string; to: string } | undefined => {
+    const frames: any[] = effect && typeof effect.getKeyframes === 'function' ? effect.getKeyframes() : [];
+    const key = property.replace(/-([a-z])/g, (_: string, letter: string) => letter.toUpperCase());
+    const from = frames[0]?.[key];
+    const to = frames[frames.length - 1]?.[key];
+    return typeof from === 'string' && typeof to === 'string' ? { from, to } : undefined;
+  };
+
   const describe = (animation: any): PageAnimation => {
     const effect = animation.effect;
     const timing = effect && typeof effect.getComputedTiming === 'function' ? effect.getComputedTiming() : {};
@@ -100,6 +109,7 @@ function installPageAnimations(g: any): void {
     const trigger = tracker?.ofAnimation?.(animation);
     const maker = tracker?.animationMaker?.(animation) ?? {};
     const root = tracker?.rootOfAnimation?.(animation);
+    const ends = type === 'CSSTransition' ? transitionEnds(effect, String(animation.transitionProperty)) : undefined;
     return {
       id: idOf(animation),
       doc,
@@ -112,6 +122,7 @@ function installPageAnimations(g: any): void {
       looping: timing.iterations === Infinity,
       playState: String(animation.playState),
       currentTime: typeof animation.currentTime === 'number' ? animation.currentTime : 0,
+      ...(ends ?? {}),
       ...(trigger ? { trigger } : {}),
       ...maker,
       ...(root ? { root } : {}),

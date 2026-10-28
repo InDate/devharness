@@ -357,8 +357,20 @@ export interface ToolResponseMeta {
 
 /** Structured result of a bench action. Behaviour reads this, never the
  *  rendered text. */
+/** One film as the bench tool lists it. */
+export interface FilmSummary {
+  step: number;
+  kind: string;
+  frames: number;
+  /** The animations of its kind that ran while it filmed. */
+  slides: number;
+  endedBy: 'quiet' | 'nothing' | 'cap' | 'frames';
+  outside?: 'all' | 'part';
+  dir: string;
+}
+
 export interface BenchToolMeta {
-  action: 'start' | 'stop' | 'tick' | 'hold' | 'release' | 'picker' | 'motion' | 'list' | 'status'
+  action: 'start' | 'stop' | 'tick' | 'hold' | 'release' | 'picker' | 'motion' | 'film' | 'list' | 'status'
     | 'keepStep' | 'dropStep' | 'flagStep' | 'sweep' | 'retake' | 'capture' | 'baseline';
   /** Whether the bench is open on the connection, after this call. */
   active?: boolean;
@@ -366,6 +378,11 @@ export interface BenchToolMeta {
   filling?: number[];
   /** motion: whether each animation the page starts is recorded as a MOTION row. */
   motionDetect?: boolean;
+  /** film: whether the motion named is marked to be filmed on its step's next run. */
+  filmMarked?: boolean;
+  /** film: every film this bench holds, oldest first, and the newest, which a step's saveAs captures. */
+  films?: FilmSummary[];
+  film?: FilmSummary;
   /** start: the bench was already open, and was answered as it stood. */
   alreadyOpen?: boolean;
   connection?: string;

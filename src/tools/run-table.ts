@@ -125,7 +125,7 @@ function causedBy(source: number | Crossing[], rules: RunRules | undefined, read
  */
 function headlineText({ observation: one, count }: ObservationLine, reading: string | undefined): string {
   const motion = one.motion;
-  const matrix = motion && !motion.set && [motion.from, motion.to].some(value => value?.startsWith('matrix'));
+  const matrix = motion && !motion.set && motion.frames !== undefined && [motion.from, motion.to].some(value => value?.startsWith('matrix'));
   const text = matrix
     ? `${one.key}  ${CARRIER[motion.type]} over ${Math.round(motion.durationMs)}ms${motion.frames ? `, ${motion.frames} frame${motion.frames === 1 ? '' : 's'}` : ''}`
     : one.text;

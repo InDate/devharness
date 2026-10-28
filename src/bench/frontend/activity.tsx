@@ -6,13 +6,13 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import {
   CrossingRow, MissingRow, choicesIn, rearmRule, keyOf, labelOf, isFrame, stabilityIn, passesIn, socketName,
   ignoreMatches,
-  type RowMoves, type RuleActions, type RuleScope, type RowVerdict,
+  type FilmRow, type RowMoves, type RuleActions, type RuleScope, type RowVerdict,
 } from './crossing.js';
 import { countKinds, kindOf, marksFields, type KindCount } from '../kinds.js';
 import { compareStep, isAnimationKind, placementOf, passOf, pausesOf } from '../step-compare.js';
 import { Row } from './row.js';
 import { useShowHidden } from './focus.js';
-import type { BoundaryEvent, BoundaryState, SequenceState } from '../wire.js';
+import type { BenchView, BoundaryEvent, BoundaryState, SequenceState } from '../wire.js';
 
 /**
  * What the app did under each step of the open sequence, read against its
@@ -20,7 +20,7 @@ import type { BoundaryEvent, BoundaryState, SequenceState } from '../wire.js';
  * what a row can do. Read by every screen that lists a step's activity, so the
  * rows it shows and the decisions made on them are the same wherever they are.
  */
-export function useActivity(base: string, sequence: SequenceState | undefined, motionDetect = true) {
+export function useActivity(base: string, sequence: SequenceState | undefined, motionDetect = true, film?: BenchView['film']) {
   const [boundary, setBoundary] = useState<BoundaryState | null>(null);
   const [reading, setReading] = useState<string | null>(null);
   // Each row's last verdict, kept while the payload of a newer crossing of its
@@ -254,6 +254,22 @@ export function useActivity(base: string, sequence: SequenceState | undefined, m
     verdicts, missing, tallied, passes, move, actions, pauses,
     /** How each animation under a step is set to behave, by its kind. */
     motionAt: (step: number) => sequence?.steps?.[step]?.motion,
+    /**
+     * Where one motion's film stands: marked, filming, or filmed. A mark is
+     * the step's, since it starts the film when that step runs; a film runs on
+     * past its step, and a motion's row can be listed under another step on a
+     * later pass, so the row shows the film taken at its own step, else the
+     * newest film of its kind.
+     */
+    filmOf: (step: number, kind: string): FilmRow => {
+      const key = `${step}|${kind}`;
+      const newest = Object.entries(film?.taken ?? {})
+        .filter(([taken]) => taken.slice(taken.indexOf('|') + 1) === kind)
+        .map(([, one]) => one)
+        .sort((a, b) => b.dir.localeCompare(a.dir))[0];
+      const taken = film?.taken[key] ?? newest;
+      return { step, kind, marked: !!film?.marked.includes(key), filming: !!film?.filming.includes(key), ...(taken ? { taken } : {}) };
+    },
     /** A replay is out of reach while a run drives the page or a recording is open. */
     replayable: !!sequence?.name && !sequence.busy && !sequence.recording,
   };
@@ -465,6 +481,7 @@ export function ActivityRows({ activity, step, base, recording, notesAt, within 
           verdict={verdicts.get(rowOf(step, event))}
           moves={movesFor(event, kindOf(event))}
           {...(event.kind === 'write' && event.method === 'animation' && !event.url.endsWith(' stopped') && step < stepCount ? {
+            film: activity.filmOf(step, kindOf(event)),
             motion: {
               base, step, kind: kindOf(event),
               setting: activity.motionAt(step)?.[kindOf(event)],

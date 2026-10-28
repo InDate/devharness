@@ -764,6 +764,8 @@ export interface BenchView {
   /** The animations the page starts are recorded as rows under their steps, beside the traffic. */
   motionDetect: boolean;
   burst?: BurstView;
+  /** Motions marked for filming, filming now, and filmed, each as `step|kind`; a film's frames are read from its `dir`. */
+  film?: { marked: string[]; filming: string[]; taken: Record<string, { dir: string; frames: number; endedBy: FilmView['endedBy'] }> };
   /** Captures kept with no note yet, which join the next note saved. */
   looseShots: string[];
   /** Present while recording: the recording takes no steps while true. */
@@ -794,6 +796,44 @@ export interface MotionView {
   animations: AnimationView[];
   /** The page clock's reading; absent on a page opened before devharness put its clock in. */
   clock?: { now: number; behind: number; paused: boolean; rate: number };
+}
+
+/** One frame of a filmed motion, with what the page held as it was drawn. */
+export interface FilmFrame {
+  file: string;
+  /** ms from the film's start, the step about to run. */
+  atMs: number;
+  /** The viewport this frame covers, CSS px: it changes where a step resizes the page mid-film. */
+  viewport: { width: number; height: number };
+  /** The region of this frame the viewer shows: where the element stood while the viewport was this size, padded. Absent where it stood outside the viewport. */
+  clip?: { x: number; y: number; width: number; height: number };
+  /** The first frame at a new viewport size. */
+  resized?: true;
+  /** ms from the first animation of the kind starting. */
+  sinceMotionMs?: number;
+  /** The animated property's computed value as this frame was drawn. */
+  value?: string;
+  /** Where the element stood, CSS px of the viewport. */
+  box?: { x: number; y: number; width: number; height: number };
+  /** Which of the kind's animations was running, and how far into it. */
+  repeat?: { index: number; of: number; elapsedMs: number; durationMs: number; from?: string; to?: string; cutShort: boolean };
+  /** Traffic, writes and other motion within 60ms of the frame. */
+  near: string[];
+}
+
+/** One motion filmed through its step, cropped to its element. */
+export interface FilmView {
+  step: number;
+  kind: string;
+  dir: string;
+  /** `quiet`: its animations ended; `nothing`: none started; `cap` and `frames`: a limit was reached first. */
+  endedBy: 'quiet' | 'nothing' | 'cap' | 'frames';
+  durationMs: number;
+  /** What set its first animation going, as the page read it. */
+  cause?: string;
+  /** `all`: the element stood outside the viewport the whole film, so no frame shows it; `part`: some of it fell outside, cut from the crop. */
+  outside?: 'all' | 'part';
+  frames: FilmFrame[];
 }
 
 /** The frames a step filmed from its input, waiting on the person to keep or drop them. */

@@ -5,8 +5,8 @@ An inbox page whose animations each carry a fault that full-speed viewing does n
 Serve the folder and open it on the bench:
 
 ```
-python3 examples/motion/serve.py 4720
-bench({ action: 'start', connection: 'motion-demo', url: 'http://127.0.0.1:4720/' })
+python3 examples/motion/serve.py 4721
+bench({ action: 'start', connection: 'motion-demo', url: 'http://127.0.0.1:4721/' })
 ```
 
 Keys 1 to 4 press the four controls, so a sequence drives them with `input press`.
@@ -25,7 +25,7 @@ Keys 1 to 4 press the four controls, so a sequence drives them with `input press
 `catalog.html` holds the range of motion a real site carries, so a model of motion is tested against more than CSS transitions started by a press. Each row pairs a driver with a mechanism. Rows marked clean carry no fault, so a detector that flags them has a false positive.
 
 ```
-bench({ action: 'start', connection: 'motion-catalog-page', url: 'http://127.0.0.1:4720/catalog.html' })
+bench({ action: 'start', connection: 'motion-catalog-page', url: 'http://127.0.0.1:4721/catalog.html' })
 ```
 
 The carousel and the canvas start at page load and run for the whole session. `?ambient=off` leaves both stopped and the marquee still, for a sequence that judges another row without background motion.
@@ -88,4 +88,4 @@ Not covered: an animated GIF or WebP, and a spring library (react-spring, Motion
 
 `matrix.json` holds every scenario on both pages against each capability of the workbench loop: seen, credit (which step owns a motion, and on what evidence), compare (whether a replay reads as matched at any pace and window size, measured on `motion-makers-no-waits`), source, solo, hold and step, slow, snapshot crop, text flag, tune, and viewport and environment. Each cell carries what devharness is expected to do and how that stands today: works, gap, unmeasured or n/a, with its basis, `code` or `sequence:<name>`. A cell reads works only on a sequence basis. Defaults are written once per capability, per trigger and per mechanism, and a scenario carries only what differs. A scenario with no key is a case the demo does not stage yet: two motions with different roots at once, two back to back on one element, and a motion whose cause changes while it runs. What a credit rests on, who may change it and how a replay weighs it stand as conditions in `docs/landscapes/attribution.landscape`.
 
-`matrix.html` renders it as a grid filtered by page, trigger, mechanism and standing: `http://127.0.0.1:4720/matrix.html`.
+`matrix.html` renders it as a grid filtered by page, trigger, mechanism and standing: `http://127.0.0.1:4721/matrix.html`.

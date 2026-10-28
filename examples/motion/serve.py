@@ -61,7 +61,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
-port = int(sys.argv[1]) if len(sys.argv) > 1 else 4720
+port = int(sys.argv[1]) if len(sys.argv) > 1 else 4721
 root = os.path.dirname(os.path.abspath(__file__))
 server = http.server.ThreadingHTTPServer(('127.0.0.1', port), functools.partial(Handler, directory=root))
 print(f'Serving on http://127.0.0.1:{port}/', flush=True)

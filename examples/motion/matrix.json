@@ -442,7 +442,7 @@
           "expect": "Held at the frame stop; the group reads at 0ms",
           "today": "works",
           "basis": "sequence:motion-group-at-stop",
-          "note": "The hold group step passes on the bench's own reading, which a replay does not compare"
+          "note": "A check fails the run unless every animation on #panel and #backdrop stands at 0ms for 200ms under the hold at the frame stop, and runs on within 1s of the release"
         },
         "crop": {
           "expect": "#panel; the backdrop fade in text"

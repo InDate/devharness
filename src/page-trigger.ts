@@ -256,6 +256,9 @@ function installPageTrigger(g: any): void {
   // Where the pointer last stood: a pointerover at the same point is the page
   // moving under a pointer that stayed, which the browser reports as the
   // pointer arriving. That hover is the moving scroll's, and takes its root.
+  // The scroll event fires at the frame after the page moved, and a hover the
+  // move causes can reach here first, while the newest scroll event is still
+  // an earlier step's; so the hover takes the cause of the scroll running now.
   let pointerAt: { x: number; y: number } | undefined;
   const stayed = (event: any) => pointerAt !== undefined && event.clientX === pointerAt.x && event.clientY === pointerAt.y;
   listen(g, 'pointermove', (event: any) => {
@@ -273,9 +276,10 @@ function installPageTrigger(g: any): void {
   }, { capture: true, passive: true });
   listen(g, 'pointerover', (event: any) => {
     if (!event.isTrusted || event.pointerType !== 'mouse') return;
-    const scrolledUnder = stayed(event) ? lastScroll?.root : undefined;
+    const cause = stayed(event) ? scrollCauseMark() : undefined;
+    const scrolledUnder = cause?.root;
     pointerAt = { x: event.clientX, y: event.clientY };
-    lastHover = mark('pointer', scrolledUnder ? `${lastScroll!.words} · hover` : 'hover', scrolledUnder ? { root: scrolledUnder } : {});
+    lastHover = mark('pointer', scrolledUnder ? `scroll · ${cause!.words} · hover` : 'hover', scrolledUnder ? { root: scrolledUnder } : {});
     if (!scrolledUnder) holdThroughTask(lastHover.root);
     for (const left of leaving.splice(0)) unhovered.set(left, { words: `${lastHover.words} left`, ...(lastHover.root ? { root: lastHover.root } : {}) });
   }, { capture: true, passive: true });

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A hover the page scrolls from under a still pointer is credited to the
+  scroll that moved it.** The browser fires a scroll event a frame after the
+  page moves, so a step's wheel could unhover an element before its own scroll
+  event arrived, and the hover-left went to the step before, whose scroll
+  event was the newest. The hover now takes the cause of the scroll moving the
+  page at that moment.
+
 ## [0.17.1] - 2026-10-29
 
 ### Added

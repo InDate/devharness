@@ -9,6 +9,7 @@ function pageWithTracker() {
   const tasks: Array<() => void> = [];
   const frames: Array<() => void> = [];
   const reports: Array<{ id: string; open: boolean }> = [];
+  const clock = { ms: 0 };
   class EventTarget {
     addEventListener(this: any, type: string, fn: (event: any) => void) { listeners.set(type, [...(listeners.get(type) ?? []), fn]); }
     removeEventListener() {}
@@ -27,7 +28,7 @@ function pageWithTracker() {
     EventTarget,
     Document,
     document: { readyState: 'complete', documentElement: {}, addEventListener: () => {} },
-    performance: { now: () => 0 },
+    performance: { now: () => clock.ms },
     setTimeout: (run: () => void) => { tasks.push(run); return tasks.length; },
     clearTimeout: () => {},
     requestAnimationFrame: (run: () => void) => { frames.push(run); return frames.length; },
@@ -44,7 +45,7 @@ function pageWithTracker() {
     for (const frame of frames.splice(0)) frame();
     for (let task = tasks.shift(); task; task = tasks.shift()) task();
   };
-  return { page, fire, turn, reports, tasks, transitions };
+  return { page, fire, turn, reports, tasks, transitions, clock };
 }
 
 describe('the work outstanding under an input\'s root', () => {
@@ -90,6 +91,23 @@ describe('the work outstanding under an input\'s root', () => {
 
     fire('pointerover', { pointerType: 'mouse', clientX: 80, clientY: 60 });
     expect([keyRoot, pointerRoot]).not.toContain(tracker.rootNow().id);
+  });
+
+  it('credits a hover under a still pointer to the input scrolling now, ahead of its scroll event', () => {
+    const { page, fire, clock } = pageWithTracker();
+    const tracker = vm.runInContext("globalThis[Symbol.for('devharness.trigger')]", page);
+    tracker.ownScroll('hover #card', 'step 13');
+    const hoverScrollRoot = tracker.rootNow().id;
+    fire('pointerover', { pointerType: 'mouse', clientX: 40, clientY: 60 });
+    clock.ms = 16;
+    fire('scroll', {});
+    clock.ms = 40;
+    fire('wheel', {});
+    const wheelRoot = tracker.rootNow().id;
+
+    fire('pointerover', { pointerType: 'mouse', clientX: 40, clientY: 60 });
+    expect(tracker.rootNow().id).toBe(wheelRoot);
+    expect(wheelRoot).not.toBe(hoverScrollRoot);
   });
 
   it('credits the transition of an element the page scrolled from under the pointer to that scroll', () => {

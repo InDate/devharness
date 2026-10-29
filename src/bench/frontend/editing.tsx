@@ -448,7 +448,16 @@ export function Editing({ base, onReturn, returnsFromShot, card: askedCard }: {
         onClick={(e: MouseEvent) => { e.stopPropagation(); void post('/sequence/step/pause', { step, on: false }); }}>
         <Glyph of="cross" /><span class="pauselabel">remove</span></button>
     ) : undefined;
-    // Open unless folded by hand: a pause shows its bookends even when nothing happened in it.
+    // A pause nothing crossed in has nothing to open, so it is one line naming where the run stands.
+    if (events.length === 0 && inputs === 0) {
+      return (
+        <RunMark classes={(standing ? 'mark switch runfold empty here onit' : 'mark switch runfold empty') + point}
+          title={standing ? 'nothing has crossed while the run stands paused' : 'nothing crossed while the run was paused'} tools={remove}>
+          {standing ? `paused · step ${step + 1} runs next` : `paused, then resumed at step ${step + 1}`}
+        </RunMark>
+      );
+    }
+    // Open unless folded by hand.
     if (openRuns.has(key)) {
       return (
         <RunMark classes={(standing ? 'mark switch runfold here onit' : 'mark switch runfold') + point} title="open what crossed while the run was paused" onClick={() => toggleRun(key)} tools={remove}>

@@ -81,6 +81,8 @@ export interface BenchHandlers {
   revealMaker: (ref: number) => Promise<string>;
   changeHold: (action: 'hold' | 'release' | 'step', layers?: Array<'code' | 'ui' | 'network'>) => Promise<void>;
   setPicker: (armed: boolean) => Promise<void>;
+  /** End a view transition the hold stopped in flight at its last frame. */
+  skipViewTransition: () => Promise<void>;
   seek: (ms: number) => Promise<void>;
   setRate: (playbackRate: number) => Promise<void>;
   dismissBurst: (drop: boolean) => Promise<void>;
@@ -618,6 +620,7 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
               );
               break;
             case '/picker': await handlers.setPicker(!!body.armed); break;
+            case '/viewtransition/skip': await handlers.skipViewTransition(); break;
             case '/motion/seek': {
               const ms = Number(body.ms);
               if (Number.isFinite(ms) && ms > 0) await handlers.seek(ms);

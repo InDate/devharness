@@ -258,6 +258,9 @@ button.save.chosen { background: var(--own); border-color: var(--own); color: #f
 }
 .chip-toggle:hover:not(:disabled) { border-color: var(--accent); color: var(--fg); }
 .chip-toggle.on { border-color: var(--accent); color: var(--accent); }
+/* The one press a notice is waiting on, filled so it reads as the way on. */
+.chip-toggle.primary { border-color: var(--accent); background: var(--accent); color: var(--bg); }
+.chip-toggle.primary:hover:not(:disabled) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 85%, var(--fg)); color: var(--bg); }
 /* Dimmed, and the cursor that stands for an explanation rather than a
    refusal: the tooltip naming what to clear first is the whole reason to
    reach one of these, and a crossed circle warns the pointer off it. */
@@ -539,7 +542,6 @@ textarea.notewords::placeholder { color: var(--muted); }
 .pausecomma { margin-left: -6px; margin-right: 6px; }
 .pauseand { margin-right: 6px; }
 .pausedot { margin: 0 6px; }
-.pausenothing { text-align: center; margin: 6px 0; }
 .pausenamed svg, .pausechip svg, .pausecancel svg { display: block; }
 .mark.pausepoint .marktext, .mark.pausepoint .marktools { line-height: 1; }
 .pausechip { display: inline-flex; align-items: center; gap: 3px; font: inherit; padding: 1px 3px; border: 0; background: none; color: var(--muted); cursor: pointer; opacity: 0.45; }
@@ -580,15 +582,17 @@ textarea.notewords::placeholder { color: var(--muted); }
 .tool.on { border-color: var(--accent); color: var(--accent); }
 .tool:disabled { opacity: 0.35; cursor: not-allowed; }
 
-.sheetwrap { position: relative; }
+/* Shrinks to the picture, so the crop controls' percentages fall on the picture rather than the column. */
+.sheetwrap { position: relative; width: fit-content; max-width: 100%; margin: 14px auto; }
 .cropsettle {
   position: absolute; display: flex; gap: 4px; padding: 3px;
   transform: translate(-100%, -100%) translate(-6px, -6px);
   border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
 }
 .cropsettle .tool { display: inline-flex; align-items: center; padding: 4px 6px; }
+/* At its own pixels, shrunk to the column only: a small element scaled up to the column's width comes out stretched and blurred. */
 .sheet {
-  display: block; width: 100%; height: auto; border-radius: 6px; background: var(--panel);
+  display: block; max-width: 100%; height: auto; border-radius: 6px; background: var(--panel);
   cursor: crosshair; touch-action: none;
 }
 .draft textarea.why {
@@ -1809,6 +1813,7 @@ textarea.toolargs {
 .capturedialog { width: min(520px, 100%); text-align: center; }
 .capturetitle { margin: 4px 0 2px; font: 600 14px/1.4 -apple-system, sans-serif; }
 .capturestate { margin: 0 0 16px; }
+.capturedialog > .notice { margin: 0 0 12px; text-align: left; }
 .capturenote {
   margin: -8px 0 16px; padding: 6px 10px; border-left: 2px solid var(--note); text-align: left;
   white-space: pre-wrap; max-height: 6em; overflow: auto;
@@ -2305,7 +2310,7 @@ button.statedisc:hover { box-shadow: 0 0 0 3px color-mix(in srgb, var(--frost) 3
 .mark.switch.failed .marktext { color: var(--alert); }
 .mark.switch.runfold { cursor: pointer; }
 .mark.switch.runfold:hover::before, .mark.switch.runfold:hover::after, .mark.switch.runfold.open::before, .mark.switch.runfold.open::after { opacity: 0.8; }
-.mark.switch.runfold.running { cursor: default; }
+.mark.switch.runfold.running, .mark.switch.runfold.empty { cursor: default; }
 /* A check the run is reading: three dots that fill in one at a time, in a
    box three dots wide, so the words beside them hold still. */
 .dots { display: inline-block; width: 3ch; vertical-align: bottom; overflow: hidden; }

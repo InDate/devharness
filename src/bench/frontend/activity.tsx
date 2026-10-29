@@ -367,7 +367,6 @@ export function PauseCrossings({ activity, step, base }: { activity: Activity; s
     ...events.map(event => ({ at: event.at, event })),
     ...inputs.map(input => ({ at: input.at, input })),
   ].sort((a, b) => a.at - b.at);
-  if (rows.length === 0) return <p class="hint nothing pausenothing">no events</p>;
   return (
     <ol class="activitycards">
       {rows.map(row => 'event' in row

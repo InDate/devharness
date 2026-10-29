@@ -19,6 +19,7 @@ import { setInspectMode } from './cdp.js';
 import { changeHold, haltSequence, openDevtools, resumePausedRun, revealMaker, setHeld, setPicker } from './controls.js';
 import { setPersonInput } from './person-input.js';
 import { dismissBurst, motionOf, seekBench, seekOne, setBenchRate } from './motion.js';
+import { skipViewTransition, viewTransitionOf } from './view-transition.js';
 import { setMotionDetect } from './motion-detect.js';
 import { stepTraffic, tickBench } from './page-hold.js';
 import { addRecordingTimer, addRecordingVariable, cancelRecordingSequence, keepRecordingPaused, pauseRecording, testRecording, chooseStepSelector, dropRecordedStep, editRecordingVariable, flagRecordedStep, keepRecordedStep, recordSequence, stopRecordingSequence } from './recording.js';
@@ -86,6 +87,7 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
       const sequence = await getSequenceState(connection);
       const series = await seriesOfNotes(sequence);
       if (session.recordingPaused) await keepRecordingPaused(session);
+      const viewTransition = await viewTransitionOf(session);
       return {
         connection,
         pageUrl: page.url(),
@@ -95,6 +97,7 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
         holdable: holdableLayers(connection),
         pickerArmed: session.pickerArmed,
         personInput: isWatchingPersonInput(connection),
+        ...(viewTransition ? { viewTransition } : {}),
         tickMs: session.tickMs,
         totalSteps: session.totalSteps,
         lastTick: session.lastTick,
@@ -153,6 +156,7 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
         action === 'step' ? `stepped the ${named}` : `${action === 'hold' ? 'held' : 'released'} the ${named}`);
     },
     setPicker: async (armed: boolean) => { await setPicker(connection, armed); },
+    skipViewTransition: async () => { await skipViewTransition(connection); },
     setPersonInput: async (on: boolean) => { await setPersonInput(connection, on); },
     setHeld: async (held: boolean, resume?: boolean) => {
       await setHeld(connection, held, { kind: 'person' });

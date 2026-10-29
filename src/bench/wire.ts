@@ -731,6 +731,8 @@ export interface BenchView {
   pickerArmed: boolean;
   /** The person's input in the app is recorded into history. */
   personInput: boolean;
+  /** A view transition the hold stopped in flight, which leaves no element pickable; absent on a running page. */
+  viewTransition?: ViewTransitionView;
   tickMs: number;
   totalSteps: number;
   lastTick?: TickResult;
@@ -1123,4 +1125,10 @@ export interface BoundaryState {
    * is what the name states, and why a rule carries no sequence of its own.
    */
   forSequence?: string;
+}
+
+/** A view transition standing in a held page: the names of its groups, and whether this Chrome can skip it. */
+export interface ViewTransitionView {
+  names: string[];
+  skippable: boolean;
 }

@@ -321,6 +321,7 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
       {state.burst && <BurstSheet burst={state.burst} base={base} post={post} />}
       {state.shotArmed && (
         <CaptureDialog heldBefore={state.shotArmed.heldBefore} facts={state.factChoice} post={post}
+          viewTransition={state.viewTransition}
           note={state.shotArmed.annotationId
             ? (state.sequence?.steps ?? []).flatMap(step => step.annotations ?? [])
               .find(note => note.id === state.shotArmed!.annotationId)?.comment ?? ''

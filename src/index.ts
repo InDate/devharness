@@ -340,7 +340,7 @@ let orchestratorInstance: Orchestrator | null = null;
  * launch has made the page by then, and every later call on it finds it watched.
  */
 /** Each held launch, by the sanitized name of its connection: the call that holds it and the tty its window waits on. */
-const heldLaunches = new Map<string, { call: string; tty: string }>();
+const heldLaunches = new Map<string, { call: string; tty: string; calledAt: string }>();
 
 async function watchNamedPage(params: Record<string, unknown> | undefined): Promise<void> {
   const named = params?.connection;
@@ -923,25 +923,28 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
       // second call on it would launch a second Chrome.
       const held = heldName !== undefined ? heldLaunches.get(heldName) : undefined;
       if (held !== undefined) {
-        return createSuccessResponse('CALL_WAITS_ON_HELD_LAUNCH', { call: called, connection: heldName, launching: held.call, tty: held.tty });
+        return createSuccessResponse('CALL_WAITS_ON_HELD_LAUNCH', { call: called, connection: heldName, launching: held.call, tty: held.tty, calledAt: held.calledAt });
       }
+      // When the call came in: a held call's launch event carries it, so an
+      // event from an earlier held call is not read as this one's.
+      const calledAt = new Date().toISOString();
       const outcome = await releaseWhenHeld(() => arriveOn('mcp', () => underDialogs(dialogTargetOf(validation.data), toolName, validation.data, extra?.signal, signal => (commandIndex !== null
         ? unlisted(() => tool.handler(validation.data, signal))
         : tool.handler(validation.data, signal)))));
       if (!outcome.done) {
         const session = resolveSessionName();
-        if (heldName !== undefined) heldLaunches.set(heldName, { call: called, tty: outcome.tty });
+        if (heldName !== undefined) heldLaunches.set(heldName, { call: called, tty: outcome.tty, calledAt });
         void outcome.rest.then(
           async finished => {
             if (commandIndex !== null) commandRecorder.attachResult(commandIndex, finished);
             await watchNamedPage(params);
             const reply = finished.content.map((part: { text?: string }) => part.text ?? '').join('\n');
-            await appendEvent(session, 'launch', { call: called, held: false, detail: `${called} finished: ${reply.split('\n')[0]}`, reply });
+            await appendEvent(session, 'launch', { call: called, ...(heldName !== undefined ? { connection: heldName } : {}), calledAt, held: false, detail: `${called} (called ${calledAt}) finished: ${reply.split('\n')[0]}`, reply });
           },
-          error => appendEvent(session, 'launch', { call: called, held: false, failed: true, detail: `${called} failed: ${error?.response?.content?.[0]?.text ?? error}` }),
+          error => appendEvent(session, 'launch', { call: called, ...(heldName !== undefined ? { connection: heldName } : {}), calledAt, held: false, failed: true, detail: `${called} (called ${calledAt}) failed: ${error?.response?.content?.[0]?.text ?? error}` }),
         ).finally(() => { if (heldName !== undefined) heldLaunches.delete(heldName); });
       }
-      const result = outcome.done ? outcome.value : createSuccessResponse('CALL_HELD_FOR_DESKTOP', { call: called, tty: outcome.tty });
+      const result = outcome.done ? outcome.value : createSuccessResponse('CALL_HELD_FOR_DESKTOP', { call: called, tty: outcome.tty, calledAt });
 
       if (commandIndex !== null) {
         commandRecorder.attachResult(commandIndex, result);

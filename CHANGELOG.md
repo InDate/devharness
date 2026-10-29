@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.5] - 2026-10-29
+
+### Fixed
+
+- **A monitored port bound to `127.0.0.1` reads as up on Node 18.** The port
+  probe connected to `localhost`, which Node 18 resolves to `::1` first; a
+  server listening on IPv4 alone refused it, the port read as down, and a
+  `block` monitor held calls on a server that was up. The probe now tries
+  both address families, as Node 20 does by default.
+
 ## [0.17.4] - 2026-10-29
 
 ### Fixed

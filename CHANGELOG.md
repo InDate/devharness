@@ -7,8 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.2] - 2026-10-29
+
+### Added
+
+- **A paused run names the step that runs next.** Every reply that leaves a
+  run paused - `stepTo`, a breakpoint, a pause point, a person's input, a
+  stopped step, a refused click, and `run status` - reads "step N of total
+  runs next", and carries `replay.nextStep` and `totalSteps` in `_meta`. It
+  read "at step 5 of 38", which left open whether step 5 had run.
+- **Launch, bench start and run replies say whether the browser is headless
+  or windowed**, and `_meta.launch.headless` carries it.
+
 ### Fixed
 
+- **A launch no longer lands in a Chrome of the other visibility.** A launch
+  with no port opened a tab in the Chrome on the session's port whatever its
+  visibility, so a windowed bench start after a headless launch came up in a
+  browser nobody could see, and reported open. It now takes a free port; one
+  naming that port is refused with CHROME_PORT_VISIBILITY_MISMATCH.
+- **The bench scrolls to the step a run stops on, and to a capture draft.**
+  In a list of hundreds of steps they could sit far down the column.
+- **A held view transition is named in the capture dialog, with a skip.**
+  While one is active Chrome hit-tests the whole document as its root, and a
+  hold keeps it active, so every pick took the whole page. The dialog names
+  it and skips it to its end on a press.
+- **A capture shows at its own size.** A small element was scaled up to the
+  column's width, stretched and blurred; it is now drawn at its own pixels,
+  centred, and shrunk only to fit.
+- **An empty pause is one line.** A pause nothing crossed in opened to a fold
+  reading "no events"; it now reads "paused · step N runs next".
 - **A hover the page scrolls from under a still pointer is credited to the
   scroll that moved it.** The browser fires a scroll event a frame after the
   page moves, so a step's wheel could unhover an element before its own scroll

@@ -941,9 +941,9 @@
       "cells": {
         "credit": {
           "expect": "Under the hover step, +0",
-          "today": "gap",
+          "today": "works",
           "basis": "sequence:motion-makers-no-waits",
-          "note": "Played against a baseline taken on the same build, #card's transform and box-shadow transitions were credited to the hover of #late-card, one step before the hover of #card that the baseline credits them to"
+          "note": "Six plays against a baseline taken on the same build credit #card's hover transitions to the hover of #card and its hover-left transitions to the scroll after it. A hover under a still pointer takes the cause of the scroll moving the page, so the scroll event of the step before, which fires a frame late, no longer claims it"
         },
         "source": {
           "expect": "CSS, started by hover",
@@ -961,9 +961,9 @@
           "expect": "Duration and lift, in the stylesheet"
         },
         "compare": {
-          "today": "gap",
+          "today": "works",
           "basis": "sequence:motion-makers-no-waits",
-          "note": "The hover of #card read its two transitions as missing, and the hover of #late-card read them as new, against a baseline taken on the same build. Measured by count: the comparison does not yet read weights"
+          "note": "Six plays against a baseline taken on the same build match the hover of #card 4/4 and the scroll after it 4/4 on #card's rows. Measured by count: the comparison does not yet read weights"
         }
       }
     },

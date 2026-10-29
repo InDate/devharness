@@ -60,3 +60,29 @@ export function useGoToTarget<T extends HTMLElement>(id: string) {
   }, []);
   return ref;
 }
+
+/** The nearest ancestor that scrolls its content, or null where the page itself scrolls. */
+function scrollerOf(el: HTMLElement): HTMLElement | null {
+  for (let at = el.parentElement; at; at = at.parentElement) {
+    const { overflowY } = getComputedStyle(at);
+    if ((overflowY === 'auto' || overflowY === 'scroll') && at.scrollHeight > at.clientHeight) return at;
+  }
+  return null;
+}
+
+/**
+ * Scroll the element of this id to the middle of the pane that holds it, where
+ * any part of it lies outside that pane; one wholly in view stays where it is,
+ * so a person reading near it is not moved.
+ */
+export function bringOnScreen(id: string): void {
+  requestAnimationFrame(() => {
+    const there = document.getElementById(id);
+    if (!there) return;
+    const box = there.getBoundingClientRect();
+    const scroller = scrollerOf(there);
+    const view = scroller ? scroller.getBoundingClientRect() : { top: 0, bottom: window.innerHeight };
+    if (box.top >= view.top && box.bottom <= view.bottom) return;
+    there.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+}

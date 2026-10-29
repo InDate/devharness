@@ -215,7 +215,7 @@ export function Draft({
   }
 
   return (
-    <article class="draft">
+    <article class="draft" id="shot-draft">
       {/* The selector holds a row of its own: it is the only part of this head
           that runs to any length, and sharing a row with the controls pushes
           them about as it grows or wraps them onto a second line. */}

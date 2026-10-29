@@ -12,7 +12,7 @@ import type {
   Annotation, BenchView, BoundaryEvent, CaptureRect, CaptureVersion, FactKind, RanStep, RunRow, SecretVariable, SequenceCard, SequenceOutline, SequenceStep, SequenceVariable,
 } from '../wire.js';
 import { useEscape } from './escape.js';
-import { askSection, useGoToAnyTarget } from './goto.js';
+import { askSection, bringOnScreen, useGoToAnyTarget } from './goto.js';
 import { comparisonOf, readsCrossings } from '../check-words.js';
 import { keyOf, kindOf, type KindCount } from '../kinds.js';
 import { socketName } from './crossing.js';
@@ -268,6 +268,31 @@ export function Editing({ base, onReturn, returnsFromShot, card: askedCard }: {
     setSelection(null);
     anchor.current = null;
   }, [stepsKey]);
+
+  // A list of hundreds of steps leaves the step a run stopped on, and a capture
+  // drafted under it, anywhere down the column: each is brought on screen once,
+  // as the run comes to rest there or the capture opens. The row can draw a
+  // render after the state that names it, so the scroll stays owed until it does.
+  const resting = state?.sequence;
+  const restingAt = resting?.name && !resting.busy && (resting.paused || resting.failure || resting.heldAt)
+    ? `${resting.name}#${resting.currentStep}` : null;
+  const drafting = !!state?.shot;
+  const owed = useRef<{ resting: string | null; drafting: boolean; ids: Set<string> }>({ resting: null, drafting: false, ids: new Set() });
+  if (restingAt !== owed.current.resting) {
+    owed.current.resting = restingAt;
+    if (restingAt) owed.current.ids.add('step-here');
+  }
+  if (drafting !== owed.current.drafting) {
+    owed.current.drafting = drafting;
+    if (drafting) owed.current.ids.add('shot-draft');
+  }
+  useEffect(() => {
+    for (const id of owed.current.ids) {
+      if (!document.getElementById(id)) continue;
+      owed.current.ids.delete(id);
+      bringOnScreen(id);
+    }
+  });
 
   if (ended) return <p class="hint">the bench has been closed on this connection</p>;
   if (!state) return <p class="hint">reading the session…</p>;

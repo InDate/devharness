@@ -403,7 +403,7 @@ export class PortMonitor {
       this.scheduleReconnect(port);
     });
 
-    socket.connect(port, 'localhost');
+    socket.connect({ port, host: 'localhost', autoSelectFamily: true });
   }
 
   private scheduleReconnect(port: number): void {
@@ -1067,7 +1067,7 @@ export class ServerManager {
         resolve(false);
       });
 
-      socket.connect(port, 'localhost');
+      socket.connect({ port, host: 'localhost', autoSelectFamily: true });
     });
   }
 

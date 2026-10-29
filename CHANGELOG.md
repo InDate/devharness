@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.4] - 2026-10-29
+
+### Fixed
+
+- **`insert` puts the steps into the sequence its `name` or `sequenceId`
+  names.** A sequence left paused by an earlier run took every insert, and
+  the steps landed in a new `<paused>-modified` copy while the named sequence
+  kept its old steps. The paused sequence now takes the steps only when the
+  name or id given is its own; any other target is read from memory or disk,
+  changed and written back. A named insert with no `insertAfterStep` appends.
+
 ## [0.17.3] - 2026-10-29
 
 ### Fixed

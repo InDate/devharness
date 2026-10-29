@@ -233,7 +233,8 @@
       "hold": {
         "expect": "Cut where it stands when the screen is held; the page stays there at release",
         "today": "works",
-        "basis": "sequence:screen-hold-stops-time-not-js"
+        "basis": "sequence:screen-hold-stops-time-not-js",
+        "note": "The run reads the hold through evaluateExpression steps, and a replay neither stores nor compares what they return: the steps passing shows they ran, not that time stood still. The sequence opens on a press with no navigate and no hold step, so its first step reads whatever the sequence before it left"
       },
       "slow": {
         "expect": "Slowed with the page",
@@ -282,7 +283,8 @@
       "hold": {
         "expect": "Paused with page time, played again at release",
         "today": "works",
-        "basis": "sequence:screen-hold-pauses-and-resumes-video"
+        "basis": "sequence:screen-hold-pauses-and-resumes-video",
+        "note": "The run reads the hold through evaluateExpression steps, and a replay neither stores nor compares what they return: the steps passing shows they ran, not that time stood still. The sequence opens with no navigate, so its first step reads whatever the sequence before it left"
       },
       "slow": {
         "expect": "Its playbackRate follows rate",
@@ -301,7 +303,8 @@
       "hold": {
         "expect": "Held with the document timeline the CSS rate stops",
         "today": "works",
-        "basis": "sequence:smil-holds-with-page"
+        "basis": "sequence:smil-holds-with-page",
+        "note": "The run reads the hold through evaluateExpression steps, and a replay neither stores nor compares what they return: the steps passing shows they ran, not that time stood still"
       },
       "slow": {
         "expect": "Slowed with the document timeline's rate",
@@ -438,7 +441,8 @@
         "hold": {
           "expect": "Held at the frame stop; the group reads at 0ms",
           "today": "works",
-          "basis": "sequence:motion-group-at-stop"
+          "basis": "sequence:motion-group-at-stop",
+          "note": "The hold group step passes on the bench's own reading, which a replay does not compare"
         },
         "crop": {
           "expect": "#panel; the backdrop fade in text"
@@ -917,6 +921,11 @@
         },
         "env": {
           "expect": "The closed position follows the sheet's height"
+        },
+        "seen": {
+          "expect": "Style writes from frame callbacks: transform #sheet js style translateY(204px) → translateY(0px) over 633ms, 39 frames",
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key"
         }
       }
     },
@@ -932,9 +941,9 @@
       "cells": {
         "credit": {
           "expect": "Under the hover step, +0",
-          "today": "works",
+          "today": "gap",
           "basis": "sequence:motion-makers-no-waits",
-          "note": "#card's transform and box-shadow transitions credited to the hover step by root, and their reversal when a wheel scroll moves the card from under the pointer credited to the scroll step"
+          "note": "Played against a baseline taken on the same build, #card's transform and box-shadow transitions were credited to the hover of #late-card, one step before the hover of #card that the baseline credits them to"
         },
         "source": {
           "expect": "CSS, started by hover",
@@ -952,9 +961,9 @@
           "expect": "Duration and lift, in the stylesheet"
         },
         "compare": {
-          "today": "works",
+          "today": "gap",
           "basis": "sequence:motion-makers-no-waits",
-          "note": "The hover of #card matched 4/4. Measured by count: the comparison does not yet read weights"
+          "note": "The hover of #card read its two transitions as missing, and the hover of #late-card read them as new, against a baseline taken on the same build. Measured by count: the comparison does not yet read weights"
         }
       }
     },
@@ -1440,6 +1449,11 @@
         },
         "tune": {
           "expect": "Period and amplitude, in the source"
+        },
+        "seen": {
+          "expect": "Style writes from frame callbacks, each frame a fresh closure: transform span.dot js style over 50ms, 4 frames",
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key"
         }
       }
     },
@@ -2103,6 +2117,14 @@
       "cells": {
         "credit": {
           "expect": "Two motions, each on the step of its own cause, not one run"
+        },
+        "seen": {
+          "today": "unmeasured",
+          "note": "The demo does not stage this case; the mechanism default does not carry to it"
+        },
+        "hold": {
+          "today": "unmeasured",
+          "note": "The demo does not stage this case; the mechanism default does not carry to it"
         }
       }
     },
@@ -2118,6 +2140,14 @@
       "cells": {
         "credit": {
           "expect": "The run splits where the second press takes it over, each part on its own step"
+        },
+        "seen": {
+          "today": "unmeasured",
+          "note": "The demo does not stage this case; the mechanism default does not carry to it"
+        },
+        "hold": {
+          "today": "unmeasured",
+          "note": "The demo does not stage this case; the mechanism default does not carry to it"
         }
       }
     }

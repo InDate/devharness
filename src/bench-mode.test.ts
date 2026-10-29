@@ -1303,6 +1303,24 @@ describe('stepping a sequence', () => {
     expect(after!.name).toBeUndefined();
   });
 
+  it('runs step 1 inside a play from the start, so the play\'s reply reads from before it', async () => {
+    const client = createFakeClient();
+    const sequences = fakeSequences();
+    let entries = 0;
+    const goto = sequences.goto;
+    sequences.goto = async (step: number) => { entries += 1; return goto(step); };
+    sequences.historyIndex = () => entries;
+    const replies: Array<{ since: number; compare?: boolean }> = [];
+    sequences.runReply = input => { replies.push(input); return 'checkout-flow completed'; };
+    await startWithSequences(client, sequences);
+    await selectSequence(CONNECTION, 'checkout-flow');
+
+    await playSequence(CONNECTION, { fromStart: true, compare: false });
+
+    expect(sequences.calls.filter(c => c === 'goto:0' || c === 'step')).toEqual(['goto:0', 'step', 'step']);
+    expect(replies).toEqual([expect.objectContaining({ since: 0, compare: false })]);
+  });
+
   /** A run that a breakpoint the sequence did not set stops at step `at`, until a later step moves it on. */
   function heldAt(sequences: ReturnType<typeof fakeSequences>, at: number) {
     const open = sequences.active;

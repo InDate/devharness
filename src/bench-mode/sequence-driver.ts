@@ -854,10 +854,11 @@ export function createSequenceDriver(
 
     historyIndex: () => commandRecorder.getCurrentHistoryIndex(),
 
-    runReply: ({ name, connection, total, since, failure, paused }) => formatRunReply(commandRecorder, {
+    runReply: ({ name, connection, total, since, failure, paused, compare }) => formatRunReply(commandRecorder, {
       name, total, since, rules: rulesForRun(connection), pauses: pausesIn(connection),
       ...(failure ? { failures: new Map([[failure.step, failure.why]]) } : {}),
       ...(paused ? { paused: true } : {}),
+      ...(compare === false ? { compare: false } : {}),
     }),
 
     setPause: async (step: number, change: { on?: boolean; holds?: Array<'code' | 'ui' | 'network'>; note?: string; notify?: boolean }) => {

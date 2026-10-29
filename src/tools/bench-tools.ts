@@ -21,6 +21,7 @@ import { benchWindowKey, placeWindow, rememberedBounds, trackWindow } from '../w
 import { translateSequence } from './legacy-steps.js';
 import type { SourceMapHandler } from '../sourcemap-handler.js';
 import type { CommandRecorder } from '../command-recorder.js';
+import { formatRunReply } from './run-table.js';
 import { createTool } from '../validation-helpers.js';
 import { createSuccessResponse, createErrorResponse, formatCodeBlock } from '../messages.js';
 import { checkBrowserAutomation } from '../error-helpers.js';
@@ -320,6 +321,7 @@ export function createBenchTools(
               const opened = await selectSequence(connection, args.sequence);
               if (opened?.failure) return createErrorResponse('BENCH_BASELINE_FAILED', { connection, sequence: args.sequence, failure: opened.failure });
             }
+            const since = commandRecorder.getCurrentHistoryIndex();
             const taken = await baselineSequence(connection);
             const name = taken?.name ?? args.sequence ?? 'the open sequence';
             if (!taken || taken.failure) {
@@ -327,7 +329,8 @@ export function createBenchTools(
             }
             const filling = taken.baseline?.filling ?? [];
             const response = createSuccessResponse('BENCH_BASELINED', {
-              connection, sequence: name, total: taken.total,
+              connection, sequence: name,
+              played: formatRunReply(commandRecorder, { name, total: taken.total, since, compare: false }).split('\n')[0],
               filling: filling.length ? `Step${filling.length === 1 ? '' : 's'} ${filling.join(', ')} still had work running when the play ended; each is taken again as it settles.` : undefined,
             });
             return { ...response, _meta: buildMeta('baseline', { active: true, connection, ...(filling.length ? { filling } : {}) }) };

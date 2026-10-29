@@ -37,6 +37,8 @@ export interface RunReplyInput {
   pauses?: Map<number, Crossing[]>;
   /** A person's input that landed on the run's page between steps. */
   person?: ExecutionResult['personInput'];
+  /** false for a play that takes the baseline: compared with the one it replaces, every change would read as a mismatch. */
+  compare?: boolean;
 }
 
 /**
@@ -258,8 +260,9 @@ function rulesBlock(rows: Row[], rules: RunRules | undefined, pauses: Map<number
 }
 
 export function formatRunReply(recorder: CommandRecorder, input: RunReplyInput): string {
-  const rows = rowsOf(recorder, input.name, input.since);
-  const own = rows.filter(row => !row.label.includes('.'));
+  const rows = rowsOf(recorder, input.name, input.since)
+    .map(row => (input.compare === false ? { ...row, match: undefined } : row));
+  const own =rows.filter(row => !row.label.includes('.'));
   const reached = own.reduce((most, row) => Math.max(most, row.step), 0);
   const failedRow = rows.find(row => row.outcome === 'failed');
   // A step that failed before its call was recorded has no row; its reason comes from the executor alone.

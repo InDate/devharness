@@ -207,3 +207,20 @@ describe('a step whose roots had not settled when the run ended', () => {
     expect(reply).not.toContain('unmatched');
   });
 });
+
+describe('the reply of a play that takes the baseline', () => {
+  it('counts each step and reads no match against the baseline it replaces', () => {
+    const steps = [
+      { index: 3, run: 'motion', runStep: 0, stepMatch: { matched: 1, kinds: 1, unmatched: [] } },
+      { index: 4, run: 'motion', runStep: 1, stepMatch: { matched: 0, kinds: 2, unmatched: [{ kind: 'animation opacity #toast', reasons: ['new'] }, { kind: 'animation left #plan-pick', reasons: ['still arriving'] }] } },
+    ].map(step => ({ ...step, tool: 'input', params: {}, timestamp: step.index, result: { content: [] } }));
+    const history = { getHistory: () => [...steps].reverse() } as unknown as CommandRecorder;
+
+    const reply = formatRunReply(history, { name: 'motion', total: 2, since: 2, steps: 'all', compare: false });
+
+    expect(reply.split('\n')[0]).toBe('motion completed 2 of 2 · 2 passed');
+    expect(reply).not.toContain('unmatched');
+    expect(reply).not.toContain('still arriving');
+    expect(reply).toContain('| 1 input | #3 | passed |  |');
+  });
+});

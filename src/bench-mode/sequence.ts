@@ -581,18 +581,31 @@ function holdRecordingNote(session: BenchSession, index: number, comment: string
  * `announce: false` for a play an MCP call started, whose reply already
  * carries the run table; any other play - a person's, a baseline - puts its
  * reply on the session's event stream, so the session reads the same run.
+ *
+ * `fromStart` starts a fresh run at step 1 inside the play, after its history
+ * index and start times are taken: run before them, step 1 fell outside the
+ * run table, the run log's tallies and the baseline's fingerprints.
+ *
+ * `compare: false` leaves each step's match out of the announced reply, for
+ * the play that takes a baseline.
  */
-export async function playSequence(connection: string, options: { throughHolds?: boolean; announce?: boolean } = {}): Promise<SequenceState | undefined> {
+export async function playSequence(connection: string, options: { throughHolds?: boolean; announce?: boolean; fromStart?: boolean; compare?: boolean } = {}): Promise<SequenceState | undefined> {
   const session = sessions.get(connection);
   if (!session?.sequences) return undefined;
   const since = session.sequences.historyIndex();
+  const startedAt = session.playStartedAt = Date.now();
+  session.playStepStarts = [];
+  // Step 1 runs as a run stopped after it, which holds the page; the let-go
+  // below releases that hold before the play steps on.
+  if (options.fromStart) {
+    session.playStepStarts[0] = startedAt;
+    await gotoSequenceStep(connection, 0);
+  }
 
   session.sequenceHalt = false;
   session.sequencePaused = false;
   await letGoForRun(session);
   session.sequencePlaying = true;
-  const startedAt = session.playStartedAt = Date.now();
-  session.playStepStarts = [];
   let state = await getSequenceState(connection);
   const total = state?.total ?? 0;
 
@@ -670,6 +683,7 @@ export async function playSequence(connection: string, options: { throughHolds?:
         name: ended.name, connection, total: ended.total, since,
         ...(ended.failure ? { failure: { step: ended.currentStep + 1, why: ended.failure } } : {}),
         ...(session.sequencePaused ? { paused: true } : {}),
+        ...(options.compare === false ? { compare: false } : {}),
       });
       void appendEvent(session.session, 'run', {
         sequence: ended.name, connection, detail: reply.split('\n')[0], reply,

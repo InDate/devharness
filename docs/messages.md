@@ -4770,7 +4770,7 @@ Could not read {{path}}: {{reason}}
 **Type:** success
 **Summary:** Baseline taken for {{sequence}} on {{connection}}
 
-All {{total}} steps played from the first and each step's traffic kept as what later plays of "{{sequence}}" compare against.{{#filling}} {{filling}}{{/filling}}
+{{played}}. Each step's traffic is kept as what later plays of "{{sequence}}" compare against.{{#filling}} {{filling}}{{/filling}}
 
 ---
 

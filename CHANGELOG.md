@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A baseline and a bench Replay count step 1.** Step 1 ran before the play
+  took its history index and start times, so the run's reply read "N of N ·
+  N−1 passed" with step 1 missing from the table, the run log's tallies left
+  it out, and the baseline stamped its click fingerprint with the play's end.
+  The play now runs step 1 itself, after taking them.
+- **A baseline's reply carries its play's outcome.** It read "All N steps
+  played" whatever the play did; it now reads the run line, as "N of N · N
+  passed". Its play reports no match against the baseline it replaces.
+
 ## [0.17.0] - 2026-10-29
 
 ### Removed

@@ -73,10 +73,8 @@ export async function playHere(connection: string, name: string): Promise<void> 
   const session = sessions.get(connection);
   if (session) await letGoForRun(session);
   await selectSequence(connection, name);
-  void (async () => {
-    await gotoSequenceStep(connection, 0);
-    await playSequence(connection);
-  })().catch(error => debugLog('bench', `playing ${name} here failed: ${error}`));
+  void playSequence(connection, { fromStart: true })
+    .catch(error => debugLog('bench', `playing ${name} here failed: ${error}`));
 }
 
 /**
@@ -140,8 +138,7 @@ export async function baselineSequence(connection: string): Promise<SequenceStat
     return getSequenceState(connection);
   }
   await letGoForRun(session);
-  await gotoSequenceStep(connection, 0);
-  const played = await playSequence(connection, { throughHolds: true });
+  const played = await playSequence(connection, { throughHolds: true, fromStart: true, compare: false });
   if (!played || played.failure || played.currentStep < played.total) {
     const why = played?.failure ?? `the run stopped at step ${(played?.currentStep ?? 0) + 1} of ${played?.total ?? 0}`;
     session.sequenceFailure = `baseline not taken, and the one before it stands: ${why}`;

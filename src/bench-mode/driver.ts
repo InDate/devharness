@@ -94,7 +94,7 @@ export interface SequenceDriver {
   /** The History index now: a play's reply reads the entries after it. */
   historyIndex: () => number;
   /** A finished play's reply, as `run sequence` answers: the steps since `since`, what each caused and matched. */
-  runReply: (input: { name: string; connection: string; total: number; since: number; failure?: { step: number; why: string }; paused?: boolean }) => string;
+  runReply: (input: { name: string; connection: string; total: number; since: number; failure?: { step: number; why: string }; paused?: boolean; compare?: boolean }) => string;
   /**
    * The pause point before step `step`: added, removed, or set to hold
    * `holds`. Absent `on` toggles it.

@@ -106,10 +106,7 @@ async function runInBench(args: ReplayArgs, recorder: CommandRecorder) {
   const name = String(args.name ?? '');
   const since = recorder.getCurrentHistoryIndex();
   await bench.selectSequence(connection, name);
-  const play = (async () => {
-    await bench.gotoSequenceStep(connection, 0);
-    return bench.playSequence(connection, { announce: false });
-  })();
+  const play = bench.playSequence(connection, { announce: false, fromStart: true });
   const benchUrl = bench.getBenchSession(connection)?.benchUrl ?? '';
   if (!args.wait) {
     play.catch(() => {});

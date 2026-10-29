@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.3] - 2026-10-29
+
+### Fixed
+
+- **A held call and the launch event that finishes it carry the time it was
+  called.** Every launch event read "bench start finished: Bench open on
+  <connection>" whichever call it finished, so one left unread from an
+  earlier held call read as the finish of the current one. The held reply,
+  the refusal of a call on a held connection, and the launch event now carry
+  `calledAt`, and the event names its `connection`.
+
 ## [0.17.2] - 2026-10-29
 
 ### Added

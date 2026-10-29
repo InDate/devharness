@@ -304,7 +304,7 @@
         "expect": "Held with the document timeline the CSS rate stops",
         "today": "works",
         "basis": "sequence:smil-holds-with-page",
-        "note": "A check fails the run unless the SVG document time stands still for 200ms under the hold and runs past the held time within 1s of the release; smil-hold-check-fails-without-hold shows the same check failing with no hold"
+        "note": "A check fails the run unless the SVG document time stands still for 200ms under the hold and runs past the held time within 1s of the release"
       },
       "slow": {
         "expect": "Slowed with the document timeline's rate",

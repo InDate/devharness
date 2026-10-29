@@ -7,8 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-10-29
+
+### Added
+
+- **`keepDeclared` on `run sequence`.** The browsers a sequence declares stay
+  open once the run ends, bench plays included, and the reply lists them under
+  "Browsers left open". Without it the run closes them, as before.
+- **`storage` `clear` takes `origins`.** Cookies (HttpOnly included),
+  localStorage and IndexedDB are cleared per origin by the browser through
+  `Storage.clearDataForOrigin`, so a database the app holds open is deleted
+  too; the page script used before reached only the page's own origin and
+  gave up after 3s on an open database. sessionStorage lives per tab and
+  clears on the page's origin only. A first step of this kind returns a
+  reused browser to a fresh visitor.
+
 ### Fixed
 
+- **A bench play launches the browser a sequence declares.** A one-browser
+  sequence was rebound onto the bench tab even where it declared that browser,
+  so the declaration never launched and the steps drove the tab with whatever
+  cookies it held. A declared browser is now left out of the rebind.
+- **The startUrl opens in the browser step 1 runs in.** It went to the run's
+  own connection, a browser the first steps may never touch. A declared
+  browser the run launches opens at its own `url` and is not navigated again.
+- **`navigate` survives a page that navigates itself once loaded.** A gate
+  redirecting a signed-in browser replaced the document while the page was
+  read, failing the call with "Execution context was destroyed". The read is
+  taken again once the new document's load event fires.
+- **`input` `press` lands on its selector.** The key went to whatever held
+  focus, so a click between steps sent an Enter past the form it was recorded
+  on. A press focuses its selector's element when focus sits outside it, and
+  fails with ELEMENT_NOT_FOUND where the selector matches nothing.
 - **A baseline and a bench Replay count step 1.** Step 1 ran before the play
   took its history index and start times, so the run's reply read "N of N ·
   N−1 passed" with step 1 missing from the table, the run log's tallies left

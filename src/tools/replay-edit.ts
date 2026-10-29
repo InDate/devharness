@@ -23,11 +23,11 @@ import { describeFingerprint } from '../element-fingerprint.js';
  * and written back, and everything it names by step number is renumbered.
  */
 async function insertIntoNamed(args: ReplayArgs, recorder: CommandRecorder) {
-  const sequence = recorder.listSequences().find(one => one.name === args.name)
-    ?? await recorder.loadSequenceFromDisk(args.name!);
-  if (!sequence) {
-    return createErrorResponse('SEQUENCE_NOT_FOUND', { message: `No sequence named "${args.name}"` });
+  const loadResult = await loadSequence({ name: args.name, sequenceId: args.sequenceId }, recorder);
+  if (!loadResult.success) {
+    return handleLoadSequenceError(loadResult, 'insert');
   }
+  const sequence = loadResult.sequence;
   const indices = args.insertIndices ?? [];
   const commandsToInsert = indices.length ? recorder.buildCommandsFromHistory(indices) : null;
   if (!commandsToInsert) {
@@ -37,8 +37,8 @@ async function insertIntoNamed(args: ReplayArgs, recorder: CommandRecorder) {
         : 'insertIndices names the history commands to put in; replay({ action: \'history\' }) lists them',
     });
   }
-  const insertAfter = args.insertAfterStep!;
   const existingCommands = rehydrateStepConnections(sequence);
+  const insertAfter = args.insertAfterStep ?? existingCommands.length;
   // A sequence whose steps name no browser runs against whichever one the run
   // is given; a step brought in naming the browser it was tried in would pin
   // itself there and split the run across two.
@@ -77,12 +77,17 @@ async function insertIntoNamed(args: ReplayArgs, recorder: CommandRecorder) {
 }
 
 export async function handleInsert(args: ReplayArgs, recorder: CommandRecorder) {
-  // A step is added to a sequence by naming it and the step to follow; it
-  // needs no run, and a run to a pause cannot reach a page the bench holds.
-  if (args.name && args.insertAfterStep !== undefined && !recorder.getActiveSequence()) {
+  // A step is added to a sequence by naming it; it needs no run, and a run to
+  // a pause cannot reach a page the bench holds. A paused sequence takes the
+  // steps only when the name or id given is its own, so a pause left over
+  // from an earlier run never draws in steps meant for another sequence.
+  const activeSeq = recorder.getActiveSequence();
+  const pausedName = activeSeq ? recorder.getSequence(activeSeq.sequenceId)?.name : undefined;
+  const targetsPaused = activeSeq !== null
+    && (args.sequenceId === activeSeq.sequenceId || (args.name !== undefined && args.name === pausedName));
+  if ((args.name !== undefined || args.sequenceId !== undefined) && !targetsPaused) {
     return insertIntoNamed(args, recorder);
   }
-  const activeSeq = recorder.getActiveSequence();
   if (!activeSeq) {
     return createErrorResponse('NO_ACTIVE_SEQUENCE', {
       message: 'No active sequence. Use run with stepTo first to pause a sequence.'

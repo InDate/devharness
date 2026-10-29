@@ -234,7 +234,7 @@
         "expect": "Cut where it stands when the screen is held; the page stays there at release",
         "today": "works",
         "basis": "sequence:screen-hold-stops-time-not-js",
-        "note": "The run reads the hold through evaluateExpression steps, and a replay neither stores nor compares what they return: the steps passing shows they ran, not that time stood still. The sequence opens on a press with no navigate and no hold step, so its first step reads whatever the sequence before it left"
+        "note": "A check fails the run unless scrollY stands still for 200ms under the hold, partway to the Labels card, and stays there 500ms after the release. The sequence opens on its own navigate"
       },
       "slow": {
         "expect": "Slowed with the page",
@@ -284,7 +284,7 @@
         "expect": "Paused with page time, played again at release",
         "today": "works",
         "basis": "sequence:screen-hold-pauses-and-resumes-video",
-        "note": "The run reads the hold through evaluateExpression steps, and a replay neither stores nor compares what they return: the steps passing shows they ran, not that time stood still. The sequence opens with no navigate, so its first step reads whatever the sequence before it left"
+        "note": "A check fails the run unless currentTime stands still for 200ms under the hold and the video plays past the held time within 1s of the release. The sequence opens on its own navigate"
       },
       "slow": {
         "expect": "Its playbackRate follows rate",
@@ -304,7 +304,7 @@
         "expect": "Held with the document timeline the CSS rate stops",
         "today": "works",
         "basis": "sequence:smil-holds-with-page",
-        "note": "The run reads the hold through evaluateExpression steps, and a replay neither stores nor compares what they return: the steps passing shows they ran, not that time stood still"
+        "note": "A check fails the run unless the SVG document time stands still for 200ms under the hold and runs past the held time within 1s of the release; smil-hold-check-fails-without-hold shows the same check failing with no hold"
       },
       "slow": {
         "expect": "Slowed with the document timeline's rate",

@@ -23,7 +23,7 @@ import type { SourceMapHandler } from '../sourcemap-handler.js';
 import type { CommandRecorder } from '../command-recorder.js';
 import { formatRunReply } from './run-table.js';
 import { createTool } from '../validation-helpers.js';
-import { createSuccessResponse, createErrorResponse, formatCodeBlock } from '../messages.js';
+import { createSuccessResponse, createErrorResponse, formatCodeBlock, getMessage } from '../messages.js';
 import { checkBrowserAutomation } from '../error-helpers.js';
 import { resolveSessionName } from '../session-identity.js';
 import { getSessionInfo } from './dashboard-tools.js';
@@ -430,11 +430,17 @@ export function createBenchTools(
                 ? { watchCall: watchCall(sessionName) }
                 : {}),
             });
+            // A bench opened in a headless Chrome reports open while no window shows it.
+            const headless = await page.browser().version().then((v: string) => v.startsWith('HeadlessChrome'), () => undefined);
+            if (headless !== undefined) {
+              response.content[0].text += `\n\n${getMessage(headless ? 'BROWSER_HEADLESS' : 'BROWSER_WINDOWED', { subject: `the Chrome holding "${connection}" and its bench` })}`;
+            }
             return {
               ...response,
               _meta: buildMeta('start', {
                 active: true,
                 connection,
+                ...(headless !== undefined ? { headless } : {}),
                 state,
                 ...(opened ? { sequence: opened } : {}),
                 ...(openFailure ? { sequenceFailure: openFailure } : {}),

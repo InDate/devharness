@@ -20,7 +20,7 @@ import type { ServerManager } from '../server-manager.js';
 import { detectAutoRestartCommand } from '../server-manager.js';
 import { ChromeLauncher, ChromeBinaryAbsentError, ChromeLaunchFailure, InvalidProfileNameError, ProfileInUseError, ProfileLockedError, normalizeProfileName, resolveLaunchPort, decideProfileReuse } from '../chrome-launcher.js';
 import { createTool } from '../validation-helpers.js';
-import { createSuccessResponse, createErrorResponse, responseWithOnce, withOnce } from '../messages.js';
+import { createSuccessResponse, createErrorResponse, responseWithOnce, withOnce, getMessage } from '../messages.js';
 import { configManager } from '../config.js';
 import { debugLog } from '../debug-logger.js';
 import { validateReference, requireValidReference, sanitizeReference, UNNAMED_CONNECTION } from '../reference-validator.js';
@@ -82,8 +82,15 @@ async function attachDialogMonitor(page: Page): Promise<DialogMonitor | undefine
  * a borrowed browser and the user loses state they cannot recover, keep an
  * owned one and every run leaks a process (issue #103).
  */
-function withLaunchMeta(response: any, name: string, reused: boolean): any {
-  response._meta = { ...(response._meta || {}), tool: 'connection', action: 'launch', launch: { name, reused } };
+function withLaunchMeta(response: any, name: string, reused: boolean, headless?: boolean): any {
+  response._meta = {
+    ...(response._meta || {}), tool: 'connection', action: 'launch',
+    launch: { name, reused, ...(headless !== undefined ? { headless } : {}) },
+  };
+  const text = response.content?.[0];
+  if (headless !== undefined && typeof text?.text === 'string') {
+    text.text += `\n\n${getMessage(headless ? 'BROWSER_HEADLESS' : 'BROWSER_WINDOWED', { subject: 'this browser' })}`;
+  }
   return response;
 }
 
@@ -304,7 +311,21 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
       const profileHolderPort = profileName && !args.port && !args.forceNewInstance
         ? chromeLauncher.findPortForProfile(profileName)
         : undefined;
-      const port = profileHolderPort ?? decision.port;
+      let port = profileHolderPort ?? decision.port;
+      // A launch into a running Chrome opens a tab that takes that Chrome's
+      // visibility, so a windowed launch landing in a headless one shows nothing.
+      const wantHeadless = args.headless === true;
+      const runningHeadless = chromeLauncher.isHeadless(port);
+      if (runningHeadless !== undefined && runningHeadless !== wantHeadless && profileHolderPort === undefined) {
+        if (args.port !== undefined) {
+          const words = (headless: boolean) => headless ? 'headless' : 'with a window';
+          return createErrorResponse('CHROME_PORT_VISIBILITY_MISMATCH', {
+            connection: args.connection ?? UNNAMED_CONNECTION, port: String(port),
+            wanted: words(wantHeadless), running: words(runningHeadless), runningHeadless: String(runningHeadless),
+          });
+        }
+        port = await findAvailablePort(configManager.getChromeConfig().startingDebugPort);
+      }
       await debugLog('index', `launch called: port=${port}, requested=${args.port}, reserved=${configManager.getCurrentPort()}, profileHolder=${profileHolderPort ?? 'none'}, forceNewInstance=${args.forceNewInstance}, url=${args.url}, autoConnect=${args.autoConnect}, connection=${args.connection}`);
       const url = args.url;
       const autoConnect = args.autoConnect ?? true;
@@ -349,7 +370,8 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
               url: pageUrl
             }),
             sanitizedRef,
-            true
+            true,
+            chromeLauncher.isHeadless(existingConnection.port),
           );
         }
       }
@@ -615,7 +637,8 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
               inactivityNote: inactivityNote(),
             }),
             reference,
-            false
+            false,
+            chromeLauncher.isHeadless(port),
           );
         } else {
           return createSuccessResponse('CHROME_LAUNCH_NO_CONNECT', { port: port.toString() }, { port, isNewBrowser });
@@ -807,7 +830,8 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
           inactivityNote: inactivityNote(),
         }),
         name,
-        false
+        false,
+        chromeLauncher.isHeadless(port),
       );
     } catch (error) {
       await context.close().catch(() => {});

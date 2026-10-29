@@ -4,7 +4,7 @@
  */
 import type { CommandRecorder, ActiveSequenceState, CommandSequence } from '../command-recorder.js';
 import type { ExecuteToolCall } from '../types.js';
-import { createSuccessResponse, createErrorResponse, withOnce } from '../messages.js';
+import { createSuccessResponse, createErrorResponse, withOnce, getMessage } from '../messages.js';
 import { showReplayOverlay } from '../interaction-recorder.js';
 import { deriveConnectionReference, sanitizeReference } from '../reference-validator.js';
 import { runRegistry, type RunRecord } from './replay-run-registry.js';
@@ -608,6 +608,13 @@ export async function handleRun(
   /** Everything a terminal run owes: verdicts first, then teardown. */
   const settle = async (response: any, outcome: string): Promise<boolean> => {
     const healthy = await applyHealthChecks(response, outcome);
+    // Read before teardown, which can close the browser it reads.
+    const view = connection
+      ? await getPageForConnection(connection).then(page => page?.browser().version()).catch(() => undefined)
+      : undefined;
+    const visibility = typeof view !== 'string' ? ''
+      : `\n\n${getMessage(view.startsWith('HeadlessChrome') ? 'BROWSER_HEADLESS' : 'BROWSER_WINDOWED', { subject: `"${connection}"` })}`;
+    if (visibility && response?.content?.[0]?.text !== undefined) response.content[0].text += visibility;
     if (outcome === 'paused') return healthy;
     const notes = (await killOwnedChrome()) + (await closeDeclared());
     if (notes && response?.content?.[0]?.text !== undefined) {

@@ -539,6 +539,12 @@ export class ChromeLauncher {
     throw new Error(`Chrome debugging port ${port} did not become inspectable in ${maxAttempts} probes.`);
   }
 
+  /** Whether the Chrome this launcher started on `port` runs headless; undefined for one it did not start. */
+  isHeadless(port: number): boolean | undefined {
+    const child = this.chromeProcesses.get(port);
+    return child ? child.spawnargs.includes('--headless=new') : undefined;
+  }
+
   /**
    * Launch Chrome with debugging enabled
    * Uses atomic release-and-launch to prevent race conditions

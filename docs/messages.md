@@ -117,6 +117,19 @@ Chrome is already running. You can either:
 
 ---
 
+## CHROME_PORT_VISIBILITY_MISMATCH
+
+**Type:** error
+**Code:** PORT_VISIBILITY_MISMATCH
+
+Cannot open "{{connection}}" {{wanted}} on port {{port}}: the Chrome there runs {{running}}, and a tab opened in it runs {{running}} too.
+
+**Suggestions:**
+- Omit `port` to launch {{wanted}} on a free port
+- Launch with `headless: {{runningHeadless}}` to take a tab in the Chrome on port {{port}}
+
+---
+
 ## CHROME_FORCED_PORT_IN_USE
 
 **Type:** error
@@ -4542,6 +4555,22 @@ Recording continues - {{steps}} step(s) so far.
 
 `{{tool}}` refused its parameters:
 {{issues}}
+
+---
+
+## BROWSER_HEADLESS
+
+**Type:** info
+
+**Headless:** {{subject}} has no window, so nothing of it shows on screen.
+
+---
+
+## BROWSER_WINDOWED
+
+**Type:** info
+
+**Windowed:** {{subject}} shows on screen.
 
 ---
 

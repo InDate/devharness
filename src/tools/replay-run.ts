@@ -51,7 +51,7 @@ import { snapshotConsole, strictConsoleFailures, snapshotSockets, socketFailures
 import { collectNestedRebindableReferences, loadDefaultRunEnv, loadRunEnv, unmatchedVariableKeys } from './replay-run-inputs.js';
 import { connectionsSharingPort, navigatedConnections, ensureDeclaredConnections, closeLaunchedConnections, pendingDeclaredCleanups, cleanupKey } from './replay-run-owned.js';
 import { type ReplayArgs } from './replay-schema.js';
-import { logRun } from './replay-session.js';
+import { logRun, pausedMeta } from './replay-session.js';
 import { handleLoadSequenceError } from './replay-validation.js';
 
 type RunOutcome = 'completed' | 'failed' | 'paused' | 'cancelled';
@@ -981,10 +981,7 @@ export async function performRun(
       execResult.breakpointHit,
       connection
     ) }],
-      _meta: {
-        tool: 'replay', action: 'run', timestamp: Date.now(),
-        replay: { success: false, totalSteps: sequence.commands.length, failedSteps: execResult.results.filter(r => !r.success).length, paused: true }
-      }
+      _meta: pausedMeta('run', recorder, { failedSteps: execResult.results.filter(r => !r.success).length, breakpoint: execResult.breakpointHit })
     } };
   }
 
@@ -1021,14 +1018,11 @@ export async function performRun(
       execResult.clickValidationFailure,
       connection
     ) }],
-      _meta: {
-        tool: 'replay', action: 'run', timestamp: Date.now(),
-        replay: {
-          success: false, totalSteps: sequence.commands.length, failedSteps: execResult.results.filter(r => !r.success).length, paused: true,
-          pausedAtStep: execResult.pausedAtStep, refused: execResult.clickValidationFailure.errors[0],
-          ...(execResult.clickValidationFailure.repair ? { repair: execResult.clickValidationFailure.repair } : {}),
-        }
-      }
+      _meta: pausedMeta('run', recorder, {
+        failedSteps: execResult.results.filter(r => !r.success).length,
+        pausedAtStep: execResult.pausedAtStep, refused: execResult.clickValidationFailure.errors[0],
+        ...(execResult.clickValidationFailure.repair ? { repair: execResult.clickValidationFailure.repair } : {}),
+      }),
     } };
   }
 
@@ -1052,10 +1046,7 @@ export async function performRun(
         + (execResult.pauseHeld?.length ? `\n\n**Held while paused:** the page's ${execResult.pauseHeld.join(', ')}; \`step\`, \`finish\` or \`cancel\` releases it.` : '')
         + formatPauseNote(execResult.pausedAtStep + 1, execResult.pauseNote, execResult.pauseNotify);
     return { outcome: 'paused', results: execResult.results, response: { content: [{ type: 'text', text }],
-      _meta: {
-        tool: 'replay', action: 'run', timestamp: Date.now(),
-        replay: { success: false, totalSteps: sequence.commands.length, failedSteps: execResult.results.filter(r => !r.success).length, paused: true }
-      }
+      _meta: pausedMeta('run', recorder, { failedSteps: execResult.results.filter(r => !r.success).length })
     } };
   }
 

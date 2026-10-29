@@ -75,3 +75,18 @@ describe('a paused background run', () => {
     expect(runRegistry.get(runId)?.status).toBe('cancelled');
   });
 });
+
+describe('a reply that leaves the run paused', () => {
+  it('names the step that runs next, in its text and in _meta', async () => {
+    const { run } = makeReplay();
+
+    const paused: any = await run.handler({ action: 'sequence', sequenceId: 'seq-pause', connection: 'test-debug-session', stepTo: 1, wait: true });
+    const status: any = await run.handler({ action: 'status' });
+
+    expect(paused.content[0].text).toContain('step 2 of 2 runs next');
+    expect(paused._meta.replay).toMatchObject({ paused: true, nextStep: 2, totalSteps: 2 });
+    expect(status.content[0].text).toContain('step 2 of 2 runs next');
+    expect(status._meta.replay).toMatchObject({ paused: true, nextStep: 2, totalSteps: 2 });
+    await run.handler({ action: 'cancel' });
+  });
+});

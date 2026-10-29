@@ -2322,7 +2322,7 @@ Step {{step}} ({{tool}}) timed out after {{timeoutMs}}ms ({{limitSource}} limit)
 **Type:** info
 **Summary:** {{sequenceName}}
 
-Paused at step {{pausedStep}} of {{total}}, {{remaining}} remaining
+Paused · step {{nextStep}} of {{total}} runs next, {{remaining}} remaining
 
 ---
 
@@ -2392,7 +2392,7 @@ No sequences in memory.
 **Type:** info
 **Summary:** {{sequenceName}}
 
-Paused at step {{currentStep}} of {{totalSteps}}
+Paused · step {{nextStep}} of {{totalSteps}} runs next
 
 ---
 

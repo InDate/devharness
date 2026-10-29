@@ -20,6 +20,19 @@ import { type ReplayArgs } from './replay-schema.js';
 import { holdReading, release } from '../hold.js';
 import { standPausedRun } from '../proxy/registry.js';
 
+/** The `_meta` of a reply that leaves the run paused: `nextStep` is the 1-based step `run step` runs next. */
+export function pausedMeta(action: string, recorder: CommandRecorder, extra: Record<string, unknown> = {}) {
+  const active = recorder.getActiveSequence();
+  return {
+    tool: 'replay', action, timestamp: Date.now(),
+    replay: {
+      success: false, paused: true,
+      ...(active ? { nextStep: active.currentStep + 1, totalSteps: active.totalSteps } : {}),
+      ...extra,
+    },
+  };
+}
+
 /**
  * How a check, assert or wait step read, from the run's own result: a check's
  * reading and the steps of any sequence it ran; an assert or wait held, or
@@ -147,7 +160,7 @@ export async function handleStatus(args: ReplayArgs, recorder: CommandRecorder) 
   if (runs.length > 0) {
     text += `\n\n${formatRunsOverview(runs)}`;
   }
-  return { content: [{ type: 'text', text }] };
+  return { content: [{ type: 'text', text }], ...(activeSeq ? { _meta: pausedMeta('status', recorder) } : {}) };
 }
 
 /**
@@ -310,13 +323,10 @@ function holdAtClickPause(
     content: [{ type: 'text', text: formatClickValidationFailure(
       sequence as any, execResult.results, execResult.pausedAtStep!, execResult.durationMs, failure, activeSeq.connection,
     ) }],
-    _meta: {
-      tool: 'replay', action, timestamp: Date.now(),
-      replay: {
-        success: false, paused: true, pausedAtStep: execResult.pausedAtStep,
-        refused: failure.errors[0], ...(failure.repair ? { repair: failure.repair } : {}),
-      },
-    },
+    _meta: pausedMeta(action, recorder, {
+      pausedAtStep: execResult.pausedAtStep,
+      refused: failure.errors[0], ...(failure.repair ? { repair: failure.repair } : {}),
+    }),
   };
 }
 
@@ -425,7 +435,8 @@ export async function handleStep(
         ...(args.steps ? { steps: args.steps } : {}), failures: failuresOf(execResult.results),
         rules, pauses, ...(execResult.personInput ? { person: execResult.personInput } : {}),
       })
-      + `\n\n**Held at step ${lastExecuted}:** a breakpoint the sequence did not set stopped the page at \`${execResult.breakpointHit.url}:${execResult.breakpointHit.lineNumber}\`. \`run({ action: 'step' })\` or \`finish\` resumes it and carries on.` }] };
+      + `\n\n**Held at step ${lastExecuted}:** a breakpoint the sequence did not set stopped the page at \`${execResult.breakpointHit.url}:${execResult.breakpointHit.lineNumber}\`. \`run({ action: 'step' })\` or \`finish\` resumes it and carries on.` }],
+      _meta: pausedMeta('step', recorder, { breakpoint: activeSeq.breakpointHit }) };
   } else if (failed || lastExecuted >= commands.length) {
     recorder.setActiveSequence(null);
     endPausedRun(activeSeq.runId, failed ? 'failed' : 'completed');
@@ -442,6 +453,7 @@ export async function handleStep(
       ...(args.steps ? { steps: args.steps } : {}), failures: failuresOf(execResult.results),
         rules, pauses, ...(execResult.personInput ? { person: execResult.personInput } : {}),
     }) + closedNote }],
+    ...(!failed && lastExecuted < commands.length ? { _meta: pausedMeta('step', recorder) } : {}),
     ...(failed ? { isError: true } : {}),
   };
 }
@@ -525,6 +537,7 @@ export async function handleFinish(
         name: sequence.name, total: commands.length, since: activeSeq.runSince ?? since, paused: true,
         ...(args.steps ? { steps: args.steps } : {}), failures: failuresOf(execResult.results), rules, pauses,
       }) }],
+      _meta: pausedMeta('finish', recorder),
     };
   }
 
@@ -538,6 +551,7 @@ export async function handleFinish(
         ...(args.steps ? { steps: args.steps } : {}), failures: failuresOf(execResult.results), rules, pauses,
       }) + `\n\n**Paused at the pause point before step ${execResult.pausedAtMark + 1}**${execResult.pauseHeld?.length ? `, holding the page's ${execResult.pauseHeld.join(', ')}` : ''}. \`run step\` or \`finish\` carries on.`
         + formatPauseNote(execResult.pausedAtMark + 1, execResult.pauseNote, execResult.pauseNotify) }],
+      _meta: pausedMeta('finish', recorder, { pausePoint: true }),
     };
   }
 
@@ -551,6 +565,7 @@ export async function handleFinish(
         ...(args.steps ? { steps: args.steps } : {}), failures: failuresOf(execResult.results),
         rules, pauses, person: execResult.personInput,
       }) }],
+      _meta: pausedMeta('finish', recorder, { personInput: true }),
     };
   }
 

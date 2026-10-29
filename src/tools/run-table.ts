@@ -278,7 +278,7 @@ export function formatRunReply(recorder: CommandRecorder, input: RunReplyInput):
   const head = failedAt !== undefined
     ? `${input.name} failed at step ${failedAt} of ${input.total}`
     : left === 0 ? `${input.name} completed ${reached} of ${input.total}`
-    : input.paused ? `${input.name} at step ${reached} of ${input.total}`
+    : input.paused ? `${input.name} paused · step ${reached + 1} of ${input.total} runs next`
     : `${input.name} stopped at step ${reached} of ${input.total}`;
   const tally = [
     `${passed} passed`,

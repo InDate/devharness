@@ -160,7 +160,7 @@ export function formatPausedResponse(
 
   let response = getFormattedResponse('REPLAY_PAUSED', {
     sequenceName: sequence.name,
-    pausedStep: pausedAtStep,
+    nextStep: pausedAtStep + 1,
     total: commands.length,
     remaining
   });
@@ -741,7 +741,7 @@ export function formatActiveStatus(
 
   let response = getFormattedResponse('REPLAY_ACTIVE_STATUS', {
     sequenceName: activeSeq.sequenceName,
-    currentStep: activeSeq.currentStep,
+    nextStep: activeSeq.currentStep + 1,
     totalSteps: activeSeq.totalSteps
   });
 

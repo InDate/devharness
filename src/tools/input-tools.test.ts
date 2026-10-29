@@ -65,6 +65,45 @@ describe('an input action whose dispatch throws', () => {
   });
 });
 
+describe('a press with a selector', () => {
+  const pressOn = (holdsFocus: boolean | null) => {
+    const focus = vi.fn(async () => {});
+    const { input, page } = makeInput({
+      $eval: vi.fn(async () => { if (holdsFocus === null) throw new Error('failed to find element matching selector'); return holdsFocus; }),
+      focus,
+    });
+    return { input, page: { ...page, focus } };
+  };
+
+  it('focuses the element when focus has moved off it, then presses', async () => {
+    const { input, page } = pressOn(false);
+
+    const result: any = await input.handler({ ...on, action: 'press', key: 'Enter', selector: 'input[name=password]' });
+
+    expect(result.isError).toBeFalsy();
+    expect(page.focus).toHaveBeenCalledWith('input[name=password]');
+    expect(page.keyboard.press).toHaveBeenCalledWith('Enter', undefined);
+  });
+
+  it('leaves focus and caret alone when the element already holds focus', async () => {
+    const { input, page } = pressOn(true);
+
+    await input.handler({ ...on, action: 'press', key: 'Enter', selector: 'input[name=password]' });
+
+    expect(page.focus).not.toHaveBeenCalled();
+    expect(page.keyboard.press).toHaveBeenCalled();
+  });
+
+  it('presses nothing when the selector matches no element', async () => {
+    const { input, page } = pressOn(null);
+
+    const result: any = await input.handler({ ...on, action: 'press', key: 'Enter', selector: '#gone' });
+
+    expect(result.isError).toBe(true);
+    expect(page.keyboard.press).not.toHaveBeenCalled();
+  });
+});
+
 describe('the DOM change observer', () => {
   it('is not left running by a click that returns before collecting it', async () => {
     const { input } = makeInput({});

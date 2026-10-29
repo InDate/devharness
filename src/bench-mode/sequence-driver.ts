@@ -18,7 +18,7 @@ import { configManager } from '../config.js';
 import { createdName, isLaunchStep } from '../tools/connection-steps.js';
 import { stopRecording, cancelRecording, eventsToCommands } from '../interaction-recorder.js';
 import { translateSequence } from '../tools/legacy-steps.js';
-import type { CommandRecorder } from '../command-recorder.js';
+import type { CommandRecorder, CommandSequence } from '../command-recorder.js';
 import { runRegistry } from '../tools/replay-run-registry.js';
 import { debugLog } from '../debug-logger.js';
 import { resolveSessionName } from '../session-identity.js';
@@ -301,6 +301,7 @@ export function createSequenceDriver(
    *  pointed at another without editing the file. */
   let baseUrl = '';
   let envFile = '';
+  let keepDeclared = false;
 
   /**
    * The run's variable store, held by reference.
@@ -384,26 +385,47 @@ export function createSequenceDriver(
    * users, two profiles - collapsing them onto one tab would change what the
    * sequence tests, so they are left alone.
    */
-  const rebindOnto = (name: string, connection: string): Record<string, string> | undefined => {
-    const sequence = loadedByName(name);
-    if (!sequence) return undefined;
-
+  const referencesOf = (sequence: CommandSequence): { references: Set<string>; declared: Set<string> } => {
     const references = new Set<string>();
     for (const command of sequence.commands ?? []) {
       const recorded = command.params?.connection ?? createdName(command);
       if (typeof recorded === 'string' && recorded) references.add(recorded);
     }
-    for (const declared of (sequence as any).requiredConnections ?? []) {
-      if (declared?.connection) references.add(String(declared.connection));
+    const declared = new Set<string>();
+    for (const decl of (sequence as any).requiredConnections ?? []) {
+      if (decl?.connection) declared.add(String(decl.connection));
     }
+    for (const reference of declared) references.add(reference);
+    return { references, declared };
+  };
 
+  /*
+   * A declared browser carries its own url, profile and fresh instance, and a
+   * rebound reference is never launched, so rebinding one onto this tab drives
+   * the tab with whatever cookies it holds.
+   */
+  const rebindOnto = (name: string, connection: string): Record<string, string> | undefined => {
+    const sequence = loadedByName(name);
+    if (!sequence) return undefined;
+
+    const { references, declared } = referencesOf(sequence);
     if (references.size > 1) {
       debugLog('bench', `sequence ${name} uses ${references.size} connections; left unbound`);
       return undefined;
     }
     references.delete(connection);
+    for (const reference of declared) references.delete(reference);
     if (references.size === 0) return undefined;
     return Object.fromEntries([...references].map(reference => [reference, connection]));
+  };
+
+  /** The steps run on this tab: they name no browser, only this one, or one rebound onto it. */
+  const runsOnTab = (name: string, connection: string): boolean => {
+    const sequence = loadedByName(name);
+    if (!sequence) return false;
+    const { references } = referencesOf(sequence);
+    references.delete(connection);
+    return references.size === 0 || rebindOnto(name, connection) !== undefined;
   };
 
   /**
@@ -805,7 +827,8 @@ export function createSequenceDriver(
       // readable only once the file is in memory, and a host the proxy has
       // not been told about is refused the moment the run moves.
       scopeProxyTo(name, connection);
-      await goToStart(name, connection);
+      // A step on another browser starts where that browser was declared or launched.
+      if (runsOnTab(name, connection)) await goToStart(name, connection);
       return undefined;
     },
 
@@ -890,6 +913,7 @@ export function createSequenceDriver(
           ...(rebindOnto(selected, selectedConnection) ? { connections: rebindOnto(selected, selectedConnection) } : {}),
           ...(baseUrl ? { baseUrl } : {}),
           ...(envFile ? { envFile } : {}),
+          ...(keepDeclared ? { keepDeclared } : {}),
         }, signal);
       }
       return undefined;
@@ -907,6 +931,7 @@ export function createSequenceDriver(
           ...(rebindOnto(selected, selectedConnection) ? { connections: rebindOnto(selected, selectedConnection) } : {}),
           ...(baseUrl ? { baseUrl } : {}),
           ...(envFile ? { envFile } : {}),
+          ...(keepDeclared ? { keepDeclared } : {}),
         }, signal);
         // A whole run leaves no session behind, so nothing else records where it
         // got to - and without that the cursor sits at 0 with the first step
@@ -939,6 +964,7 @@ export function createSequenceDriver(
         ...(rebindOnto(name, selectedConnection) ? { connections: rebindOnto(name, selectedConnection) } : {}),
         ...(baseUrl ? { baseUrl } : {}),
         ...(envFile ? { envFile } : {}),
+        ...(keepDeclared ? { keepDeclared } : {}),
       }, signal);
     },
 
@@ -1623,5 +1649,6 @@ export function createSequenceDriver(
     baseUrl: () => baseUrl || undefined,
     setEnvFile: (value: string) => { envFile = value; },
     envFile: () => envFile || undefined,
+    setKeepDeclared: (value: boolean) => { keepDeclared = value; },
   };
 }

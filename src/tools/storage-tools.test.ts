@@ -808,18 +808,55 @@ describe('storage - IndexedDB actions (feature-011)', () => {
     expect((await tools.storage.handler({ connection: 'app', action: 'idbPut', db: 'app', store: 'kv', key: 'k' } as any)).isError).toBe(true);
   });
 
-  it('clears IndexedDB only when asked, and reports what it deleted', async () => {
-    const idb = install({ app: { stores: { kv: {} } }, other: { stores: {} } });
-    const { tools } = buildTool();
+});
+
+describe('storage clear', () => {
+  function clearingPage(url: string) {
+    const sent: Array<{ method: string; params: any }> = [];
+    const session = { send: vi.fn(async (method: string, params: any) => { sent.push({ method, params }); return {}; }), detach: vi.fn(async () => {}) };
+    return { page: { ...fakePage(), url: () => url, createCDPSession: vi.fn(async () => session) }, sent, session };
+  }
+
+  it("clears the page's origin through the browser, IndexedDB only when listed", async () => {
+    const { page, sent, session } = clearingPage('http://localhost:4100/join?x=1');
+    const { tools } = buildTool(page);
 
     const untouched = await tools.storage.handler({ connection: 'app', action: 'clear', reason: 'test', types: ['localStorage'] } as any);
-    expect(untouched.isError).toBeFalsy();
-    expect(Object.keys(idb.__state)).toHaveLength(2);
+    const cleared = await tools.storage.handler({ connection: 'app', action: 'clear', reason: 'test', types: ['cookies', 'indexedDB'] } as any);
 
-    const cleared = await tools.storage.handler({ connection: 'app', action: 'clear', reason: 'test', types: ['indexedDB'] } as any);
+    expect(untouched.isError).toBeFalsy();
     expect(cleared.isError).toBeFalsy();
-    expect(textOf(cleared)).toContain('indexedDB (2 deleted');
-    expect(Object.keys(idb.__state)).toHaveLength(0);
+    expect(sent).toEqual([
+      { method: 'Storage.clearDataForOrigin', params: { origin: 'http://localhost:4100', storageTypes: 'local_storage' } },
+      { method: 'Storage.clearDataForOrigin', params: { origin: 'http://localhost:4100', storageTypes: 'cookies,indexeddb' } },
+    ]);
+    expect(session.detach).toHaveBeenCalledTimes(2);
+    expect(textOf(cleared)).toContain('cookies, indexedDB for http://localhost:4100');
+  });
+
+  it('clears each named origin, and names sessionStorage left in a tab on another origin', async () => {
+    const { page, sent } = clearingPage('about:blank');
+    sessionStorage.setItem('k', 'v');
+    const { tools } = buildTool(page);
+
+    const result = await tools.storage.handler({
+      connection: 'app', action: 'clear', reason: 'fresh person', origins: ['http://localhost:4100/setup', 'https://shop.example'],
+    } as any);
+
+    expect(result.isError).toBeFalsy();
+    expect(sent.map(s => s.params.origin)).toEqual(['http://localhost:4100', 'https://shop.example']);
+    expect(sessionStorage.getItem('k')).toBe('v');
+    expect(textOf(result)).toContain('not cleared: sessionStorage (the tab holds about:blank)');
+  });
+
+  it('refuses a clear on a page with no http(s) origin when no origins are named', async () => {
+    const { page, sent } = clearingPage('about:blank');
+    const { tools } = buildTool(page);
+
+    const result: any = await tools.storage.handler({ connection: 'app', action: 'clear', reason: 'test' } as any);
+
+    expect(result.isError).toBe(true);
+    expect(sent).toEqual([]);
   });
 });
 
@@ -875,7 +912,9 @@ describe('storage authenticator actions', () => {
 describe('storage on a page that fails or pauses', () => {
   function stalledTool(opts: { paused?: boolean; throws?: string }) {
     const page = {
+      url: () => 'http://localhost:4100/',
       evaluate: vi.fn(async () => { if (opts.throws) throw new Error(opts.throws); return undefined; }),
+      createCDPSession: vi.fn(async () => ({ send: async () => { if (opts.throws) throw new Error(opts.throws); return {}; }, detach: async () => {} })),
       cookies: vi.fn(async () => []),
       deleteCookie: vi.fn(async () => {}),
     };

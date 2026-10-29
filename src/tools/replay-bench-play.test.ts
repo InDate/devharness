@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 
-const play = vi.hoisted(() => ({ failed: true, recorder: undefined as any, envFiles: [] as string[], plays: 0 }));
+const play = vi.hoisted(() => ({ failed: true, recorder: undefined as any, envFiles: [] as string[], keeps: [] as boolean[], plays: 0 }));
 const reason = 'Could not resolve template token {{env:SOCKET_APP_TOKEN}}: SOCKET_APP_TOKEN is not set: no envFile was read and the server\'s environment lacks it - add SOCKET_APP_TOKEN=<value> to .devharness/sequences.env, which every run reads when it names no envFile (the sequence file deliberately holds no value for it)';
 
 vi.mock('../bench-mode.js', () => ({
@@ -21,6 +21,7 @@ vi.mock('../bench-mode.js', () => ({
       }), { total: 1, currentStep: 1, steps: [{ index: 0 }] }),
   getBenchSession: () => ({ benchUrl: 'http://127.0.0.1:1/bench/' }),
   setSequenceEnvFile: (_connection: string, envFile: string) => { play.envFiles.push(envFile); return true; },
+  setSequenceKeepDeclared: (_connection: string, keep: boolean) => { play.keeps.push(keep); return true; },
 }));
 
 import { CommandRecorder } from '../command-recorder.js';
@@ -84,6 +85,19 @@ describe('a bench play given an env file', () => {
     expect(res.isError).toBe(true);
     expect(res.content[0].text).toContain('envFile');
     expect(play.envFiles).toEqual([]);
+    recorder.stopSequenceWatch();
+  });
+
+  it('sets keepDeclared on the bench for each play, so a play without it closes them again', async () => {
+    play.failed = false;
+    play.keeps = [];
+    const recorder = play.recorder = new CommandRecorder();
+    const { run } = createReplayTools(recorder, vi.fn() as any, async () => null, async () => 9222, undefined);
+
+    await run.handler({ action: 'sequence', name: 'env-token-search', connection: 'app', bench: true, wait: true, keepDeclared: true } as any);
+    await run.handler({ action: 'sequence', name: 'env-token-search', connection: 'app', bench: true, wait: true } as any);
+
+    expect(play.keeps).toEqual([true, false]);
     recorder.stopSequenceWatch();
   });
 

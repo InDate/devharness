@@ -109,6 +109,8 @@ export interface SequenceDriver {
   /** The KEY=value file each run this bench starts reads {{env:NAME}} from. '' returns to `.devharness/sequences.env`. */
   setEnvFile: (envFile: string) => void;
   envFile: () => string | undefined;
+  /** Each run this bench starts leaves the browsers its sequence declares open once it ends. */
+  setKeepDeclared: (keep: boolean) => void;
   finish: (signal?: AbortSignal) => Promise<string | undefined>;
   /**
    * Stop the run where it stands, holding the step it reached.

@@ -92,6 +92,7 @@ const replayArgsSchema = z.object({
   folder: z.string().optional().describe("runAll: sequences subfolder to run; omitted, every folder not starting with '_'"),
   continueOnFailure: z.boolean().optional().describe('runAll: keep going after a sequence fails (default true)'),
   killChromeOnFinish: z.boolean().optional().describe('run/runAll: kill the browsers this run launched once it finishes'),
+  keepDeclared: z.boolean().optional().describe('run: leave the browsers the sequence declares open once it ends'),
 }).strict();
 
 /** One step written into a `run steps` call, as a saved sequence stores it. */
@@ -111,7 +112,7 @@ export const runSchema = replayArgsSchema.pick({
   startUrl: true, baseUrl: true, envFile: true, variables: true, stepTimeout: true, totalTimeout: true,
   startFrom: true, stepTo: true, playing: true, hold: true, stepCount: true, wait: true, bench: true,
   steps: true, record: true, global: true, folder: true, tags: true, continueOnFailure: true,
-  killChromeOnFinish: true, requireSockets: true, strict: true, indices: true, params: true, lines: true,
+  killChromeOnFinish: true, keepDeclared: true, requireSockets: true, strict: true, indices: true, params: true, lines: true,
 }).extend({
   action: z.enum(Object.keys(RUN_ACTIONS) as [keyof typeof RUN_ACTIONS, ...Array<keyof typeof RUN_ACTIONS>]),
   // The fields below are replay's, described for the actions that take them here.
@@ -128,6 +129,7 @@ export const runSchema = replayArgsSchema.pick({
   params: z.record(z.any()).optional().describe('repeat, one index: fields replacing the recorded ones; null removes one'),
   lines: z.array(z.number()).optional().describe('fromLog: history.log line numbers, 1 the newest'),
   killChromeOnFinish: z.boolean().optional().describe('sequence, all: kill the browsers this run launched once it finishes'),
+  keepDeclared: z.boolean().optional().describe('sequence: leave the browsers the sequence declares open once it ends, bench plays included'),
   requireSockets: z.boolean().optional().describe('sequence, all: fail the run when a WebSocket closes or errors during it'),
   strict: z.enum(['errors', 'warnings']).optional().describe("sequence, all: fail the run on console output it produces"),
   commands: z.array(inlineStep).min(1).optional()
@@ -166,7 +168,7 @@ export const MOVED_TO_RUN: Readonly<Record<string, keyof typeof RUN_ACTIONS>> = 
 const RUN_ONLY_FIELDS = {
   runId: true, baseUrl: true, envFile: true, variables: true, stepTimeout: true, totalTimeout: true,
   startFrom: true, stepTo: true, playing: true, stepCount: true, wait: true, bench: true,
-  steps: true, folder: true, continueOnFailure: true, killChromeOnFinish: true, requireSockets: true,
+  steps: true, folder: true, continueOnFailure: true, killChromeOnFinish: true, keepDeclared: true, requireSockets: true,
   strict: true, params: true, lines: true, connections: true,
 } as const;
 

@@ -157,6 +157,18 @@ describe('declared browsers', () => {
     expect(killedPorts(calls)).not.toContain(PORTS['declared-b']);
   });
 
+  it('are left open under keepDeclared, and the reply names them', async () => {
+    const { run, calls } = makeReplay(twoSteps);
+
+    const result: any = await run.handler({
+      action: 'sequence', wait: true, sequenceId: 'seq-declared', connection: 'run-device', keepDeclared: true,
+    } as any);
+
+    expect(killedPorts(calls)).not.toContain(PORTS['declared-b']);
+    expect(calls.some(c => c.tool === 'connection' && c.params.action === 'close' && c.params.connection === 'declared-b')).toBe(false);
+    expect(result.content[0].text).toContain('**Browsers left open** (keepDeclared): declared-b');
+  });
+
   it('reuse a browser already bound to the name, read from the error id', async () => {
     const { replay, run, calls } = makeReplay(twoSteps, { launchAnswer: 'bound' });
 

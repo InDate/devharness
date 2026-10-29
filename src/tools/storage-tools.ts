@@ -69,7 +69,18 @@ const storageSchema = z.object({
   reason: z.string().optional().describe('clear: why storage is cleared'),
   userVerified: z.boolean().optional().describe('authenticatorAdd: report the user verified (default true)'),
   types: z.array(z.enum(['cookies', 'localStorage', 'sessionStorage', 'indexedDB'])).optional().describe('clear: types to clear (default cookies, localStorage, sessionStorage; indexedDB only when listed)'),
+  origins: z.array(z.string()).optional().describe("clear: origins whose data is cleared, as http://localhost:4100 (default the page's origin)"),
 }).strict();
+
+/** The http(s) origin of a URL, or undefined for about:blank, data: and unparseable text. */
+function originOf(url: string): string | undefined {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.origin : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** The target an ACTION_FAILED reply names for a web storage call. */
 const localStorageKey = (key: string | number | undefined) => key === undefined ? 'localStorage' : `localStorage[${String(key)}]`;
@@ -744,72 +755,51 @@ export function createStorageTools(
           }
 
           case 'clear': {
-            // Log the reason for audit purposes
             const types = args.types || ['cookies', 'localStorage', 'sessionStorage'];
-            console.error(`[devharness] clearStorage called - Reason: ${args.reason}, Types: ${types.join(', ')}, Connection: ${connection}`);
+            const pageOrigin = originOf(page.url());
+            const read = args.origins?.length ? args.origins.map(originOf) : [pageOrigin];
+            const unreadable = (args.origins ?? []).filter((_, at) => read[at] === undefined);
+            if (unreadable.length || read[0] === undefined) {
+              return createErrorResponse('INVALID_PARAMETER', {
+                parameter: 'origins',
+                value: unreadable.join(', ') || page.url(),
+                message: unreadable.length
+                  ? `${unreadable.join(', ')} holds no http(s) origin`
+                  : `The page at ${page.url()} holds no http(s) origin; name the origins to clear`,
+              });
+            }
+            const origins = read as string[];
+            console.error(`[devharness] clearStorage called - Reason: ${args.reason}, Types: ${types.join(', ')}, Origins: ${origins.join(', ')}, Connection: ${connection}`);
 
             const result = await executeWithPauseDetection(
               targetCdpManager,
               async () => {
-                const cleared: string[] = [];
-
-                if (types.includes('cookies')) {
-                  const cookies = await page.cookies();
-                  if (cookies.length > 0) {
-                    await page.deleteCookie(...cookies);
-                  }
-                  cleared.push('cookies');
-                }
-
-                if (types.includes('localStorage') || types.includes('sessionStorage')) {
-                  await page.evaluate((storageTypes: string[]) => {
-                    if (storageTypes.includes('localStorage')) {
-                      localStorage.clear();
+                // The browser clears these per origin, open IndexedDB connections
+                // included, which a page script cannot reach past its own origin
+                // or delete while the app holds the database open.
+                const storageTypes = [
+                  ...(types.includes('cookies') ? ['cookies'] : []),
+                  ...(types.includes('localStorage') ? ['local_storage'] : []),
+                  ...(types.includes('indexedDB') ? ['indexeddb'] : []),
+                ];
+                if (storageTypes.length) {
+                  const session = await openSession(page as any);
+                  try {
+                    for (const origin of origins) {
+                      await session.send('Storage.clearDataForOrigin', { origin, storageTypes: storageTypes.join(',') });
                     }
-                    if (storageTypes.includes('sessionStorage')) {
-                      sessionStorage.clear();
-                    }
-                  }, types);
-
-                  if (types.includes('localStorage')) cleared.push('localStorage');
-                  if (types.includes('sessionStorage')) cleared.push('sessionStorage');
-                }
-
-                if (types.includes('indexedDB')) {
-                  const idbResult: any = await page.evaluate(async () => {
-                    const indexedDB: any = (globalThis as any).indexedDB;
-                    if (!indexedDB || typeof indexedDB.databases !== 'function') {
-                      return { supported: false, deleted: [], blocked: [] };
-                    }
-                    const dbs = await indexedDB.databases();
-                    const deleted: string[] = [];
-                    const blocked: string[] = [];
-                    for (const info of dbs) {
-                      if (!info.name) continue;
-                      // deleteDatabase never settles while another connection
-                      // holds the database open, so bound the wait and report
-                      // the survivors rather than hanging the tool.
-                      const ok = await new Promise<boolean>((resolve) => {
-                        const req = indexedDB.deleteDatabase(info.name);
-                        const done = (v: boolean) => resolve(v);
-                        req.onsuccess = () => done(true);
-                        req.onerror = () => done(false);
-                        req.onblocked = () => done(false);
-                        setTimeout(() => done(false), 3000);
-                      });
-                      (ok ? deleted : blocked).push(info.name);
-                    }
-                    return { supported: true, deleted, blocked };
-                  });
-
-                  if (idbResult.supported) {
-                    cleared.push(`indexedDB (${idbResult.deleted.length} deleted${idbResult.blocked.length ? `, ${idbResult.blocked.length} blocked: ${idbResult.blocked.join(', ')}` : ''})`);
-                  } else {
-                    cleared.push('indexedDB (skipped: indexedDB.databases() unsupported)');
+                  } finally {
+                    await session.detach().catch(() => {});
                   }
                 }
+                // sessionStorage lives per tab, and the tab holds only the page's own origin.
+                const sessionCleared = types.includes('sessionStorage') && pageOrigin !== undefined && origins.includes(pageOrigin);
+                if (sessionCleared) await page.evaluate(() => sessionStorage.clear());
 
-                return { cleared };
+                return {
+                  cleared: types.filter(type => type !== 'sessionStorage' || sessionCleared),
+                  ...(types.includes('sessionStorage') && !sessionCleared ? { left: `sessionStorage (the tab holds ${pageOrigin ?? page.url()})` } : {}),
+                };
               },
               'clearStorage'
             );
@@ -818,7 +808,10 @@ export function createStorageTools(
               const failed = actionFailureResponse(result, 'clear', types.join(', '));
               if (failed) return failed;
             }
-            return createSuccessResponse('STORAGE_CLEARED', { types: result.result!.cleared.join(', ') });
+            const { cleared, left } = result.result!;
+            return createSuccessResponse('STORAGE_CLEARED', {
+              types: `${cleared.join(', ')} for ${origins.join(', ')}${left ? `; not cleared: ${left}` : ''}`,
+            });
           }
 
           default:

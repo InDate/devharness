@@ -401,8 +401,13 @@ rather than on the next run. It lands on the sequence next to `commands`:
 `url` defaults to the sequence's `startUrl`; `forceNewInstance` defaults to
 **true** (a separate process, not a tab - two identities in one browser share
 its storage); `role` shows up in the run summary. A reference already bound to
-a live browser is reused, and a `connections` mapping wins over the
-declaration. A browser that will not launch fails the run before step 1.
+a live browser is reused with the cookies and storage it holds; a first step
+`storage({ action: 'clear', origins: [...], types: [...], reason })` returns it
+to fresh. A `connections` mapping wins over the declaration. A browser that will
+not launch fails the run before step 1. The startUrl goes to the browser step 1
+runs in; a declared browser the run launches opens at its own `url` instead.
+The bench rebinds a one-browser sequence onto its tab only when that browser is
+undeclared.
 
 **`profile` makes the device durable.** Add the persistent profile the browser
 should come up on - the same ones `connection({ action: 'launch', profile })` creates:
@@ -429,7 +434,9 @@ cancelled - and reports *"Browsers closed (declared and launched): ..."*. A
 pause keeps them (that is the state you stopped to inspect); whatever ends the
 pause (`cancel`, `finish`, stepping off the end) closes them then. Browsers
 that were already up, or that share a port with another live connection, are
-left alone.
+left alone. `keepDeclared: true` on `run sequence`, bench plays included, leaves
+the declared browsers open for reading their final state; the reply lists them
+under *"Browsers left open"*.
 
 **Declaring that it crosses the proxy.** `replay({ action: 'declare', name: '...',
 proxy: true })` marks a run that reads what crossed the proxy; `create` sets it

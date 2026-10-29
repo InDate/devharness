@@ -102,6 +102,7 @@ async function runInBench(args: ReplayArgs, recorder: CommandRecorder) {
     }
     bench.setSequenceEnvFile(connection, args.envFile);
   }
+  bench.setSequenceKeepDeclared(connection, args.keepDeclared === true);
   const name = String(args.name ?? '');
   const since = recorder.getCurrentHistoryIndex();
   await bench.selectSequence(connection, name);
@@ -554,9 +555,12 @@ export async function handleRun(
   // Closing the browsers the sequence declared, deferred so that every terminal
   // outcome uses one path: a pause hands the debt to `pendingDeclaredCleanups`
   // and whatever ends the pause pays it (issues #127, #137).
-  const closeDeclared = () => closeLaunchedConnections(
-    declaredConns.launched, executeToolCall, getConnectionPort, sequence.name
-  );
+  const closeDeclared = async () => {
+    if (!args.keepDeclared || declaredConns.launched.length === 0) {
+      return closeLaunchedConnections(declaredConns.launched, executeToolCall, getConnectionPort, sequence.name);
+    }
+    return `\n\n**Browsers left open** (keepDeclared): ${declaredConns.launched.join(', ')} - a later run declaring one reuses it with the cookies and storage it holds; \`connection({ action: 'close' })\` releases it.`;
+  };
 
   /**
    * Tear down the browsers this run owns: its own connection, plus any a step

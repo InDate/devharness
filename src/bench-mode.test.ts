@@ -401,6 +401,7 @@ function noteSequences() {
     setBaseUrl: () => {},
     baseUrl: () => undefined,
     setEnvFile: () => {},
+    setKeepDeclared: () => {},
     envFile: () => undefined,
   };
   return api;
@@ -1110,6 +1111,7 @@ describe('stepping a sequence', () => {
       setBaseUrl: (value: string) => { calls.push(`baseUrl:${value}`); base = value; },
       baseUrl: () => base || undefined,
       setEnvFile: () => {},
+      setKeepDeclared: () => {},
       envFile: () => undefined,
       halt: async () => { calls.push('halt'); },
       cancel: async () => { calls.push('cancel'); open = null; },

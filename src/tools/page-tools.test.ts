@@ -53,3 +53,26 @@ describe('the hints in a navigation reply', () => {
     }
   });
 });
+
+// Last: a successful goto spends the once-per-session hints the test above reads.
+describe('a goto on a page that navigates itself once loaded', () => {
+  it('reads the page a gate redirects to once loaded, where the first read lost its document', async () => {
+    let reads = 0;
+    const navigate = makeNavigate({
+      goto: vi.fn(async () => null),
+      title: vi.fn(async () => {
+        reads += 1;
+        if (reads === 1) throw new Error('Execution context was destroyed, most likely because of a navigation.');
+        return 'Join';
+      }),
+      evaluate: vi.fn(async (fn: any) => (fn === 'document.readyState' ? 'complete' : { results: [], viewportHeight: 800, viewportWidth: 1200 })),
+      once: vi.fn(),
+      off: vi.fn(),
+    });
+
+    const result: any = await navigate.handler({ action: 'goto', connection: 'shop-web-app', url: 'http://shop.test/' });
+
+    expect(result.isError).toBeFalsy();
+    expect(reads).toBe(2);
+  });
+});

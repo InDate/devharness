@@ -8,6 +8,8 @@ import {
   validateNavigation, validateTypedText, capturePreClickState, validateClickAction,
   autoLaunchChrome, executeSteps,
 } from './replay-executor.js';
+import { navigateToStartUrl } from './replay-step-checks.js';
+import { analyzeSequenceConnections } from './replay-connections.js';
 import type { ExecutionContext } from './replay-executor.js';
 import { productionShaped } from '../test-support/fake-execute-tool-call.js';
 import type { ClickValidationConfig } from '../config.js';
@@ -41,6 +43,42 @@ describe('validateNavigation', () => {
   it('fails a page left on about:blank when another URL was expected', async () => {
     const ctx = ctxWith(tool => tool === 'navigate' ? pageInfo('about:blank', '') : undefined);
     expect((await validateNavigation(ctx, 'http://shop.test/')).success).toBe(false);
+  });
+});
+
+describe('the startUrl navigation before step 1', () => {
+  const sequenceOf = (extra: Partial<CommandSequence>) => ({
+    id: 's', name: 'walk', createdAt: 0, startUrl: 'http://shop.test/pair.html',
+    commands: [{ tool: 'input', params: { action: 'click', selector: '#pair', connection: 'host-root' } }],
+    ...extra,
+  }) as CommandSequence;
+  const gotos = (calls: any[]) => calls.filter(c => c.tool === 'navigate').map(c => c.params.connection);
+
+  it('goes to the browser step 1 runs in, not the run connection', async () => {
+    const ctx = ctxWith(() => undefined);
+    const sequence = sequenceOf({});
+
+    await navigateToStartUrl(ctx, sequence, analyzeSequenceConnections(sequence.commands));
+
+    expect(gotos(ctx.calls)).toEqual(['host-root']);
+  });
+
+  it('leaves a declared browser the run launches at its declared url', async () => {
+    const ctx = ctxWith(() => undefined);
+    const sequence = sequenceOf({ requiredConnections: [{ connection: 'host-root', url: 'http://shop.test/pair.html' }] });
+
+    await navigateToStartUrl(ctx, sequence, analyzeSequenceConnections(sequence.commands));
+
+    expect(gotos(ctx.calls)).toEqual([]);
+  });
+
+  it('navigates a declared browser rebound onto one already open, since nothing launched it', async () => {
+    const ctx = { ...ctxWith(() => undefined), connectionMap: { 'host-root': 'shop-web-app' } };
+    const sequence = sequenceOf({ requiredConnections: [{ connection: 'host-root' }] });
+
+    await navigateToStartUrl(ctx, sequence, analyzeSequenceConnections(sequence.commands));
+
+    expect(gotos(ctx.calls)).toEqual(['shop-web-app']);
   });
 });
 

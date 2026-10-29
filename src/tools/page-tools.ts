@@ -46,10 +46,50 @@ export interface PageContext {
 // Helper Functions
 // =============================================================================
 
+/** Puppeteer's raw error for a read whose document a navigation replaced. */
+const CONTEXT_DESTROYED = /Execution context was destroyed|Cannot find context with specified id/;
+
+/** Reads of a page that navigates itself once loaded, as a gate redirecting a signed-in browser does. */
+const SELF_NAVIGATION_READS = 3;
+
 /**
- * Gather page context including console errors and failed network requests
+ * Gather page context including console errors and failed network requests.
+ * A navigation the page starts during the read replaces its document, and the
+ * read is taken again once the new document has loaded.
  */
 export async function gatherPageContext(
+  page: any,
+  consoleMonitor: ConsoleMonitor,
+  networkMonitor: NetworkMonitor,
+  clickableCache: ClickableCache,
+  abortSignal?: AbortSignal
+): Promise<PageContext> {
+  for (let read = 1; ; read++) {
+    try {
+      return await readPageContext(page, consoleMonitor, networkMonitor, clickableCache);
+    } catch (error) {
+      if (read >= SELF_NAVIGATION_READS || !CONTEXT_DESTROYED.test(String((error as Error)?.message ?? error))) throw error;
+      await raceAbort(newDocumentLoaded(page), abortSignal);
+    }
+  }
+}
+
+/**
+ * Resolves on the load of the document a navigation put in place. The listener
+ * goes on before readyState is read, so a load landing between the two is caught.
+ */
+async function newDocumentLoaded(page: any): Promise<void> {
+  let onLoad!: () => void;
+  const loaded = new Promise<void>(resolve => { onLoad = resolve; page.once('load', onLoad); });
+  const state = await page.evaluate('document.readyState').catch(() => 'navigating');
+  if (state === 'complete') {
+    page.off('load', onLoad);
+    return;
+  }
+  await loaded;
+}
+
+async function readPageContext(
   page: any,
   consoleMonitor: ConsoleMonitor,
   networkMonitor: NetworkMonitor,
@@ -297,7 +337,7 @@ export function createPageTools(
                 restartMonitoring(page, targetConsoleMonitor, targetNetworkMonitor);
 
                 // Gather full page context
-                return gatherPageContext(page, targetConsoleMonitor, targetNetworkMonitor, clickableCache);
+                return gatherPageContext(page, targetConsoleMonitor, targetNetworkMonitor, clickableCache, abortSignal);
               },
               'navigateTo'
             );
@@ -332,7 +372,7 @@ export function createPageTools(
                 restartMonitoring(page, targetConsoleMonitor, targetNetworkMonitor);
 
                 // Gather full page context
-                return gatherPageContext(page, targetConsoleMonitor, targetNetworkMonitor, clickableCache);
+                return gatherPageContext(page, targetConsoleMonitor, targetNetworkMonitor, clickableCache, abortSignal);
               },
               'reloadPage'
             );
@@ -356,7 +396,7 @@ export function createPageTools(
                 restartMonitoring(page, targetConsoleMonitor, targetNetworkMonitor);
 
                 // Gather full page context
-                return gatherPageContext(page, targetConsoleMonitor, targetNetworkMonitor, clickableCache);
+                return gatherPageContext(page, targetConsoleMonitor, targetNetworkMonitor, clickableCache, abortSignal);
               },
               'goBack'
             );
@@ -380,7 +420,7 @@ export function createPageTools(
                 restartMonitoring(page, targetConsoleMonitor, targetNetworkMonitor);
 
                 // Gather full page context
-                return gatherPageContext(page, targetConsoleMonitor, targetNetworkMonitor, clickableCache);
+                return gatherPageContext(page, targetConsoleMonitor, targetNetworkMonitor, clickableCache, abortSignal);
               },
               'goForward'
             );

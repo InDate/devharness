@@ -1183,6 +1183,22 @@ export function createInputTools(
                 };
               }
 
+              // A key reaches whatever holds focus, and a click between steps can
+              // move it off the field the press was recorded on.
+              let selector = args.selector;
+              if (selector && isExtendedSelector(selector)) {
+                const resolved = await resolveSelector(page, selector);
+                if ('error' in resolved) {
+                  return createErrorResponse('ELEMENT_NOT_FOUND', { selector, suggestion: resolved.suggestion });
+                }
+                selector = resolved.selector;
+              }
+              if (selector) {
+                const holds = await page.$eval(selector, (el: any) => el.contains(el.ownerDocument.activeElement)).catch(() => null);
+                if (holds === null) return createErrorResponse('ELEMENT_NOT_FOUND', { selector: args.selector });
+                if (!holds) await withReplayBypass(page, () => page.focus(selector));
+              }
+
               await checkAborted(); // last exit before the key press goes on the wire
               const result = await withReplayBypass(page, () =>
                 executeWithPauseDetection(
@@ -1200,6 +1216,7 @@ export function createInputTools(
                   'pressKey'
                 )
               );
+              if (selector && selector !== args.selector) await cleanupResolvedSelector(page, selector);
               {
                 const stopped = stoppedResponse(result, 'press', key);
                 if (stopped) return stopped;

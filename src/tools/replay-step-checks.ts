@@ -13,7 +13,8 @@ import type { ClickActionMeta, DebuggerStatusMeta } from '../tool-response.js';
 import { compareFingerprints, describeFingerprint, locateFingerprint, type ElementFingerprint, type ElementRepair } from '../element-fingerprint.js';
 import { unlisted } from '../call-origin.js';
 import { debugLog } from '../debug-logger.js';
-import { requireValidReference } from '../reference-validator.js';
+import { requireValidReference, sanitizeReference } from '../reference-validator.js';
+import { addressedConnection } from './connection-steps.js';
 import { checkUrlPort } from '../utils/port-check.js';
 import type { BreakpointHitInfo, ConnectionAnalysis, ExecutionContext } from './replay-types.js';
 
@@ -211,9 +212,21 @@ export async function navigateToStartUrl(
   sequence: CommandSequence,
   analysis: ConnectionAnalysis
 ): Promise<{ success: true } | { success: false; error: string }> {
-  const { executeToolCall, connection, logPrefix = 'executor' } = ctx;
+  const { executeToolCall, connectionMap, logPrefix = 'executor' } = ctx;
+  const firstStep = sequence.commands[analysis.firstConnectionToolIndex];
+  const named = firstStep && addressedConnection(firstStep);
+  const connection = named ? connectionMap?.[sanitizeReference(named)] ?? sanitizeReference(named) : ctx.connection;
 
   if (!sequence.startUrl || !connection) {
+    return { success: true };
+  }
+
+  // A declared browser opens at its declared url, or the startUrl, when the run
+  // launches it; one rebound onto an existing browser is never launched.
+  const launchedAtUrl = (sequence.requiredConnections ?? [])
+    .map(decl => sanitizeReference(decl.connection))
+    .filter(ref => !connectionMap?.[ref]);
+  if (launchedAtUrl.includes(connection)) {
     return { success: true };
   }
 

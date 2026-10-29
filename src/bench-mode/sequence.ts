@@ -408,6 +408,14 @@ export function setSequenceEnvFile(connection: string, envFile: string): boolean
   return true;
 }
 
+/** Whether the bench's runs leave the browsers a sequence declares open once they end. */
+export function setSequenceKeepDeclared(connection: string, keep: boolean): boolean {
+  const session = sessions.get(connection);
+  if (!session?.sequences) return false;
+  session.sequences.setKeepDeclared(keep);
+  return true;
+}
+
 /** Point the run at another deployment - another port, another host. */
 export async function setSequenceBaseUrl(connection: string, baseUrl: string): Promise<SequenceState | undefined> {
   const session = sessions.get(connection);

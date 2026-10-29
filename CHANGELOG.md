@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-10-29
+
 ### Removed
 
 - **The devharness Agent Skill.** It reached few sessions, and those mostly on

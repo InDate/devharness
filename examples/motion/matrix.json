@@ -1780,9 +1780,9 @@
         },
         "credit": {
           "expect": "Press step, +0",
-          "today": "gap",
-          "basis": "sequence:credit-every-catalog-key",
-          "note": "#box in the iframe reads after, placed by time: the tracker runs in the top document alone, so no root reaches the frame"
+          "today": "works",
+          "basis": "sequence:iframe-credit",
+          "note": "Press 6 owns the transform #box transition in the same-origin Outbox iframe, by root. The iframe runs its own tracker, which marks none of the parent's input, so the key handler's call into the frame read as the frame's page load; a frame with no live cause of its own now takes the live cause of the document that embeds it. A cross-origin frame stays out of reach"
         },
         "source": {
           "expect": "CSS, started by key 6"

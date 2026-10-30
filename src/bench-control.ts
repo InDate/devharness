@@ -893,6 +893,11 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
   return {
     port,
     url: `http://127.0.0.1:${port}${prefix}/`,
-    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    // server.close resolves only once every connection ends, and a bench page
+    // left open keeps its keep-alive connections, so they are ended here.
+    close: () => new Promise<void>((resolve) => {
+      server.close(() => resolve());
+      server.closeAllConnections();
+    }),
   };
 }

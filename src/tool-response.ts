@@ -310,6 +310,8 @@ export interface ConnectionMeta {
   /** The page a browser connection drives; absent for a Node.js target. */
   url?: string;
   title?: string;
+  /** The group this connection belongs to, from `connection launch` with `group`. */
+  group?: string;
 }
 
 /**

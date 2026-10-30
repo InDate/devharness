@@ -48,6 +48,8 @@ import { createConsoleTools } from './tools/console-tools.js';
 import { createNetworkTools } from './tools/network-tools.js';
 import { createProxyTools } from './tools/proxy-tools.js';
 import { createHoldTools } from './tools/hold-tools.js';
+import { createGroupTools } from './tools/group-tools.js';
+import { setGroupSources } from './group-read.js';
 import { describeHold, drivesPage, forRunStep, heldConnections, holdReading, isOutside, release, type HoldOwner } from './hold.js';
 import { createPageTools } from './tools/page-tools.js';
 import { createDOMTools } from './tools/dom-tools.js';
@@ -253,6 +255,15 @@ const logpointTracker = new LogpointExecutionTracker();
 const clickableCache = new ClickableCache();
 const commandRecorder = new CommandRecorder();
 recordPersonInputInto(commandRecorder);
+setGroupSources({
+  history: () => commandRecorder.getHistory(Number.MAX_SAFE_INTEGER),
+  isOpen: name => !!connectionManager.findConnectionByReference(name),
+  hasProxy: name => !!getProxy(name),
+  consoleErrors: (name, since) => (connectionManager.findConnectionByReference(name)?.consoleMonitor?.getAllMessages('error') ?? [])
+    .filter(message => message.timestamp >= since).map(message => message.timestamp),
+  networkRequests: (name, since) => (connectionManager.findConnectionByReference(name)?.networkMonitor?.getRequests({ since }) ?? [])
+    .map(request => ({ at: request.timing?.startTime ?? 0, failed: request.failed || (request.response?.status ?? 0) >= 400 })),
+});
 const portReserver = new PortReserver();
 const serverManager = new ServerManager();
 
@@ -616,6 +627,7 @@ function toolset<T extends object>(name: string, tools: T): T {
 const allTools = {
   // Connection tools (Chrome/debugger)
   ...(configManager.isToolEnabled('connection') ? toolset('connection', connectionTools) : {}),
+  ...(configManager.isToolEnabled('connection') ? toolset('group', createGroupTools(connectionManager)) : {}),
   // CDP Debugging tools
   ...(configManager.isToolEnabled('breakpoint') ? toolset('breakpoint', createBreakpointTools(sourceMapHandler, logpointTracker, resolveConnectionByName)) : {}),
   ...(configManager.isToolEnabled('execution') ? toolset('execution', createExecutionTools(resolveConnectionByName, connectionManager, (port) => serverManager.retryPendingRestartByInspectorPort(port))) : {}),

@@ -6,6 +6,8 @@ import { z } from 'zod';
 import { PuppeteerManager } from '../puppeteer-manager.js';
 import { ConsoleMonitor, StoredConsoleMessage } from '../console-monitor.js';
 import { createTool } from '../validation-helpers.js';
+import { membersOf } from '../groups.js';
+import { formatHeadline, groupRefusal, headlineMeta, mergedRows, readGroup } from '../group-read.js';
 import { createSuccessResponse, createErrorResponse } from '../messages.js';
 import {
   DEFAULT_SUMMARY_TOKEN_BUDGET,
@@ -72,8 +74,12 @@ async function handleWorkerConsole(connection: any, args: ConsoleArgs) {
 
 const consoleSchema = z.object({
   action: z.enum(['list', 'get', 'recent', 'search', 'clear', 'setObjectDepth']),
-  connection: z.string()
-    .describe('The connection, by the name connection launch or attach gave it'),
+  connection: z.string().optional()
+    .describe('The connection, by the name connection launch or attach gave it; with group, that member\'s messages'),
+  group: z.string().min(1).optional()
+    .describe('list: per-browser headline of the group since the last read; narrowed by connection, type or pattern, the messages'),
+  since: z.number().optional()
+    .describe('list with group: epoch ms, at or after (default: the last read)'),
 
   // Shared filters
   type: z.string().optional()
@@ -335,6 +341,35 @@ export function createConsoleTools(
       'Console messages, from the page or a worker via `target`.',
       consoleSchema,
       async (args: ConsoleArgs) => {
+        if (args.group) {
+          if (args.action !== 'list') {
+            return createErrorResponse('INVALID_PARAMS', { message: `group reads list alone; "${args.action}" acts on one browser, named by connection` });
+          }
+          const refusal = groupRefusal(args.group, args.connection);
+          if (refusal) return createErrorResponse('INVALID_PARAMS', { message: refusal });
+          const reading = readGroup(args.group, 'console', args.since !== undefined ? { since: args.since } : {});
+          const meta = { tool: 'console', action: 'list', timestamp: Date.now(), groupRead: headlineMeta(reading) };
+          if (args.connection === undefined && args.type === undefined && args.pattern === undefined) {
+            return { content: [{ type: 'text', text: formatHeadline(reading) }], _meta: meta };
+          }
+          const matcher = args.pattern !== undefined ? new RegExp(args.pattern, args.flags) : undefined;
+          const rows = [];
+          for (const member of args.connection ? [args.connection] : membersOf(args.group)) {
+            const monitor = (await resolveConnectionByName(member))?.consoleMonitor;
+            for (const message of monitor?.getAllMessages(args.type) ?? []) {
+              if (message.timestamp < reading.rowsSince) continue;
+              if (matcher && !matcher.test(message.text)) continue;
+              const text = message.text.length > 160 ? `${message.text.slice(0, 160)}…` : message.text;
+              rows.push({ at: message.timestamp, connection: member, id: message.id, line: `${message.id}  ${message.type} ${text}` });
+            }
+          }
+          const merged = mergedRows(reading, rows, args.limit ?? 30);
+          return { content: [{ type: 'text', text: merged.text }], _meta: { ...meta, messages: merged.shown.map(({ line: _line, ...row }) => row), total: merged.total, older: merged.older } };
+        }
+        if (!args.connection) {
+          return createErrorResponse('MISSING_PARAMETER', { action: args.action, missing: 'connection', message: `The "${args.action}" action requires connection` });
+        }
+
         // Validate required params
         const validationError = validateRequiredParams(args);
         if (validationError) return validationError;

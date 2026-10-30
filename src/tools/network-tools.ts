@@ -7,6 +7,8 @@ import { promises as fs } from 'fs';
 import { join } from 'path';
 import { StoredNetworkRequest } from '../network-monitor.js';
 import { createTool } from '../validation-helpers.js';
+import { membersOf } from '../groups.js';
+import { formatHeadline, groupRefusal, headlineMeta, mergedRows, readGroup } from '../group-read.js';
 import { createSuccessResponse, createErrorResponse, formatCodeBlock, responseWithOnce } from '../messages.js';
 import type { Page } from 'puppeteer-core';
 import { getOutputPath } from '../helpers/paths.js';
@@ -15,7 +17,10 @@ import type { ToolResponseMeta, NetworkToolMeta } from '../tool-response.js';
 // Consolidated network tool schema
 const networkToolSchema = z.object({
   action: z.enum(['list', 'get', 'search', 'enable', 'disable', 'setConditions', 'sockets', 'streams']),
-  connection: z.string().describe('The connection, by the name connection launch or attach gave it'),
+  connection: z.string().optional().describe('The connection, by the name connection launch or attach gave it; with group, that member\'s requests'),
+  group: z.string().min(1).optional().describe('list: per-browser headline of the group since the last read; narrowed by connection, failed or pattern, the requests'),
+  failed: z.boolean().optional().describe('list with group: failed requests only'),
+  full: z.boolean().optional().describe('list with group: from the group\'s start'),
 
   // list action parameters
   resourceType: z.string().optional().describe('list/search: resource type filter'),
@@ -151,7 +156,40 @@ export function createNetworkTools(
       'Network traffic as CDP sees it; proxy holds what reached the outside world.',
       networkToolSchema,
       async (args) => {
-        const { action, connection } = args;
+        if (args.group) {
+          if (args.action !== 'list') {
+            return createErrorResponse('INVALID_PARAMS', { message: `group reads list alone; "${args.action}" acts on one browser, named by connection` });
+          }
+          const refusal = groupRefusal(args.group, args.connection);
+          if (refusal) return createErrorResponse('INVALID_PARAMS', { message: refusal });
+          const reading = readGroup(args.group, 'network', { ...(args.since !== undefined ? { since: args.since } : {}), ...(args.full ? { full: true } : {}) });
+          const meta = { tool: 'network', action: 'list', timestamp: Date.now(), groupRead: headlineMeta(reading) };
+          if (args.connection === undefined && !args.failed && args.pattern === undefined) {
+            return { content: [{ type: 'text', text: formatHeadline(reading) }], _meta: meta };
+          }
+          const matcher = args.pattern !== undefined ? new RegExp(args.pattern, args.flags) : undefined;
+          const rows = [];
+          for (const member of args.connection ? [args.connection] : membersOf(args.group)) {
+            const monitor = (await resolveConnectionByName(member))?.networkMonitor;
+            for (const req of monitor?.getRequests({ since: reading.rowsSince, ...(args.until !== undefined ? { until: args.until } : {}) }) ?? []) {
+              const status = req.response?.status;
+              const failed = req.failed || (status ?? 0) >= 400;
+              if (args.failed && !failed) continue;
+              if (matcher && !matcher.test(req.url)) continue;
+              rows.push({
+                at: req.timing?.startTime ?? 0, connection: member, id: req.id,
+                line: `${req.id}  ${req.method} ${req.url} ${status ?? (req.failed ? `failed${req.errorText ? ` ${req.errorText}` : ''}` : 'pending')}`,
+              });
+            }
+          }
+          const merged = mergedRows(reading, rows, args.limit ?? 30);
+          return { content: [{ type: 'text', text: merged.text }], _meta: { ...meta, requests: merged.shown.map(({ line: _line, ...row }) => row), total: merged.total, older: merged.older } };
+        }
+        if (!args.connection) {
+          return createErrorResponse('MISSING_PARAMETER', { action: args.action, missing: 'connection', message: `The "${args.action}" action requires connection` });
+        }
+        const { action } = args;
+        const connection: string = args.connection;
 
         switch (action) {
           case 'streams': {

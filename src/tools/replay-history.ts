@@ -10,6 +10,8 @@ import { sanitizeReference, InvalidReferenceError } from '../reference-validator
 import { commandTakesInjectedConnection } from './replay-executor.js';
 import { addressedConnection, createdName } from './connection-steps.js';
 import { formatHistory } from './replay-formatters.js';
+import { hasGroup, membersOf } from '../groups.js';
+import { callFailed, clock, formatHeadline, headlineMeta, readGroup, withHeadline } from '../group-read.js';
 import { readHistoryLines, getHistoryFilePath } from '../debug-logger.js';
 import { type ReplayArgs } from './replay-schema.js';
 import { formatEntries, formatObservations } from './history-activity.js';
@@ -48,6 +50,29 @@ export async function handleHistory(args: ReplayArgs, recorder: CommandRecorder)
     return { content: [{ type: 'text', text }] };
   }
   const limit = args.limit || 50;
+  if (args.group) {
+    if (!hasGroup(args.group)) {
+      return createErrorResponse('INVALID_PARAMS', { message: `No group "${args.group}". \`group({ action: 'list' })\` names every group.` });
+    }
+    if (args.connection && !membersOf(args.group).includes(args.connection)) {
+      return createErrorResponse('INVALID_PARAMS', { message: `"${args.connection}" is not in group "${args.group}": ${membersOf(args.group).join(', ') || 'it has no browsers'}.` });
+    }
+    const reading = readGroup(args.group, 'history', { full: args.full });
+    const narrowed = args.connection !== undefined || args.failed === true;
+    const calls = reading.calls
+      .filter(cmd => args.connection === undefined || cmd.params?.connection === args.connection)
+      .filter(cmd => !args.failed || callFailed(cmd));
+    const text = narrowed
+      ? withHeadline(reading, calls.length ? formatHistory(calls.slice(-limit), calls.length) : `No calls match since ${clock(reading.rowsSince)}.`)
+      : formatHeadline(reading);
+    return { content: [{ type: 'text', text }], _meta: { tool: 'replay', action: 'history', timestamp: Date.now(), groupRead: headlineMeta(reading), ...(narrowed ? { calls: calls.slice(-limit).map(cmd => cmd.index) } : {}) } };
+  }
+  if (args.connection !== undefined || args.failed === true) {
+    const calls = recorder.getHistory(Number.MAX_SAFE_INTEGER)
+      .filter(cmd => args.connection === undefined || cmd.params?.connection === args.connection)
+      .filter(cmd => !args.failed || callFailed(cmd));
+    return { content: [{ type: 'text', text: formatHistory(calls.slice(0, limit), calls.length) }] };
+  }
   const history = recorder.getHistory(limit);
   const stats = recorder.getStats();
 

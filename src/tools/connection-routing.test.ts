@@ -13,7 +13,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createInspectionTools } from './inspection-tools.js';
 import { createNetworkTools } from './network-tools.js';
 import { createModalTools } from './modal-tools.js';
-import { validateParams } from '../validation-helpers.js';
 
 // ---------------------------------------------------------------------------
 // inspect: searchCode / searchFunctions
@@ -168,12 +167,14 @@ describe('network enable/disable honour connection', () => {
   });
 
   it.each(['list', 'get', 'search', 'enable', 'disable', 'setConditions', 'sockets', 'streams'])(
-    '%s without a reference fails validation naming connection',
-    (action) => {
-      const result = validateParams({ action }, network.zodSchema, 'network');
+    '%s without a reference or a group is refused naming connection, reading no default',
+    async (action) => {
+      const result = await network.handler({ action });
 
-      expect(result.success).toBe(false);
-      expect((result as any).error.missingParameters.map((p: any) => p.name)).toContain('connection');
+      expect(result.isError).toBe(true);
+      expect(result._errorId).toBe('MISSING_PARAMETER');
+      expect(result.content[0].text).toContain('connection');
+      expect(defaultMonitor.getRequests).not.toHaveBeenCalled();
     }
   );
 

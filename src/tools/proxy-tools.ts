@@ -9,6 +9,8 @@ import { z } from 'zod';
 import { createTool } from '../validation-helpers.js';
 import { createErrorResponse, responseWithOnce } from '../messages.js';
 import { getProxy, listProxies, namesSharing, stopProxyFor } from '../proxy/registry.js';
+import { hasGroup, membersOf } from '../groups.js';
+import { callConnection, clock, formatHeadline, headlineMeta, readGroup, withHeadline } from '../group-read.js';
 import { levelOf, type ProxyEvent, type ProxyCursor } from '../proxy/intercept-proxy.js';
 
 /**
@@ -47,8 +49,11 @@ function stampOf(e: ProxyEvent): string {
 
 const proxySchema = z.object({
   action: z.enum(['status', 'events', 'sockets', 'body', 'answer', 'answerFrame', 'withdraw', 'answers', 'refuse', 'stop']),
-  connection: z.string()
-    .describe("The browser, by the name connection({ action: 'launch', proxy: true }) gave it"),
+  connection: z.string().optional()
+    .describe("The browser, by the name connection({ action: 'launch', proxy: true }) gave it; with group, that member's events"),
+  group: z.string().min(1).optional().describe('events: per-browser headline of the group since the last read; narrowed by connection, failed or urlIncludes, the events'),
+  failed: z.boolean().optional().describe('events with group: failed requests only'),
+  full: z.boolean().optional().describe('events with group: from the group\'s start'),
   since: z.number().optional().describe('events: epoch ms, at or after'),
   limit: z.number().int().positive().optional().describe('events: the newest N listed (default 30)'),
   until: z.number().optional().describe('events: epoch ms, before'),
@@ -67,13 +72,71 @@ const proxySchema = z.object({
 /** How many events a reply lists unless asked for more. */
 const EVENTS_LISTED = 30;
 
+/** One event as its line. The level sits beside the stamp: a stamp with no statement of what backs it reads as attribution whatever it was built from. */
+function eventLine(e: ProxyEvent): string {
+  const cmd = stampOf(e);
+  const sure = ` (${levelOf(e)})`;
+  const tail = `${sure}${e.evidence?.initiator ? ` <${e.evidence.initiator}>` : ''}${e.answeredAs ? ` [${e.answeredAs}]` : ''}`;
+  return e.kind === 'request'
+    ? `${e.id}  ${cmd}${e.method} ${e.url} ${e.status ?? 'pending'}${tail}`
+    : `${e.id}  ${cmd}${e.direction === 'out' ? '->' : '<-'} ${e.url} ${e.size}b${tail}`;
+}
+
+const eventFailed = (e: ProxyEvent): boolean => (e.status ?? 0) >= 400 || e.answeredAs === 'refused';
+
+/** The group's headline and, narrowed, its members' events merged in time order, each row led by its browser's number. */
+function groupEvents(args: { group: string; connection?: string; failed?: boolean; urlIncludes?: string; since?: number; full?: boolean; limit?: number }) {
+  if (!hasGroup(args.group)) {
+    return createErrorResponse('INVALID_PARAMS', { message: `No group "${args.group}". \`group({ action: 'list' })\` names every group.` });
+  }
+  const members = membersOf(args.group);
+  if (args.connection && !members.includes(args.connection)) {
+    return createErrorResponse('INVALID_PARAMS', { message: `"${args.connection}" is not in group "${args.group}": ${members.join(', ') || 'it has no browsers'}.` });
+  }
+  const reading = readGroup(args.group, 'proxy', { ...(args.since !== undefined ? { since: args.since } : {}), ...(args.full ? { full: true } : {}) });
+  const tagOf = new Map(reading.browsers.map(b => [b.connection, b.tag]));
+  const meta = { tool: 'proxy', action: 'events', timestamp: Date.now(), groupRead: headlineMeta(reading) };
+  if (args.connection === undefined && !args.failed && args.urlIncludes === undefined) {
+    return { content: [{ type: 'text', text: formatHeadline(reading) }], _meta: meta };
+  }
+  const events = (args.connection ? [args.connection] : members)
+    .flatMap(member => (getProxy(member)?.eventsIn(reading.rowsSince) ?? []).map(e => ({ e, member })))
+    .filter(({ e }) => !args.failed || eventFailed(e))
+    .filter(({ e }) => args.urlIncludes === undefined || e.url.includes(args.urlIncludes))
+    .sort((a, b) => a.e.at - b.e.at);
+  const shown = events.slice(-(args.limit ?? EVENTS_LISTED));
+  const older = events.length - shown.length;
+  const lines = shown.map(({ e, member }) => {
+    const caller = e.commandIndex !== undefined ? callConnection(e.commandIndex) : undefined;
+    const across = caller !== undefined && caller !== member && tagOf.has(caller) ? ` ← call on ${tagOf.get(caller)}` : '';
+    return `${tagOf.get(member)} ${eventLine(e)}${across}`;
+  });
+  const head = events.length === 0
+    ? `No events match since ${clock(reading.rowsSince)}.`
+    : `${events.length} event(s) since ${clock(reading.rowsSince)}${older ? `; the newest ${shown.length} listed, ${older} older left out - narrow with urlIncludes or since, or raise limit` : ''}`;
+  return {
+    content: [{ type: 'text', text: withHeadline(reading, `${head}${lines.length ? `\n\n${lines.join('\n')}` : ''}`) }],
+    _meta: { ...meta, proxyEvents: shown.map(({ e, member }) => ({ ...e, connection: member })), total: events.length, older },
+  };
+}
+
 export function createProxyTools() {
   return {
     proxy: createTool(
       'Read and steer the intercepting proxy a browser was launched through (launch with proxy: true); holding traffic in time is the hold tool.',
       proxySchema,
       async (args) => {
-        const proxy = getProxy(args.connection);
+        if (args.group) {
+          if (args.action !== 'events') {
+            return createErrorResponse('INVALID_PARAMS', { message: `group reads events alone; "${args.action}" acts on one browser's proxy, named by connection` });
+          }
+          return groupEvents({ ...args, group: args.group });
+        }
+        if (!args.connection) {
+          return createErrorResponse('MISSING_PARAMETER', { action: args.action, missing: 'connection', message: `The "${args.action}" action requires connection` });
+        }
+        const connection = args.connection;
+        const proxy = getProxy(connection);
         if (!proxy) {
           return createErrorResponse('CONNECTION_NOT_FOUND', {
             message: `No proxy for "${args.connection}". Launch with connection({ action: 'launch', proxy: true }). Running: ${listProxies().join(', ') || 'none'}`,
@@ -159,15 +222,7 @@ export function createProxyTools() {
             // into the caller's context.
             const shown = events.slice(-(args.limit ?? EVENTS_LISTED));
             const older = events.length - shown.length;
-            const lines = shown.map(e => {
-              const cmd = stampOf(e);
-              // The level sits beside the stamp: a stamp with no statement of
-              // what backs it reads as attribution whatever it was built from.
-              const sure = ` (${levelOf(e)})`;
-              return e.kind === 'request'
-                ? `${e.id}  ${cmd}${e.method} ${e.url} ${e.status ?? 'pending'}${sure}${e.evidence?.initiator ? ` <${e.evidence.initiator}>` : ''}${e.answeredAs ? ` [${e.answeredAs}]` : ''}`
-                : `${e.id}  ${cmd}${e.direction === 'out' ? '->' : '<-'} ${e.url} ${e.size}b${sure}${e.evidence?.initiator ? ` <${e.evidence.initiator}>` : ''}${e.answeredAs ? ` [${e.answeredAs}]` : ''}`;
-            });
+            const lines = shown.map(eventLine);
             return responseWithOnce({
               content: [{ type: 'text', text: events.length === 0
                 ? `Nothing matching crossed the boundary in that window.${elsewhere ? ` ${elsewhere} went elsewhere.` : ''}`

@@ -18,6 +18,7 @@ import type { LogpointExecutionTracker } from '../logpoint-execution-tracker.js'
 import type { PortReserver } from '../port-reserver.js';
 import type { ServerManager } from '../server-manager.js';
 import { detectAutoRestartCommand } from '../server-manager.js';
+import { groupOf, joinGroup, renameMember } from '../groups.js';
 import { ChromeLauncher, ChromeBinaryAbsentError, ChromeLaunchFailure, PortSplitError, InvalidProfileNameError, ProfileInUseError, ProfileLockedError, normalizeProfileName, resolveLaunchPort, decideProfileReuse } from '../chrome-launcher.js';
 import { createTool } from '../validation-helpers.js';
 import { createSuccessResponse, createErrorResponse, responseWithOnce, withOnce, getMessage } from '../messages.js';
@@ -161,6 +162,7 @@ const connectionSchema = z.object({
   proxy: z.boolean().optional().describe('launch: route this browser through an intercepting proxy, so a response or socket frame can be held and served in its place (default: false)'),
   chromeArgs: z.array(z.string()).optional().describe('launch: extra Chrome command-line flags, merged after the managed defaults'),
   watchInput: z.boolean().optional().describe('launch: record a person\'s clicks and typing in this browser into History and onto the next reply, as the bench\'s RECORD MY INPUT does (default: replay.watchPersonInput)'),
+  group: z.string().min(1).optional().describe('launch: the group this browser joins, created if absent'),
 }).strict();
 
 type ConnectionArgs = z.infer<typeof connectionSchema>;
@@ -254,7 +256,10 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
   const launch = async (args: ConnectionArgs): Promise<any> => {
     const held: number[] = [];
     try {
-      return await launchHolding(args, held);
+      const response = await launchHolding(args, held);
+      const name = response?._meta?.launch?.name;
+      if (args.group && !response?.isError && typeof name === 'string') joinGroup(args.group, name);
+      return response;
     } finally {
       for (const port of held) launchingPorts.delete(port);
     }
@@ -1182,6 +1187,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
         connected: conn.cdpManager.isConnected(),
         paused: conn.cdpManager.isPaused(),
         ...(await pageOf(conn)),
+        ...(groupOf(conn.reference || UNNAMED_CONNECTION) !== undefined && { group: groupOf(conn.reference || UNNAMED_CONNECTION) }),
         createdAt: new Date(conn.createdAt).toISOString(),
       })));
 
@@ -1284,9 +1290,11 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
       return createErrorResponse('REFERENCE_IN_USE', { reference: newName });
     }
     const connection = await addressed(args);
+    const oldName = connection?.reference;
     if (!connection || !connectionManager.updateReference(connection.id, newName)) {
       return createErrorResponse('CONNECTION_NOT_FOUND', { reference: args.connection });
     }
+    if (oldName) renameMember(oldName, newName);
     return createSuccessResponse('CONNECTION_RENAMED', {
       oldName: args.connection,
       newName,

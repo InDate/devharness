@@ -380,6 +380,11 @@
         },
         "env": {
           "expect": "At 120Hz the dip spans two frames, at 60Hz one"
+        },
+        "seen": {
+          "today": "works",
+          "basis": "sequence:seen-unstaged-scenarios",
+          "note": "pop #badge keyframes 300ms, from key 1"
         }
       }
     },
@@ -474,10 +479,15 @@
       "cells": {
         "seen": {
           "expect": "No animation; height, margin and opacity change at once",
-          "today": "unmeasured"
+          "today": "works",
+          "basis": "sequence:seen-unstaged-scenarios",
+          "note": "class div.row.removing +removing, changed, no motion, from key 4"
         },
         "credit": {
-          "expect": "Press step: styles changed, no motion"
+          "expect": "Press step: styles changed, no motion",
+          "today": "works",
+          "basis": "sequence:seen-unstaged-scenarios",
+          "note": "The class change row +removing credited to press 4 by root"
         },
         "source": {
           "expect": "CSS, started by key 4"
@@ -520,6 +530,11 @@
         },
         "tune": {
           "expect": "Duration and easing live; cancel-before-animate in the source"
+        },
+        "seen": {
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "#heart, web animation 400ms, from key q"
         }
       }
     },
@@ -550,6 +565,11 @@
         },
         "tune": {
           "expect": "Duration and easing, in the stylesheet"
+        },
+        "seen": {
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "#notify background-color and transform transitions, from key w"
         }
       }
     },
@@ -651,6 +671,11 @@
         },
         "tune": {
           "expect": "An exit rule with @starting-style, in the stylesheet"
+        },
+        "seen": {
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "fade #modal and zoom div.dialog keyframes, from key t"
         }
       }
     },
@@ -685,6 +710,11 @@
         },
         "tune": {
           "expect": "A spinner threshold and the skeleton height, in the source"
+        },
+        "seen": {
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "spin #load-spin and shimmer div.skeleton keyframes, looping, from key y"
         }
       }
     },
@@ -727,6 +757,11 @@
           "today": "gap",
           "basis": "sequence:motion-makers-no-waits",
           "note": "Step 4 (press u) matched 1/2: its #progress transitions ran on under press h, the hover of #late-card and later steps. Measured by count: the comparison does not yet read weights"
+        },
+        "seen": {
+          "today": "works",
+          "basis": "sequence:motion-makers-no-waits",
+          "note": "#progress transform transitions 150ms, one per reply chunk, from key u"
         }
       }
     },
@@ -761,6 +796,11 @@
         },
         "tune": {
           "expect": "The failure branch, in the source"
+        },
+        "seen": {
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "spin #send-spin keyframes, looping, from key i"
         }
       }
     },
@@ -791,6 +831,11 @@
         },
         "tune": {
           "expect": "Class restart in the source"
+        },
+        "seen": {
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "shake #email keyframes 360ms, from key o"
         }
       }
     },
@@ -821,6 +866,11 @@
         },
         "tune": {
           "expect": "The measure loop's start index, in the source"
+        },
+        "seen": {
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "three div web animations 350ms, from key p"
         }
       }
     },
@@ -893,6 +943,11 @@
           "today": "gap",
           "basis": "sequence:motion-makers-no-waits",
           "note": "Step 5 (press s): the stream and its pushed messages read new or missing on every run. Measured by count: the comparison does not yet read weights"
+        },
+        "seen": {
+          "today": "works",
+          "basis": "sequence:motion-makers-no-waits",
+          "note": "slide div.feed-item keyframes 300ms, from push /api/events"
         }
       }
     },
@@ -968,6 +1023,11 @@
           "today": "works",
           "basis": "sequence:motion-makers-no-waits",
           "note": "Six plays against a baseline taken on the same build match the hover of #card 4/4 and the scroll after it 4/4 on #card's rows. Measured by count: the comparison does not yet read weights"
+        },
+        "seen": {
+          "today": "works",
+          "basis": "sequence:motion-makers-no-waits",
+          "note": "#card transform and box-shadow transitions 150ms, on hover and hover left"
         }
       }
     },
@@ -1004,6 +1064,11 @@
         },
         "compare": {
           "expect": "Compared as background against the recording’s background, its start, period and stop"
+        },
+        "seen": {
+          "today": "works",
+          "basis": "sequence:seen-unstaged-scenarios",
+          "note": "#slides transform transitions 500ms, from key k · every 3000ms"
         }
       }
     },
@@ -1037,6 +1102,11 @@
         },
         "compare": {
           "expect": "Compared as background against the recording’s background, its start, period and stop"
+        },
+        "seen": {
+          "today": "works",
+          "basis": "sequence:seen-unstaged-scenarios",
+          "note": "marquee span keyframes 12000ms, looping, on the catalog load with ambient motion on"
         }
       }
     },
@@ -1109,6 +1179,11 @@
           "today": "works",
           "basis": "sequence:motion-makers-no-waits",
           "note": "The navigate matched 9/9. Measured by count: the comparison does not yet read weights"
+        },
+        "seen": {
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "rise h2 keyframes 600ms after 100ms, from page load, on the navigate step"
         }
       }
     },
@@ -1295,6 +1370,11 @@
           "today": "gap",
           "basis": "sequence:motion-makers-no-waits",
           "note": "The hover of #late-card matched 1/14: earlier steps’ motion landed under it. Measured by count: the comparison does not yet read weights"
+        },
+        "seen": {
+          "today": "works",
+          "basis": "sequence:motion-makers-no-waits",
+          "note": "#late-card transform and opacity transitions, from the hover, the scroll and the reveal timer"
         }
       }
     },
@@ -1329,6 +1409,16 @@
         },
         "tune": {
           "expect": "The 300ms threshold, in the source"
+        },
+        "seen": {
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "#refreshed opacity transition from key c, then spin #refresh-spin keyframes after its 300ms timer"
+        },
+        "compare": {
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "Matched in 3 of 3 plays against a fresh baseline"
         }
       }
     },
@@ -1346,7 +1436,7 @@
           "expect": "Press step: list dims; no spinner, the 60ms reply beats the threshold",
           "today": "works",
           "basis": "sequence:credit-every-catalog-key",
-          "note": "GET /api/messages credited to press v by root"
+          "note": "GET /api/messages credited to press v by root; pressed straight after c, the dim’s reversal is credited to v’s reply, read against its own Animation object"
         },
         "source": {
           "expect": "CSS, started by the reply to its request, under key v"
@@ -1359,6 +1449,16 @@
         },
         "tune": {
           "expect": "The 300ms threshold, in the source"
+        },
+        "seen": {
+          "today": "works",
+          "basis": "sequence:seen-unstaged-scenarios",
+          "note": "#refreshed opacity transition from key v, and back from its reply"
+        },
+        "compare": {
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "Matched in 3 of 3 plays against a fresh baseline; before the reversal fix the reversal moved between c and v"
         }
       }
     },
@@ -1393,6 +1493,11 @@
         },
         "tune": {
           "expect": "The rollback branch, in the source"
+        },
+        "seen": {
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "#star color and transform transitions, from key b"
         }
       }
     },
@@ -1423,6 +1528,11 @@
         },
         "tune": {
           "expect": "Not needed"
+        },
+        "seen": {
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "spin #search-spin keyframes, looping, from key n"
         }
       }
     },
@@ -1488,6 +1598,11 @@
         },
         "tune": {
           "expect": "The .warn transition list, in the stylesheet"
+        },
+        "seen": {
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "div.notice.leaving opacity and transform transitions, from key f"
         }
       }
     },
@@ -1526,6 +1641,11 @@
           "today": "gap",
           "basis": "sequence:motion-makers-no-waits",
           "note": "Step 6 (press h) matched 1/3: the chained rings landed under the second press [, the hover of #late-card and the scroll. Measured by count: the comparison does not yet read weights"
+        },
+        "seen": {
+          "today": "works",
+          "basis": "sequence:motion-makers-no-waits",
+          "note": "#tour-ring web animation 200ms ×5, from key h"
         }
       }
     },
@@ -1572,6 +1692,11 @@
           "today": "gap",
           "basis": "sequence:motion-makers-no-waits",
           "note": "Press j matched 2/2; press z matched 0/1: Backed up landed under the hover of #late-card. Measured by count: the comparison does not yet read weights"
+        },
+        "seen": {
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "#ring-arc web animation 4000ms, from key j"
         }
       }
     },
@@ -1587,7 +1712,9 @@
       "cells": {
         "seen": {
           "expect": "Animation object inside an open shadow root, named through the host",
-          "today": "unmeasured"
+          "today": "gap",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "Seen as ping span.ping keyframes 500ms, from key 5; the row names the span inside the shadow root and leaves out its host mail-chip#chip"
         },
         "credit": {
           "expect": "Press step, +0",
@@ -1621,7 +1748,9 @@
       "cells": {
         "seen": {
           "expect": "Animation object in the iframe's document",
-          "today": "unmeasured"
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "#box transform transition 400ms in the iframe document; credited after the step, no trigger, since no tracker runs in the iframe"
         },
         "hold": {
           "expect": "Held with the parent page",
@@ -1700,7 +1829,7 @@
           "expect": "Open and close steps, +0 each, including the exit",
           "today": "works",
           "basis": "sequence:credit-every-catalog-key",
-          "note": "Open and close transitions, display and overlay included, credited to each press 7 by root"
+          "note": "Open and close transitions, display, overlay and the ::backdrop background-color included, credited to each press 7 by root; the close’s reversals go to the second press, read against their own Animation objects"
         },
         "source": {
           "expect": "CSS, started by key 7"
@@ -1713,6 +1842,16 @@
         },
         "tune": {
           "expect": "Duration, in the stylesheet"
+        },
+        "seen": {
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "#settings opacity, transform, display and overlay transitions and the ::backdrop background-color, on open and on close"
+        },
+        "compare": {
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "Matched in 3 of 3 plays against a fresh baseline; before the reversal fix the backdrop reversal moved to the first press"
         }
       }
     },
@@ -1743,6 +1882,16 @@
         },
         "tune": {
           "expect": "Duration, in the stylesheet"
+        },
+        "seen": {
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "#menu opacity, transform, display and overlay transitions, on open and on close"
+        },
+        "compare": {
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "Matched in 3 of 3 plays against a fresh baseline"
         }
       }
     },
@@ -1776,6 +1925,11 @@
         },
         "env": {
           "expect": "Text wraps, so the open height changes with width"
+        },
+        "seen": {
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "#details-content height and content-visibility transitions 300ms, from key 9"
         }
       }
     },
@@ -1806,6 +1960,11 @@
         },
         "tune": {
           "expect": "Duration and easing, in the stylesheet"
+        },
+        "seen": {
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "shine #premium keyframes 1200ms, from key 0"
         }
       }
     },
@@ -1836,6 +1995,11 @@
         },
         "tune": {
           "expect": "The path and duration, in the stylesheet"
+        },
+        "seen": {
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "fly #plane keyframes 900ms, from key ;"
         }
       }
     },
@@ -1866,6 +2030,11 @@
         },
         "tune": {
           "expect": "Duration, in the stylesheet"
+        },
+        "seen": {
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "#preview clip-path transition 500ms, from key '"
         }
       }
     },
@@ -1963,6 +2132,11 @@
         },
         "source": {
           "expect": "JS catalog.html:736, the line of the animate() call in strict module code, started by key ; the go-to opens the module’s keydown listener, the outermost function on record"
+        },
+        "seen": {
+          "today": "works",
+          "basis": "sequence:credit-every-catalog-key",
+          "note": "#nudge web animation 400ms, from key \\"
         }
       }
     },
@@ -2105,7 +2279,15 @@
       "fault": "A second press starts a transition while the first press’s is still running; each must keep its own root",
       "cells": {
         "credit": {
-          "expect": "Each motion credited to its own press; a motion both presses shaped names both"
+          "expect": "Each motion credited to its own press; a motion both presses shaped names both",
+          "today": "gap",
+          "basis": "sequence:credit-reversed-transition",
+          "note": "Key c’s transition is credited to c and the reversal to v’s reply, each by its own root; the reversal, shaped by both, names v’s reply alone"
+        },
+        "seen": {
+          "today": "works",
+          "basis": "sequence:credit-reversed-transition",
+          "note": "#refreshed opacity: key c’s transition, and the reversal credited to v’s reply"
         }
       }
     },

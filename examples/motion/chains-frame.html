@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; }
+  #f1 { height: 14px; border-radius: 3px; background: #3b6fd8; transition: opacity 150ms linear; }
+  #f1.on { opacity: .3; }
+</style>
+</head>
+<body>
+<div id="f1"></div>
+<script>
+  // Called by chains.html's key p: the change is made in this document by its parent's handler.
+  window.flip = () => document.getElementById('f1').classList.add('on');
+</script>
+</body>
+</html>

@@ -48,8 +48,13 @@ function installPageTrigger(g: any): void {
   // `site` is where the app made the call that marked; `harness` marks a
   // scroll devharness made itself.
   // `root` is the input at the head of the chain the mark stands in, carried
-  // from mark to mark as the work it started runs on.
-  interface Mark { kind: string; words: string; at: number; live: boolean; origin?: string; method?: string; scrolls?: boolean; fn?: any; site?: Site; harness?: boolean; root?: Root }
+  // from mark to mark as the work it started runs on. `parent` is the mark
+  // whose words this one's words continue, taken where those words are put
+  // together, so the chain of parents and the words follow one rule. `motion`
+  // is the Animation object whose end a chain mark stands for.
+  interface Mark { id: string; kind: string; words: string; at: number; live: boolean; parent?: Mark; motion?: object; origin?: string; method?: string; scrolls?: boolean; fn?: any; site?: Site; harness?: boolean; root?: Root }
+  /** What started a piece of work: its words, its root, and the mark the words came from where one did. */
+  interface Cause { words: string; root?: Root; mark?: Mark }
   /**
    * The input at the head of a chain: an id this document gives it, and the
    * step devharness ran it under where devharness drove it. A person's input
@@ -63,6 +68,10 @@ function installPageTrigger(g: any): void {
   // Ids unique to this document: a reload numbers afresh under a new prefix.
   const rootPrefix = Math.random().toString(36).slice(2, 10);
   let nextRoot = 1;
+  let nextMark = 1;
+  // Orders changes and scrolls against one another, for a reader that asks
+  // which came after a moment it marked rather than within some time of it.
+  let orderSeq = 0;
   // The step a driven input runs under, set by devharness around its dispatch.
   let drivenBy: string | undefined;
   const ROOTS = new Set(['input', 'pointer']);
@@ -71,13 +80,12 @@ function installPageTrigger(g: any): void {
   let lastInput: Mark | undefined;
   let lastScrollCall: Mark | undefined;
   let lastHash: Mark | undefined;
-  let lastScroll: Mark | undefined;
   let lastHover: Mark | undefined;
   let loadedAt: number | undefined;
   // A change this soon after the load event belongs to the load: an app's
   // load-time setup runs in callbacks nothing here marks.
   const LOAD_TAIL_MS = 500;
-  const CARRIERS = new Set(['timer', 'frame']);
+  const CARRIERS = new Set(['timer', 'frame', 'idle']);
   // Keys the page scrolls on by itself, with no script of its own.
   const SCROLL_KEYS = new Set([' ', 'PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
 
@@ -156,7 +164,7 @@ function installPageTrigger(g: any): void {
 
   const mark = (kind: string, words: string, facts: Partial<Mark> = {}): Mark => {
     const root = facts.root ?? (ROOTS.has(kind) ? { id: `${rootPrefix}:${nextRoot++}`, ...(drivenBy ? { step: drivenBy } : {}) } : undefined);
-    const made: Mark = { kind, words, at: now(), live: true, ...facts, ...(root ? { root } : {}) };
+    const made: Mark = { id: `${rootPrefix}.${nextMark++}`, kind, words, at: now(), live: true, ...facts, ...(root ? { root } : {}) };
     last = made;
     if (!CARRIERS.has(kind)) lastCause = made;
     nextTask(() => { made.live = false; });
@@ -209,9 +217,37 @@ function installPageTrigger(g: any): void {
     return root;
   };
 
+  /** The mark of the work running now: the live one, where it carries a cause. */
+  const liveMark = (): Mark | undefined =>
+    (last && last.live && (!CARRIERS.has(last.kind) || last.origin !== undefined) ? last : undefined);
   /** The root of the work running now: the live mark's, where a live mark carries one. */
-  const liveRoot = (): Root | undefined =>
-    (last && last.live && (!CARRIERS.has(last.kind) || last.origin !== undefined) ? last.root : undefined);
+  const liveRoot = (): Root | undefined => liveMark()?.root;
+  /** The mark whose words `current` reads, under the same conditions. */
+  const currentMark = (withLoad = true): Mark | undefined =>
+    (last && last.live && (withLoad || last.kind !== 'load') ? last : undefined);
+
+  // A chain longer than this is cut at its newest end: the head names the root.
+  const CHAIN_MAX = 16;
+  type Link = { id: string; kind: string; words?: string; root?: Root };
+  /**
+   * A mark and its parents, newest first: id, kind and words each, and a chain
+   * mark's motion as a node of its own. The last carries its root, which names
+   * the step a chain reaches where a link on the way - a push - left it behind.
+   */
+  const chainOf = (from: Mark | undefined): Link[] => {
+    const chain: Link[] = [];
+    const motionId = (object: object): number | undefined => g[Symbol.for('devharness.animations')]?.idOf?.(object);
+    let tail: Mark | undefined;
+    for (let one = from; one && chain.length < CHAIN_MAX; one = one.parent) {
+      chain.push({ id: one.id, kind: one.kind, words: one.words });
+      tail = one;
+      const motion = one.motion ? motionId(one.motion) : undefined;
+      if (motion !== undefined) chain.push({ id: `motion:${motion}`, kind: 'motion' });
+    }
+    const last = chain.at(-1);
+    if (last && tail?.root && last.id === tail.id) last.root = tail.root;
+    return chain;
+  };
 
   const loading = (): boolean => g.document.readyState !== 'complete' || (loadedAt !== undefined && now() - loadedAt <= LOAD_TAIL_MS);
 
@@ -278,7 +314,7 @@ function installPageTrigger(g: any): void {
   // An element the pointer leaves loses its hover by the same cause as the
   // element it arrives on: the pointerover that follows names it.
   const leaving: any[] = [];
-  const unhovered = new WeakMap<object, { words: string; root?: Root }>();
+  const unhovered = new WeakMap<object, Cause>();
   listen(g, 'pointerout', (event: any) => {
     if (event.isTrusted && event.pointerType === 'mouse' && event.target) leaving.push(event.target);
   }, { capture: true, passive: true });
@@ -287,14 +323,17 @@ function installPageTrigger(g: any): void {
     const cause = stayed(event) ? scrollCauseMark() : undefined;
     const scrolledUnder = cause?.root;
     pointerAt = { x: event.clientX, y: event.clientY };
-    lastHover = mark('pointer', scrolledUnder ? `scroll · ${cause!.words} · hover` : 'hover', scrolledUnder ? { root: scrolledUnder } : {});
+    lastHover = mark('pointer', scrolledUnder ? `scroll · ${cause!.words} · hover` : 'hover', scrolledUnder ? { root: scrolledUnder, parent: cause } : {});
     if (!scrolledUnder) holdThroughTask(lastHover.root);
-    for (const left of leaving.splice(0)) unhovered.set(left, { words: `${lastHover.words} left`, ...(lastHover.root ? { root: lastHover.root } : {}) });
+    for (const left of leaving.splice(0)) unhovered.set(left, { words: `${lastHover.words} left`, mark: lastHover, ...(lastHover.root ? { root: lastHover.root } : {}) });
   }, { capture: true, passive: true });
   for (const type of ['transitionend', 'animationend']) {
     listen(g, type, (event: any) => {
-      const root = started.get(event.target)?.get(event.propertyName || event.animationName)?.root;
-      mark('chain', `end of ${event.propertyName || event.animationName} on ${nameOf(event.target)}`, root ? { root } : {});
+      const begun = started.get(event.target)?.get(event.propertyName || event.animationName);
+      const root = begun?.root;
+      mark('chain', `end of ${event.propertyName || event.animationName} on ${nameOf(event.target)}`, {
+        ...(root ? { root } : {}), ...(begun?.mark ? { parent: begun.mark } : {}), ...(begun?.animation ? { motion: begun.animation } : {}),
+      });
     }, { capture: true, passive: true });
   }
   listen(g, 'hashchange', () => { lastHash = mark('scroll-cause', `#${String(g.location.hash).slice(1)}`); }, { capture: true });
@@ -315,25 +354,40 @@ function installPageTrigger(g: any): void {
     // A call made in the input's own handler can share its timestamp; the call, listed later, is the newer.
     return candidates.reduce((newest, one) => (one.at >= newest.at ? one : newest));
   };
-  listen(g, 'scroll', () => {
-    const cause = scrollCauseMark();
-    lastScroll = mark('scroll', `scroll · ${cause?.words ?? 'browser'}`, cause?.root ? { root: cause.root } : {});
+  // The newest scroll of each scroller - the document for the page - in the
+  // order changes are numbered in, for an observer reading what moved its targets.
+  const scrolled = new WeakMap<object, { mark: Mark; seq: number }>();
+  // A scroll call moves its scroller until it stands where the call sent it,
+  // and its hold stays open until then: a scroll event on that scroller is the
+  // call's, whatever input lands while it runs. A scrolling input releases the
+  // hold, and the scroll from then on is the input's.
+  const movingCall = (scroller: any): Mark | undefined => {
+    for (const held of scrollHolds.values()) if (held.target.scroller === scroller) return held.mark;
+    return undefined;
+  };
+  listen(g, 'scroll', (event: any) => {
+    const target = event?.target;
+    const scroller = target === g.document ? (g.document.scrollingElement ?? g.document.documentElement) : target;
+    const cause = movingCall(scroller) ?? scrollCauseMark();
+    const made = mark('scroll', `scroll · ${cause?.words ?? 'browser'}`, { ...(cause?.root ? { root: cause.root } : {}), ...(cause ? { parent: cause } : {}) });
+    if (target) scrolled.set(target, { mark: made, seq: ++orderSeq });
   }, { capture: true, passive: true });
 
   /** Wrap a function so each call marks first, as `words`, with what was live when it was called. */
-  const calls = (owner: any, method: string, kind: string, words: string, after?: (made: Mark) => void, outstanding?: (root: Root, result: any, before: any) => void, prepare?: (self: any, args: unknown[]) => any) => {
+  const calls = (owner: any, method: string, kind: string, words: string, after?: (made: Mark) => void, outstanding?: (root: Root, result: any, before: any, made: Mark) => void, prepare?: (self: any, args: unknown[]) => any) => {
     const original = owner && owner[method];
     if (typeof original !== 'function') return;
     const wrapper = function (this: any, ...args: unknown[]) {
       if (quiet) return original.apply(this, args);
       const under = current(false);
+      const parent = currentMark(false);
       const root = liveRoot();
-      const made = mark(kind, under !== undefined ? `${under} · ${words}` : words, { method, fn: running, site: siteOf(wrapper), ...(root ? { root } : {}) });
+      const made = mark(kind, under !== undefined ? `${under} · ${words}` : words, { method, fn: running, site: siteOf(wrapper), ...(root ? { root } : {}), ...(parent ? { parent } : {}) });
       after?.(made);
       let before: any;
       try { before = prepare?.(this, args); } catch { /* a target the page cannot measure */ }
       const result = original.apply(this, args);
-      if (root) outstanding?.(root, result, before);
+      if (root) outstanding?.(root, result, before, made);
       return result;
     };
     owner[method] = wrapper;
@@ -348,7 +402,7 @@ function installPageTrigger(g: any): void {
   // A target the page's own rules move - scroll-padding, a sticky offset -
   // stands open until superseded, and its step reads as still arriving.
   type ScrollTarget = { scroller: any; top?: number; left?: number };
-  const scrollHolds = new Map<string, { root: Root; target: ScrollTarget }>();
+  const scrollHolds = new Map<string, { root: Root; target: ScrollTarget; mark: Mark }>();
   const releaseScrollHolds = () => {
     for (const [id, held] of [...scrollHolds]) { scrollHolds.delete(id); release(held.root); }
   };
@@ -384,11 +438,11 @@ function installPageTrigger(g: any): void {
     const axis = (value: any, from: number) => (typeof value === 'number' ? (by ? from + value : value) : undefined);
     return { scroller, top: axis(asked.top, at.top), left: axis(asked.left, at.left) };
   };
-  const untilScrollEnds = (root: Root, _result: unknown, target: ScrollTarget | undefined) => {
+  const untilScrollEnds = (root: Root, _result: unknown, target: ScrollTarget | undefined, made: Mark) => {
     releaseScrollHolds();
     if (!target || reached(target)) return;
     hold(root);
-    scrollHolds.set(root.id, { root, target });
+    scrollHolds.set(root.id, { root, target, mark: made });
   };
   listen(g, 'scrollend', () => {
     for (const [id, held] of [...scrollHolds]) {
@@ -420,8 +474,9 @@ function installPageTrigger(g: any): void {
     const set = function (this: any, value: unknown) {
       if (quiet) { described.set!.call(this, value); return; }
       const under = current(false);
+      const parent = currentMark(false);
       const root = liveRoot();
-      lastScrollCall = mark('scroll-cause', under !== undefined ? `${under} · ${property} =` : `${property} =`, { method: property, fn: running, site: siteOf(set), ...(root ? { root } : {}) });
+      lastScrollCall = mark('scroll-cause', under !== undefined ? `${under} · ${property} =` : `${property} =`, { method: property, fn: running, site: siteOf(set), ...(root ? { root } : {}), ...(parent ? { parent } : {}) });
       described.set!.call(this, value);
     };
     Object.defineProperty(g.Element.prototype, property, { ...described, set });
@@ -434,15 +489,36 @@ function installPageTrigger(g: any): void {
   for (const method of ['beginElement', 'beginElementAt']) calls(g.SVGAnimationElement?.prototype, method, 'media', `${method}()`, keep, throughFrame);
 
   // An observer's callback is the cause of what it changes: an element coming
-  // into view, mostly by a scroll, or an element resized.
+  // into view or an element resized. The browser calls back after the layout
+  // that follows what moved it, so the newest change on a reported element or
+  // an ancestor since this observer's previous callback is its cause; for an
+  // element coming into view, a scroll of a scroller above it competes, in the
+  // order both were numbered. A scroll resizes nothing, and a resize nothing
+  // here made - the window's - has no cause.
+  const causeSince = (entries: unknown, seen: number, withScrolls: boolean): Cause | undefined => {
+    let newest: (Cause & { seq: number }) | undefined;
+    const consider = (one: (Cause & { seq: number }) | undefined) => {
+      if (one && one.seq > seen && (!newest || one.seq > newest.seq)) newest = one;
+    };
+    for (const entry of Array.isArray(entries) ? entries : []) {
+      for (let node = entry?.target; node; node = node.parentNode ?? node.host) {
+        consider(changed.get(node));
+        const scroll = withScrolls ? scrolled.get(node) : undefined;
+        if (scroll) consider({ words: scroll.mark.words, mark: scroll.mark, seq: scroll.seq, ...(scroll.mark.root ? { root: scroll.mark.root } : {}) });
+      }
+    }
+    return newest;
+  };
   for (const [name, words] of [['IntersectionObserver', 'in view'], ['ResizeObserver', 'resize']]) {
     const Original = g[name];
     if (typeof Original !== 'function') continue;
     const Wrapped = function (this: any, callback: any, ...rest: unknown[]) {
+      let seen = orderSeq;
       return new Original(function (this: any, ...given: unknown[]) {
         runAs(callback);
-        const after = lastScroll && now() - lastScroll.at <= AFTER_MS ? lastScroll : undefined;
-        mark('observer', `${after ? `${after.words} · ` : ''}${words}`, after?.root ? { root: after.root } : {});
+        const cause = causeSince(given[0], seen, name === 'IntersectionObserver');
+        seen = orderSeq;
+        mark('observer', `${cause ? `${cause.words} · ` : ''}${words}`, { ...(cause?.root ? { root: cause.root } : {}), ...(cause?.mark ? { parent: cause.mark } : {}) });
         return callback.apply(this, given);
       }, ...rest);
     } as any;
@@ -457,13 +533,14 @@ function installPageTrigger(g: any): void {
       const method = String(init?.method ?? resource?.method ?? 'GET').toUpperCase();
       const url = resource && typeof resource === 'object' && resource.url ? resource.url : resource;
       // The reply carries the root of the work that asked for it.
-      const root = liveRoot();
+      const caller = liveMark();
+      const root = caller?.root;
       hold(root);
       return fetched.apply(this, [resource, init]).then((response: any) => {
-        mark('reply', `reply ${method} ${pathOf(url)}`, root ? { root } : {});
+        const reply = mark('reply', `reply ${method} ${pathOf(url)}`, { ...(root ? { root } : {}), ...(caller ? { parent: caller } : {}) });
         if (root && response) {
-          bodyRoot.set(response, { root, words: `reply ${method} ${pathOf(url)}` });
-          if (response.body) bodyRoot.set(response.body, { root, words: `reply ${method} ${pathOf(url)}` });
+          bodyRoot.set(response, { root, words: reply.words, mark: reply });
+          if (response.body) bodyRoot.set(response.body, { root, words: reply.words, mark: reply });
         }
         // Released after this job, so the app's continuation runs under the open root.
         nextTask(() => release(root));
@@ -474,13 +551,13 @@ function installPageTrigger(g: any): void {
   // A body read in chunks or whole resolves in a promise job the reply's own
   // mark is no longer live in: each read marks the reply again with the root
   // of the fetch that asked for it, ahead of the app's continuation.
-  const bodyRoot = new WeakMap<object, { root: Root; words: string }>();
+  const bodyRoot = new WeakMap<object, Cause & { root: Root }>();
   const markBody = <T>(owner: any, read: Promise<T>): Promise<T> => {
     const body = bodyRoot.get(owner);
     if (!body || !read || typeof read.then !== 'function') return read;
     hold(body.root);
     return read.then(value => {
-      mark('reply', body.words, { root: body.root });
+      mark('reply', body.words, { root: body.root, ...(body.mark ? { parent: body.mark } : {}) });
       nextTask(() => release(body.root));
       return value;
     }, (error: unknown) => { release(body.root); throw error; });
@@ -511,10 +588,13 @@ function installPageTrigger(g: any): void {
     const open = Xhr.prototype.open;
     Xhr.prototype.open = function (this: any, method: string, url: string, ...rest: unknown[]) {
       // Added at open, ahead of a handler the app adds before send.
-      const root = liveRoot();
+      const caller = liveMark();
+      const root = caller?.root;
       hold(root);
       listen(this, 'loadend', () => nextTask(() => release(root)));
-      listen(this, 'readystatechange', () => { if (this.readyState === 4) mark('reply', `reply ${String(method).toUpperCase()} ${pathOf(url)}`, root ? { root } : {}); });
+      listen(this, 'readystatechange', () => {
+        if (this.readyState === 4) mark('reply', `reply ${String(method).toUpperCase()} ${pathOf(url)}`, { ...(root ? { root } : {}), ...(caller ? { parent: caller } : {}) });
+      });
       return open.apply(this, [method, url, ...rest]);
     };
   }
@@ -523,7 +603,12 @@ function installPageTrigger(g: any): void {
     if (typeof Original !== 'function') continue;
     const Wrapped = function (this: any, url: string, ...rest: unknown[]) {
       const made = new Original(url, ...rest);
-      listen(made, 'message', () => mark('push', `push ${pathOf(url)}`));
+      // What the server pushes is the server's: the work that opened the
+      // stream is its parent, as a step lists the frames of a stream it
+      // opened, and its root is left behind so the push neither holds that
+      // step open nor counts as the step's own.
+      const opener = liveMark();
+      listen(made, 'message', () => mark('push', `push ${pathOf(url)}`, opener ? { parent: opener } : {}));
       return made;
     } as any;
     Wrapped.prototype = Original.prototype;
@@ -531,6 +616,48 @@ function installPageTrigger(g: any): void {
       if (!(key in Wrapped)) { try { Wrapped[key] = Original[key]; } catch { /* a read-only static */ } }
     }
     g[name] = Wrapped;
+  }
+
+  // A port delivers what its partner posted, in the order posted: each post
+  // queues its cause on the partner, and the tracker's listener, added on the
+  // port before the app can add one, takes them in that order; a post made
+  // under no cause holds its place with none. A port handed to another
+  // document or worker delivers there and never here: past the cap its queue
+  // is dropped, and the port names no cause from then on rather than a wrong one.
+  const PORT_QUEUE_MAX = 64;
+  const partners = new WeakMap<object, object>();
+  const portCauses = new WeakMap<object, Array<Cause | undefined>>();
+  const Channel = g.MessageChannel;
+  const Port = g.MessagePort?.prototype;
+  if (typeof Channel === 'function' && Port && typeof Port.postMessage === 'function') {
+    const Wrapped = function (this: any) {
+      const made = new Channel();
+      partners.set(made.port1, made.port2);
+      partners.set(made.port2, made.port1);
+      for (const port of [made.port1, made.port2]) {
+        portCauses.set(port, []);
+        listen(port, 'message', () => {
+          const cause = portCauses.get(port)?.shift();
+          mark('message', cause ? `${cause.words} · message` : 'message', cause ? { ...(cause.root ? { root: cause.root } : {}), ...(cause.mark ? { parent: cause.mark } : {}) } : {});
+        });
+      }
+      return made;
+    } as any;
+    Wrapped.prototype = Channel.prototype;
+    g.MessageChannel = Wrapped;
+    const post = Port.postMessage;
+    Port.postMessage = function (this: any, ...args: unknown[]) {
+      const partner = partners.get(this);
+      const queue = partner ? portCauses.get(partner) : undefined;
+      if (queue && queue.length >= PORT_QUEUE_MAX) portCauses.delete(partner!);
+      else if (queue) {
+        const words = current(false);
+        const root = liveRoot();
+        const parent = currentMark(false);
+        queue.push(words === undefined ? undefined : { words, ...(root ? { root } : {}), ...(parent ? { mark: parent } : {}) });
+      }
+      return post.apply(this, args);
+    };
   }
 
   // The element changes a callback made, read while its cause is still the
@@ -547,15 +674,17 @@ function installPageTrigger(g: any): void {
       const said = words(args);
       const origin = under ? (CARRIERS.has(under.kind) ? under.origin : under.words) : undefined;
       const carried = origin !== undefined ? `${origin} · ${said}` : said;
-      const family = method === 'requestAnimationFrame' ? 'frame' : 'timer';
+      const family = method === 'requestAnimationFrame' ? 'frame' : method === 'requestIdleCallback' ? 'idle' : 'timer';
       const fn = callback[CALLBACK] ?? callback;
       const root = origin !== undefined ? under?.root : undefined;
+      // The mark `origin` holds the words of: past a carrier, as `origin` is.
+      const parent = origin !== undefined ? (CARRIERS.has(under!.kind) ? under!.parent : under) : undefined;
       // Released after the callback returns, so one that schedules its next
       // keeps its root open across the gap.
       const id = original.apply(this, [function (this: any, ...given: unknown[]) {
         if (method !== 'setInterval') pending.delete(`${family}:${id}`);
         runAs(fn);
-        mark(family, carried, origin !== undefined ? { origin, ...(root ? { root } : {}) } : {});
+        mark(family, carried, origin !== undefined ? { origin, ...(root ? { root } : {}), ...(parent ? { parent } : {}) } : {});
         try { return callback.apply(this, given); } finally { takeChanges(); if (method !== 'setInterval') release(root); }
       }, ...args]);
       pending.set(`${family}:${id}`, { fn, root });
@@ -590,9 +719,11 @@ function installPageTrigger(g: any): void {
   scheduled('setTimeout', args => `timer ${Math.round(Number(args[0]) || 0)}ms`);
   scheduled('setInterval', args => `every ${Math.round(Number(args[0]) || 0)}ms`);
   scheduled('requestAnimationFrame', () => 'frame loop');
+  scheduled('requestIdleCallback', () => 'idle');
   cancelling('clearTimeout', 'timer');
   cancelling('clearInterval', 'timer');
   cancelling('cancelAnimationFrame', 'frame');
+  cancelling('cancelIdleCallback', 'idle');
 
   // A listener the app adds runs as the app's function, for a motion it starts
   // to point at; the same wrapper is handed back to remove it.
@@ -623,6 +754,7 @@ function installPageTrigger(g: any): void {
   const animatedBy = new WeakMap<object, any>();
   const animatedAt = new WeakMap<object, Site>();
   const animatedRoot = new WeakMap<object, Root>();
+  const animatedMark = new WeakMap<object, Mark>();
   const animate = g.Element?.prototype?.animate;
   if (typeof animate === 'function') {
     const wrapper = function (this: any, ...args: unknown[]) {
@@ -634,9 +766,11 @@ function installPageTrigger(g: any): void {
       if (site) animatedAt.set(made, site);
       const root = liveRoot();
       if (root) animatedRoot.set(made, root);
+      const cause = currentMark();
+      if (cause) animatedMark.set(made, cause);
       // Its end starts what the app chains on it: the reaction is added here
       // first, so it marks before the app's own `finished` reaction runs.
-      const ended = () => mark('chain', `end of ${made.id || 'animation'} on ${nameOf(this)}`, root ? { root } : {});
+      const ended = () => mark('chain', `end of ${made.id || 'animation'} on ${nameOf(this)}`, { ...(root ? { root } : {}), ...(cause ? { parent: cause } : {}), motion: made });
       hold(root);
       // Released after the app's own reaction to the end has run in this job.
       made.finished?.then(() => { ended(); nextTask(() => release(root)); }, () => release(root));
@@ -650,23 +784,24 @@ function installPageTrigger(g: any): void {
   // ::view-transition pseudo-elements on the document until it finishes. The
   // callback runs under the call's root, the pseudo-elements' animations take
   // it, and the root stays open until the transition finishes.
-  let viewTransition: { words: string; root?: Root } | undefined;
+  let viewTransition: Cause | undefined;
   const DocumentProto = g.Document?.prototype;
   const startViewTransition = DocumentProto?.startViewTransition;
   if (typeof startViewTransition === 'function') {
     DocumentProto.startViewTransition = function (this: any, given?: any) {
       const under = current();
+      const parent = currentMark();
       const root = liveRoot();
       const words = under !== undefined ? `${under} · view transition` : 'view transition';
       const update = typeof given === 'function' ? given : given && typeof given.update === 'function' ? given.update : undefined;
       const wrapped = update ? function (this: any, ...args: unknown[]) {
         runAs(update);
-        mark('chain', words, root ? { root } : {});
+        mark('chain', words, { ...(root ? { root } : {}), ...(parent ? { parent } : {}) });
         return update.apply(this, args);
       } : undefined;
       const argument = wrapped ? (typeof given === 'function' ? wrapped : { ...given, update: wrapped }) : given;
       const transition = startViewTransition.call(this, argument);
-      const own = { words, ...(root ? { root } : {}) };
+      const own: Cause = { words, ...(root ? { root } : {}), ...(parent ? { mark: parent } : {}) };
       viewTransition = own;
       hold(root);
       const ended = () => { if (viewTransition === own) viewTransition = undefined; nextTask(() => release(root)); };
@@ -674,14 +809,14 @@ function installPageTrigger(g: any): void {
       return transition;
     };
   }
-  const ofViewTransition = (animation: any): { words: string; root?: Root } | undefined => {
+  const ofViewTransition = (animation: any): Cause | undefined => {
     const pseudo = animation && animation.effect && animation.effect.pseudoElement;
     return typeof pseudo === 'string' && pseudo.startsWith('::view-transition') ? viewTransition : undefined;
   };
 
   // A transition or keyframe animation starts at the style recalc after the
   // change that set it off, outside any task: the change's trigger is kept.
-  interface Change { words: string; at: number; root?: Root }
+  interface Change extends Cause { at: number; seq: number }
   const changed = new WeakMap<object, Change>();
   if (typeof g.MutationObserver === 'function') {
     // A same-origin frame's own tracker marks none of its parent's input, so
@@ -689,12 +824,12 @@ function installPageTrigger(g: any): void {
     // frame - read as the frame's page load, with no root (credit-every-
     // catalog-key, key 6). With no live mark of its own, a frame takes the
     // live cause of the document that embeds it.
-    const parentCause = (): { words?: string; root?: Root } | undefined => {
+    const parentCause = (): { words?: string; root?: Root; mark?: Mark } | undefined => {
       if (last && last.live) return undefined;
       try {
         const parent = g.parent !== g ? g.parent?.[Symbol.for('devharness.trigger')] : undefined;
         const words = parent?.current?.(false);
-        return words ? { words, root: parent.rootNow?.() } : undefined;
+        return words ? { words, root: parent.rootNow?.(), mark: parent.markNow?.() } : undefined;
       } catch { return undefined; }
     };
     const recordChanges = (records: any[]) => {
@@ -704,7 +839,8 @@ function installPageTrigger(g: any): void {
       if (!words) return;
       const at = now();
       const root = inherited ? inherited.root : liveRoot();
-      const change: Change = { words, at, ...(root ? { root } : {}) };
+      const cause = inherited ? inherited.mark : currentMark();
+      const change: Change = { words, at, seq: ++orderSeq, ...(root ? { root } : {}), ...(cause ? { mark: cause } : {}) };
       for (const record of records) {
         changed.set(record.target, change);
         for (const node of record.addedNodes ?? []) changed.set(node, change);
@@ -732,7 +868,7 @@ function installPageTrigger(g: any): void {
     if (g.document.documentElement) watch(); else listen(g.document, 'readystatechange', watch, { once: true });
   }
   /** What set an element going: the newest change on it or an ancestor, else a hover, else the work running now. */
-  const causeOfElement = (target: any): { words?: string; root?: Root } => {
+  const causeOfElement = (target: any): Partial<Cause> => {
     const t = now();
     let newest: Change | undefined;
     for (let node = target; node; node = node.parentNode ?? node.host) {
@@ -740,12 +876,12 @@ function installPageTrigger(g: any): void {
       if (change && t - change.at <= CHANGE_MS && (!newest || change.at > newest.at)) newest = change;
     }
     if (newest) return newest;
-    try { if (target && target.matches && target.matches(':hover')) return { words: lastHover?.words ?? 'hover', root: lastHover?.root }; } catch { /* a node with no matches */ }
+    try { if (target && target.matches && target.matches(':hover')) return { words: lastHover?.words ?? 'hover', root: lastHover?.root, mark: lastHover }; } catch { /* a node with no matches */ }
     for (let node = target; node; node = node.parentNode ?? node.host) {
       const left = unhovered.get(node);
       if (left) return left;
     }
-    return { words: current(), root: liveRoot() };
+    return { words: current(), root: liveRoot(), mark: currentMark() };
   };
   /**
    * What started a CSS transition or keyframe animation created at `at`. A
@@ -757,7 +893,7 @@ function installPageTrigger(g: any): void {
    * its own moment, else the page load while the page was loading then, else
    * a mark live then.
    */
-  const causeOfCssStart = (target: any, at: number, readNow: boolean): { words?: string; root?: Root } => {
+  const causeOfCssStart = (target: any, at: number, readNow: boolean): Partial<Cause> => {
     let newest: Change | undefined;
     for (let node = target; node; node = node.parentNode ?? node.host) {
       const change = changed.get(node);
@@ -765,26 +901,30 @@ function installPageTrigger(g: any): void {
     }
     if (newest) return newest;
     if (readNow) {
-      try { if (target && target.matches && target.matches(':hover')) return { words: lastHover?.words ?? 'hover', root: lastHover?.root }; } catch { /* a node with no matches */ }
+      try { if (target && target.matches && target.matches(':hover')) return { words: lastHover?.words ?? 'hover', root: lastHover?.root, mark: lastHover }; } catch { /* a node with no matches */ }
       for (let node = target; node; node = node.parentNode ?? node.host) {
         const left = unhovered.get(node);
         if (left) return left;
       }
     }
     if (g.document.readyState !== 'complete' || loadedAt === undefined || at <= loadedAt + LOAD_TAIL_MS) return { words: 'page load' };
-    if (readNow || (last && last.live && last.at <= at)) return { words: current(), root: liveRoot() };
+    if (readNow || (last && last.live && last.at <= at)) return { words: current(), root: liveRoot(), mark: currentMark() };
     return {};
   };
   const pageRate = (): number => {
     const rate = g[Symbol.for('devharness.clock')]?.state?.().rate;
     return typeof rate === 'number' && rate > 0 ? rate : 1;
   };
-  const started = new WeakMap<object, Map<string, { words: string; root?: Root }>>();
+  /** A motion begun: its cause, and its Animation object where the page lists one. */
+  interface Begun extends Cause { animation?: object }
+  /** The motion with its root let go: what reads it later keeps its cause and object. */
+  const unheld = (begun: Begun): Begun => ({ words: begun.words, ...(begun.mark ? { mark: begun.mark } : {}), ...(begun.animation ? { animation: begun.animation } : {}) });
+  const started = new WeakMap<object, Map<string, Begun>>();
   // A transition that reverses a running one shares its element and property
   // name, and exists a frame before its run event: read by name in that
   // frame, it takes the cause of the one it replaced. The cause is kept
   // against the Animation object itself, which only its own run event sets.
-  const ofStart = new WeakMap<object, { words: string; root?: Root }>();
+  const ofStart = new WeakMap<object, Begun>();
   // An event names no pseudo-element as '', an effect as null.
   const startedObject = (target: any, name: string, pseudo: unknown): object | undefined => {
     if (typeof target?.getAnimations !== 'function') return undefined;
@@ -800,15 +940,15 @@ function installPageTrigger(g: any): void {
   // 50ms in, ran 175ms from 0.56 (credit-reversed-transition). It carries the
   // cause of the one it cut short. The cut one's cancel event fires in the
   // same frame as the new one's run event, and either may come first.
-  const ongoing = new WeakMap<object, Map<string, { words: string; root?: Root }>>();
-  const cancelled = new WeakMap<object, Map<string, { words: string; root?: Root; at: number }>>();
-  const cutShort = new WeakMap<object, { words: string; root?: Root }>();
+  const ongoing = new WeakMap<object, Map<string, Begun>>();
+  const cancelled = new WeakMap<object, Map<string, Begun & { at: number }>>();
+  const cutShort = new WeakMap<object, Begun>();
   const SAME_FRAME_MS = 50;
-  const cutBefore = (target: any, name: string): { words: string; root?: Root } | undefined => {
+  const cutBefore = (target: any, name: string): Begun | undefined => {
     const running = ongoing.get(target)?.get(name);
     if (running) return running;
     const cut = cancelled.get(target)?.get(name);
-    return cut && now() - cut.at <= SAME_FRAME_MS ? { words: cut.words, ...(cut.root ? { root: cut.root } : {}) } : undefined;
+    return cut && now() - cut.at <= SAME_FRAME_MS ? { ...unheld(cut), ...(cut.root ? { root: cut.root } : {}) } : undefined;
   };
   // A keyframe animation's animationstart waits out its delay, while it was
   // created at the style recalc before it: the hero title's page-load rise,
@@ -831,10 +971,10 @@ function installPageTrigger(g: any): void {
       ongoing.get(event.target)?.delete(name);
       cancelled.get(event.target)?.delete(name);
       if (!cause.words) return;
-      const named = started.get(event.target) ?? new Map<string, { words: string; root?: Root }>();
+      const named = started.get(event.target) ?? new Map<string, Begun>();
       if (named.get(name)?.root) release(named.get(name)!.root);
-      const begun = { words: cause.words, ...(cause.root ? { root: cause.root } : {}) };
-      const running = ongoing.get(event.target) ?? new Map<string, { words: string; root?: Root }>();
+      const begun: Begun = { words: cause.words, ...(cause.root ? { root: cause.root } : {}), ...(cause.mark ? { mark: cause.mark } : {}), ...(object ? { animation: object } : {}) };
+      const running = ongoing.get(event.target) ?? new Map<string, Begun>();
       running.set(name, begun);
       ongoing.set(event.target, running);
       if (object && cut) cutShort.set(object, cut);
@@ -851,14 +991,14 @@ function installPageTrigger(g: any): void {
       if (iterations === Infinity && cause.root) {
         nextTask(() => {
           if (named.get(name) !== begun) return;
-          named.set(name, { words: begun.words });
+          named.set(name, unheld(begun));
           release(cause.root);
         });
       }
     }, { capture: true, passive: true });
   }
   /** What started a CSS transition or keyframe animation: its own run event's cause, else the newest change on its element. */
-  const causeOfStart = (animation: any): { words?: string; root?: Root } => {
+  const causeOfStart = (animation: any): Partial<Cause> => {
     const own = ofStart.get(animation);
     if (own) return own;
     const target = animation && animation.effect && animation.effect.target;
@@ -866,7 +1006,7 @@ function installPageTrigger(g: any): void {
     const name = animation.transitionProperty || animation.animationName;
     // An element that lists no animations of its own keeps the cause by name.
     const byName = typeof target.getAnimations !== 'function' && name ? started.get(target)?.get(name) : undefined;
-    if (byName) return { words: byName.words, root: byName.root ?? causeOfElement(target).root };
+    if (byName) return { words: byName.words, root: byName.root ?? causeOfElement(target).root, mark: byName.mark };
     // Read before its run event - Chrome reports it created at the style
     // recalc - a CSS animation's cause is ordered as its run event's is, so a
     // press made straight after the load does not take the page's own rise.
@@ -881,13 +1021,13 @@ function installPageTrigger(g: any): void {
       const running = ongoing.get(event.target)?.get(name);
       ongoing.get(event.target)?.delete(name);
       if (running && type.endsWith('cancel')) {
-        const cut = cancelled.get(event.target) ?? new Map<string, { words: string; root?: Root; at: number }>();
+        const cut = cancelled.get(event.target) ?? new Map<string, Begun & { at: number }>();
         cut.set(name, { ...running, at: now() });
         cancelled.set(event.target, cut);
       }
       const begun = named?.get(name);
       if (!begun?.root) return;
-      named!.set(name, { words: begun.words });
+      named!.set(name, unheld(begun));
       nextTask(() => release(begun.root));
     }, { capture: true, passive: true });
   }
@@ -978,12 +1118,15 @@ function installPageTrigger(g: any): void {
      * The cause and root of the transition or keyframe animation this one cut
      * short on its element and property; undefined where it started from rest.
      * Read before its run event, the one still running under that name.
+     * `motion` is the cut one's id as the animation list numbers it.
      */
-    cutOf(animation: any): { words: string; root?: Root } | undefined {
-      if (ofStart.has(animation)) return cutShort.get(animation);
+    cutOf(animation: any): { words: string; root?: Root; motion?: number } | undefined {
       const target = animation && animation.effect && animation.effect.target;
       const name = animation && (animation.transitionProperty || animation.animationName);
-      return target && name !== undefined ? cutBefore(target, name) : undefined;
+      const cut = ofStart.has(animation) ? cutShort.get(animation) : target && name !== undefined ? cutBefore(target, name) : undefined;
+      if (!cut) return undefined;
+      const motion = cut.animation ? g[Symbol.for('devharness.animations')]?.idOf?.(cut.animation) : undefined;
+      return { words: cut.words, ...(cut.root ? { root: cut.root } : {}), ...(typeof motion === 'number' ? { motion } : {}) };
     },
     /** What called one of `methods` within the last second, newest first, else `fallback`. */
     ofCall(methods: string[], fallback: string): string {
@@ -996,6 +1139,20 @@ function installPageTrigger(g: any): void {
     drive(step: string | undefined): void { drivenBy = step; },
     /** The root of the work running now. */
     rootNow: (): Root | undefined => liveRoot(),
+    /** The mark `current(false)` reads now, for a same-origin frame taking this document's cause. */
+    markNow: (): Mark | undefined => currentMark(false),
+    /**
+     * The marks from what started an Animation object back to its root, newest
+     * first, as `ofAnimation` reads its words; empty for one that moves with a
+     * scroll timeline, whose position is its cause.
+     */
+    chainOfAnimation(animation: any): Link[] {
+      if (animation && animation.timeline && g.document.timeline && animation.timeline !== g.document.timeline) return [];
+      if (byAnimation.has(animation)) return chainOf(animatedMark.get(animation));
+      const transitioned = ofViewTransition(animation);
+      if (transitioned) return chainOf(transitioned.mark);
+      return chainOf(causeOfStart(animation).mark);
+    },
     /** The root of a trusted input event, for the person watch to report with it; marked here when its listener runs first. */
     rootOfEvent(event: any): Root | undefined {
       return event && event.isTrusted && INPUT[event.type] ? markInput(event).root : undefined;

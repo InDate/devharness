@@ -25,6 +25,7 @@
 import { entryOf, levelOf, type ProxyCursor, type ProxyEvent } from './proxy/intercept-proxy.js';
 import { causeBefore } from './proxy/cause-timeline.js';
 import type { PageWrite, WriteMotion } from './write-watch.js';
+import { rootCursor } from './root-credit.js';
 
 export type ObservationKind = 'request' | 'frame' | 'storage' | 'motion';
 
@@ -223,8 +224,12 @@ export function observeEvent(event: ProxyEvent, connection?: string): Observatio
 /** A page write as the write watch stores or restamps it. */
 export function observeWrite(write: PageWrite, connection?: string): Observation {
   const stamp = entryOfCursor(write.cursor);
+  // A motion a push set going carries no root of its own, and its chain ends
+  // at the input that opened the stream: it is listed with the frames of that
+  // stream, under the entry that opened it, and owned by none.
+  const opener = stamp === undefined ? entryOfCursor(rootCursor(write.motion?.chain?.at(-1)?.root)) : undefined;
   const input = fromWrite(write, stamp ?? entryOfCursor(causeBefore(write.at, namesEntry)));
-  return observe({ ...input, ...(stamp !== undefined ? { stamped: true as const } : {}), ...(connection ? { connection } : {}) }, write);
+  return observe({ ...input, ...(stamp !== undefined ? { stamped: true as const } : {}), ...(opener !== undefined ? { opener } : {}), ...(connection ? { connection } : {}) }, write);
 }
 
 function held(ids: string[] | undefined): Observation[] {

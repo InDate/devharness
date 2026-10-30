@@ -8,6 +8,7 @@
 
 import type { Annotation, AnnotationTarget, StepTraffic } from '../annotation.js';
 import type { ExpectedValue, MotionSetting } from './kinds.js';
+import type { MotionLink } from '../page-animations.js';
 
 export type { Annotation, AnnotationTarget, StepTraffic } from '../annotation.js';
 
@@ -864,6 +865,12 @@ export interface BoundaryEvent {
   trigger?: string;
   /** The trigger of the motion it cut short on its element and property, whose state it started from. */
   cuts?: string;
+  /** A motion row's id in its document; `cutsMotion` names the motion it cut short and `endsMotion`, on a stopped row, the one it ended, by the same id. */
+  motionId?: number;
+  cutsMotion?: number;
+  endsMotion?: number;
+  /** A motion row's chain from its cause back to its root, newest first. */
+  chain?: MotionLink[];
   /** A motion row's maker - CSS, JS, SVG, MEDIA, ME, BROWSER - and what its go-to reveals. */
   maker?: string;
   makerRef?: number;

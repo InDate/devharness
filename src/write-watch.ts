@@ -26,7 +26,7 @@ import { onRootNamed, rootCursor, setSettleGate, type PageRoot } from './root-cr
 import type { CDPSession, Page, Target, WebWorker } from 'puppeteer-core';
 import { currentCursor, onCursorEnd } from './proxy/registry.js';
 import { animationRecordOf } from './animation-record.js';
-import type { PageAnimation } from './page-animations.js';
+import type { MotionLink, PageAnimation } from './page-animations.js';
 import { causeAt, onCauseAdded } from './proxy/cause-timeline.js';
 import type { ProxyCursor } from './proxy/intercept-proxy.js';
 import { describeStructuredValue } from './structured-value.js';
@@ -88,7 +88,13 @@ export interface WriteMotion {
   /** See `MotionReport.rootFrom`. */
   rootFrom?: 'property';
   /** See `PageAnimation.cuts`. */
-  cuts?: { trigger: string; root?: PageRoot };
+  cuts?: { trigger: string; root?: PageRoot; motion?: number };
+  /** The motion's id in its document, which a later motion's `cuts.motion` and its own stop row's `ends` name. */
+  id?: number;
+  /** See `PageAnimation.chain`. */
+  chain?: MotionLink[];
+  /** On a stopped row: the id of the motion it ended. */
+  ends?: number;
   /** A function maker's first line of source, as Chrome describes it: `() => { masthead.style.height…`. */
   makerSource?: string;
   /** Its frames are still coming: how it runs is read when its close report arrives. */
@@ -315,8 +321,9 @@ export class WriteWatch {
           // report arrived in; one that ran to its end ends in its own chain,
           // under its root.
           const rooted = rootCursor(entry.stoppedBy ? entry.stoppedBy.root : entry.read!.root);
-          const stop = entry.stoppedBy ? { motion: { type: entry.read!.type, durationMs: 0, set: false, ...entry.stoppedBy, ...(rooted ? { byRoot: true as const } : {}) } }
-            : rooted ? { motion: { type: entry.read!.type, durationMs: 0, set: false, root: entry.read!.root, byRoot: true as const } } : {};
+          const ends = entry.read!.id;
+          const stop = entry.stoppedBy ? { motion: { type: entry.read!.type, durationMs: 0, set: false, ends, ...entry.stoppedBy, ...(rooted ? { byRoot: true as const } : {}) } }
+            : { motion: { type: entry.read!.type, durationMs: 0, set: false, ends, ...(rooted ? { root: entry.read!.root, byRoot: true as const } : {}) } };
           const row = this.push({ store: 'animation', operation: 'stopped', key: entry.kind, value: endingValue(entry.read!), ...stop }, entry.endedAt, rooted ?? entry.endedIn);
           if (entry.stoppedBy) void this.locateMaker(`${entry.key}:stopped`, row);
         };
@@ -358,7 +365,7 @@ export class WriteWatch {
         const rooted = rootCursor(entry.read.root);
         this.push({
           store: 'animation', operation: 'stopped', key: entry.kind,
-          ...(rooted ? { motion: { type: entry.read.type, durationMs: 0, set: false, root: entry.read.root, byRoot: true as const } } : {}),
+          motion: { type: entry.read.type, durationMs: 0, set: false, ends: entry.read.id, ...(rooted ? { root: entry.read.root, byRoot: true as const } : {}) },
         }, Date.now(), rooted ?? currentCursor());
       }));
     }
@@ -818,6 +825,8 @@ export function motionOf(read: PageAnimation): WriteMotion {
     ...(read.root ? { root: read.root } : {}),
     ...(read.rootFrom ? { rootFrom: read.rootFrom } : {}),
     ...(read.cuts ? { cuts: read.cuts } : {}),
+    id: read.id,
+    ...(read.chain ? { chain: read.chain } : {}),
     ...(read.frames !== undefined && read.playState === 'running' ? { moving: true as const } : {}),
   };
 }

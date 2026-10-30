@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cause chains</title>
+<style>
+  body { font: 13px/1.4 system-ui, sans-serif; margin: 16px; color: #222; }
+  h1 { font-size: 16px; margin: 0 0 4px; }
+  p.lead { margin: 0 0 12px; color: #555; max-width: 70ch; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+  .cell { border: 1px solid #ddd; border-radius: 6px; padding: 6px; }
+  .cell b { font-family: ui-monospace, monospace; }
+  .cell small { display: block; color: #666; min-height: 2.6em; }
+  .box { height: 14px; margin-top: 4px; border-radius: 3px; background: #3b6fd8; transition: opacity 150ms linear; }
+  .box.slow { transition-duration: 400ms; }
+  .box.on { opacity: .3; }
+  .box.mid { opacity: .6; }
+  .scroller { height: 40px; overflow: auto; border: 1px dashed #bbb; margin-top: 4px; }
+  .scroller .tall { height: 400px; position: relative; }
+  .scroller .far { position: absolute; top: 300px; left: 0; right: 0; }
+  #ch:hover { opacity: .3; }
+  @keyframes ca-spin { from { transform: rotate(0deg); } to { transform: rotate(8deg); } }
+  #ca.on { opacity: 1; animation: ca-spin 200ms linear; }
+  #cx-size { width: 40px; height: 6px; background: #ccc; margin-top: 4px; }
+  iframe { display: block; width: 100%; height: 34px; border: 0; margin-top: 4px; }
+</style>
+</head>
+<body>
+<h1>Cause chains</h1>
+<p class="lead">One scenario per key, each on elements of its own. Every motion's
+expected chain, from its cause back to the input at its root, is declared in the
+<code>#expect</code> block below and read by <code>scripts/check-chains.mjs</code>
+against a baseline of the <code>chains-every-key</code> sequence.</p>
+<div class="grid" id="grid"></div>
+<button id="cc-go" style="margin-top:8px">Click scenario (c)</button>
+
+<script type="application/json" id="expect">
+{
+  "about": "Per scenario: the step that drives it, and each motion it starts in order of start. chain lists the kinds of a motion's links newest first, as the trigger tracker records them; head is the words of the last link; cuts and after name an earlier motion of the same scenario by index; samePress holds every chain to one root mark; count other than 1 asks for that many rows alike; anyStep searches every step for a motion its root does not place. Where an expectation names the cause a mechanism should carry and the tracker does not yet, gap says what is missing.",
+  "scenarios": [
+    { "id": "1", "drive": { "key": "1" }, "title": "class change in the key handler", "motions": [ { "el": "#c1", "chain": ["input"], "head": "key 1" } ] },
+    { "id": "2", "drive": { "key": "2" }, "title": "timer", "motions": [ { "el": "#c2", "chain": ["timer", "input"], "head": "key 2" } ] },
+    { "id": "3", "drive": { "key": "3" }, "title": "timer set inside a timer", "motions": [ { "el": "#c3", "chain": ["timer", "input"], "head": "key 3" } ] },
+    { "id": "4", "drive": { "key": "4" }, "title": "two animation frames", "motions": [ { "el": "#c4", "chain": ["frame", "input"], "head": "key 4" } ] },
+    { "id": "5", "drive": { "key": "5" }, "title": "fetch, then its body as JSON", "motions": [ { "el": "#c5", "chain": ["reply", "reply", "input"], "head": "key 5" } ] },
+    { "id": "6", "drive": { "key": "6" }, "title": "XHR load", "motions": [ { "el": "#c6", "chain": ["reply", "input"], "head": "key 6" } ] },
+    { "id": "7", "drive": { "key": "7" }, "title": "first chunk of a streamed body", "motions": [ { "el": "#c7", "chain": ["reply", "reply", "input"], "head": "key 7" } ] },
+    { "id": "8", "drive": { "key": "8" }, "title": "fetch, acted on before its body", "motions": [ { "el": "#c8", "chain": ["reply", "input"], "head": "key 8" } ] },
+    { "id": "9", "drive": { "key": "9" }, "title": "one press forks three ways", "samePress": true, "motions": [
+      { "el": "#c9a", "chain": ["input"], "head": "key 9" },
+      { "el": "#c9b", "chain": ["timer", "input"], "head": "key 9" },
+      { "el": "#c9c", "chain": ["reply", "input"], "head": "key 9" } ] },
+    { "id": "0", "drive": { "key": "0" }, "title": "a transition's end starts the next", "motions": [
+      { "el": "#c0a", "chain": ["input"], "head": "key 0" },
+      { "el": "#c0b", "chain": ["chain", "motion", "input"], "head": "key 0", "after": 0 } ] },
+    { "id": "q", "drive": { "key": "q" }, "title": "an animate() call's finished starts a transition", "motions": [
+      { "el": "#cq", "name": "cq-pulse", "chain": ["input"], "head": "key q" },
+      { "el": "#cqb", "chain": ["chain", "motion", "input"], "head": "key q", "after": 0 } ] },
+    { "id": "we", "drive": { "keys": ["w", "e"], "gapsMs": [50] }, "title": "the reply to a second key cuts the first key's transition", "motions": [
+      { "el": "#cw", "chain": ["input"], "head": "key w" },
+      { "el": "#cw", "chain": ["reply", "input"], "head": "key e", "cuts": 0 } ] },
+    { "id": "r", "drive": { "key": "r" }, "title": "scrollTop brings an element into view of an IntersectionObserver", "motions": [
+      { "el": "#cr", "chain": ["observer", "scroll", "scroll-cause", "input"], "head": "key r" } ] },
+    { "id": "t", "drive": { "key": "t" }, "title": "a size change reaches a ResizeObserver", "motions": [
+      { "el": "#ct", "chain": ["observer", "input"], "head": "key t" } ] },
+    { "id": "y", "drive": { "key": "y" }, "title": "view transition", "motions": [ { "el": "html", "chain": ["input"], "head": "key y", "count": "any" } ] },
+    { "id": "u", "drive": { "key": "u" }, "title": "three ticks of an interval", "motions": [ { "el": "#cu", "chain": ["timer", "input"], "head": "key u", "count": 3 } ] },
+    { "id": "i", "drive": { "key": "i" }, "title": "a microtask", "motions": [ { "el": "#ci", "chain": ["input"], "head": "key i" } ] },
+    { "id": "o", "drive": { "key": "o" }, "title": "the app's own MutationObserver", "motions": [ { "el": "#co", "chain": ["input"], "head": "key o" } ] },
+    { "id": "p", "drive": { "key": "p" }, "title": "a change made in a same-origin frame", "motions": [ { "el": "#f1", "chain": ["input"], "head": "key p" } ] },
+    { "id": "a", "drive": { "key": "a" }, "title": "a class starts a keyframe animation", "motions": [ { "el": "#ca", "name": "ca-spin", "chain": ["input"], "head": "key a" } ] },
+    { "id": "s", "drive": { "key": "s" }, "title": "a smooth scroll's scroll event", "motions": [ { "el": "#cs", "chain": ["scroll", "scroll-cause", "input"], "head": "key s" } ] },
+    { "id": "d", "drive": { "key": "d" }, "title": "animate() started from the end of another", "motions": [
+      { "el": "#cd", "name": "cd-a", "chain": ["input"], "head": "key d" },
+      { "el": "#cd", "name": "cd-b", "chain": ["chain", "motion", "input"], "head": "key d", "after": 0 } ] },
+    { "id": "f", "drive": { "key": "f" }, "title": "a timer set after a reply's body", "motions": [ { "el": "#cf", "chain": ["timer", "reply", "reply", "input"], "head": "key f" } ] },
+    { "id": "g", "drive": { "key": "g" }, "title": "eight animation frames in a loop", "motions": [ { "el": "#cg", "chain": ["frame", "input"], "head": "key g" } ] },
+    { "id": "h", "drive": { "hover": "#ch" }, "title": "a :hover transition", "motions": [ { "el": "#ch", "chain": ["pointer"], "head": "hover" } ] },
+    { "id": "j", "drive": { "key": "j" }, "title": "requestIdleCallback", "motions": [ { "el": "#cj", "chain": ["idle", "input"], "head": "key j" } ] },
+    { "id": "k", "drive": { "key": "k" }, "title": "a MessageChannel message", "motions": [ { "el": "#ck", "chain": ["message", "input"], "head": "key k" } ] },
+    { "id": "l", "drive": { "key": "l" }, "title": "a timer set in a microtask", "motions": [ { "el": "#cl", "chain": ["timer", "input"], "head": "key l" } ] },
+    { "id": "z", "drive": { "key": "z" }, "title": "three transitions, each cutting the one before", "motions": [
+      { "el": "#cz", "chain": ["input"], "head": "key z" },
+      { "el": "#cz", "chain": ["timer", "input"], "head": "key z", "cuts": 0 },
+      { "el": "#cz", "chain": ["timer", "input"], "head": "key z", "cuts": 1 } ] },
+    { "id": "x", "drive": { "key": "x" }, "title": "two elements start together; a timer cuts one", "samePress": true, "motions": [
+      { "el": "#cxa", "chain": ["input"], "head": "key x" },
+      { "el": "#cxb", "chain": ["input"], "head": "key x" },
+      { "el": "#cxa", "chain": ["timer", "input"], "head": "key x", "cuts": 0 } ] },
+    { "id": "c", "drive": { "click": "#cc-go" }, "title": "a click", "motions": [ { "el": "#cc", "chain": ["input"], "head": "click" } ] },
+    { "id": "b", "drive": { "key": "b" }, "title": "an animation frame requested in a timer", "motions": [ { "el": "#cb", "chain": ["frame", "input"], "head": "key b" } ] },
+    { "id": "m", "drive": { "key": "m" }, "title": "animate() called in a timer", "motions": [ { "el": "#cm", "name": "cm-fade", "chain": ["timer", "input"], "head": "key m" } ] },
+    { "id": "v", "drive": { "key": "v" }, "title": "XHR opened in a timer", "motions": [ { "el": "#cv", "chain": ["reply", "timer", "input"], "head": "key v" } ] },
+    { "id": "n", "drive": { "key": "n" }, "title": "a pushed message on a stream the key opened", "motions": [
+      { "el": "#cn", "chain": ["push", "input"], "head": "key n" } ] }
+  ]
+}
+</script>
+
+<script>
+  const $ = id => document.getElementById(id);
+  const on = el => el.classList.add('on');
+  const off = el => el.classList.remove('on');
+
+  // Each scenario's cell: its key, its title, and the elements it moves.
+  const cells = [
+    ['1', ['c1']], ['2', ['c2']], ['3', ['c3']], ['4', ['c4']], ['5', ['c5']], ['6', ['c6']], ['7', ['c7']], ['8', ['c8']],
+    ['9', ['c9a', 'c9b', 'c9c']], ['0', ['c0a', 'c0b']], ['q', ['cq', 'cqb']], ['we', ['cw slow']], ['r', ['cr']], ['t', ['ct']],
+    ['y', []], ['u', ['cu']], ['i', ['ci']], ['o', ['co']], ['p', []], ['a', ['ca']], ['s', ['cs']], ['d', ['cd']], ['f', ['cf']],
+    ['g', ['cg']], ['h', ['ch']], ['j', ['cj']], ['k', ['ck']], ['l', ['cl']], ['z', ['cz slow']], ['x', ['cxa slow', 'cxb slow']],
+    ['c', ['cc']], ['b', ['cb']], ['m', ['cm']], ['v', ['cv']], ['n', ['cn']],
+  ];
+  const expect = JSON.parse($('expect').textContent).scenarios;
+  for (const [id, boxes] of cells) {
+    const scenario = expect.find(one => one.id === id);
+    const cell = document.createElement('div');
+    cell.className = 'cell';
+    cell.innerHTML = `<b>${id}</b><small>${scenario.title}</small>` + boxes.map(spec => {
+      const [boxId, extra] = spec.split(' ');
+      return `<div class="box ${extra ?? ''}" id="${boxId}"></div>`;
+    }).join('');
+    cell.id = `cell-${id}`;
+    $('grid').append(cell);
+  }
+  $('cell-r').insertAdjacentHTML('beforeend', '<div class="scroller" id="r-scroller"><div class="tall"><div class="far" id="r-target">in view</div></div></div>');
+  $('cell-s').insertAdjacentHTML('beforeend', '<div class="scroller" id="s-scroller"><div class="tall"></div></div>');
+  $('cell-t').insertAdjacentHTML('beforeend', '<div id="cx-size"></div>');
+  $('cell-y').insertAdjacentHTML('beforeend', '<div id="y-text">before</div>');
+  $('cell-p').insertAdjacentHTML('beforeend', '<iframe id="frame" src="chains-frame.html" title="frame"></iframe>');
+  $('cell-o').insertAdjacentHTML('beforeend', '<div id="o-watched"></div>');
+
+  // Observers armed by their key: each also calls back once when it starts observing.
+  let intersectArmed = false;
+  new IntersectionObserver(entries => {
+    if (intersectArmed && entries.some(e => e.isIntersecting)) { intersectArmed = false; on($('cr')); }
+  }, { root: $('r-scroller') }).observe($('r-target'));
+  let resizeArmed = false;
+  new ResizeObserver(() => { if (resizeArmed) { resizeArmed = false; on($('ct')); } }).observe($('cx-size'));
+  new MutationObserver(() => on($('co'))).observe($('o-watched'), { attributes: true });
+  let scrollArmed = false;
+  $('s-scroller').addEventListener('scroll', () => {
+    if (scrollArmed && $('s-scroller').scrollTop > 100) { scrollArmed = false; on($('cs')); }
+  });
+  $('cc-go').addEventListener('click', () => on($('cc')));
+  $('c0a').addEventListener('transitionend', () => on($('c0b')));
+
+  const frames = (n, done) => (n === 0 ? done() : requestAnimationFrame(() => frames(n - 1, done)));
+  const quick = '/api/messages?delay=30';
+
+  const scenarios = {
+    1: () => on($('c1')),
+    2: () => setTimeout(() => on($('c2')), 120),
+    3: () => setTimeout(() => setTimeout(() => on($('c3')), 60), 60),
+    4: () => frames(2, () => on($('c4'))),
+    5: async () => { await (await fetch(quick)).json(); on($('c5')); },
+    6: () => { const x = new XMLHttpRequest(); x.open('GET', quick); x.onload = () => on($('c6')); x.send(); },
+    7: async () => { const reader = (await fetch('/api/sync')).body.getReader(); await reader.read(); on($('c7')); reader.cancel(); },
+    8: () => fetch(quick).then(() => on($('c8'))),
+    9: () => { on($('c9a')); setTimeout(() => on($('c9b')), 80); fetch(quick).then(() => on($('c9c'))); },
+    0: () => on($('c0a')),
+    q: () => { $('cq').animate([{ opacity: 1 }, { opacity: .4 }, { opacity: 1 }], { duration: 150, id: 'cq-pulse' }).finished.then(() => on($('cqb'))); },
+    w: () => on($('cw')),
+    e: () => fetch(quick).then(() => off($('cw'))),
+    r: () => { intersectArmed = true; $('r-scroller').scrollTop = 260; },
+    t: () => { resizeArmed = true; $('cx-size').style.width = '90px'; },
+    y: () => { const apply = () => { $('y-text').textContent = 'after'; }; document.startViewTransition ? document.startViewTransition(apply) : apply(); },
+    u: () => { let ticks = 0; const id = setInterval(() => { $('cu').classList.toggle('on'); if (++ticks === 3) clearInterval(id); }, 220); },
+    i: () => queueMicrotask(() => on($('ci'))),
+    o: () => $('o-watched').setAttribute('data-touched', '1'),
+    p: () => $('frame').contentWindow.flip(),
+    a: () => on($('ca')),
+    s: () => { scrollArmed = true; $('s-scroller').scrollTo({ top: 300, behavior: 'smooth' }); },
+    d: () => { $('cd').animate([{ opacity: 1 }, { opacity: .5 }], { duration: 120, id: 'cd-a' }).finished
+      .then(() => $('cd').animate([{ opacity: .5 }, { opacity: 1 }], { duration: 120, id: 'cd-b' })); },
+    f: async () => { await (await fetch(quick)).json(); setTimeout(() => on($('cf')), 40); },
+    g: () => frames(8, () => on($('cg'))),
+    j: () => requestIdleCallback(() => on($('cj'))),
+    k: () => { const channel = new MessageChannel(); channel.port1.onmessage = () => on($('ck')); channel.port2.postMessage('go'); },
+    l: () => Promise.resolve().then(() => setTimeout(() => on($('cl')), 30)),
+    // Each flip moves to a value the one before did not start from: a transition
+    // sent back to its start is shortened by how far it ran, and the next flip
+    // would race its end.
+    z: () => { on($('cz')); setTimeout(() => $('cz').classList.add('mid'), 80); setTimeout(() => $('cz').classList.remove('mid'), 160); },
+    x: () => { on($('cxa')); on($('cxb')); setTimeout(() => off($('cxa')), 100); },
+    b: () => setTimeout(() => requestAnimationFrame(() => on($('cb'))), 40),
+    m: () => setTimeout(() => $('cm').animate([{ opacity: 1 }, { opacity: .4 }], { duration: 150, id: 'cm-fade' }), 40),
+    v: () => setTimeout(() => { const x = new XMLHttpRequest(); x.open('GET', quick); x.onload = () => on($('cv')); x.send(); }, 40),
+    n: () => { const stream = new EventSource('/api/events'); stream.onmessage = () => { on($('cn')); stream.close(); }; },
+  };
+  document.addEventListener('keydown', event => {
+    if (event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
+    scenarios[event.key]?.();
+  });
+</script>
+</body>
+</html>

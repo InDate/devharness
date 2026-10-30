@@ -17,6 +17,13 @@
 export const ANIMATIONS_KEY = 'devharness.animations';
 
 /** One animation as a sweep reads it. */
+/**
+ * One mark on the way from a motion's cause back to its root, as the trigger
+ * tracker held it; `motion` a motion whose end the mark before it stands for.
+ * The last link carries its root where it has one.
+ */
+export interface MotionLink { id: string; kind: string; words?: string; root?: { id: string; step?: string } }
+
 export interface PageAnimation {
   id: number;
   /** The document the id was given in: ids count from 1 again in each new document. */
@@ -50,8 +57,10 @@ export interface PageAnimation {
   root?: { id: string; step?: string };
   /** See `MotionReport.rootFrom`. */
   rootFrom?: 'property';
-  /** The motion on its element and property it cut short, whose state it started from: that one's trigger and root. */
-  cuts?: { trigger: string; root?: { id: string; step?: string } };
+  /** The motion on its element and property it cut short, whose state it started from: that one's trigger, root and id. */
+  cuts?: { trigger: string; root?: { id: string; step?: string }; motion?: number };
+  /** The marks from its cause back to its root, newest first: where two motions' chains share a mark, one cause forked into both. */
+  chain?: MotionLink[];
 }
 
 /** Motion the page makes with no Animation object (`page-motion.ts`), named by what carried it. */
@@ -126,6 +135,7 @@ function installPageAnimations(g: any): void {
     const maker = tracker?.animationMaker?.(animation) ?? {};
     const root = tracker?.rootOfAnimation?.(animation);
     const cut = tracker?.cutOf?.(animation);
+    const chain = tracker?.chainOfAnimation?.(animation);
     const ends = type === 'CSSTransition' ? transitionEnds(effect, String(animation.transitionProperty)) : undefined;
     return {
       id: idOf(animation),
@@ -143,7 +153,8 @@ function installPageAnimations(g: any): void {
       ...(trigger ? { trigger } : {}),
       ...maker,
       ...(root ? { root } : {}),
-      ...(cut ? { cuts: { trigger: cut.words, ...(cut.root ? { root: cut.root } : {}) } } : {}),
+      ...(cut ? { cuts: { trigger: cut.words, ...(cut.root ? { root: cut.root } : {}), ...(cut.motion !== undefined ? { motion: cut.motion } : {}) } } : {}),
+      ...(chain?.length ? { chain } : {}),
     };
   };
 

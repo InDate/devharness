@@ -1,0 +1,761 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mailroom</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.4 system-ui, sans-serif; background: #f4f4f6; color: #222; }
+  button { font: inherit; padding: 6px 12px; border: 1px solid #bbb; border-radius: 6px; background: #fff; cursor: pointer; }
+  input { font: inherit; padding: 6px 10px; border: 1px solid #bbb; border-radius: 6px; }
+
+  #scroll-bar { position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 10; background: #36c;
+    transform-origin: 0 50%; animation: grow linear both; animation-timeline: scroll(root); }
+  @keyframes grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+
+  header { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 8px; height: 72px; padding: 0 16px;
+    background: #fff; border-bottom: 1px solid #ddd; overflow: hidden; }
+  header h1 { margin: 0 auto 0 0; font-size: 20px; }
+
+  .hero { position: relative; height: 180px; overflow: hidden; display: grid; place-items: center; color: #fff; }
+  .hero-bg { position: absolute; inset: -60px 0; background: linear-gradient(135deg, #36c, #6a3); }
+  .hero h2 { position: relative; margin: 0; font-size: 26px; animation: rise 600ms 100ms ease-out both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(12px); } }
+
+  main { max-width: 640px; margin: 0 auto; padding: 16px; }
+  section { background: #fff; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+  section h3 { margin: 0 0 12px; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: #666; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+  #heart { display: inline-block; color: #999; }
+  #like.liked #heart { color: #d33; }
+
+  .switch { position: relative; width: 44px; height: 24px; padding: 0; border: 0; border-radius: 12px; background: #bbb;
+    transition: background-color 200ms ease; }
+  .switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%;
+    background: #fff; transition: transform 200ms ease; }
+  .switch[aria-checked="true"] { background: #36c; }
+  .switch[aria-checked="true"]::after { transform: translateX(20px); }
+
+  #acc-body { height: 0; overflow: hidden; }
+  #acc-body p { margin: 8px 0 0; }
+
+  .tabs { position: relative; display: flex; gap: 4px; border-bottom: 1px solid #ddd; }
+  .tab { border: 0; border-radius: 0; background: none; padding: 8px 12px; }
+  #tab-ink { position: absolute; bottom: -1px; height: 2px; background: #36c; view-transition-name: tab-ink; }
+  .pane { padding-top: 12px; view-transition-name: tab-pane; }
+
+  #modal { position: fixed; inset: 0; z-index: 20; display: none; place-items: center; background: rgba(0,0,0,.35); }
+  #modal.open { display: grid; animation: fade 200ms ease-out; }
+  #modal .dialog { width: 280px; padding: 16px; border-radius: 8px; background: #fff; }
+  #modal.open .dialog { animation: zoom 250ms cubic-bezier(.2,.8,.2,1); }
+  @keyframes fade { from { opacity: 0; } }
+  @keyframes zoom { from { opacity: 0; transform: scale(.9); } }
+
+  .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid #ccc; border-top-color: #36c; border-radius: 50%;
+    animation: spin 700ms linear infinite; vertical-align: middle; }
+  .spinner[hidden] { display: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #messages { margin-top: 12px; }
+  .skeleton { height: 36px; margin-bottom: 6px; border-radius: 6px;
+    background: linear-gradient(90deg, #eee 25%, #f8f8f8 50%, #eee 75%); background-size: 200% 100%;
+    animation: shimmer 1200ms linear infinite; }
+  @keyframes shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+  .message { height: 56px; display: flex; align-items: center; padding: 0 12px; margin-bottom: 6px; border-radius: 6px; background: #f4f4f6; }
+
+  .track { flex: 1; height: 8px; border-radius: 4px; background: #eee; overflow: hidden; }
+  #progress { height: 100%; background: #36c; transform-origin: 0 50%; transform: scaleX(0); transition: transform 150ms linear; }
+  #check path { fill: none; stroke: #3a3; stroke-width: 3; stroke-dasharray: 24; stroke-dashoffset: 24; transition: stroke-dashoffset 300ms ease-out; }
+  #check.done path { stroke-dashoffset: 0; }
+
+  #email.invalid { border-color: #d33; animation: shake 360ms; }
+  @keyframes shake { 20%, 60% { transform: translateX(-6px); } 40%, 80% { transform: translateX(6px); } }
+
+  #flip-list > div { padding: 8px 12px; margin-bottom: 4px; border-radius: 6px; background: #eef; }
+  #counter { font-size: 22px; font-variant-numeric: tabular-nums; }
+  .feed-item { padding: 8px 12px; margin-bottom: 4px; border-radius: 6px; background: #efe; animation: slide 300ms ease-out; }
+  @keyframes slide { from { opacity: 0; transform: translateY(-8px); } }
+
+  .card { padding: 16px; border-radius: 8px; background: #f4f4f6; transition: transform 150ms ease-out, box-shadow 150ms ease-out; }
+  .card:hover { transform: translateY(-3px); box-shadow: 0 6px 16px rgba(0,0,0,.12); }
+
+  #sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 15; height: 240px; padding: 0 16px 16px;
+    border-radius: 12px 12px 0 0; background: #fff; box-shadow: 0 -4px 16px rgba(0,0,0,.15); touch-action: none; }
+  #sheet-handle { height: 36px; display: grid; place-items: center; cursor: grab; }
+  #sheet-handle::before { content: ''; width: 40px; height: 4px; border-radius: 2px; background: #ccc; }
+
+  .carousel { overflow: hidden; border-radius: 6px; }
+  #slides { display: flex; transition: transform 500ms ease; }
+  #slides > div { flex: 0 0 100%; height: 80px; display: grid; place-items: center; color: #fff; }
+  .marquee { overflow: hidden; white-space: nowrap; margin-top: 12px; }
+  .marquee span { display: inline-block; padding-left: 100%; animation: marquee 12s linear infinite; }
+  @keyframes marquee { to { transform: translateX(-100%); } }
+  body.calm .marquee span { animation: none; }
+  @media (prefers-reduced-motion: reduce) { .marquee span { animation: none; } }
+  #sky { display: block; width: 100%; height: 80px; margin-top: 12px; border-radius: 6px; background: #123; }
+
+  .reveal { margin-bottom: 12px; animation: reveal linear both; animation-timeline: view(); animation-range: entry 0% cover 30%; }
+  @keyframes reveal { from { opacity: 0; transform: translateY(24px); } }
+  .late { margin-bottom: 12px; opacity: 0; transform: translateY(24px); transition: opacity 300ms ease-out, transform 300ms ease-out; }
+  .late.shown { opacity: 1; transform: none; }
+  .spacer { height: 600px; }
+
+  @view-transition { navigation: auto; }
+
+  #refreshed { margin-top: 12px; transition: opacity 200ms ease; }
+  #refreshed.stale { opacity: .5; }
+  #star { transition: color 200ms ease, transform 200ms ease; }
+  #star.on { color: #e9a400; transform: scale(1.15); }
+
+  .dot { display: inline-block; width: 8px; height: 8px; margin-right: 4px; border-radius: 50%; background: #999; }
+  .notice { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; margin-bottom: 6px;
+    border-radius: 6px; background: #eef; transition: opacity 250ms ease, transform 250ms ease; }
+  .notice.warn { background: #fec; transition: transform 250ms ease; }
+  .notice.leaving { opacity: 0; transform: translateX(40px); }
+  .tour-row { position: relative; display: flex; gap: 12px; margin-top: 12px; }
+  .tour-stop { width: 90px; padding: 6px 0; text-align: center; border-radius: 6px; background: #f4f4f6; }
+  #tour-ring { position: absolute; top: 0; left: 0; width: 90px; height: 100%; border: 2px solid #36c; border-radius: 6px; pointer-events: none; }
+
+  #ring-arc { fill: none; stroke: #36c; stroke-width: 4; stroke-dasharray: 100.5; stroke-dashoffset: 100.5; }
+
+  #settings { border: 0; border-radius: 8px; padding: 16px; opacity: 0; transform: scale(.95);
+    transition: opacity 200ms ease, transform 200ms ease, overlay 200ms allow-discrete, display 200ms allow-discrete; }
+  #settings[open] { opacity: 1; transform: none; }
+  @starting-style { #settings[open] { opacity: 0; transform: scale(.95); } }
+  #settings::backdrop { background: rgba(0,0,0,0); transition: background-color 200ms, overlay 200ms allow-discrete, display 200ms allow-discrete; }
+  #settings[open]::backdrop { background: rgba(0,0,0,.35); }
+  @starting-style { #settings[open]::backdrop { background: rgba(0,0,0,0); } }
+
+  #menu { margin: 0; inset: auto; top: 120px; left: 16px; border: 1px solid #ddd; border-radius: 8px; padding: 12px; opacity: 0; transform: translateY(-6px);
+    transition: opacity 150ms ease, transform 150ms ease, overlay 150ms allow-discrete, display 150ms allow-discrete; }
+  #menu:popover-open { opacity: 1; transform: none; }
+  @starting-style { #menu:popover-open { opacity: 0; transform: translateY(-6px); } }
+
+  #faq { interpolate-size: allow-keywords; margin-top: 12px; }
+  #faq::details-content { height: 0; overflow: clip; transition: height 300ms ease, content-visibility 300ms allow-discrete; }
+  #faq[open]::details-content { height: auto; }
+
+  @property --angle { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
+  #premium { display: inline-block; padding: 6px 12px; border-radius: 6px; color: #fff; font-weight: 600;
+    background: conic-gradient(from var(--angle), #c90, #c39, #39c, #c90); }
+  #premium.shine { animation: shine 1200ms ease-in-out; }
+  @keyframes shine { to { --angle: 360deg; } }
+
+  .flight { position: relative; height: 80px; margin-top: 12px; }
+  #plane { position: absolute; top: 0; left: 0; offset-path: path('M 0 40 C 80 -10, 160 90, 300 20'); offset-rotate: auto; }
+  #plane.fly { animation: fly 900ms ease-in forwards; }
+  @keyframes fly { to { offset-distance: 100%; opacity: 0; } }
+
+  #preview { height: 80px; margin-top: 12px; border-radius: 6px; background: linear-gradient(135deg, #a63, #36c);
+    clip-path: circle(0% at 50% 50%); transition: clip-path 500ms ease-out; }
+  #preview.shown { clip-path: circle(75% at 50% 50%); }
+
+  .media-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+  .media-row > * { width: 100%; height: 120px; border-radius: 6px; background: #f4f4f6; }
+  .plans { position: relative; display: flex; gap: 12px; margin-top: 12px; }
+  .plan { width: 120px; padding: 12px; border-radius: 6px; background: #f4f4f6; text-align: center; }
+  #plan-pick { position: absolute; top: -4px; left: -4px; width: 128px; height: calc(100% + 8px); border: 2px solid #36c; border-radius: 8px; pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="scroll-bar"></div>
+<header id="masthead">
+  <h1>Mailroom</h1>
+  <button id="like"><span id="heart">♥</span> Like</button>
+  <button class="switch" id="notify" role="switch" aria-checked="false" aria-label="Notifications"></button>
+</header>
+<div class="hero"><div class="hero-bg" id="hero-bg"></div><h2>Your week in mail</h2></div>
+<main>
+  <section>
+    <h3>State change</h3>
+    <div class="controls">
+      <button id="acc-toggle">Details</button>
+      <button id="modal-open">Compose</button>
+    </div>
+    <div id="acc-body"><p>Rules run on arrival. Filters sort by sender, then by subject, then by size.</p><p>Archived mail is kept for a year.</p></div>
+    <div class="tabs" style="margin-top:12px">
+      <button class="tab" data-tab="inbox" aria-selected="true">Inbox</button>
+      <button class="tab" data-tab="sent" aria-selected="false">Sent</button>
+      <button class="tab" data-tab="spam" aria-selected="false">Spam</button>
+      <div id="tab-ink"></div>
+    </div>
+    <div class="pane" id="pane-inbox">12 unread.</div>
+    <div class="pane" id="pane-sent" hidden>Last sent yesterday.</div>
+    <div class="pane" id="pane-spam" hidden>Spam is empty.</div>
+  </section>
+
+  <section>
+    <h3>Waiting</h3>
+    <div class="controls">
+      <button id="load">Load messages</button> <span class="spinner" id="load-spin" hidden></span>
+    </div>
+    <div id="messages"></div>
+    <div class="controls" style="margin-top:12px">
+      <button id="sync">Sync</button>
+      <div class="track"><div id="progress"></div></div>
+      <svg id="check" width="24" height="24" viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg>
+    </div>
+    <div class="controls" style="margin-top:12px">
+      <button id="send">Send</button> <span class="spinner" id="send-spin" hidden></span> <span id="send-status"></span>
+    </div>
+  </section>
+
+  <section>
+    <h3>Attention</h3>
+    <div class="controls">
+      <input id="email" placeholder="Email for the digest">
+      <button id="join">Join</button>
+    </div>
+  </section>
+
+  <section>
+    <h3>Data change</h3>
+    <div class="controls"><button id="shuffle">Newest first</button></div>
+    <div id="flip-list" style="margin-top:12px">
+      <div>Monday</div><div>Tuesday</div><div>Wednesday</div><div>Thursday</div>
+    </div>
+    <div class="controls" style="margin-top:12px"><button id="total">Count</button> <span id="counter">0</span></div>
+    <div class="controls" style="margin-top:12px"><button id="subscribe">Live</button></div>
+    <div id="feed" style="margin-top:12px"><div class="feed-item">Waiting for mail</div></div>
+  </section>
+
+  <section>
+    <h3>Pointer</h3>
+    <div class="card" id="card">Hover this card</div>
+  </section>
+
+  <section>
+    <h3>Ambient</h3>
+    <div class="carousel"><div id="slides">
+      <div style="background:#36c">Storage 80% used</div>
+      <div style="background:#6a3">New: snooze</div>
+      <div style="background:#a63">Weekly digest</div>
+    </div></div>
+    <div class="controls" style="margin-top:8px"><button id="carousel-toggle">Pause</button></div>
+    <div class="marquee"><span>Server status: all systems normal · Next maintenance Sunday 02:00</span></div>
+    <canvas id="sky" width="600" height="80"></canvas>
+  </section>
+
+  <section>
+    <h3>Waiting on a reply</h3>
+    <div class="controls">
+      <button id="refresh">Refresh</button> <button id="refresh-quick">Refresh cached</button> <span class="spinner" id="refresh-spin" hidden></span>
+    </div>
+    <div id="refreshed">
+      <div class="message">Quarterly numbers</div><div class="message">Lunch on Friday?</div>
+      <div class="message">Build passed</div><div class="message">Re: the motion bug</div>
+    </div>
+    <div class="controls" style="margin-top:12px">
+      <button id="star">★</button> <span id="star-count">4</span> starred <span id="star-status"></span>
+    </div>
+    <div class="controls" style="margin-top:12px">
+      <button id="search">Search archive</button> <button id="search-cancel">Cancel</button>
+      <span class="spinner" id="search-spin" hidden></span> <span id="search-status"></span>
+    </div>
+  </section>
+
+  <section>
+    <h3>Exits and chains</h3>
+    <div class="controls"><button id="typing">Typing</button> <span><span class="dot"></span><span class="dot"></span><span class="dot"></span></span></div>
+    <div id="notices" style="margin-top:12px">
+      <div class="notice">Backup finished <button class="dismiss">×</button></div>
+      <div class="notice warn">Storage almost full <button class="dismiss">×</button></div>
+      <div class="notice">2 new contacts <button class="dismiss">×</button></div>
+    </div>
+    <div class="controls" style="margin-top:12px"><button id="tour">Take the tour</button></div>
+    <div class="tour-row">
+      <div class="tour-stop">Compose</div><div class="tour-stop">Search</div><div class="tour-stop">Settings</div>
+      <div id="tour-ring" hidden></div>
+    </div>
+  </section>
+
+  <section>
+    <h3>Played by the app</h3>
+    <div class="controls">
+      <svg width="40" height="40" viewBox="0 0 40 40"><circle cx="20" cy="20" r="16" fill="none" stroke="#eee" stroke-width="4"/>
+        <circle id="ring-arc" cx="20" cy="20" r="16" transform="rotate(-90 20 20)"/></svg>
+      <button id="backup">Back up</button> <button id="backup-pause">Pause</button>
+      <button id="backup-faster">Faster</button> <button id="backup-cancel">Cancel</button>
+      <span id="backup-status"></span>
+    </div>
+  </section>
+
+  <section>
+    <h3>Other documents</h3>
+    <div class="controls"><mail-chip id="chip">3 drafts</mail-chip> <button id="chip-ping">Ping</button></div>
+    <iframe id="frame" title="Outbox" style="display:block;width:100%;height:60px;margin-top:12px;border:1px solid #ddd;border-radius:6px"></iframe>
+    <div class="controls" style="margin-top:8px"><button id="frame-slide">Slide outbox</button> <a href="catalog-detail.html" id="detail-link">Open message</a></div>
+  </section>
+
+  <section>
+    <h3>Platform motion</h3>
+    <div class="controls">
+      <button id="settings-open">Settings</button>
+      <button popovertarget="menu" id="menu-btn">Menu</button>
+      <span id="premium">Premium</span> <button id="premium-shine">Shine</button>
+      <button id="fly">Archive</button> <button id="preview-toggle">Preview</button>
+      <button id="smil-go">Move dot</button> <button id="jump">Jump to Labels</button>
+      <span id="nudge" style="display:inline-block">Bundle</span> <button id="nudge-go">Nudge</button>
+      <span id="saved-stamp" style="display:inline-block;opacity:0">Saved</span>
+    </div>
+    <details id="faq"><summary>How long is mail kept?</summary><p>A year in the archive, thirty days in the trash.</p></details>
+    <div class="flight"><span id="plane">✈</span></div>
+    <div id="preview"></div>
+    <svg width="120" height="24" style="margin-top:12px"><circle cx="12" cy="12" r="6" fill="#36c">
+      <animate id="smil" attributeName="cx" from="12" to="108" dur="800ms" begin="indefinite" fill="freeze"/></circle></svg>
+  </section>
+
+  <section>
+    <h3>Media and libraries</h3>
+    <div class="controls">
+      <button id="video-toggle">Play promo</button> <button id="lottie-play">Play envelope</button>
+      <button id="gl-toggle">Spin</button> <button id="plans-show">Plans</button>
+    </div>
+    <div class="media-row">
+      <video id="promo" src="media/promo.webm" muted playsinline loop></video>
+      <div id="envelope"></div>
+    </div>
+    <div class="media-row"><canvas id="gl" width="300" height="120"></canvas></div>
+    <div class="plans">
+      <div class="plan">Free</div><div class="plan">Plus</div><div class="plan">Team</div>
+      <div id="plan-pick"></div>
+    </div>
+  </section>
+
+  <section>
+    <h3>Scroll</h3>
+    <div class="spacer"></div>
+    <div class="card reveal">Read receipts</div>
+    <div class="card reveal">Snooze</div>
+    <div class="card reveal">Undo send</div>
+    <div class="card late" id="late-card">Labels</div>
+    <div class="spacer"></div>
+  </section>
+</main>
+
+<div id="modal"><div class="dialog">
+  <p style="margin-top:0">New message</p>
+  <button id="modal-close">Close</button>
+</div></div>
+
+<dialog id="settings"><p style="margin-top:0">Settings</p><button id="settings-close">Done</button></dialog>
+<div popover id="menu">Mark all read<br>Empty trash</div>
+
+<div id="sheet"><div id="sheet-handle"></div><b>Quick reply</b><p>Drag the handle down to close.</p></div>
+
+<script src="vendor/gsap.min.js"></script>
+<script src="vendor/lottie_light.min.js"></script>
+<script>
+  const $ = id => document.getElementById(id);
+  const ambient = new URLSearchParams(location.search).get('ambient') !== 'off';
+  if (!ambient) document.body.classList.add('calm');
+
+  const like = $('like'), heart = $('heart');
+  like.addEventListener('click', () => {
+    like.classList.toggle('liked');
+    heart.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.6)' }, { transform: 'scale(1)' }], { duration: 400, easing: 'ease-out' });
+  });
+
+  const notify = $('notify');
+  notify.addEventListener('click', () => notify.setAttribute('aria-checked', String(notify.getAttribute('aria-checked') !== 'true')));
+
+  const accBody = $('acc-body');
+  let accFrame;
+  $('acc-toggle').addEventListener('click', () => {
+    const opening = !accBody.classList.contains('open');
+    accBody.classList.toggle('open', opening);
+    cancelAnimationFrame(accFrame);
+    const from = opening ? 0 : accBody.scrollHeight;
+    const to = opening ? accBody.scrollHeight : 0;
+    const start = performance.now();
+    const tick = now => {
+      const t = Math.min(1, (now - start) / 300);
+      accBody.style.height = (from + (to - from) * (1 - Math.pow(1 - t, 3))) + 'px';
+      if (t < 1) accFrame = requestAnimationFrame(tick);
+    };
+    accFrame = requestAnimationFrame(tick);
+  });
+
+  const tabs = [...document.querySelectorAll('.tab')], ink = $('tab-ink');
+  const placeInk = tab => { ink.style.left = tab.offsetLeft + 'px'; ink.style.width = tab.offsetWidth + 'px'; };
+  const showTab = tab => {
+    const apply = () => {
+      for (const t of tabs) {
+        t.setAttribute('aria-selected', String(t === tab));
+        $('pane-' + t.dataset.tab).hidden = t !== tab;
+      }
+      placeInk(tab);
+    };
+    document.startViewTransition ? document.startViewTransition(apply) : apply();
+  };
+  for (const t of tabs) t.addEventListener('click', () => showTab(t));
+  placeInk(tabs[0]);
+
+  const modal = $('modal');
+  $('modal-open').addEventListener('click', () => modal.classList.add('open'));
+  $('modal-close').addEventListener('click', () => modal.classList.remove('open'));
+
+  $('load').addEventListener('click', async () => {
+    $('load-spin').hidden = false;
+    $('messages').innerHTML = '<div class="skeleton"></div>'.repeat(3);
+    const rows = await (await fetch('/api/messages?delay=60')).json();
+    $('load-spin').hidden = true;
+    $('messages').innerHTML = rows.map(r => `<div class="message">${r}</div>`).join('');
+  });
+
+  $('sync').addEventListener('click', async () => {
+    const progress = $('progress'), check = $('check');
+    progress.style.transform = 'scaleX(0)';
+    check.classList.remove('done');
+    const res = await fetch('/api/sync');
+    const total = Number(res.headers.get('Content-Length'));
+    const reader = res.body.getReader();
+    let got = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      got += value.length;
+      progress.style.transform = `scaleX(${got / total})`;
+    }
+    check.classList.add('done');
+  });
+
+  $('send').addEventListener('click', async () => {
+    $('send-spin').hidden = false;
+    $('send-status').textContent = 'Sending';
+    const res = await fetch('/api/send', { method: 'POST' });
+    if (!res.ok) { $('send-status').textContent = 'Failed to send'; return; }
+    $('send-spin').hidden = true;
+    $('send-status').textContent = 'Sent';
+  });
+
+  $('join').addEventListener('click', () => {
+    const email = $('email');
+    if (!email.value.includes('@')) email.classList.add('invalid');
+    else email.classList.remove('invalid');
+  });
+
+  $('shuffle').addEventListener('click', () => {
+    const list = $('flip-list'), items = [...list.children];
+    const first = new Map();
+    for (let i = 1; i < items.length; i++) first.set(items[i], items[i].getBoundingClientRect().top);
+    items.reverse().forEach(el => list.appendChild(el));
+    for (const [el, top] of first) {
+      const dy = top - el.getBoundingClientRect().top;
+      el.animate([{ transform: `translateY(${dy}px)` }, { transform: 'none' }], { duration: 350, easing: 'ease-in-out' });
+    }
+  });
+
+  let countTimer;
+  $('total').addEventListener('click', () => {
+    const target = 1280, steps = 40;
+    let i = 0;
+    clearInterval(countTimer);
+    countTimer = setInterval(() => {
+      i++;
+      $('counter').textContent = String(Math.floor(target * i / (steps + 1)));
+      if (i === steps) clearInterval(countTimer);
+    }, 16);
+  });
+
+  $('subscribe').addEventListener('click', () => {
+    const events = new EventSource('/api/events');
+    events.onmessage = e => {
+      const item = document.createElement('div');
+      item.className = 'feed-item';
+      item.textContent = e.data;
+      $('feed').prepend(item);
+    };
+    events.addEventListener('end', () => events.close());
+  });
+
+  const sheet = $('sheet'), handle = $('sheet-handle');
+  const sheetClosed = () => sheet.offsetHeight - 36;
+  let sheetY = 0, sheetFrame;
+  const setSheet = y => { sheetY = y; sheet.style.transform = `translateY(${y}px)`; };
+  const springSheet = to => {
+    let v = 0, last = performance.now();
+    cancelAnimationFrame(sheetFrame);
+    const tick = now => {
+      const dt = Math.min(0.032, (now - last) / 1000);
+      last = now;
+      v += (-170 * (sheetY - to) - 18 * v) * dt;
+      setSheet(sheetY + v * dt);
+      if (Math.abs(v) > 1 || Math.abs(sheetY - to) > 0.5) sheetFrame = requestAnimationFrame(tick);
+      else setSheet(to);
+    };
+    sheetFrame = requestAnimationFrame(tick);
+  };
+  let dragFrom = null;
+  handle.addEventListener('pointerdown', e => {
+    cancelAnimationFrame(sheetFrame);
+    handle.setPointerCapture(e.pointerId);
+    dragFrom = { pointer: e.clientY, sheet: sheetY };
+  });
+  handle.addEventListener('pointermove', e => {
+    if (!dragFrom) return;
+    setSheet(Math.min(sheetClosed(), Math.max(0, dragFrom.sheet + e.clientY - dragFrom.pointer)));
+  });
+  handle.addEventListener('pointerup', e => {
+    if (!dragFrom) return;
+    const moved = e.clientY - dragFrom.pointer;
+    dragFrom = null;
+    if (moved > 120) setSheet(sheetClosed());
+    else springSheet(sheetY > sheetClosed() / 2 ? sheetClosed() : 0);
+  });
+  setSheet(sheetClosed());
+
+  const slides = $('slides');
+  let slide = 0, slideTimer = null;
+  const nextSlide = () => { slide = (slide + 1) % 3; slides.style.transform = `translateX(${-100 * slide}%)`; };
+  const toggleCarousel = () => {
+    if (slideTimer) { clearInterval(slideTimer); slideTimer = null; $('carousel-toggle').textContent = 'Play'; }
+    else { slideTimer = setInterval(nextSlide, 3000); $('carousel-toggle').textContent = 'Pause'; }
+  };
+  $('carousel-toggle').addEventListener('click', toggleCarousel);
+  if (ambient) toggleCarousel();
+  else $('carousel-toggle').textContent = 'Play';
+
+  const sky = $('sky'), ctx = sky.getContext('2d');
+  const stars = Array.from({ length: 40 }, (_, i) => ({ x: (i * 97) % 600, y: (i * 37) % 80, v: 0.5 + (i % 5) / 4 }));
+  let skyFrames = 0;
+  const drawSky = () => {
+    ctx.clearRect(0, 0, 600, 80);
+    ctx.fillStyle = '#fff';
+    for (const s of stars) { s.x = (s.x + s.v) % 600; ctx.fillRect(s.x, s.y, 2, 2); }
+    if (++skyFrames % 120 === 0) { const until = performance.now() + 90; while (performance.now() < until); }
+    requestAnimationFrame(drawSky);
+  };
+  if (ambient) requestAnimationFrame(drawSky);
+
+  const masthead = $('masthead'), heroBg = $('hero-bg');
+  addEventListener('scroll', () => {
+    masthead.style.height = Math.max(48, 72 - scrollY / 4) + 'px';
+    heroBg.style.transform = `translateY(${scrollY * 0.4}px)`;
+  });
+
+  new IntersectionObserver(entries => {
+    for (const e of entries) if (e.isIntersecting) setTimeout(() => e.target.classList.add('shown'), 400);
+  }).observe($('late-card'));
+
+  const refresh = async delay => {
+    const list = $('refreshed');
+    const spinTimer = setTimeout(() => { $('refresh-spin').hidden = false; }, 300);
+    list.classList.add('stale');
+    const rows = await (await fetch(`/api/messages?delay=${delay}`)).json();
+    clearTimeout(spinTimer);
+    $('refresh-spin').hidden = true;
+    list.innerHTML = rows.map(r => `<div class="message">${r}</div>`).join('');
+    // probe copy: the reply leaves the dim in place
+  };
+  $('refresh').addEventListener('click', () => refresh(600));
+  $('refresh-quick').addEventListener('click', () => refresh(60));
+
+  $('star').addEventListener('click', async () => {
+    $('star').classList.add('on');
+    $('star-count').textContent = String(Number($('star-count').textContent) + 1);
+    $('star-status').textContent = '';
+    const res = await fetch('/api/star', { method: 'POST' });
+    if (!res.ok) {
+      $('star').classList.remove('on');
+      $('star-status').textContent = 'Could not star';
+    }
+  });
+
+  let searching;
+  $('search').addEventListener('click', async () => {
+    searching?.abort();
+    searching = new AbortController();
+    $('search-spin').hidden = false;
+    $('search-status').textContent = 'Searching';
+    try {
+      const rows = await (await fetch('/api/messages?delay=2000', { signal: searching.signal })).json();
+      $('search-status').textContent = `${rows.length} results`;
+    } catch {
+      $('search-status').textContent = 'Cancelled';
+    }
+    $('search-spin').hidden = true;
+  });
+  $('search-cancel').addEventListener('click', () => searching?.abort());
+
+  const dots = [...document.querySelectorAll('.dot')];
+  let typing = false;
+  const bounce = start => {
+    if (!typing) { for (const d of dots) d.style.transform = ''; return; }
+    const t = (performance.now() - start) / 1000;
+    dots.forEach((d, i) => { d.style.transform = `translateY(${-4 * Math.max(0, Math.sin((t * 2 - i * 0.2) * Math.PI))}px)`; });
+    requestAnimationFrame(() => bounce(start));
+  };
+  const toggleTyping = () => {
+    typing = !typing;
+    if (typing) { const start = performance.now(); requestAnimationFrame(() => bounce(start)); }
+  };
+  $('typing').addEventListener('click', toggleTyping);
+
+  $('notices').addEventListener('click', e => {
+    if (!e.target.classList.contains('dismiss')) return;
+    const notice = e.target.closest('.notice');
+    notice.classList.add('leaving');
+    notice.addEventListener('transitionend', ev => { if (ev.propertyName === 'opacity') notice.remove(); });
+  });
+
+  $('tour').addEventListener('click', async () => {
+    const ring = $('tour-ring');
+    ring.hidden = false;
+    await ring.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 200, fill: 'forwards' }).finished;
+    for (const stop of document.querySelectorAll('.tour-stop')) {
+      await ring.animate([{ transform: `translateX(${stop.offsetLeft}px)` }], { duration: 400, easing: 'ease-in-out', fill: 'forwards' }).finished;
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+    await ring.animate([{ opacity: 0 }], { duration: 200, fill: 'forwards' }).finished;
+    ring.hidden = true;
+  });
+
+  let backup;
+  const startBackup = () => {
+    backup?.cancel();
+    backup = $('ring-arc').animate([{ strokeDashoffset: 100.5 }, { strokeDashoffset: 0 }], { duration: 4000, fill: 'forwards' });
+    backup.finished.then(a => { if (a.playbackRate > 0) $('backup-status').textContent = 'Backed up'; }, () => {});
+    $('backup-status').textContent = 'Backing up';
+  };
+  const pauseBackup = () => { if (backup) backup.playState === 'paused' ? backup.play() : backup.pause(); };
+  const fasterBackup = () => backup?.updatePlaybackRate(4);
+  const cancelBackup = () => { if (!backup) return; backup.reverse(); $('backup-status').textContent = 'Cancelled'; };
+  $('backup').addEventListener('click', startBackup);
+  $('backup-pause').addEventListener('click', pauseBackup);
+  $('backup-faster').addEventListener('click', fasterBackup);
+  $('backup-cancel').addEventListener('click', cancelBackup);
+
+  customElements.define('mail-chip', class extends HTMLElement {
+    constructor() {
+      super();
+      this.attachShadow({ mode: 'open' }).innerHTML = `<style>
+        span { display: inline-block; padding: 4px 10px; border-radius: 12px; background: #def; }
+        span.ping { animation: ping 500ms ease-out; }
+        @keyframes ping { 50% { transform: scale(1.15); background: #9cf; } }
+      </style><span><slot></slot></span>`;
+    }
+    ping() {
+      const pill = this.shadowRoot.querySelector('span');
+      pill.classList.remove('ping');
+      void pill.offsetWidth;
+      pill.classList.add('ping');
+    }
+  });
+  $('chip-ping').addEventListener('click', () => $('chip').ping());
+
+  $('frame').srcdoc = `<style>
+    body { margin: 0; font: 14px system-ui, sans-serif; }
+    #box { width: 120px; margin: 14px; padding: 6px 10px; border-radius: 6px; background: #fde; transition: transform 400ms ease-in-out; }
+    #box.right { transform: translateX(200px); }
+  </style><div id="box">Outbox: 2</div>
+  <script>window.slide = () => document.getElementById('box').classList.toggle('right');<\/script>`;
+  $('frame-slide').addEventListener('click', () => $('frame').contentWindow.slide());
+
+  const settings = $('settings');
+  const toggleSettings = () => (settings.open ? settings.close() : settings.showModal());
+  $('settings-open').addEventListener('click', toggleSettings);
+  $('settings-close').addEventListener('click', () => settings.close());
+
+  const restartClass = (el, name) => { el.classList.remove(name); void el.offsetWidth; el.classList.add(name); };
+  $('premium-shine').addEventListener('click', () => restartClass($('premium'), 'shine'));
+  $('fly').addEventListener('click', () => restartClass($('plane'), 'fly'));
+  $('preview-toggle').addEventListener('click', () => $('preview').classList.toggle('shown'));
+  $('smil-go').addEventListener('click', () => $('smil').beginElement());
+  const jump = () => (scrollY > 100 ? scrollTo({ top: 0, behavior: 'smooth' }) : $('late-card').scrollIntoView({ behavior: 'smooth', block: 'center' }));
+  $('jump').addEventListener('click', jump);
+
+  const promo = $('promo');
+  const toggleVideo = () => (promo.paused ? promo.play() : promo.pause());
+  $('video-toggle').addEventListener('click', toggleVideo);
+
+  const envelope = lottie.loadAnimation({ container: $('envelope'), renderer: 'svg', loop: false, autoplay: false, path: 'media/envelope.json' });
+  const playEnvelope = () => envelope.goToAndPlay(0, true);
+  $('lottie-play').addEventListener('click', playEnvelope);
+
+  const gl = $('gl').getContext('webgl');
+  const shader = (type, source) => { const s = gl.createShader(type); gl.shaderSource(s, source); gl.compileShader(s); return s; };
+  const program = gl.createProgram();
+  gl.attachShader(program, shader(gl.VERTEX_SHADER, `attribute vec2 p; uniform float a;
+    void main() { gl_Position = vec4(p.x * cos(a) - p.y * sin(a), (p.x * sin(a) + p.y * cos(a)) * 2.5, 0.0, 1.0); }`));
+  gl.attachShader(program, shader(gl.FRAGMENT_SHADER, 'precision mediump float; void main() { gl_FragColor = vec4(0.2, 0.4, 0.8, 1.0); }'));
+  gl.linkProgram(program);
+  gl.useProgram(program);
+  gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0.35, -0.3, -0.2, 0.3, -0.2]), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  const angle = gl.getUniformLocation(program, 'a');
+  let glFrame = null;
+  const drawGl = now => {
+    gl.clearColor(0.96, 0.96, 0.97, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.uniform1f(angle, now / 600);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    glFrame = requestAnimationFrame(drawGl);
+  };
+  const toggleGl = () => {
+    if (glFrame === null) glFrame = requestAnimationFrame(drawGl);
+    else { cancelAnimationFrame(glFrame); glFrame = null; }
+  };
+  $('gl-toggle').addEventListener('click', toggleGl);
+  drawGl(0);
+  cancelAnimationFrame(glFrame);
+  glFrame = null;
+
+  const showPlans = () => gsap.timeline()
+    .fromTo('.plan', { y: 20, opacity: 0 }, { y: 0, opacity: 1, duration: 0.4, stagger: 0.1, ease: 'power2.out' })
+    .fromTo('#plan-pick', { left: -4 }, { left: 128, duration: 0.3, ease: 'power1.inOut' });
+  $('plans-show').addEventListener('click', showPlans);
+
+  const keys = {
+    q: () => like.click(), w: () => notify.click(), e: () => $('acc-toggle').click(),
+    r: () => showTab(tabs[(tabs.findIndex(t => t.getAttribute('aria-selected') === 'true') + 1) % tabs.length]),
+    t: () => (modal.classList.contains('open') ? $('modal-close') : $('modal-open')).click(),
+    y: () => $('load').click(), u: () => $('sync').click(), i: () => $('send').click(),
+    o: () => $('join').click(), p: () => $('shuffle').click(), a: () => $('total').click(),
+    s: () => $('subscribe').click(), g: () => springSheet(sheetY > 0 ? 0 : sheetClosed()), k: toggleCarousel,
+    c: () => $('refresh').click(), v: () => $('refresh-quick').click(), b: () => $('star').click(),
+    n: () => $('search').click(), m: () => $('search-cancel').click(),
+    d: toggleTyping, f: () => document.querySelector('#notices .notice:not(.leaving) .dismiss')?.click(), h: () => $('tour').click(),
+    j: startBackup, l: pauseBackup, z: fasterBackup, x: cancelBackup,
+    5: () => $('chip').ping(), 6: () => $('frame').contentWindow.slide(), '/': () => { location.href = 'catalog-detail.html'; },
+    7: toggleSettings, 8: () => $('menu').togglePopover(), 9: () => { $('faq').open = !$('faq').open; },
+    0: () => restartClass($('premium'), 'shine'), ';': () => restartClass($('plane'), 'fly'),
+    "'": () => $('preview').classList.toggle('shown'), ',': () => $('smil').beginElement(), '.': jump,
+    '[': toggleVideo, ']': playEnvelope, '-': toggleGl, '=': showPlans,
+  };
+  document.addEventListener('keydown', e => {
+    if (e.target instanceof HTMLInputElement || e.metaKey || e.ctrlKey) return;
+    keys[e.key]?.();
+  });
+</script>
+<script type="module">
+  // A bundled app ships modules, and module code is strict: a stack read of a
+  // call in it carries the script and line, never the calling function.
+  const nudge = () => document.getElementById('nudge').animate(
+    [{ transform: 'translateX(0)' }, { transform: 'translateX(24px)' }, { transform: 'translateX(0)' }],
+    { duration: 400, easing: 'ease-in-out' });
+  document.getElementById('nudge-go').addEventListener('click', nudge);
+  document.addEventListener('keydown', e => { if (e.key === '\\') nudge(); });
+
+  // A shortcut sequence as Mousetrap runs one: ⌘K starts it, ⌘S within a
+  // second finishes it, and the second key arriving later starts nothing.
+  let sequenceOpen;
+  document.addEventListener('keydown', e => {
+    if (!(e.metaKey || e.ctrlKey)) return;
+    if (e.key === 'k') {
+      e.preventDefault();
+      clearTimeout(sequenceOpen);
+      sequenceOpen = setTimeout(() => { sequenceOpen = undefined; }, 1000);
+    } else if (e.key === 's' && sequenceOpen) {
+      e.preventDefault();
+      clearTimeout(sequenceOpen);
+      sequenceOpen = undefined;
+      document.getElementById('saved-stamp').animate([{ opacity: 0 }, { opacity: 1 }, { opacity: 0 }], { duration: 600 });
+    }
+  });
+</script>
+</body>
+</html>

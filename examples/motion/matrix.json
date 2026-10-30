@@ -423,9 +423,9 @@
         },
         "credit": {
           "expect": "Press step: fade-in +2 frames, fade-out +700ms",
-          "today": "gap",
+          "today": "works",
           "basis": "sequence:animation-list-at-frame-steps",
-          "note": "Credited to the frame step that ran the callback"
+          "note": "Under a press held before its first frame and stepped two frames, press 2 owns the fade-in transition its second frame callback set off (from key 2 · frame loop), the fade-in stopping, and the fade-out from its 700ms timer; the frame steps own nothing. The tracker takes a callback's element changes as the callback returns, where a held frame step had delivered them after every callback it ran"
         },
         "source": {
           "expect": "CSS, started by the end of the save motion before it"
@@ -458,9 +458,9 @@
         },
         "credit": {
           "expect": "Press step, +0, as one group",
-          "today": "gap",
+          "today": "works",
           "basis": "sequence:motion-group-at-stop",
-          "note": "Under a held press, credited to the next frame step"
+          "note": "Under a press held before its first frame, press 3 owns all 13 transitions as one group, the panel, the backdrop and the staggered items with the planted 260ms delay among them; no later step owns any"
         },
         "source": {
           "expect": "CSS, started by key 3"

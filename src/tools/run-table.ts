@@ -262,7 +262,7 @@ function rulesBlock(rows: Row[], rules: RunRules | undefined, pauses: Map<number
 
 // A root that never settles - a loop running on - holds the reply no longer
 // than an `owns` check waits for one.
-const ARRIVING_BOUND_MS = 10000;
+export const ARRIVING_BOUND_MS = 10000;
 
 /**
  * Resolves once every step of the run still arriving has settled, or at

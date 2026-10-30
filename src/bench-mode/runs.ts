@@ -1,4 +1,4 @@
-import { entrySettled, onEntrySettled } from '../root-credit.js';
+import { entrySettled, onEntrySettled, whenSettled } from '../root-credit.js';
 import { getOutputPath } from '../helpers/paths.js';
 import { debugLog } from '../debug-logger.js';
 import { getProxy } from '../proxy/registry.js';
@@ -17,6 +17,7 @@ import { sessions } from './session.js';
 import { stepTimes, withTallies } from './tallies.js';
 import { RECORDED_BODY_CAP } from './traffic.js';
 import { crossingsOf, sliceOf } from '../step-slice.js';
+import { ARRIVING_BOUND_MS } from '../tools/run-table.js';
 
 /**
  * Every run going now - each run sequence in the registry and each bench's own
@@ -183,12 +184,20 @@ export async function baselineSequence(connection: string): Promise<SequenceStat
   });
   session.sequenceFailure = await sequences.saveStepTraffic(take()).catch(error => String(error));
   // What a step caused keeps landing after the play ends, on the entry of
-  // the step whose input caused it, until the step's roots settle. The
-  // baseline is taken again whenever one of its steps settles - one still
-  // open at the play's end, and one that reopens after it read as settled -
-  // and the bench lists the steps still open. The next baseline of this
-  // browser replaces the subscription.
+  // the step whose input caused it, until the step's roots settle. The reply
+  // waits for those steps, as a run's reply does, up to the same bound: a
+  // play started straight after it navigated away from the last step's
+  // scroll, and the baseline kept that step mid-scroll with its later motion
+  // missing (30 Oct). The baseline is taken again whenever one of its steps
+  // settles - one still open at the bound, and one that reopens after it
+  // read as settled - and the bench lists the steps still open. The next
+  // baseline of this browser replaces the subscription.
   const open = () => stepEntries.flatMap((entry, index) => (entry !== undefined && !entrySettled(entry) ? [index + 1] : []));
+  const arriving = stepEntries.filter((entry): entry is number => entry !== undefined && !entrySettled(entry));
+  if (arriving.length) {
+    await Promise.all(arriving.map(entry => whenSettled(entry, ARRIVING_BOUND_MS)));
+    session.sequenceFailure = await sequences.saveStepTraffic(take()).catch(error => String(error));
+  }
   retaking.get(connection)?.();
   retaking.delete(connection);
   session.baselineFilling = open().length ? { steps: open(), retakes: 0 } : undefined;

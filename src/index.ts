@@ -662,18 +662,12 @@ const allTools = {
   ...(configManager.isToolEnabled('issues') ? toolset('issues', createIssuesTools(
     executeToolCall,
     async (name: string) => {
-      // Helper to get sequence path by name
-      const sequences = commandRecorder.listSequences();
-      const sequence = sequences.find(s => s.name === name || s.id === name);
-      if (!sequence) return null;
-      // Try to find saved file
-      const sequencesDir = commandRecorder.getSequencesDir();
-      const filename = name.replace(/[^a-z0-9-_]/gi, '-').toLowerCase() + '.json';
-      const { join } = await import('path');
-      const { existsSync } = await import('fs');
-      const filepath = join(sequencesDir, filename);
-      if (existsSync(filepath)) return filepath;
-      return null;
+      // Saved sequences sit in folders under the sequences root, so a name
+      // resolves by the walk `run` uses: the sequence's own name, its id, or
+      // its file path relative to the root without `.json`.
+      const saved = await commandRecorder.listSavedSequencesOnDisk();
+      const match = saved.find(s => s.name === name || s.id === name || s.filename.replace(/\.json$/, '') === name);
+      return match?.fullPath ?? null;
     },
     async (connection: string) => {
       const resolved = await resolveConnectionByName(connection);

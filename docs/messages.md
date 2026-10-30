@@ -2064,6 +2064,15 @@ A bench play runs the sequence file as saved, so {{params}} would be ignored. Ru
 
 ---
 
+## REPLAY_RUN_WHILE_PAUSED
+
+**Type:** error
+**Summary:** {{name}} is paused at step {{step}}/{{totalSteps}}
+
+{{name}} is paused at step {{step}} of {{totalSteps}}. A run started now would record its steps under that pause, and its `killChromeOnFinish` would close a browser the paused run holds. End the paused run first: `run({ action: 'finish' })` runs its remaining steps, and `{{cancel}}` stops it.
+
+---
+
 ## REPLAY_RUN_STILL_RUNNING
 
 **Type:** success

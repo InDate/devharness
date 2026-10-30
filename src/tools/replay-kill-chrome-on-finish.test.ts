@@ -37,6 +37,7 @@ function makeReplay(
     getCurrentHistoryIndex: vi.fn(() => 0),
     recordCommand: vi.fn(),
     setActiveSequence: vi.fn(),
+    getActiveSequence: vi.fn(() => null),
   } as any;
 
   const calls: Array<{ tool: string; params: Record<string, any> }> = [];

@@ -559,6 +559,7 @@ describe('insert into a hoisted sequence', () => {
     await replay.handler({ action: 'history' } as any);   // insert requires history to be viewed first
     await replay.handler({ action: 'insert', name: 'solo', insertIndices: [idx], overwrite: true } as any);
 
+    await run.handler({ action: 'cancel' } as any);
     calls.length = 0;
     await runSequence(run, { name: 'solo', connection: 'other-browser-one' });
 

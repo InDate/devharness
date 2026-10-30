@@ -27,6 +27,7 @@ import { addressedConnection, createdName } from './connection-steps.js';
 import { openReplayCursor, type ReplayCursor } from '../replay-cursor.js';
 import { sequenceNeedsProxy } from './replay-connections.js';
 import { getProxy } from '../proxy/registry.js';
+import { callOwner } from '../call-origin.js';
 import { PROXIED_WORD } from '../reference-validator.js';
 import {
   formatTeardown,
@@ -192,6 +193,19 @@ export async function handleRun(
     args = { ...args, wait: args.wait ?? true };
   }
   if (args.bench) return runInBench(args, recorder);
+
+  // The recorder holds one paused run, and every call recorded after its pause
+  // is read as the pause's own: a second run started now lands under the
+  // paused step, and its killChromeOnFinish closes a browser of the same name.
+  const paused = recorder.getActiveSequence();
+  if (paused && callOwner().kind === 'agent') {
+    return createErrorResponse('REPLAY_RUN_WHILE_PAUSED', {
+      name: paused.sequenceName,
+      step: paused.currentStep + 1,
+      totalSteps: paused.totalSteps,
+      cancel: paused.runId ? `run({ action: 'cancel', runId: '${paused.runId}' })` : `run({ action: 'cancel' })`,
+    });
+  }
 
   // Load sequence: a saved one by name or id, or the steps written into the
   // call, held in memory under a name of their own so a paused run's `step`

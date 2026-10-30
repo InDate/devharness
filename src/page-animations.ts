@@ -51,7 +51,7 @@ export interface PageAnimation {
 }
 
 /** Motion the page makes with no Animation object (`page-motion.ts`), named by what carried it. */
-export type MotionType = 'StyleWrites' | 'AttributeWrites' | 'TextWrites' | 'Canvas' | 'Media' | 'SMIL' | 'Scroll';
+export type MotionType = 'StyleWrites' | 'AttributeWrites' | 'TextWrites' | 'Canvas' | 'Media' | 'SMIL' | 'Scroll' | 'ClassChange';
 
 /** What a sweep found since the one before it. */
 export interface SweepReading {

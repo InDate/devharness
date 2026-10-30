@@ -34,7 +34,7 @@ export interface MotionReport {
   doc: string;
   /** `open` at its first change; `close` once it has stopped, with how it ran. */
   phase: 'open' | 'close';
-  source: 'style' | 'attribute' | 'text' | 'canvas' | 'media' | 'smil' | 'scroll';
+  source: 'style' | 'attribute' | 'text' | 'canvas' | 'media' | 'smil' | 'scroll' | 'class';
   element: string;
   property: string;
   from: string;
@@ -82,6 +82,8 @@ function installPageMotion(g: any): void {
   const SVG_ATTRIBUTES = ['transform', 'd', 'opacity', 'x', 'y', 'cx', 'cy', 'r', 'width', 'height', 'points', 'fill', 'stroke', 'stroke-dashoffset', 'viewBox'];
 
   const timers = g[Symbol.for('devharness.clock')]?.native ?? { setTimeout: g.setTimeout.bind(g), clearTimeout: g.clearTimeout.bind(g) };
+  const frame: ((run: () => void) => unknown) | undefined = g[Symbol.for('devharness.clock')]?.native?.requestAnimationFrame
+    ?? (typeof g.requestAnimationFrame === 'function' ? g.requestAnimationFrame.bind(g) : undefined);
   const now = (): number => g.performance.now();
   const nameOf = (element: any): string => {
     const named = g[Symbol.for('devharness.animations')]?.name?.(element);
@@ -175,6 +177,39 @@ function installPageMotion(g: any): void {
     if (sweepTimer === undefined) sweepTimer = timers.setTimeout(() => closeQuiet(), QUIET_MS);
   };
 
+  // A class change that starts no animation still changes what the page
+  // shows, at once: a row collapsed under `transition: none` reports nothing
+  // else. A transition or keyframe animation it starts is created at the next
+  // style recalc and its run event dispatched in the frame after, so the
+  // change is judged two frames on, against the run events since.
+  const runEvents: Array<{ target: any; at: number }> = [];
+  const onRunEvent = (event: any) => {
+    if (!on) return;
+    runEvents.push({ target: event.target, at: now() });
+    if (runEvents.length > 200) runEvents.shift();
+  };
+  const tokens = (text: string): string[] => text.split(/\s+/).filter(Boolean);
+  const classChanged = (element: any, from: string, to: string) => {
+    const before = tokens(from), after = tokens(to);
+    const diff = [...after.filter(one => !before.includes(one)).map(one => `+${one}`), ...before.filter(one => !after.includes(one)).map(one => `-${one}`)];
+    if (diff.length === 0) return;
+    const t = now();
+    const trigger = tracker()?.current?.();
+    const root = tracker()?.rootNow?.();
+    const maker = tracker()?.runningMaker?.() ?? {};
+    tracker()?.hold?.(root);
+    const judge = () => {
+      const animated = runEvents.some(one => one.at >= t && (one.target === element || element.contains?.(one.target)));
+      if (on && !animated) {
+        const run: Run = { id: nextRun++, source: 'class', element: nameOf(element), property: 'class', from: before.join(' '), to: diff.join(' '), startMs: t, endMs: t, frames: 1, ...(trigger ? { trigger } : {}), ...maker, ...(root ? { root } : {}) };
+        report(run, 'open');
+        report(run, 'close');
+      }
+      tracker()?.release?.(root);
+    };
+    if (frame) frame(() => frame(() => timers.setTimeout(judge, 0))); else timers.setTimeout(judge, 0);
+  };
+
   const declarations = (text: string | null): Map<string, string> => {
     const map = new Map<string, string>();
     for (const part of String(text ?? '').split(';')) {
@@ -191,7 +226,9 @@ function installPageMotion(g: any): void {
 
   const observer = typeof g.MutationObserver === 'function' ? new g.MutationObserver((records: any[]) => {
     for (const record of records) {
-      if (record.type === 'attributes' && record.attributeName === 'style') {
+      if (record.type === 'attributes' && record.attributeName === 'class') {
+        classChanged(record.target, record.oldValue ?? '', record.target.getAttribute('class') ?? '');
+      } else if (record.type === 'attributes' && record.attributeName === 'style') {
         const before = declarations(record.oldValue);
         const after = declarations(record.target.getAttribute('style'));
         for (const [property, value] of after) if (before.get(property) !== value) note('style', record.target, property, before.get(property) ?? '', value);
@@ -288,13 +325,14 @@ function installPageMotion(g: any): void {
       on = true;
       lastScroll = { x: g.scrollX ?? 0, y: g.scrollY ?? 0 };
       observer?.observe(g.document, {
-        subtree: true, attributes: true, attributeOldValue: true, attributeFilter: ['style', ...SVG_ATTRIBUTES],
+        subtree: true, attributes: true, attributeOldValue: true, attributeFilter: ['style', 'class', ...SVG_ATTRIBUTES],
         characterData: true, characterDataOldValue: true, childList: true,
       });
       // Registered as devharness's own, so the trigger tracker leaves them unwrapped.
-      tracker()?.own?.(onMedia); tracker()?.own?.(onSmil); tracker()?.own?.(onScroll);
+      tracker()?.own?.(onMedia); tracker()?.own?.(onSmil); tracker()?.own?.(onScroll); tracker()?.own?.(onRunEvent);
       for (const type of ['play', 'pause', 'ended']) g.document.addEventListener(type, onMedia, true);
       for (const type of ['beginEvent', 'endEvent']) g.document.addEventListener(type, onSmil, true);
+      for (const type of ['transitionrun', 'animationstart']) g.document.addEventListener(type, onRunEvent, true);
       g.addEventListener('scroll', onScroll, { passive: true });
       return true;
     },
@@ -304,6 +342,7 @@ function installPageMotion(g: any): void {
       observer?.disconnect();
       for (const type of ['play', 'pause', 'ended']) g.document.removeEventListener(type, onMedia, true);
       for (const type of ['beginEvent', 'endEvent']) g.document.removeEventListener(type, onSmil, true);
+      for (const type of ['transitionrun', 'animationstart']) g.document.removeEventListener(type, onRunEvent, true);
       g.removeEventListener('scroll', onScroll);
       closeQuiet(true);
       on = false;

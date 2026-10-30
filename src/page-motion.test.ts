@@ -11,8 +11,9 @@ function pageWithMotion() {
   const timers: Array<{ at: number; run: () => void }> = [];
   const reports: MotionReport[] = [];
   class Context2D { canvas: any; constructor(canvas: any) { this.canvas = canvas; } fillRect() {} }
+  const documentListeners = new Map<string, (event: any) => void>();
   const page: any = {
-    document: { addEventListener: () => {}, removeEventListener: () => {}, documentElement: { tagName: 'HTML' } },
+    document: { addEventListener: (type: string, fn: (event: any) => void) => { documentListeners.set(type, fn); }, removeEventListener: () => {}, documentElement: { tagName: 'HTML' } },
     performance: { now: () => pageNow },
     addEventListener: () => {}, removeEventListener: () => {},
     setTimeout: () => 0, clearTimeout: () => {},
@@ -36,7 +37,15 @@ function pageWithMotion() {
     pageNow += ms;
     for (let due = timers.findIndex(t => t.at <= pageNow); due >= 0; due = timers.findIndex(t => t.at <= pageNow)) timers.splice(due, 1)[0].run();
   };
-  return { page, motion, writeStyle, advance, reports, Context2D };
+  /** Set an element's class attribute, as the page's code does. */
+  const writeClass = (target: { attrs: Record<string, string> }, className: string) => {
+    const oldValue = target.attrs.class ?? '';
+    target.attrs.class = className;
+    observerCallback?.([{ type: 'attributes', attributeName: 'class', target, oldValue }]);
+  };
+  /** Dispatch an event the page's document hears in its capture phase. */
+  const fire = (type: string, event: any) => documentListeners.get(type)?.({ type, ...event });
+  return { page, motion, writeStyle, writeClass, fire, advance, reports, Context2D };
 }
 
 describe('the page\'s watch of motion with no Animation object', () => {
@@ -76,6 +85,31 @@ describe('the page\'s watch of motion with no Animation object', () => {
 
     expect(reports.filter(r => r.phase === 'close')).toHaveLength(1);
     expect(reports[1]).toMatchObject({ phase: 'close', source: 'canvas', element: '#sky', frames: 3 });
+  });
+});
+
+describe('a class change that starts no animation', () => {
+  const row = (child?: object) => ({ id: 'row', attrs: { class: 'row' } as Record<string, string>, getAttribute(name: string) { return this.attrs[name] ?? null; }, contains: (node: object) => node === child });
+
+  it('reads as one change with the classes it added, once no run event has come for it', () => {
+    const { motion, writeClass, advance, reports } = pageWithMotion();
+    motion.start();
+    writeClass(row(), 'row removing');
+    advance(0);
+
+    expect(reports.map(r => r.phase)).toEqual(['open', 'close']);
+    expect(reports[1]).toMatchObject({ source: 'class', element: '#row', property: 'class', from: 'row', to: '+removing', frames: 1 });
+  });
+
+  it('reads as nothing where it started a transition on the element or inside it', () => {
+    const { motion, writeClass, fire, advance, reports } = pageWithMotion();
+    motion.start();
+    const item = {};
+    writeClass(row(item), 'row open');
+    fire('transitionrun', { target: item });
+    advance(0);
+
+    expect(reports).toHaveLength(0);
   });
 });
 

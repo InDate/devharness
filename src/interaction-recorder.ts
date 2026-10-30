@@ -1482,21 +1482,16 @@ export function calculateSummary(events: InputEvent[]): StoredRecording['summary
 
 export function simplifyEvents(
   events: InputEvent[],
-  options: { distanceThreshold?: number; timeThreshold?: number; scrollTimeThreshold?: number } = {}
+  options: { distanceThreshold?: number; timeThreshold?: number } = {}
 ): InputEvent[] {
-  const { distanceThreshold = 10, timeThreshold = 100, scrollTimeThreshold = 150 } = options;
+  const { distanceThreshold = 10, timeThreshold = 100 } = options;
   const simplified: InputEvent[] = [];
   let lastMove: MouseEvent | null = null;
-  let pendingScroll: MouseEvent | null = null;
 
   const flushPending = () => {
     if (lastMove) {
       simplified.push(lastMove);
       lastMove = null;
-    }
-    if (pendingScroll) {
-      simplified.push(pendingScroll);
-      pendingScroll = null;
     }
   };
 
@@ -1510,31 +1505,11 @@ export function simplifyEvents(
 
     if (isMouseEvent(event)) {
       if (event.type === 'wheel') {
-        // Consolidate consecutive wheel events within time threshold
-        if (lastMove) {
-          simplified.push(lastMove);
-          lastMove = null;
-        }
-        if (!pendingScroll) {
-          pendingScroll = { ...event };
-        } else {
-          const timeDiff = event.timestamp - pendingScroll.timestamp;
-          if (timeDiff <= scrollTimeThreshold) {
-            // Accumulate scroll deltas
-            pendingScroll.deltaX = (pendingScroll.deltaX || 0) + (event.deltaX || 0);
-            pendingScroll.deltaY = (pendingScroll.deltaY || 0) + (event.deltaY || 0);
-            pendingScroll.timestamp = event.timestamp; // Update to latest timestamp
-          } else {
-            // Time gap too large, push previous and start new
-            simplified.push(pendingScroll);
-            pendingScroll = { ...event };
-          }
-        }
+        // Each wheel event is kept: summed into one, a swipe replays as a
+        // single jump. eventsToCommands gathers a gesture's events into one step.
+        flushPending();
+        simplified.push(event);
       } else if (event.type === 'mousemove') {
-        if (pendingScroll) {
-          simplified.push(pendingScroll);
-          pendingScroll = null;
-        }
         if (!lastMove) {
           lastMove = event;
         } else {
@@ -1560,6 +1535,9 @@ export function simplifyEvents(
   flushPending();
   return simplified;
 }
+
+/** The longest quiet between two wheel events of one gesture; a trackpad's momentum tail runs 16-34ms apart. */
+const GESTURE_GAP_MS = 150;
 
 export interface CommandConversionOptions {
   simplify?: boolean;
@@ -1809,12 +1787,32 @@ export function eventsToCommands(
     }
 
     // Scroll
+    // A gesture is the wheel events that follow one another with no gap over
+    // GESTURE_GAP_MS. One step carries them with their offsets, and replays
+    // them at those offsets: a step per event pays a step's own work between
+    // every event, and a trackpad sends one every 16ms.
     if (event.type === 'wheel' && (event.deltaX || event.deltaY)) {
-      addCommand({
-        tool: 'input',
-        params: { action: 'scroll', x: event.x, y: event.y, deltaX: event.deltaX || 0, deltaY: event.deltaY || 0 },
-      }, event.timestamp);
-      i++;
+      const gesture: MouseEvent[] = [event];
+      let j = i + 1;
+      while (j < processedEvents.length) {
+        const next = processedEvents[j];
+        if (!isMouseEvent(next) || next.type !== 'wheel') break;
+        if (next.timestamp - gesture[gesture.length - 1].timestamp > GESTURE_GAP_MS) break;
+        if (next.deltaX || next.deltaY) gesture.push(next);
+        j++;
+      }
+      const params: Record<string, any> = gesture.length === 1
+        ? { action: 'scroll', x: event.x, y: event.y, deltaX: event.deltaX || 0, deltaY: event.deltaY || 0 }
+        : {
+            action: 'scroll', x: event.x, y: event.y,
+            events: gesture.map((wheel, k) => ({
+              deltaX: wheel.deltaX || 0,
+              deltaY: wheel.deltaY || 0,
+              afterMs: k === 0 ? 0 : wheel.timestamp - gesture[k - 1].timestamp,
+            })),
+          };
+      addCommand({ tool: 'input', params }, event.timestamp);
+      i = j;
       continue;
     }
 

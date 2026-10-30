@@ -105,6 +105,11 @@ export function unlisted<T>(work: () => T): T {
   return place.run({ ...(outer ?? { from: 'mcp' }), step: false, recorded: true }, work);
 }
 
+/** The sequence of the run the current call is part of, step handlers and their inner calls included. */
+export function runSequenceName(): string | undefined {
+  return place.getStore()?.run;
+}
+
 /** Where the current call belongs in history, or undefined for a call made on another's behalf. */
 export function historyPlace(): { from: CallChannel; run?: string; runStep?: number; env?: StepEnv; written?: Record<string, unknown> } | undefined {
   const here = place.getStore();

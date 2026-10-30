@@ -440,11 +440,12 @@ export class ConsoleMonitor {
   /**
    * Get message count
    */
-  getCount(type?: string): number {
+  getCount(type?: string, since?: number): number {
+    const kept = since === undefined ? this.messages : this.messages.filter(msg => msg.timestamp >= since);
     if (type) {
-      return this.messages.filter(msg => msg.type === type).length;
+      return kept.filter(msg => msg.type === type).length;
     }
-    return this.messages.length;
+    return kept.length;
   }
 
   /**

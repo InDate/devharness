@@ -39,6 +39,7 @@ import { sanitizeReference } from '../reference-validator.js';
 import { holderWord, holdReading } from '../hold.js';
 import { markFilm, settledFilms } from '../bench-mode/motion-film.js';
 import { sessions } from '../bench-mode/session.js';
+import { runsHeadless } from '../utils/headless-browser.js';
 
 const benchSchema = z.object({
   action: z.enum(['start', 'stop', 'tick', 'hold', 'release', 'picker', 'motion', 'film', 'list', 'status', 'keepStep', 'dropStep', 'flagStep', 'sweep', 'retake', 'capture', 'baseline']),
@@ -431,7 +432,7 @@ export function createBenchTools(
                 : {}),
             });
             // A bench opened in a headless Chrome reports open while no window shows it.
-            const headless = await page.browser().version().then((v: string) => v.startsWith('HeadlessChrome'), () => undefined);
+            const headless = await runsHeadless(page);
             if (headless !== undefined) {
               response.content[0].text += `\n\n${getMessage(headless ? 'BROWSER_HEADLESS' : 'BROWSER_WINDOWED', { subject: `the Chrome holding "${connection}" and its bench` })}`;
             }

@@ -144,7 +144,14 @@ export function generatePuppeteerCode(commands: Array<{ tool: string; params: Re
           if (params.x !== undefined && params.y !== undefined) {
             lines.push(`  await page.mouse.move(${params.x}, ${params.y});`);
           }
-          lines.push(`  await page.mouse.wheel({ deltaX: ${params.deltaX || 0}, deltaY: ${params.deltaY || 0} });`);
+          if (Array.isArray(params.events)) {
+            params.events.forEach((wheel: { deltaX?: number; deltaY?: number; afterMs?: number }, i: number) => {
+              if (i > 0 && wheel.afterMs) lines.push(`  await new Promise(resolve => setTimeout(resolve, ${wheel.afterMs}));`);
+              lines.push(`  await page.mouse.wheel({ deltaX: ${wheel.deltaX || 0}, deltaY: ${wheel.deltaY || 0} });`);
+            });
+          } else {
+            lines.push(`  await page.mouse.wheel({ deltaX: ${params.deltaX || 0}, deltaY: ${params.deltaY || 0} });`);
+          }
           lines.push('');
           break;
 
@@ -265,7 +272,14 @@ export function generatePlaywrightCode(commands: Array<{ tool: string; params: R
           if (params.x !== undefined && params.y !== undefined) {
             lines.push(`  await page.mouse.move(${params.x}, ${params.y});`);
           }
-          lines.push(`  await page.mouse.wheel(${params.deltaX || 0}, ${params.deltaY || 0});`);
+          if (Array.isArray(params.events)) {
+            params.events.forEach((wheel: { deltaX?: number; deltaY?: number; afterMs?: number }, i: number) => {
+              if (i > 0 && wheel.afterMs) lines.push(`  await page.waitForTimeout(${wheel.afterMs});`);
+              lines.push(`  await page.mouse.wheel(${wheel.deltaX || 0}, ${wheel.deltaY || 0});`);
+            });
+          } else {
+            lines.push(`  await page.mouse.wheel(${params.deltaX || 0}, ${params.deltaY || 0});`);
+          }
           lines.push('');
           break;
 

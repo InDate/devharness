@@ -90,3 +90,31 @@ describe('a reply that leaves the run paused', () => {
     await run.handler({ action: 'cancel' });
   });
 });
+
+describe('a run started while another stands paused', () => {
+  it('is refused, naming the paused run and the calls that end it, and leaves that run to finish', async () => {
+    const { run } = makeReplay();
+    const runId = await pausedRun(run);
+
+    const second: any = await run.handler({ action: 'sequence', sequenceId: 'seq-pause', connection: 'test-debug-session', wait: true });
+
+    expect(second.isError).toBe(true);
+    expect(second.content[0].text).toContain('pause-seq is paused at step 2 of 2');
+    expect(second.content[0].text).toContain(`run({ action: 'cancel', runId: '${runId}' })`);
+    expect(runRegistry.get(runId)?.status).toBe('paused');
+
+    await run.handler({ action: 'finish' });
+    expect(runRegistry.get(runId)?.status).toBe('completed');
+  });
+
+  it('starts once the paused run is cancelled', async () => {
+    const { run } = makeReplay();
+    await pausedRun(run);
+    await run.handler({ action: 'cancel' });
+
+    const next: any = await run.handler({ action: 'sequence', sequenceId: 'seq-pause', connection: 'test-debug-session', wait: true });
+
+    expect(next.isError).toBeFalsy();
+    expect(next._meta.replay).toMatchObject({ success: true });
+  });
+});

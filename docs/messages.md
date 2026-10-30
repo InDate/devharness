@@ -150,7 +150,9 @@ Cannot launch a new Chrome instance on port {{port}}: that port is already in us
 **Type:** error
 **Code:** REFERENCE_IN_USE
 
-Connection name "{{reference}}" is already bound to a live connection, so `forceNewInstance` would leave two Chrome instances answering to the same name.
+Connection name "{{reference}}" is already bound to a live connection, so `forceNewInstance` would leave two Chrome instances answering to the same name.{{#leftBy}}
+
+A run of `{{leftBy}}` launched it and left it open: a run closes the browsers it launched only when it is passed `killChromeOnFinish: true`. Close it with `connection({ action: 'close', connection: "{{reference}}", reason })`, and pass `killChromeOnFinish: true` to the runs that follow.{{/leftBy}}
 
 **Suggestions:**
 - Choose a different 3-word connection name for the new instance

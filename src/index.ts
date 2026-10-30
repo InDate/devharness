@@ -661,14 +661,7 @@ const allTools = {
   // Issues tracking tools
   ...(configManager.isToolEnabled('issues') ? toolset('issues', createIssuesTools(
     executeToolCall,
-    async (name: string) => {
-      // Saved sequences sit in folders under the sequences root, so a name
-      // resolves by the walk `run` uses: the sequence's own name, its id, or
-      // its file path relative to the root without `.json`.
-      const saved = await commandRecorder.listSavedSequencesOnDisk();
-      const match = saved.find(s => s.name === name || s.id === name || s.filename.replace(/\.json$/, '') === name);
-      return match?.fullPath ?? null;
-    },
+    (name: string) => commandRecorder.findSavedSequencePath(name),
     async (connection: string) => {
       const resolved = await resolveConnectionByName(connection);
       if (!resolved?.puppeteerManager) return null;

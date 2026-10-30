@@ -62,11 +62,12 @@ export async function gatherPageContext(
   consoleMonitor: ConsoleMonitor,
   networkMonitor: NetworkMonitor,
   clickableCache: ClickableCache,
-  abortSignal?: AbortSignal
+  abortSignal: AbortSignal | undefined,
+  since: number
 ): Promise<PageContext> {
   for (let read = 1; ; read++) {
     try {
-      return await readPageContext(page, consoleMonitor, networkMonitor, clickableCache);
+      return await readPageContext(page, consoleMonitor, networkMonitor, clickableCache, since);
     } catch (error) {
       if (read >= SELF_NAVIGATION_READS || !CONTEXT_DESTROYED.test(String((error as Error)?.message ?? error))) throw error;
       await raceAbort(newDocumentLoaded(page), abortSignal);
@@ -93,7 +94,8 @@ async function readPageContext(
   page: any,
   consoleMonitor: ConsoleMonitor,
   networkMonitor: NetworkMonitor,
-  clickableCache: ClickableCache
+  clickableCache: ClickableCache,
+  since: number
 ): Promise<PageContext> {
   const url = page.url();
   const title = await page.title();
@@ -103,13 +105,14 @@ async function readPageContext(
   clickableCache.set(pageKey(page, url), result.elements, result.viewportHeight, result.viewportWidth);
   const inViewportCount = result.elements.filter((el) => el.inViewport).length;
 
-  // Get console stats
-  const consoleErrors = consoleMonitor.getCount('error');
-  const consoleWarnings = consoleMonitor.getCount('warning');
-  const consoleTotal = consoleMonitor.getCount();
+  // The monitors keep what earlier documents logged and fetched, so a count
+  // over the whole buffer reported a reload's errors with the page before it
+  // (#563-#569). Counted from the navigation's start, the counts are this load's.
+  const consoleErrors = consoleMonitor.getCount('error', since);
+  const consoleWarnings = consoleMonitor.getCount('warning', since);
+  const consoleTotal = consoleMonitor.getCount(undefined, since);
 
-  // Get network stats
-  const allRequests = networkMonitor.getRequests();
+  const allRequests = networkMonitor.getRequests({ since });
   const failedRequests = allRequests.filter(r =>
     r.failed || (r.response && r.response.status >= 400)
   ).length;
@@ -260,6 +263,7 @@ export function createPageTools(
       // the background.
       async (args, abortSignal?: AbortSignal) => {
         const { action, connection } = args;
+        const since = Date.now();
 
         throwIfAborted(abortSignal);
 
@@ -337,7 +341,7 @@ export function createPageTools(
                 restartMonitoring(page, targetConsoleMonitor, targetNetworkMonitor);
 
                 // Gather full page context
-                return gatherPageContext(page, targetConsoleMonitor, targetNetworkMonitor, clickableCache, abortSignal);
+                return gatherPageContext(page, targetConsoleMonitor, targetNetworkMonitor, clickableCache, abortSignal, since);
               },
               'navigateTo'
             );
@@ -372,7 +376,7 @@ export function createPageTools(
                 restartMonitoring(page, targetConsoleMonitor, targetNetworkMonitor);
 
                 // Gather full page context
-                return gatherPageContext(page, targetConsoleMonitor, targetNetworkMonitor, clickableCache, abortSignal);
+                return gatherPageContext(page, targetConsoleMonitor, targetNetworkMonitor, clickableCache, abortSignal, since);
               },
               'reloadPage'
             );
@@ -396,7 +400,7 @@ export function createPageTools(
                 restartMonitoring(page, targetConsoleMonitor, targetNetworkMonitor);
 
                 // Gather full page context
-                return gatherPageContext(page, targetConsoleMonitor, targetNetworkMonitor, clickableCache, abortSignal);
+                return gatherPageContext(page, targetConsoleMonitor, targetNetworkMonitor, clickableCache, abortSignal, since);
               },
               'goBack'
             );
@@ -420,7 +424,7 @@ export function createPageTools(
                 restartMonitoring(page, targetConsoleMonitor, targetNetworkMonitor);
 
                 // Gather full page context
-                return gatherPageContext(page, targetConsoleMonitor, targetNetworkMonitor, clickableCache, abortSignal);
+                return gatherPageContext(page, targetConsoleMonitor, targetNetworkMonitor, clickableCache, abortSignal, since);
               },
               'goForward'
             );

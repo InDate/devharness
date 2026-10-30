@@ -245,3 +245,48 @@ describe('REPLAY_STEP_TIMEOUT template', () => {
     expect(msg).toContain('30000');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Recorded delays
+// ---------------------------------------------------------------------------
+
+describe('a recorded step delay', () => {
+  /** Runs a 60ms step, then a step recorded `delay` after it; answers the ms between the two steps' starts. */
+  async function gapAfterSlowStep(delay: number): Promise<number> {
+    const startedAt: number[] = [];
+    const { ctx } = makeHarness({
+      'dom.querySelector': async () => {
+        startedAt.push(Date.now());
+        await new Promise(resolve => setTimeout(resolve, 60));
+        return { content: [{ type: 'text', text: '' }] };
+      },
+    });
+    const result = await executeSteps({
+      sequence: seq([
+        { tool: 'dom', params: { action: 'querySelector', selector: '#first' } },
+        { tool: 'dom', params: { action: 'querySelector', selector: '#second' }, delay },
+      ]),
+      startStep: 0,
+      ctx,
+      stepTimeout: 5000,
+      totalTimeout: 300000,
+    });
+    expect(result.results.every(r => r.success)).toBe(true);
+    return startedAt[1] - startedAt[0];
+  }
+
+  // A recording measures a delay from one input to the next, start to start;
+  // waited after the step before it finished, a swipe recorded 16ms apart
+  // replayed 45-216ms apart.
+  it('runs from the start of the step before it, so that step\'s own time is inside it', async () => {
+    const gap = await gapAfterSlowStep(150);
+    expect(gap).toBeGreaterThanOrEqual(145);
+    expect(gap).toBeLessThan(195);
+  });
+
+  it('adds no wait when the step before it took longer than the delay', async () => {
+    const gap = await gapAfterSlowStep(50);
+    expect(gap).toBeGreaterThanOrEqual(55);
+    expect(gap).toBeLessThan(95);
+  });
+});

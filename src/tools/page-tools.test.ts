@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createPageTools, formatPageContextForResponse } from './page-tools.js';
+import { ConsoleMonitor } from '../console-monitor.js';
 
-function makeNavigate(page: Record<string, any>) {
+function makeNavigate(page: Record<string, any>, monitors: { consoleMonitor?: any; networkMonitor?: any } = {}) {
   const cdpManager = {
     isConnected: () => true,
     getRuntimeType: () => 'chrome',
@@ -13,7 +14,7 @@ function makeNavigate(page: Record<string, any>) {
   const puppeteerManager = { isConnected: () => true, getPage: () => ({ url: () => 'http://shop.test/', ...page }) };
   const clickableCache = { set: vi.fn() } as any;
   const { navigate } = createPageTools(
-    async () => ({ connection: {}, cdpManager, puppeteerManager, consoleMonitor: monitor, networkMonitor: monitor }),
+    async () => ({ connection: {}, cdpManager, puppeteerManager, consoleMonitor: monitors.consoleMonitor ?? monitor, networkMonitor: monitors.networkMonitor ?? monitor }),
     clickableCache,
   );
   return navigate;
@@ -51,6 +52,32 @@ describe('the hints in a navigation reply', () => {
     for (const hint of [response.clickableElements.hint, response.console.hint, response.network.hint]) {
       expect(hint).toContain("connection: 'shop-web-app'");
     }
+  });
+});
+
+// After the hints test: a successful reload spends the once-per-session hints it reads.
+describe('the console and network counts in a navigation reply', () => {
+  // The monitors keep what earlier documents logged: after a reload with the
+  // cache cleared, the reply counted 2 errors whose stack named the bundle
+  // the page had just replaced (#563-#569).
+  it('count what the reload\'s own load logged and fetched, not what the page before it left', async () => {
+    const consoleMonitor: any = new ConsoleMonitor();
+    const error = (id: string, timestamp: number) => ({ id, type: 'error', text: `error ${id}`, args: [], timestamp });
+    consoleMonitor.messages = [error('before', Date.now() - 5000)];
+    const network = { isActive: () => false, startMonitoring: vi.fn(), getRequests: vi.fn((_filter?: { since?: number }) => []) };
+    const calledAt = Date.now();
+    const navigate = makeNavigate({
+      reload: vi.fn(async () => { consoleMonitor.messages.push(error('during', Date.now())); }),
+      title: vi.fn(async () => 'Shop'),
+      evaluate: vi.fn(async () => ({ results: [], viewportHeight: 800, viewportWidth: 1200 })),
+    }, { consoleMonitor, networkMonitor: network });
+
+    const result: any = await navigate.handler({ action: 'reload', connection: 'shop-web-app' });
+
+    expect(result.content[0].text).toContain('**Console:** 1 errors, 0 warnings');
+    const since = network.getRequests.mock.calls[0]?.[0]?.since;
+    expect(since).toBeGreaterThanOrEqual(calledAt);
+    expect(since).toBeLessThanOrEqual(Date.now());
   });
 });
 

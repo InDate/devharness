@@ -69,3 +69,18 @@ describe('a sequence deleted from disk', () => {
     expect(existsSync(activity)).toBe(false);
   });
 });
+
+describe('a saved sequence looked up by name', () => {
+  it('is found in a folder under the sequences root by its name, its id, or its path', async () => {
+    const recorder = new CommandRecorder();
+    const folder = join(recorder.getSequencesDir(), 'swipe');
+    await fsp.mkdir(folder, { recursive: true });
+    const file = join(folder, 'swipe-tutorial-lookup.json');
+    await fsp.writeFile(file, sequenceFile('swipe-tutorial-lookup'));
+
+    expect(await recorder.findSavedSequencePath('swipe-tutorial-lookup')).toBe(file);
+    expect(await recorder.findSavedSequencePath('id-swipe-tutorial-lookup')).toBe(file);
+    expect(await recorder.findSavedSequencePath('swipe/swipe-tutorial-lookup')).toBe(file);
+    expect(await recorder.findSavedSequencePath('swipe-swipe-tutorial-lookup')).toBeNull();
+  });
+});

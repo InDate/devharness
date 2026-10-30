@@ -180,4 +180,37 @@ describe('a scroll as a run of wheel events', () => {
     expect(page.mouse.wheel.mock.calls.map((call: any[]) => call[0].deltaY)).toEqual([-100, -50, -25]);
     expect(result.content[0].text).toContain('as the first of 3 wheel events');
   });
+
+  // A recording keeps a trackpad swipe's events with the time between them,
+  // and the step sends them at those offsets: one step per event paid a
+  // step's own work between every event.
+  it('sends a recorded gesture\'s events with their own deltas, each at its offset from the first', async () => {
+    const { input, page } = makeInput(pageWithViewport({ width: 500, height: 700 }));
+    const sentAt: number[] = [];
+    page.mouse.wheel.mockImplementation(async () => { sentAt.push(Date.now()); });
+
+    const result: any = await input.handler({
+      ...on, action: 'scroll', x: 200, y: 200,
+      events: [{ deltaX: 1, afterMs: 0 }, { deltaX: 6, afterMs: 40 }, { deltaX: -2, deltaY: 3, afterMs: 40 }],
+    });
+
+    expect(page.mouse.wheel.mock.calls.map((call: any[]) => call[0])).toEqual([
+      { deltaX: 1, deltaY: 0 }, { deltaX: 6, deltaY: 0 }, { deltaX: -2, deltaY: 3 },
+    ]);
+    expect(sentAt[1] - sentAt[0]).toBeGreaterThanOrEqual(35);
+    expect(sentAt[2] - sentAt[0]).toBeGreaterThanOrEqual(75);
+    expect(sentAt[2] - sentAt[0]).toBeLessThan(120);
+    expect(result.content[0].text).toContain('Scrolled down 3px and right 5px');
+    expect(result.content[0].text).toContain('in 3 wheel events');
+    expect(result._meta.wheel).toMatchObject({ events: 3, askedMs: 80 });
+  });
+
+  it('refuses a gesture whose events move nothing', async () => {
+    const { input, page } = makeInput(pageWithViewport({ width: 500, height: 700 }));
+
+    const result: any = await input.handler({ ...on, action: 'scroll', events: [{ deltaX: 0 }, { deltaY: 0, afterMs: 16 }] });
+
+    expect(result.isError).toBe(true);
+    expect(page.mouse.wheel).not.toHaveBeenCalled();
+  });
 });

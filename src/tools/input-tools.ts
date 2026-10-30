@@ -81,6 +81,12 @@ const inputToolSchema = z.object({
   deltaX: z.number().optional().describe('Horizontal scroll px'),
   deltaY: z.number().optional().describe('Vertical scroll px'),
   decay: z.number().optional().describe('scroll: each event\'s delta times this over the previous one (default 1); 0.85 over 20 steps is a momentum tail'),
+  events: z.array(z.object({
+    deltaX: z.number().optional(),
+    deltaY: z.number().optional(),
+    afterMs: z.number().min(0).optional().describe('ms after the event before it (the first: after the call starts)'),
+  })).min(1).optional()
+    .describe('scroll: the wheel events of one gesture, each sent at its own offset, as a recording captures a trackpad swipe; in place of deltaX/deltaY, steps, durationMs and decay'),
   x: z.number().optional(),
   y: z.number().optional(),
 
@@ -1624,11 +1630,22 @@ export function createInputTools(
 
             case 'scroll': {
               const { deltaX = 0, deltaY = 0, x, y } = args;
-              const events = Math.max(1, Math.round(args.steps ?? 1));
+              const events = args.events ? args.events.length : Math.max(1, Math.round(args.steps ?? 1));
               const decay = args.decay ?? 1;
               const spacingMs = events > 1 ? (args.durationMs ?? events * 16) / (events - 1) : 0;
+              // Each wheel event and its offset from the first dispatch. A recorded
+              // gesture carries its own offsets, `afterMs` from the event before;
+              // a generated one spaces `steps` evenly, each delta `decay` times the last.
+              let offset = 0;
+              const wheels = args.events
+                ? args.events.map((event, i) => {
+                    offset += i === 0 ? 0 : event.afterMs ?? 16;
+                    return { at: offset, deltaX: event.deltaX ?? 0, deltaY: event.deltaY ?? 0 };
+                  })
+                : Array.from({ length: events }, (_, i) => ({ at: i * spacingMs, deltaX: deltaX * decay ** i, deltaY: deltaY * decay ** i }));
+              const askedMs = Math.round(wheels[wheels.length - 1].at);
 
-              if (deltaX === 0 && deltaY === 0) {
+              if (wheels.every(wheel => wheel.deltaX === 0 && wheel.deltaY === 0)) {
                 return {
                   content: [
                     {
@@ -1663,16 +1680,14 @@ export function createInputTools(
                     // awaited together.
                     const sent: Promise<void>[] = [];
                     const sentAt: number[] = [];
-                    let scale = 1;
                     try {
                       const startedAt = Date.now();
-                      for (let i = 0; i < events; i++) {
+                      for (const wheel of wheels) {
                         throwIfAborted(abortSignal);
-                        const wait = startedAt + i * spacingMs - Date.now();
+                        const wait = startedAt + wheel.at - Date.now();
                         if (wait > 0) await abortableSleep(wait, abortSignal);
                         sentAt.push(Date.now());
-                        sent.push(mouse.wheel({ deltaX: deltaX * scale, deltaY: deltaY * scale }));
-                        scale *= decay;
+                        sent.push(mouse.wheel({ deltaX: wheel.deltaX, deltaY: wheel.deltaY }));
                       }
                     } finally {
                       const settled = await Promise.allSettled(sent);
@@ -1707,11 +1722,21 @@ export function createInputTools(
               }
 
               const scrollResult = result.result;
+              // A recorded gesture reads as the distance its events add up to;
+              // generated steps read as the first event's delta.
+              const total = (pick: (wheel: typeof wheels[number]) => number) => Math.round(wheels.reduce((sum, wheel) => sum + pick(wheel), 0) * 100) / 100;
+              const readX = args.events ? total(wheel => wheel.deltaX) : deltaX;
+              const readY = args.events ? total(wheel => wheel.deltaY) : deltaY;
               const directionParts: string[] = [];
-              if (deltaY > 0) directionParts.push(`down ${deltaY}px`);
-              if (deltaY < 0) directionParts.push(`up ${Math.abs(deltaY)}px`);
-              if (deltaX > 0) directionParts.push(`right ${deltaX}px`);
-              if (deltaX < 0) directionParts.push(`left ${Math.abs(deltaX)}px`);
+              if (readY > 0) directionParts.push(`down ${readY}px`);
+              if (readY < 0) directionParts.push(`up ${Math.abs(readY)}px`);
+              if (readX > 0) directionParts.push(`right ${readX}px`);
+              if (readX < 0) directionParts.push(`left ${Math.abs(readX)}px`);
+              const spread = events > 1
+                ? args.events
+                  ? ` in ${events} wheel events sent over ${scrollResult?.spanMs}ms${scrollResult && Math.abs(scrollResult.spanMs - askedMs) > 16 ? ` (recorded ${askedMs}ms)` : ''}`
+                  : ` as the first of ${events} wheel events sent over ${scrollResult?.spanMs}ms${scrollResult && Math.abs(scrollResult.spanMs - askedMs) > spacingMs ? ` (asked ${askedMs}ms)` : ''}, each delta ×${decay} the last`
+                : '';
 
               const positionInfo = scrollResult?.position
                 ? ` at (${scrollResult.position.x}, ${scrollResult.position.y}) on ${pointReading(scrollPoint!)}`
@@ -1721,10 +1746,10 @@ export function createInputTools(
                 content: [
                   {
                     type: 'text',
-                    text: `Scrolled ${directionParts.join(' and ')}${positionInfo}${events > 1 ? ` as the first of ${events} wheel events sent over ${scrollResult?.spanMs}ms${scrollResult && Math.abs(scrollResult.spanMs - spacingMs * (events - 1)) > spacingMs ? ` (asked ${Math.round(spacingMs * (events - 1))}ms)` : ''}, each delta ×${decay} the last` : ''}\n**Page position:** (${scrollResult?.scrollPosition.scrollX}, ${scrollResult?.scrollPosition.scrollY}) of (${scrollResult?.scrollPosition.maxScrollX}, ${scrollResult?.scrollPosition.maxScrollY})`,
+                    text: `Scrolled ${directionParts.join(' and ')}${positionInfo}${spread}\n**Page position:** (${scrollResult?.scrollPosition.scrollX}, ${scrollResult?.scrollPosition.scrollY}) of (${scrollResult?.scrollPosition.maxScrollX}, ${scrollResult?.scrollPosition.maxScrollY})`,
                   },
                 ],
-                _meta: { tool: 'input', action: 'scroll', timestamp: Date.now(), ...(events > 1 ? { wheel: { events, spanMs: scrollResult?.spanMs, askedMs: Math.round(spacingMs * (events - 1)) } } : {}), ...(scrollPoint ? { element: scrollPoint.fingerprint ?? null } : {}), ...(scrollPoint?.outside ? { outsideViewport: { viewport: scrollPoint.outside } } : {}) },
+                _meta: { tool: 'input', action: 'scroll', timestamp: Date.now(), ...(events > 1 ? { wheel: { events, spanMs: scrollResult?.spanMs, askedMs } } : {}), ...(scrollPoint ? { element: scrollPoint.fingerprint ?? null } : {}), ...(scrollPoint?.outside ? { outsideViewport: { viewport: scrollPoint.outside } } : {}) },
               };
             }
 

@@ -1262,6 +1262,18 @@ export class CommandRecorder {
   }
 
   /**
+   * The file of the saved sequence a name stands for: its own name, its id,
+   * or its path under the sequences root without `.json`. Sequences sit in
+   * folders under the root, and a lookup of one flat file at the root returned
+   * nothing for them.
+   */
+  async findSavedSequencePath(name: string): Promise<string | null> {
+    const saved = await this.listSavedSequencesOnDisk();
+    const match = saved.find(s => s.name === name || s.id === name || s.filename.replace(/\.json$/, '') === name);
+    return match?.fullPath ?? null;
+  }
+
+  /**
    * List issue sequences on disk with associated issue metadata
    */
   async listIssueSequencesOnDisk(): Promise<Array<{

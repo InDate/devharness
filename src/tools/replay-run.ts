@@ -28,6 +28,7 @@ import { openReplayCursor, type ReplayCursor } from '../replay-cursor.js';
 import { sequenceNeedsProxy } from './replay-connections.js';
 import { getProxy } from '../proxy/registry.js';
 import { callOwner } from '../call-origin.js';
+import { runsHeadless } from '../utils/headless-browser.js';
 import { PROXIED_WORD } from '../reference-validator.js';
 import {
   formatTeardown,
@@ -624,11 +625,11 @@ export async function handleRun(
   const settle = async (response: any, outcome: string): Promise<boolean> => {
     const healthy = await applyHealthChecks(response, outcome);
     // Read before teardown, which can close the browser it reads.
-    const view = connection
-      ? await getPageForConnection(connection).then(page => page?.browser().version()).catch(() => undefined)
+    const headless = connection
+      ? await getPageForConnection(connection).then(runsHeadless).catch(() => undefined)
       : undefined;
-    const visibility = typeof view !== 'string' ? ''
-      : `\n\n${getMessage(view.startsWith('HeadlessChrome') ? 'BROWSER_HEADLESS' : 'BROWSER_WINDOWED', { subject: `"${connection}"` })}`;
+    const visibility = headless === undefined ? ''
+      : `\n\n${getMessage(headless ? 'BROWSER_HEADLESS' : 'BROWSER_WINDOWED', { subject: `"${connection}"` })}`;
     if (visibility && response?.content?.[0]?.text !== undefined) response.content[0].text += visibility;
     if (outcome === 'paused') return healthy;
     const notes = (await killOwnedChrome()) + (await closeDeclared());

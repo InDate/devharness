@@ -1124,6 +1124,11 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
   // A pause point saved before a step: the run stops there as at stepTo. The
   // step it resumes at is the one it stopped before, so it does not stop again.
   let pausedAtMark: number | undefined;
+  // A recorded delay is the time from one input to the next, start to start.
+  // Waited in full after a step's own work, it adds that work to every gap:
+  // a swipe recorded 16ms apart replayed 45-216ms apart. The wait is what
+  // remains of the delay since the step before began.
+  let lastStepBeganAt: number | undefined;
 
   for (let i = startStep; i < targetEnd; i++) {
     const cmd = commands[i];
@@ -1200,9 +1205,12 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
     }
 
     // Wait for delay if specified (for recorded interactions)
-    if (cmd.delay && cmd.delay > 0) {
-      debugLog(logPrefix, `Waiting ${cmd.delay}ms before step ${i + 1}`);
-      const wasAborted = await abortableDelayResult(cmd.delay, abortSignal);
+    const remainingDelay = cmd.delay && cmd.delay > 0
+      ? cmd.delay - (lastStepBeganAt !== undefined ? Date.now() - lastStepBeganAt : 0)
+      : 0;
+    if (remainingDelay > 0) {
+      debugLog(logPrefix, `Waiting ${remainingDelay}ms of ${cmd.delay}ms before step ${i + 1}`);
+      const wasAborted = await abortableDelayResult(remainingDelay, abortSignal);
       if (wasAborted) {
         debugLog(logPrefix, `Replay aborted at step ${i + 1}`);
         results.push({
@@ -1215,6 +1223,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
       }
     }
 
+    lastStepBeganAt = Date.now();
     onProgress?.({ step: i + 1, totalSteps: commands.length, tool: cmd.tool });
 
     try {

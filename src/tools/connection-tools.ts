@@ -21,6 +21,7 @@ import { detectAutoRestartCommand } from '../server-manager.js';
 import { ChromeLauncher, ChromeBinaryAbsentError, ChromeLaunchFailure, PortSplitError, InvalidProfileNameError, ProfileInUseError, ProfileLockedError, normalizeProfileName, resolveLaunchPort, decideProfileReuse } from '../chrome-launcher.js';
 import { createTool } from '../validation-helpers.js';
 import { createSuccessResponse, createErrorResponse, responseWithOnce, withOnce, getMessage } from '../messages.js';
+import { runSequenceName } from '../call-origin.js';
 import { configManager } from '../config.js';
 import { debugLog } from '../debug-logger.js';
 import { validateReference, requireValidReference, sanitizeReference, UNNAMED_CONNECTION } from '../reference-validator.js';
@@ -74,6 +75,14 @@ async function attachDialogMonitor(page: Page): Promise<DialogMonitor | undefine
 }
 
 /**
+ * The sequence whose run launched each browser, by connection name. A saved
+ * sequence launches under a fixed name with forceNewInstance and leaves the
+ * browser open without killChromeOnFinish, so the next run naming it is
+ * refused at its first step; the refusal names the run that left it.
+ */
+const launchedByRun = new Map<string, string>();
+
+/**
  * Stamp a launch response with who owns the resulting connection.
  *
  * The text of a launch response does not show whether the run CREATED a
@@ -83,6 +92,11 @@ async function attachDialogMonitor(page: Page): Promise<DialogMonitor | undefine
  * owned one and every run leaks a process (issue #103).
  */
 function withLaunchMeta(response: any, name: string, reused: boolean, headless?: boolean): any {
+  if (!reused) {
+    const run = runSequenceName();
+    if (run !== undefined) launchedByRun.set(name, run);
+    else launchedByRun.delete(name);
+  }
   response._meta = {
     ...(response._meta || {}), tool: 'connection', action: 'launch',
     launch: { name, reused, ...(headless !== undefined ? { headless } : {}) },
@@ -386,7 +400,10 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
 
           if (args.forceNewInstance) {
             await debugLog('index', `launch: forceNewInstance with name "${sanitizedRef}" already bound to a live connection - refusing to double-bind`);
-            return createErrorResponse('CHROME_REFERENCE_ALREADY_BOUND', { reference: sanitizedRef });
+            return createErrorResponse('CHROME_REFERENCE_ALREADY_BOUND', {
+              reference: sanitizedRef,
+              ...(launchedByRun.has(sanitizedRef) ? { leftBy: launchedByRun.get(sanitizedRef) } : {}),
+            });
           }
 
           // Reuse is only correct when that connection is running the profile

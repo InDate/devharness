@@ -110,5 +110,19 @@ describe('bug-005 error templates', () => {
     expect(message).toContain('device a one');
     expect(message).not.toContain('{{');
     expect(getMessageCode('CHROME_REFERENCE_ALREADY_BOUND')).toBe('REFERENCE_IN_USE');
+    expect(message).not.toContain('left it open');
+  });
+
+  // A saved sequence launches under a fixed name and leaves the browser open
+  // without killChromeOnFinish; the next run naming it was refused at step 1
+  // with nothing to say where the browser came from, which cost a rerun of
+  // eight sequences (#127-#142).
+  it('renders CHROME_REFERENCE_ALREADY_BOUND naming the run that left the browser open, and how to stop it', () => {
+    const message = getErrorMessage('CHROME_REFERENCE_ALREADY_BOUND', { reference: 'trackswitcher sheet browser', leftBy: 'trackswitcher-sheet-rows' });
+
+    expect(message).toContain('A run of `trackswitcher-sheet-rows` launched it and left it open');
+    expect(message).toContain(`connection({ action: 'close', connection: "trackswitcher sheet browser", reason })`);
+    expect(message).toContain('killChromeOnFinish: true');
+    expect(message).not.toContain('{{');
   });
 });

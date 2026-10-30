@@ -3,6 +3,7 @@
  * so the recorder takes the shapes without taking the bench's session state.
  */
 import type { SavedObservation } from './step-slice.js';
+import type { CapturedBy } from './build-info.js';
 
 /** Where a picked element came from, as far as the page will admit. */
 export interface AnnotationTarget {
@@ -105,4 +106,10 @@ export interface StepTraffic {
   windowMs?: number;
   /** When this was taken, by a recording or by a baseline play. */
   recordedAt?: number;
+  /**
+   * The devharness build that took it. A field its rows lack is read against
+   * this: a build from before that field was captured leaves it out whatever
+   * the app did. Absent on a step taken before builds were stamped.
+   */
+  capturedBy?: CapturedBy;
 }

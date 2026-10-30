@@ -8,7 +8,7 @@
     "devharness": "build/mcp-supervisor.js"
   },
   "scripts": {
-    "build": "tsc && npm run typecheck:bench && npm run build:dashboard && npm run build:bench",
+    "build": "tsc && npm run typecheck:bench && npm run build:dashboard && npm run build:bench && node scripts/write-build-info.mjs",
     "postbuild": "node scripts/signal-supervisor.mjs",
     "build:dashboard": "node scripts/build-dashboard.mjs",
     "build:bench": "node scripts/build-bench.mjs",

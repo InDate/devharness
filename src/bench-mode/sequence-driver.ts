@@ -38,6 +38,7 @@ import { describeFingerprint, type ElementFingerprint } from '../element-fingerp
 import { CANCELLED } from './session.js';
 import { heldRulesOf, type SiteReader } from './rules.js';
 import { routedReplayCall } from '../tools/replay-schema.js';
+import { capturedBy } from '../build-info.js';
 
 /**
  * Stands in for the bench's own address inside a recorded sequence.
@@ -1403,7 +1404,7 @@ export function createSequenceDriver(
       const commands = sequence.commands ?? [];
       for (const { index, traffic, fingerprint } of entries) {
         if (index < 0 || index >= commands.length) continue;
-        commands[index].traffic = traffic;
+        commands[index].traffic = { ...traffic, capturedBy: capturedBy() };
         // The baseline is the run a person takes as the recording, so the
         // element each click reached in it is the one later runs are held to.
         if (fingerprint) commands[index].fingerprint = fingerprint;

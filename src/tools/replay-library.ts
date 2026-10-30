@@ -22,6 +22,7 @@ import { configManager } from '../config.js';
 import { generatePuppeteerCode, generatePlaywrightCode } from './replay-codegen.js';
 import { type ReplayArgs } from './replay-schema.js';
 import { validateSequenceToolNames, handleLoadSequenceError } from './replay-validation.js';
+import { capturedBy } from '../build-info.js';
 
 
 export async function handleCreate(
@@ -128,6 +129,7 @@ export async function handleCreate(
         kinds: kindsOf(recordedAt, normalized.hoisted, RECORDED_BODY_CAP),
         observations: sliceOf(recordedAt, normalized.hoisted, began!, RECORDED_BODY_CAP),
         windowMs: ended - began!,
+        capturedBy: capturedBy(),
       };
     }
     if (unmeasured.length > 0) {

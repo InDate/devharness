@@ -24,9 +24,12 @@ function pageWithTracker() {
     }
   }
   const observers: Array<(records: any[]) => void> = [];
+  // Records a change queued and no microtask has delivered yet, which takeRecords() hands over.
+  const pendingRecords: any[] = [];
   class MutationObserver {
     constructor(callback: (records: any[]) => void) { observers.push(callback); }
     observe() {}
+    takeRecords() { return pendingRecords.splice(0); }
   }
   const page: any = new EventTarget();
   Object.assign(page, {
@@ -53,7 +56,11 @@ function pageWithTracker() {
   };
   /** Deliver a class change on `target` to the page's observers, as the microtask after the change does. */
   const mutate = (target: object) => { for (const callback of observers) callback([{ type: 'attributes', attributeName: 'class', target }]); };
-  return { page, fire, turn, reports, tasks, transitions, clock, mutate };
+  /** Queue a style change on `target` that no microtask has delivered yet, as a change made inside a frame callback stands. */
+  page.queueChange = (target: object) => { pendingRecords.push({ type: 'attributes', attributeName: 'style', target }); };
+  /** Deliver the queued changes to the page's observers, as the microtask checkpoint does. */
+  const deliver = () => { const records = pendingRecords.splice(0); if (records.length) for (const callback of observers) callback(records); };
+  return { page, fire, turn, reports, tasks, transitions, clock, mutate, deliver };
 }
 
 describe('the work outstanding under an input\'s root', () => {
@@ -116,6 +123,24 @@ describe('the work outstanding under an input\'s root', () => {
     fire('pointerover', { pointerType: 'mouse', clientX: 40, clientY: 60 });
     expect(tracker.rootNow().id).toBe(wheelRoot);
     expect(wheelRoot).not.toBe(hoverScrollRoot);
+  });
+
+  it("credits a transition a frame callback's style change set off to the input that scheduled it, though the change is delivered after the page moved on", () => {
+    const { page, fire, turn, deliver } = pageWithTracker();
+    const tracker = vm.runInContext("globalThis[Symbol.for('devharness.trigger')]", page);
+    const toast = { matches: () => false };
+    page.toast = toast;
+    fire('keydown', { key: '2' });
+    const keyRoot = tracker.rootNow().id;
+    vm.runInContext('requestAnimationFrame(() => { requestAnimationFrame(() => { queueChange(toast); }); })', page);
+    turn();
+    turn();
+    turn();
+    turn();
+    deliver();
+    fire('transitionrun', { target: toast, propertyName: 'opacity' });
+
+    expect(tracker.rootOfAnimation({ effect: { target: toast }, transitionProperty: 'opacity' })?.id).toBe(keyRoot);
   });
 
   it('credits the transition of an element the page scrolled from under the pointer to that scroll', () => {

@@ -527,6 +527,9 @@ function installPageTrigger(g: any): void {
     g[name] = Wrapped;
   }
 
+  // The element changes a callback made, read while its cause is still the
+  // newest mark; set once the change observer below exists.
+  let takeChanges: () => void = () => {};
   // A callback carries the trigger live when it was scheduled.
   const scheduled = (method: string, words: (args: unknown[]) => string) => {
     const original = g[method];
@@ -547,7 +550,7 @@ function installPageTrigger(g: any): void {
         if (method !== 'setInterval') pending.delete(`${family}:${id}`);
         runAs(fn);
         mark(family, carried, origin !== undefined ? { origin, ...(root ? { root } : {}) } : {});
-        try { return callback.apply(this, given); } finally { if (method !== 'setInterval') release(root); }
+        try { return callback.apply(this, given); } finally { takeChanges(); if (method !== 'setInterval') release(root); }
       }, ...args]);
       pending.set(`${family}:${id}`, { fn, root });
       hold(root);
@@ -675,7 +678,8 @@ function installPageTrigger(g: any): void {
   interface Change { words: string; at: number; root?: Root }
   const changed = new WeakMap<object, Change>();
   if (typeof g.MutationObserver === 'function') {
-    const observer = new g.MutationObserver((records: any[]) => {
+    const recordChanges = (records: any[]) => {
+      if (!records.length) return;
       const words = current();
       if (!words) return;
       const at = now();
@@ -685,7 +689,14 @@ function installPageTrigger(g: any): void {
         changed.set(record.target, change);
         for (const node of record.addedNodes ?? []) changed.set(node, change);
       }
-    });
+    };
+    const observer = new g.MutationObserver(recordChanges);
+    // The observer's own callback waits for the microtask checkpoint, which a
+    // held page's frame step reaches only after running every frame callback
+    // it held: the toast's fade-in, set in its second frame callback, read as
+    // the frame loop's with no root (animation-list-at-frame-steps). Each
+    // callback's changes are taken as it returns instead.
+    if (typeof observer.takeRecords === 'function') takeChanges = () => recordChanges(observer.takeRecords());
     const watch = () => observer.observe(g.document, { subtree: true, attributes: true, childList: true });
     if (g.document.documentElement) watch(); else listen(g.document, 'readystatechange', watch, { once: true });
   }

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A transition a frame callback sets off is credited to the input behind
+  it on a held page.** The tracker read which cause changed an element from
+  its mutation observer, whose callback waits for the microtask checkpoint;
+  a `hold frame` step runs every held frame callback before that checkpoint,
+  so a change made in the second of them read as the frame loop's, with no
+  root, and its transition went to the frame step. Each callback's changes
+  are now taken as it returns, under its own cause.
 - **Pausing, playing, speeding or reversing a running animation is a row
   of its step.** Such a call starts no animation and writes nothing, so
   Chrome's reports and the DOM carried no trace of it, and a step that only

@@ -1734,9 +1734,9 @@
       "cells": {
         "seen": {
           "expect": "Animation object inside an open shadow root, named through the host",
-          "today": "gap",
-          "basis": "sequence:credit-every-catalog-key",
-          "note": "Seen as ping span.ping keyframes 500ms, from key 5; the row names the span inside the shadow root and leaves out its host mail-chip#chip"
+          "today": "works",
+          "basis": "sequence:chip-through-host-after-load",
+          "note": "Seen as ping #chip › span.ping css animation 500ms, credited to press 5 by its cause. An element inside a shadow root is named through its host, and the host's host outward; the tracker observes each shadow root the page attaches, so the class change inside it carries the press. The FAQ's details content, in the browser's own shadow root, reads #faq › #details-content the same way"
         },
         "credit": {
           "expect": "Press step, +0",

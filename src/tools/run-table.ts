@@ -18,6 +18,7 @@ import { stepReply } from './replay-history.js';
 import { foreignTo, linesOf, observationsOf, type Observation, type ObservationLine } from '../observation-log.js';
 import { CARRIER } from '../write-watch.js';
 import { describeCall, readingConnection } from './history-activity.js';
+import { whenSettled } from '../root-credit.js';
 
 export interface RunReplyInput {
   name: string;
@@ -257,6 +258,20 @@ function rulesBlock(rows: Row[], rules: RunRules | undefined, pauses: Map<number
     return `| ${rule.label.replace(/\|/g, '\\|')} | ${rule.verb} | ${rule.from} | ${acted} |`;
   });
   return `Rules\n| rule | verb | from | acted |\n|---|---|---|---|\n${lines.join('\n')}`;
+}
+
+// A root that never settles - a loop running on - holds the reply no longer
+// than an `owns` check waits for one.
+const ARRIVING_BOUND_MS = 10000;
+
+/**
+ * Resolves once every step of the run still arriving has settled, or at
+ * `boundMs`. Each step is matched again as it settles, so a reply built after
+ * this reads the late rows' verdict; the reply built at the run's end would
+ * leave a step ending on a smooth scroll or a transition at `still arriving`.
+ */
+export async function settleArriving(recorder: CommandRecorder, name: string, since: number, boundMs = ARRIVING_BOUND_MS): Promise<void> {
+  await Promise.all(rowsOf(recorder, name, since).filter(stillArriving).map(row => whenSettled(row.command.index, boundMs)));
 }
 
 export function formatRunReply(recorder: CommandRecorder, input: RunReplyInput): string {

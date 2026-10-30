@@ -39,7 +39,7 @@ import {
   formatVariablePrompt,
   formatPauseNote,
 } from './replay-formatters.js';
-import { formatRunReply, formatStepsReply } from './run-table.js';
+import { formatRunReply, formatStepsReply, settleArriving } from './run-table.js';
 import { pausesIn, rulesForRun } from './run-rules.js';
 import { armForRun, keepArmedForRun, originOf } from '../bench-mode/rules.js';
 import { viewportAtRunStart } from '../sequence-viewport.js';
@@ -113,6 +113,7 @@ async function runInBench(args: ReplayArgs, recorder: CommandRecorder) {
     return createSuccessResponse('REPLAY_BENCH_PLAYING', { name, connection, benchUrl });
   }
   const state = await play;
+  await settleArriving(recorder, name, since);
   const rules = rulesForRun(connection);
   // A step that failed before its call was recorded has no History row, so
   // its reason reaches the reply only from the bench's own state.
@@ -1084,6 +1085,7 @@ export async function performRun(
     };
   }
 
+  await settleArriving(recorder, sequence.name, since);
   let response = formatRunReply(recorder, {
     name: sequence.name, total: execResult.totalCommands, since,
     ...(args.steps ? { steps: args.steps } : {}),

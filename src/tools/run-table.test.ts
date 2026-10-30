@@ -3,7 +3,8 @@
  * each pause listed where it stood between them.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import { formatRunReply } from './run-table.js';
+import { formatRunReply, settleArriving } from './run-table.js';
+import { noteRoot, onEntrySettled, stepToken } from '../root-credit.js';
 import { CommandRecorder } from '../command-recorder.js';
 import { executeSteps } from './replay-executor.js';
 import { historyPlace } from '../call-origin.js';
@@ -205,6 +206,43 @@ describe('a step whose roots had not settled when the run ended', () => {
     expect(reply.split('\n')[0]).toBe('motion completed 2 of 2 · 2 passed · 1 still arriving');
     expect(reply).toContain('Step 2 still arriving, its roots not settled when the run ended: animation left #plan-pick; the bench matches it again as they settle');
     expect(reply).not.toContain('unmatched');
+  });
+});
+
+describe('a step still arriving when the run ends', () => {
+  const arrivingAt = (index: number) => {
+    const steps = [
+      { index: 3, run: 'motion', runStep: 0, stepMatch: { matched: 1, kinds: 1, unmatched: [] } },
+      { index, run: 'motion', runStep: 1, stepMatch: { matched: 0, kinds: 1, unmatched: [{ kind: 'animation scrollY html', reasons: ['still arriving'] }] } },
+    ].map(step => ({ ...step, tool: 'input', params: {}, timestamp: step.index, result: { content: [] } }));
+    return { steps, history: { getHistory: () => [...steps].reverse() } as unknown as CommandRecorder };
+  };
+
+  it('is read in the reply as matched once its roots settle', async () => {
+    const { steps, history } = arrivingAt(40);
+    const root = { id: 'scroll-40', step: stepToken({ kind: 'command', index: 40 }) };
+    noteRoot('settle-test', root, true);
+    const stop = onEntrySettled(entry => {
+      if (entry === 40) steps[1].stepMatch = { matched: 1, kinds: 1, unmatched: [] };
+    });
+
+    const settled = settleArriving(history, 'motion', 2);
+    noteRoot('settle-test', root, false);
+    await settled;
+    stop();
+
+    const reply = formatRunReply(history, { name: 'motion', total: 2, since: 2 });
+    expect(reply.split('\n')[0]).toBe('motion completed 2 of 2 · 2 passed · all matched');
+  });
+
+  it('reads as still arriving where its roots stay open past the bound', async () => {
+    const { history } = arrivingAt(41);
+    noteRoot('settle-test', { id: 'loop-41', step: stepToken({ kind: 'command', index: 41 }) }, true);
+
+    await settleArriving(history, 'motion', 2, 20);
+
+    const reply = formatRunReply(history, { name: 'motion', total: 2, since: 2 });
+    expect(reply.split('\n')[0]).toBe('motion completed 2 of 2 · 2 passed · 1 still arriving');
   });
 });
 

@@ -15,7 +15,8 @@
  * by due time, then by the order they were set, and one native timer is set
  * for the next one due, capped so a change of rate or a pause takes effect
  * within that cap. Animation frames stay Chrome's own, so drawing stays real;
- * each frame callback is handed page time. Workers keep wall time.
+ * each frame callback is handed page time, and below a rate of 1 the
+ * callbacks run on that share of Chrome's frames. Workers keep wall time.
  *
  * The design follows Playwright's injected clock and @sinonjs/fake-timers
  * (Christian Johansen), from which the queue and the real-time sync come.
@@ -161,8 +162,28 @@ function installPageClock(g: any): void {
       if (at !== frameStamp) { frameStamp = at; framePage = pageNow(); }
       return framePage;
     };
+    // An app that moves a fixed step per frame reads no time, so page time
+    // at a slower rate leaves it at full speed. Below a rate of 1 the app's
+    // callbacks run on one native frame in 1/rate, each native frame adding
+    // `rate` to the share until a whole frame is due; the rest pass the
+    // callbacks on to the next native frame.
+    let dueStamp: number | undefined;
+    let dueNow = true;
+    let frameShare = 1;
+    const frameDue = (at: number): boolean => {
+      if (at !== dueStamp) {
+        dueStamp = at;
+        if (paused || rate <= 0 || rate >= 1) { frameShare = 1; dueNow = true; }
+        else { frameShare = Math.min(1, frameShare + rate); dueNow = frameShare >= 1; if (dueNow) frameShare -= 1; }
+      }
+      return dueNow;
+    };
     const pass = (id: number, callback: Function) => {
-      nativeIds.set(id, frame((at: number) => { nativeIds.delete(id); callback(frameTime(at)); }));
+      nativeIds.set(id, frame((at: number) => {
+        if (!frameDue(at)) { pass(id, callback); return; }
+        nativeIds.delete(id);
+        callback(frameTime(at));
+      }));
     };
     define(g, 'requestAnimationFrame', function requestAnimationFrame(callback: Function) {
       const id = nextFrameId++;
@@ -224,6 +245,111 @@ function installPageClock(g: any): void {
   const stepMedia = (ms: number) => {
     for (const element of heldMedia) { try { element.currentTime += ms / 1000; } catch { /* no seekable range yet */ } }
   };
+
+  // Chrome runs a smooth scroll on its compositor, which neither page time
+  // nor the CSS rate reaches: at a rate of 0.25 a jump took 1000ms against
+  // 992ms at 1 (30 Oct). Below a rate of 1 a smooth scroll the page asks for
+  // runs here instead, on page time: the call is made instant to find where
+  // each scroller lands, the scrollers are put back, and every frame moves
+  // them along an ease-in-out over Chrome's own duration, the square root of
+  // the distance in frames of 1/60s, up to 1s. An instant scroll on the
+  // scroller, or a person's wheel or touch, ends it, as either ends Chrome's;
+  // scroll anchoring moving the scroller under it does not. The
+  // scrollend each instant write raises is stopped, the last write's a frame
+  // after it, and one scrollend is raised then, so the page sees one where
+  // the scroll ends, as a last write to where the scroller stood raises none.
+  const scrolling = new Map<any, { from: { x: number; y: number }; to: { x: number; y: number }; start: number; duration: number; ending?: boolean }>();
+  const ElementProto = g.Element?.prototype;
+  const nativeScroll = ElementProto ? {
+    windowTo: g.scrollTo, windowBy: g.scrollBy, window: g.scroll,
+    to: ElementProto.scrollTo, by: ElementProto.scrollBy, scroll: ElementProto.scroll, intoView: ElementProto.scrollIntoView,
+  } : undefined;
+  if (nativeScroll && native.requestAnimationFrame) {
+    const frame = native.requestAnimationFrame;
+    const docScroller = () => g.document.scrollingElement ?? g.document.documentElement;
+    const at = (scroller: any) => ({ x: Number(scroller.scrollLeft) || 0, y: Number(scroller.scrollTop) || 0 });
+    const place = (scroller: any, to: { x: number; y: number }) => nativeScroll.to.call(scroller, { left: to.x, top: to.y, behavior: 'instant' });
+    const slowed = () => !paused && rate > 0 && rate < 1;
+    const smoothFor = (scroller: any, behavior: unknown) => {
+      if (behavior === 'smooth') return true;
+      if (behavior === 'instant') return false;
+      try { return g.getComputedStyle(scroller).scrollBehavior === 'smooth'; } catch { return false; }
+    };
+    let ticking = false;
+    const tick = () => {
+      for (const [scroller, run] of scrolling) {
+        if (run.ending) {
+          scrolling.delete(scroller);
+          const target = scroller === docScroller() ? g.document : scroller;
+          try { target.dispatchEvent(new g.Event('scrollend', { bubbles: target === g.document })); } catch { /* a scroller gone from the page */ }
+          continue;
+        }
+        const t = Math.min(1, Math.max(0, (pageNow() - run.start) / run.duration));
+        const eased = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+        if (t >= 1) run.ending = true;
+        place(scroller, { x: run.from.x + (run.to.x - run.from.x) * eased, y: run.from.y + (run.to.y - run.from.y) * eased });
+      }
+      ticking = scrolling.size > 0;
+      if (ticking) frame(tick);
+    };
+    const begin = (scroller: any, from: { x: number; y: number }, to: { x: number; y: number }) => {
+      const distance = Math.max(Math.abs(to.x - from.x), Math.abs(to.y - from.y));
+      if (distance < 1) { scrolling.delete(scroller); return; }
+      scrolling.set(scroller, { from, to, start: pageNow(), duration: Math.min(Math.sqrt(distance), 60) / 60 * 1000 });
+      if (!ticking) { ticking = true; frame(tick); }
+    };
+    // The scrollers a call can move: for scrollIntoView every scrolling box around the element, else the one called on.
+    const scrollersOf = (self: any, method: string): any[] => {
+      if (method !== 'intoView') return [self === g || self === undefined ? docScroller() : self];
+      const boxes: any[] = [];
+      for (let box = self?.parentElement; box; box = box.parentElement) {
+        if (box.scrollHeight > box.clientHeight || box.scrollWidth > box.clientWidth) boxes.push(box);
+      }
+      if (!boxes.includes(docScroller())) boxes.push(docScroller());
+      return boxes;
+    };
+    const take = (owner: any, name: string, method: keyof typeof nativeScroll) => {
+      const original = nativeScroll[method];
+      if (typeof original !== 'function') return;
+      define(owner, name, function (this: any, ...args: any[]) {
+        const options = args[0] !== null && typeof args[0] === 'object' ? args[0] : undefined;
+        const scrollers = scrollersOf(this, method);
+        const behavior = method === 'intoView' ? options?.behavior : (options ? options.behavior : undefined);
+        const smooth = scrollers.filter(scroller => smoothFor(scroller, behavior));
+        if (!slowed() || smooth.length === 0) {
+          for (const scroller of scrollers) scrolling.delete(scroller);
+          return original.apply(this, args);
+        }
+        const before = new Map(scrollers.map(scroller => [scroller, at(scroller)]));
+        const instant = method === 'intoView'
+          ? [{ ...(options ?? (args[0] === false ? { block: 'end', inline: 'nearest' } : {})), behavior: 'instant' }]
+          : [options ? { ...options, behavior: 'instant' } : { left: Number(args[0]) || 0, top: Number(args[1]) || 0, behavior: 'instant' }];
+        original.apply(this, instant);
+        for (const scroller of smooth) {
+          const from = before.get(scroller)!;
+          const to = at(scroller);
+          place(scroller, from);
+          begin(scroller, from, to);
+        }
+        for (const scroller of scrollers) if (!smooth.includes(scroller)) scrolling.delete(scroller);
+        return undefined;
+      });
+    };
+    take(g, 'scrollTo', 'windowTo');
+    take(g, 'scroll', 'window');
+    take(g, 'scrollBy', 'windowBy');
+    take(ElementProto, 'scrollTo', 'to');
+    take(ElementProto, 'scroll', 'scroll');
+    take(ElementProto, 'scrollBy', 'by');
+    take(ElementProto, 'scrollIntoView', 'intoView');
+    for (const type of ['wheel', 'touchstart']) {
+      g.addEventListener(type, (event: any) => { if (event.isTrusted) scrolling.clear(); }, { capture: true, passive: true });
+    }
+    g.addEventListener('scrollend', (event: any) => {
+      const scroller = event.target === g.document ? docScroller() : event.target;
+      if (event.isTrusted && scrolling.has(scroller)) event.stopImmediatePropagation();
+    }, { capture: true });
+  }
 
   // A frame recalculates style and lays the page out after its callbacks, and
   // recalculating style is what starts a CSS transition. A held page renders
@@ -302,6 +428,8 @@ function installPageClock(g: any): void {
       }
       return { kind: 'requestAnimationFrame', fn: '', ...this.frame(frameMs) };
     },
+    /** Whether a smooth scroll the clock runs at a slower rate is still moving. */
+    scrolling() { return scrolling.size > 0; },
     /** Run page time at this multiple of wall time. */
     rate(value: number) {
       sync(); rate = Math.max(0, Number(value) || 0); schedule();

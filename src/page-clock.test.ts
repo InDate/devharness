@@ -7,7 +7,7 @@ import { PAGE_CLOCK_SOURCE, CLOCK_KEY } from './page-clock.js';
  * the test moves by hand: `wait(ms)` runs native time on, firing the native
  * timers that come due, and `paint()` runs one native frame.
  */
-function pageWithClock() {
+function pageWithClock(extras: Record<string, unknown> = {}) {
   let nativeNow = 1000;
   let nativeId = 1;
   const nativeTimers: Array<{ id: number; at: number; run: () => void }> = [];
@@ -18,7 +18,8 @@ function pageWithClock() {
     static now() { return 1_700_000_000_000 + nativeNow; }
   }
   class Event {
-    constructor(private at: number) {}
+    constructor(private at: number | string) {}
+    get type() { return typeof this.at === 'string' ? this.at : undefined; }
   }
   Object.defineProperty(Event.prototype, 'timeStamp', {
     configurable: true, enumerable: true,
@@ -45,6 +46,7 @@ function pageWithClock() {
     },
     requestAnimationFrame: (run: (at: number) => void) => nativeFrames.push(run),
     cancelAnimationFrame: () => {},
+    ...extras,
   };
   vm.createContext(page);
   vm.runInContext(PAGE_CLOCK_SOURCE, page);
@@ -215,5 +217,99 @@ describe('the page clock - held frames and the frame step', () => {
     expect(clock.next(16)).toMatchObject({ kind: 'requestAnimationFrame', now: 1021 });
     expect(clock.next(16)).toBeNull();
     expect(run('order')).toEqual(['timer', 'frame']);
+  });
+});
+
+describe('the page clock - frames at a slower rate', () => {
+  const frameCount = (rate: number) => {
+    const { clock, run, wait, paint } = pageWithClock();
+    clock.rate(rate);
+    run('globalThis.ran = 0; const loop = () => { ran++; requestAnimationFrame(loop); }; requestAnimationFrame(loop);');
+    for (let frame = 0; frame < 8; frame++) { wait(16); paint(); }
+    return run('ran');
+  };
+
+  it("runs the app's frame callbacks on one native frame in four at a rate of 0.25", () => {
+    expect(frameCount(0.25)).toBe(2);
+  });
+
+  it('runs them on every native frame at a rate of 1', () => {
+    expect(frameCount(1)).toBe(8);
+  });
+});
+
+describe('the page clock - a smooth scroll at a slower rate', () => {
+  /** A page whose one scroller moves only by instant writes, recording every call the browser received and every event dispatched on the document. */
+  function pageWithScroller() {
+    const calls: Array<{ top: number; behavior?: string }> = [];
+    const dispatched: string[] = [];
+    class Element {
+      scrollTop = 0; scrollLeft = 0; scrollHeight = 5000; clientHeight = 500; scrollWidth = 0; clientWidth = 0;
+      parentElement = null;
+      scrollTo(options: { top?: number; left?: number; behavior?: string }) {
+        calls.push({ top: options.top ?? this.scrollTop, behavior: options.behavior });
+        this.scrollTop = options.top ?? this.scrollTop;
+        this.scrollLeft = options.left ?? this.scrollLeft;
+      }
+      scroll() {}
+      scrollBy() {}
+      scrollIntoView() {}
+    }
+    const scroller = new Element();
+    const listeners = new Map<string, (event: any) => void>();
+    const page = pageWithClock({
+      Element,
+      document: { scrollingElement: scroller, dispatchEvent: (event: { type: string }) => dispatched.push(event.type) },
+      scrollTo: (options: { top: number; behavior?: string }) => scroller.scrollTo(options),
+      scroll: () => {}, scrollBy: () => {},
+      getComputedStyle: () => ({ scrollBehavior: 'auto' }),
+      addEventListener: (type: string, fn: (event: any) => void) => { listeners.set(type, fn); },
+    });
+    /** Native frames, 16ms apart, for this much wall time. */
+    const frames = (ms: number) => { for (let at = 0; at < ms; at += 16) { page.wait(16); page.paint(); } };
+    return { ...page, scroller, calls, dispatched, frames, listeners };
+  }
+
+  it("runs on page time: Chrome's duration for the distance, stretched by the rate, with one scrollend at its end", () => {
+    const { clock, run, scroller, frames, dispatched } = pageWithScroller();
+    clock.rate(0.25);
+    run(`scrollTo({ top: 1000, behavior: 'smooth' })`);
+    expect(scroller.scrollTop).toBe(0);
+
+    // sqrt(1000) frames of 1/60s is 527ms of page time, 2108ms of wall time at 0.25.
+    frames(1056);
+    expect(scroller.scrollTop).toBeGreaterThan(300);
+    expect(scroller.scrollTop).toBeLessThan(700);
+    expect(clock.scrolling()).toBe(true);
+
+    frames(1200);
+    expect(scroller.scrollTop).toBe(1000);
+    expect(clock.scrolling()).toBe(false);
+    expect(dispatched).toEqual(['scrollend']);
+  });
+
+  it('ends where an instant scroll puts the scroller, or at a wheel', () => {
+    const { clock, run, scroller, frames, listeners } = pageWithScroller();
+    clock.rate(0.25);
+    run(`scrollTo({ top: 1000, behavior: 'smooth' })`);
+    frames(500);
+    run(`scrollTo({ top: 50, behavior: 'instant' })`);
+    frames(500);
+    expect(scroller.scrollTop).toBe(50);
+    expect(clock.scrolling()).toBe(false);
+
+    run(`scrollTo({ top: 1000, behavior: 'smooth' })`);
+    frames(500);
+    const stoodAt = scroller.scrollTop;
+    listeners.get('wheel')?.({ isTrusted: true });
+    frames(500);
+    expect(scroller.scrollTop).toBe(stoodAt);
+    expect(clock.scrolling()).toBe(false);
+  });
+
+  it("hands a smooth scroll to Chrome at a rate of 1", () => {
+    const { run, calls } = pageWithScroller();
+    run(`scrollTo({ top: 1000, behavior: 'smooth' })`);
+    expect(calls).toEqual([{ top: 1000, behavior: 'smooth' }]);
   });
 });

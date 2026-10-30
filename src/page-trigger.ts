@@ -36,8 +36,10 @@ function installPageTrigger(g: any): void {
   const unwrappedFrame: ((run: () => void) => unknown) | undefined = native?.requestAnimationFrame ?? (typeof g.requestAnimationFrame === 'function' ? g.requestAnimationFrame.bind(g) : undefined);
   // A trigger the last of these named reads as `after <it>` on a callback that carries none.
   const AFTER_MS = 100;
-  // A smooth scroll runs for up to a second after the call that began it.
+  // A smooth scroll runs for up to a second after the call that began it;
+  // one the page clock runs at a slower rate runs until the clock ends it.
   const SCROLL_CALL_MS = 1000;
+  const clockScrolling = (): boolean => g[Symbol.for('devharness.clock')]?.scrolling?.() === true;
   const CHANGE_MS = 2000;
 
   // A carrier's mark holds the cause it was scheduled under as `origin`, where
@@ -300,7 +302,7 @@ function installPageTrigger(g: any): void {
     // The newest wins: a key whose handler calls scrollIntoView() reads as the call, which carries the key.
     const candidates = [
       lastInput && t - lastInput.at <= 150 ? lastInput : undefined,
-      lastScrollCall && t - lastScrollCall.at <= SCROLL_CALL_MS ? lastScrollCall : undefined,
+      lastScrollCall && (t - lastScrollCall.at <= SCROLL_CALL_MS || clockScrolling()) ? lastScrollCall : undefined,
       lastHash && t - lastHash.at <= SCROLL_CALL_MS ? lastHash : undefined,
     ].filter((one): one is Mark => one !== undefined);
     if (candidates.length === 0) return undefined;

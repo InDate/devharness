@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A slower `hold rate` slows frame-stepped motion and smooth scrolls.** The
+  page clock slowed page time, while Chrome still handed the app a frame
+  callback on every frame, so a canvas that moves a fixed step per frame ran
+  at full speed; and Chrome runs a smooth scroll on its compositor, out of
+  reach of page time and the CSS rate. Below a rate of 1 the app's frame
+  callbacks now run on that share of Chrome's frames, and the page clock runs
+  the page's smooth `scrollTo`, `scrollBy` and `scrollIntoView` on page time,
+  over Chrome's own duration for the distance, with one `scrollend` at its
+  end; an instant scroll or a wheel ends it. The trigger tracker credits its
+  scroll events to the call for as long as it runs.
 - **A rate set with `hold rate` holds across a navigation.** A new document
   starts its CSS animations and its page clock at 1×, while devharness kept
   the rate it was given, so after a navigation the page ran at real time and

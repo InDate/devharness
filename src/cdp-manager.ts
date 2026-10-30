@@ -78,6 +78,8 @@ export interface EvaluateExpressionOptions {
    * round-trip). Only meaningful through evaluateExpressionDetailed().
    */
   captureRaw?: boolean;
+  /** The `devharness://` name the expression runs under (default `evaluate`). */
+  scriptName?: string;
 }
 
 /** Result of evaluateExpressionDetailed(). */
@@ -1207,7 +1209,7 @@ export class CDPManager {
         // when the page is actually running.
         const canAwaitInProtocol = awaitPromise && !this.state.paused;
         result = await Runtime.evaluate({
-          expression: ownScript('evaluate', expression),
+          expression: ownScript(options?.scriptName ?? 'evaluate', expression),
           timeout: cdpTimeoutMs,
           ...(canAwaitInProtocol ? { awaitPromise: true } : {}),
         });

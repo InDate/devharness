@@ -9,6 +9,9 @@ export const OWN_SCRIPTS = /^(pptr:|devharness:\/\/)/;
 /** Own scripts whose functions call the app's code: the timer and send wrapper. */
 export const WRAPS_APP_CODE = /^devharness:\/\/send-wrapper$/;
 
+/** The prefix of a script one `inspect evaluateExpression` call ran, followed by its number. */
+export const EVALUATE_SCRIPT = 'devharness://evaluate/';
+
 export function ownScript(name: string, source: string): string {
   return `${source}\n//# sourceURL=devharness://${name}`;
 }

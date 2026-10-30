@@ -11,7 +11,7 @@ import { PAGE_TRIGGER_SOURCE } from './page-trigger.js';
 import { PAGE_ANIMATIONS_SOURCE } from './page-animations.js';
 import { PAGE_INPUT_GUARD_SOURCE } from './page-input-guard.js';
 import { MOTION_BINDING, PAGE_MOTION_SOURCE, type MotionReport } from './page-motion.js';
-import { ownScript } from './utils/own-script.js';
+import { EVALUATE_SCRIPT, ownScript } from './utils/own-script.js';
 import { openSession } from './utils/own-session.js';
 
 export interface StoredNetworkRequest {
@@ -194,6 +194,8 @@ export interface RequestInitiatorReport {
   at: number;
   /** The document that named this request, for a parser or preload root. */
   document?: string;
+  /** The `inspect evaluateExpression` script standing on this request's stack. */
+  evaluatedIn?: string;
 }
 
 /**
@@ -216,6 +218,19 @@ function rootOfInitiator(initiator: any): InitiatorRoot {
     }
   }
   return 'script';
+}
+
+/**
+ * The numbered evaluate script anywhere on a request's stack, async parents
+ * included, so a fetch the evaluated code awaited or scheduled carries it.
+ */
+function evaluatedIn(initiator: any): string | undefined {
+  for (let segment = initiator?.stack; segment; segment = segment.parent) {
+    for (const frame of segment.callFrames ?? []) {
+      if (typeof frame?.url === 'string' && frame.url.startsWith(EVALUATE_SCRIPT)) return frame.url;
+    }
+  }
+  return undefined;
 }
 
 export class NetworkMonitor {
@@ -572,12 +587,14 @@ export class NetworkMonitor {
         const document = (root === 'parser' || root === 'preload')
           ? (typeof e.initiator?.url === 'string' ? e.initiator.url : e.documentURL)
           : undefined;
+        const evaluated = evaluatedIn(e.initiator);
         report({
           method: String(e.request.method ?? 'GET'),
           url: String(e.request.url),
           root,
           at: Date.now(),
           ...(typeof document === 'string' ? { document } : {}),
+          ...(evaluated ? { evaluatedIn: evaluated } : {}),
         });
       }
     });

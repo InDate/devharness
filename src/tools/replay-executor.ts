@@ -28,6 +28,7 @@ import { abortableDelayResult } from '../utils/abort.js';
 import { debugLog } from '../debug-logger.js';
 import { sanitizeReference } from '../reference-validator.js';
 import { observes } from '../observing-tools.js';
+import { creditingEvaluatesTo } from '../proxy/evaluate-credit.js';
 import { configManager } from '../config.js';
 import { describePersonInput, personInputSince } from '../person-watch.js';
 import { hold, holdReading, isOutside, isRunOwn, release, type HoldLayer } from '../hold.js';
@@ -1595,7 +1596,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
       const nextAnswers = next?.tool === 'modal' && next.params?.action === 'answer';
       const personAnswers = !nextAnswers && originChannel() === 'bench';
       debugLog(logPrefix, `Step ${i + 1}: a dialog it opens is answered by ${nextAnswers ? 'the next step' : personAnswers ? 'a person' : 'nobody'} (origin ${originChannel() ?? 'none'})`);
-      const call = () => executeCommandWithRetry(executeToolCall, cmd.tool, params, logPrefix, stepSignalOf(abortSignal, stepAbort));
+      const call = () => creditingEvaluatesTo(cursorAt(i), () => executeCommandWithRetry(executeToolCall, cmd.tool, params, logPrefix, stepSignalOf(abortSignal, stepAbort)));
       const execResult = await executeWithTimeout(
         personAnswers ? showingPickers(call) : call(),
         stepBound,

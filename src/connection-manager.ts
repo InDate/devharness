@@ -6,6 +6,7 @@
 import { noteRoot } from './root-credit.js';
 import { CDPManager } from './cdp-manager.js';
 import { getProxy } from './proxy/registry.js';
+import { cursorOfScript } from './proxy/evaluate-credit.js';
 import { attachLayer, isHeld, recordHeld, recordReleased } from './hold.js';
 import { attachPageTime, pageTimeOf } from './page-time.js';
 import { PuppeteerManager } from './puppeteer-manager.js';
@@ -104,8 +105,9 @@ export class ConnectionManager {
     // two meet. A connection with no proxy reports into nothing.
     if (networkMonitor && reference) {
       networkMonitor.onRequestInitiator = report => {
+        const evaluated = report.evaluatedIn ? cursorOfScript(report.evaluatedIn) : undefined;
         getProxy(reference)?.noteInitiator(
-          report.method, report.url, report.root, report.at, report.document);
+          report.method, report.url, evaluated ? 'evaluate' : report.root, report.at, report.document, evaluated);
       };
       networkMonitor.onSocketSend = report => {
         getProxy(reference)?.noteSend(

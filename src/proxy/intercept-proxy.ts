@@ -157,7 +157,9 @@ export interface ProxyEvent {
    * Computed from `evidence` by `levelOf`, not stored. Kept on the event only
    * where a reader wants the current policy's answer beside the fields.
    *
-   * observed   - a payload id ties this arrival to a send.
+   * observed   - a payload id ties this arrival to a send, or code an
+ *              `inspect evaluateExpression` call ran stands on this
+ *              request's stack.
    * likely     - consumed a send's outstanding allowance, and carries that
    *              send's command rather than the one it landed under.
    * positional - the stamp says when this crossed, not what caused it.
@@ -199,6 +201,8 @@ export interface EventEvidence {
   protocolPaired?: boolean;
   /** What started this request, read from the page rather than from the wire. */
   initiator?: InitiatorRoot;
+  /** The call whose evaluated code stands on this request's stack, for an `evaluate` root. */
+  evaluatedUnder?: ProxyCursor;
   /**
    * The document whose markup named this request, for a parser or preload root.
    *
@@ -235,7 +239,18 @@ export type InitiatorRoot =
    * caused this. A person at the keyboard produces the same measurement, and
    * `mark`'s window is what keeps it from reaching a command long finished.
    */
-  | 'input';
+  | 'input'
+  /**
+   * Code an `inspect evaluateExpression` call ran stands on the stack. The
+   * evaluate takes no cursor, so the request is credited to that call through
+   * `evaluatedUnder` rather than to the cursor standing as it crossed.
+   */
+  | 'evaluate';
+
+/** Which root replaces which on one request: a stack through an evaluate, then a dispatched gesture, then the rest. */
+function rankOf(root: InitiatorRoot): number {
+  return root === 'evaluate' ? 2 : root === 'input' ? 1 : 0;
+}
 
 /**
  * The class of a payload: what makes two frames the same kind of message.
@@ -422,6 +437,8 @@ export function entryOf(event: ProxyEvent): number | undefined {
 export function causeOf(event: ProxyEvent): ProxyCursor | undefined {
   const paired = event.evidence?.pairing?.sentUnder;
   if (paired) return paired;
+  const evaluated = event.evidence?.evaluatedUnder;
+  if (evaluated) return evaluated;
   // The page named a timer as what asked for this, so no command caused it and
   // it belongs to no step. Left in the bucket it crossed under it would weigh
   // nothing and still be counted as present, and a poll firing a different
@@ -454,6 +471,7 @@ export function levelOf(event: Pick<ProxyEvent, 'kind' | 'direction' | 'evidence
   // schedule and no command caused it. Measured, where the cursor says only
   // that it crossed while that command was in flight.
   if (e?.initiator === 'timer') return 'unprompted';
+  if (e?.initiator === 'evaluate' && e.evaluatedUnder) return 'observed';
   // The page measured a user gesture dispatching when this left, and a command
   // drove that gesture. That is a measurement of cause, where a cursor says
   // only that the two overlapped - so it reads above `positional`, which is
@@ -1176,7 +1194,8 @@ export class InterceptProxy {
    * crosses, and a request already recorded takes the report directly.
    */
   noteInitiator(
-    method: string, url: string, root: InitiatorRoot, at: number, document?: string
+    method: string, url: string, root: InitiatorRoot, at: number, document?: string,
+    evaluatedUnder?: ProxyCursor
   ): void {
     const key = `${method.toUpperCase()} ${url}`;
     const origin = originOfUrl(url);
@@ -1189,21 +1208,24 @@ export class InterceptProxy {
     for (let i = this.events.length - 1; i >= 0 && i > this.events.length - JOIN_SCAN; i--) {
       const event = this.events[i];
       if (event.kind !== 'request') continue;
-      // A root already stands unless this one is `input`, which outranks every
-      // other: CDP reads the stack and cannot see that an event was being
-      // dispatched, and that is the only thing tying a request to the command
-      // that drove the page.
+      // A standing root holds against one of equal or lower rank. `input`
+      // outranks the stack's classes: CDP reads the stack and cannot see that
+      // an event was being dispatched, and that is the only thing tying a
+      // request to the command that drove the page. `evaluate` outranks
+      // `input`: it names the exact call whose code started the request.
       const standing = event.evidence?.initiator;
-      if (standing !== undefined && !(root === 'input' && standing !== 'input')) continue;
+      if (standing !== undefined && rankOf(root) <= rankOf(standing)) continue;
       if (`${(event.method ?? 'GET').toUpperCase()} ${event.url}` !== key) continue;
       if (Math.abs((event.startedAt ?? event.at) - at) > JOIN_WINDOW_MS) continue;
       const evidence = (event.evidence ??= {});
       evidence.initiator = root;
       if (document) evidence.initiatedBy = document;
+      if (evaluatedUnder) evidence.evaluatedUnder = evaluatedUnder;
       this.attributeFromPage(event);
+      if (evaluatedUnder) observeEvent(event, this.reference);
       return;
     }
-    this.reportedInitiators.push({ key, root, at, document });
+    this.reportedInitiators.push({ key, root, at, document, ...(evaluatedUnder ? { evaluatedUnder } : {}) });
     if (this.reportedInitiators.length > MAX_REPORTED_INITIATORS) {
       this.reportedInitiators.splice(0, this.reportedInitiators.length - MAX_REPORTED_INITIATORS);
     }
@@ -1220,6 +1242,17 @@ export class InterceptProxy {
    */
   private attributeFromPage(event: ProxyEvent): void {
     const root = event.evidence?.initiator;
+    const evaluated = event.evidence?.evaluatedUnder;
+    if (root === 'evaluate' && evaluated) {
+      delete event.commandIndex;
+      delete event.runId;
+      delete event.step;
+      delete event.within;
+      delete event.entry;
+      delete event.paused;
+      stampWith(event, evaluated);
+      return;
+    }
     if (event.commandIndex !== undefined || event.runId !== undefined) return;
     // Started inside a user gesture. A command drives the gesture, so the
     // command last marked is the one that caused it however late the bytes
@@ -1259,7 +1292,7 @@ export class InterceptProxy {
   /** A report that arrived before its request crossed, where one is waiting. */
   private takeInitiator(
     method: string, url: string, startedAt: number
-  ): { root: InitiatorRoot; document?: string } | undefined {
+  ): { root: InitiatorRoot; document?: string; evaluatedUnder?: ProxyCursor } | undefined {
     const key = `${method.toUpperCase()} ${url}`;
     // Closest in time wins, and `input` breaks a tie. Preferring any `input`
     // report inside the window instead would hand a poll the click's report
@@ -1282,7 +1315,7 @@ export class InterceptProxy {
     // `input` outranks the stack's class here as it does on a request already
     // recorded; a timer root stands, since the page measured no dispatch.
     const nearest = this.reportedInitiators[best].root;
-    if (nearest !== 'input' && nearest !== 'timer') {
+    if (nearest !== 'input' && nearest !== 'timer' && nearest !== 'evaluate') {
       const input = this.reportedInitiators.findIndex(held =>
         held.key === key && held.root === 'input' && Math.abs(held.at - startedAt) <= JOIN_WINDOW_MS);
       if (input >= 0) best = input;
@@ -1293,12 +1326,12 @@ export class InterceptProxy {
     // request to the same URL that nothing reported.
     this.reportedInitiators = this.reportedInitiators.filter(
       other => !(other.key === key && Math.abs(other.at - startedAt) <= JOIN_WINDOW_MS));
-    return { root: held.root, document: held.document };
+    return { root: held.root, document: held.document, ...(held.evaluatedUnder ? { evaluatedUnder: held.evaluatedUnder } : {}) };
   }
 
   /** Requests whose initiator is joined but whose bytes have not crossed yet. */
   private reportedInitiators: Array<
-    { key: string; root: InitiatorRoot; at: number; document?: string }
+    { key: string; root: InitiatorRoot; at: number; document?: string; evaluatedUnder?: ProxyCursor }
   > = [];
 
   /** One live socket's allowance queue, reachable from outside its closure. */
@@ -1500,6 +1533,7 @@ export class InterceptProxy {
         const evidence = (event.evidence ??= {});
         evidence.initiator = reported.root;
         if (reported.document) evidence.initiatedBy = reported.document;
+        if (reported.evaluatedUnder) evidence.evaluatedUnder = reported.evaluatedUnder;
       }
     }
     // A shape ruled background does not hold the boundary open: it arrives on

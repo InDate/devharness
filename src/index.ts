@@ -82,6 +82,7 @@ import { ToolError } from './tool-error.js';
 import type { ServerLog, ServerRow, ToolGroup, ToolValues } from './bench/wire.js';
 import { arriveOn, unlisted, historyPlace, entryChannel, asInnerCall, callOwner } from './call-origin.js';
 import { markNextCommand, releaseCommand, noteCallStart, nameNewestCall, newlyIdleProxies, attachEntryToCursor, getProxy } from './proxy/registry.js';
+import { creditingEvaluatesTo, evaluateCredit } from './proxy/evaluate-credit.js';
 import { noteLostConnection } from './lost-connections.js';
 import { describePersonInput, isPersonWatchTurnedOn, recordPersonInputInto, takeUnreadPersonInput, watchPersonInput } from './person-watch.js';
 import { activitySummary } from './activity-index.js';
@@ -564,9 +565,13 @@ async function executeToolCall(calledName: string, calledParams: Record<string, 
   // A recorded call's own tool calls are made on its behalf and stay out; a
   // run's steps list themselves (withinRun), so a run reads as its call and
   // then its steps.
+  const runStep = evaluateCredit();
+  const credit = index === null ? undefined
+    : place?.run ? (runStep?.kind === 'replay' ? { ...runStep, entry: index } : undefined)
+    : { kind: 'command' as const, index };
   const run = () => underDialogs(dialogTargetOf(validation.data), toolName, validation.data, abortSignal, signal => index === null
     ? tool.handler(validation.data, signal)
-    : unlisted(() => tool.handler(validation.data, signal)));
+    : creditingEvaluatesTo(credit, () => unlisted(() => tool.handler(validation.data, signal))));
   let result: any;
   try {
     result = await (cliEntry ? run() : asInnerCall(run));
@@ -908,7 +913,7 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
         ? sanitizeReference(params.connection) : undefined;
       if (launching !== undefined) launchingConnections.add(launching);
       const result = await arriveOn('mcp', () => underDialogs(dialogTargetOf(validation.data), toolName, validation.data, extra?.signal, signal => (commandIndex !== null
-        ? unlisted(() => tool.handler(validation.data, signal))
+        ? creditingEvaluatesTo({ kind: 'command', index: commandIndex }, () => unlisted(() => tool.handler(validation.data, signal)))
         : tool.handler(validation.data, signal))))
         .finally(() => { if (launching !== undefined) launchingConnections.delete(launching); });
 

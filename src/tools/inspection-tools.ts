@@ -11,6 +11,7 @@ import { createTool } from '../validation-helpers.js';
 import { createSuccessResponse, createErrorResponse, formatCodeBlock, responseWithOnce } from '../messages.js';
 import type { ToolResponseMeta } from '../tool-response.js';
 import { isAbortError, raceAbort, throwIfAborted } from '../utils/abort.js';
+import { evaluateScriptName } from '../proxy/evaluate-credit.js';
 import {
   getWorkerTargetRegistry,
   WorkerTargetRegistry,
@@ -469,12 +470,13 @@ export function createInspectionTools(
 
             try {
               throwIfAborted(abortSignal);
+              const scriptName = evaluateScriptName();
               // raceAbort = stop waiting on cancel; the evaluation itself
               // continues in the target (no way to recall it).
               const detailed = await raceAbort(
                 targetCdpManager.evaluateExpressionDetailed(
                   expression, callFrameId, expandObjects, maxDepth,
-                  { awaitPromise, captureRaw: true }
+                  { awaitPromise, captureRaw: true, ...(scriptName ? { scriptName } : {}) }
                 ),
                 abortSignal
               );

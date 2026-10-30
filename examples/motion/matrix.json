@@ -146,7 +146,9 @@
       },
       "slow": {
         "expect": "rate sets its playback rate",
-        "today": "unmeasured"
+        "today": "works",
+        "basis": "sequence:waapi-and-view-transition-slow",
+        "note": "A check fails the run unless the backup ring's animate() runs at 0.1 to 0.45 of wall time over 300ms on a catalog loaded after rate 0.25"
       }
     },
     "view-transition": {
@@ -161,7 +163,9 @@
       },
       "slow": {
         "expect": "rate sets its playback rate",
-        "today": "unmeasured"
+        "today": "works",
+        "basis": "sequence:waapi-and-view-transition-slow",
+        "note": "A check fails the run unless the tabs' ::view-transition-group(tab-pane) runs at 0.1 to 0.45 of wall time over 300ms at rate 0.25. The transition lasts about 1s of wall time at 0.25, so the check reads it in the same run as the press: calls made one by one land after it has ended"
       }
     },
     "scroll-timeline": {
@@ -192,7 +196,9 @@
       },
       "slow": {
         "expect": "rate scales the page clock",
-        "today": "unmeasured"
+        "today": "works",
+        "basis": "sequence:page-clock-slow",
+        "note": "A check fails the run unless the Details panel's requestAnimationFrame loop advances at 0.1 to 0.45 of wall time over 300ms at rate 0.25, its eased height read back to page milliseconds"
       }
     },
     "timer-text": {
@@ -208,7 +214,9 @@
       },
       "slow": {
         "expect": "rate scales the page clock",
-        "today": "unmeasured"
+        "today": "works",
+        "basis": "sequence:page-clock-slow",
+        "note": "A check fails the run unless the Count setInterval ticks at 0.1 to 0.45 of wall time over 400ms at rate 0.25"
       }
     },
     "scroll-listener": {
@@ -242,7 +250,9 @@
       },
       "slow": {
         "expect": "Slowed with the page",
-        "today": "unmeasured"
+        "today": "works",
+        "basis": "sequence:smil-and-smooth-scroll-slow",
+        "note": "Chrome runs a smooth scroll on its compositor, out of reach of page time and the CSS rate, so below a rate of 1 the page clock runs the page's smooth scrollTo, scrollBy and scrollIntoView itself on page time, with one scrollend at its end. A check fails the run unless the Jump back to the top at rate 0.25 takes 1/0.45 to 1/0.1 of the same distance's time at rate 1, ends at the top and raises one scrollend"
       }
     },
     "canvas": {
@@ -258,7 +268,9 @@
       },
       "slow": {
         "expect": "rate scales the page clock",
-        "today": "unmeasured"
+        "today": "works",
+        "basis": "sequence:page-clock-slow",
+        "note": "The sky moves each star a fixed step per frame and reads no time, so page time alone left it at full speed; below a rate of 1 the page clock runs the app's frame callbacks on that share of Chrome's frames. A check fails the run unless the sky's top-row star moves at 0.1 to 0.45 of its pace at rate 1"
       }
     },
     "webgl": {
@@ -274,7 +286,9 @@
       },
       "slow": {
         "expect": "rate scales the page clock",
-        "today": "unmeasured"
+        "today": "works",
+        "basis": "sequence:page-clock-slow",
+        "note": "A check fails the run unless the Spin's angle uniform, set from its frame timestamp, advances at 0.1 to 0.45 of wall time over 300ms at rate 0.25"
       }
     },
     "video": {
@@ -292,9 +306,9 @@
       },
       "slow": {
         "expect": "Its playbackRate follows rate",
-        "today": "gap",
-        "basis": "code",
-        "note": "rate sets Animation playback and the page clock only"
+        "today": "works",
+        "basis": "sequence:video-slows-with-page-rate",
+        "note": "On a catalog loaded after rate 0.25, the promo video plays with playbackRate 0.25 and a check fails the run unless it runs at 0.1 to 0.45 of wall time over 300ms; after rate 1 on the open page, the same check holds it to 0.6 to 1.4. The video loops every 3s, so each check reads currentTime modulo its duration. Without the rate the 0.25 check fails"
       }
     },
     "smil": {
@@ -312,9 +326,9 @@
       },
       "slow": {
         "expect": "Slowed with the document timeline's rate",
-        "today": "unmeasured",
-        "basis": "research:motion-time-control.md",
-        "note": "Read from Blink source, not run"
+        "today": "works",
+        "basis": "sequence:smil-and-smooth-scroll-slow",
+        "note": "A check fails the run unless the SVG document time runs at 0.1 to 0.45 of wall time over 300ms at rate 0.25"
       }
     },
     "lottie": {
@@ -330,7 +344,9 @@
       },
       "slow": {
         "expect": "rate scales the page clock",
-        "today": "unmeasured"
+        "today": "works",
+        "basis": "sequence:page-clock-slow",
+        "note": "A check fails the run unless the envelope's currentFrame advances at 0.1 to 0.45 of wall time over 300ms at rate 0.25"
       }
     },
     "gsap": {
@@ -347,7 +363,9 @@
       },
       "slow": {
         "expect": "rate scales the page clock",
-        "today": "unmeasured"
+        "today": "works",
+        "basis": "sequence:page-clock-slow",
+        "note": "A check fails the run unless the Plans timeline's time() advances at 0.1 to 0.45 of wall time over 300ms at rate 0.25"
       }
     }
   },
@@ -1677,7 +1695,9 @@
         },
         "slow": {
           "expect": "rate multiplies the app's 4× rather than replacing it",
-          "today": "unmeasured"
+          "today": "works",
+          "basis": "sequence:waapi-and-view-transition-slow",
+          "note": "At rate 0.25, once the app's Faster press brings the backup ring's playbackRate to 4, a check fails the run unless the ring runs at 0.6 to 1.4 of wall time: rate 0.25 times the app's 4, where a rate replacing it reads 0.25 and a rate ignored reads 4"
         },
         "crop": {
           "expect": "The backup controls row"

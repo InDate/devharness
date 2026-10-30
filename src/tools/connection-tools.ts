@@ -18,7 +18,7 @@ import type { LogpointExecutionTracker } from '../logpoint-execution-tracker.js'
 import type { PortReserver } from '../port-reserver.js';
 import type { ServerManager } from '../server-manager.js';
 import { detectAutoRestartCommand } from '../server-manager.js';
-import { ChromeLauncher, ChromeBinaryAbsentError, ChromeLaunchFailure, InvalidProfileNameError, ProfileInUseError, ProfileLockedError, normalizeProfileName, resolveLaunchPort, decideProfileReuse } from '../chrome-launcher.js';
+import { ChromeLauncher, ChromeBinaryAbsentError, ChromeLaunchFailure, PortSplitError, InvalidProfileNameError, ProfileInUseError, ProfileLockedError, normalizeProfileName, resolveLaunchPort, decideProfileReuse } from '../chrome-launcher.js';
 import { createTool } from '../validation-helpers.js';
 import { createSuccessResponse, createErrorResponse, responseWithOnce, withOnce, getMessage } from '../messages.js';
 import { configManager } from '../config.js';
@@ -92,6 +92,19 @@ function withLaunchMeta(response: any, name: string, reused: boolean, headless?:
     text.text += `\n\n${getMessage(headless ? 'BROWSER_HEADLESS' : 'BROWSER_WINDOWED', { subject: 'this browser' })}`;
   }
   return response;
+}
+
+/** Milliseconds until Chrome on `port` lists a page target, read every 25ms up to `capMs`. */
+async function pageTargetListed(port: number, capMs: number): Promise<number> {
+  const start = Date.now();
+  while (Date.now() - start < capMs) {
+    try {
+      const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(capMs) })).json() as Array<{ type: string }>;
+      if (targets.some(target => target.type === 'page')) break;
+    } catch { /* not answering yet: read again */ }
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  return Date.now() - start;
 }
 
 /**
@@ -203,7 +216,37 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
     };
   }
 
+  /*
+   * Ports picked by launches that have not yet bound them. The free-port search
+   * binds and closes, so a launch waiting on the desktop leaves its port
+   * bindable, and a second launch picking it opens a tab in the first one's
+   * Chrome: two connections sharing one profile.
+   */
+  const launchingPorts = new Set<number>();
+
+  /** The next free port from `start` no launch in flight holds, held for the launch in `held`. */
+  const claimFreePort = async (start: number, held: number[]): Promise<number> => {
+    for (let from = start; ; ) {
+      const port = await findAvailablePort(from);
+      if (!launchingPorts.has(port)) {
+        launchingPorts.add(port);
+        held.push(port);
+        return port;
+      }
+      from = port + 1;
+    }
+  };
+
   const launch = async (args: ConnectionArgs): Promise<any> => {
+    const held: number[] = [];
+    try {
+      return await launchHolding(args, held);
+    } finally {
+      for (const port of held) launchingPorts.delete(port);
+    }
+  };
+
+  const launchHolding = async (args: ConnectionArgs, held: number[]): Promise<any> => {
       // Validate the name FIRST, before launching Chrome
       const requested = args.connection;
       if (requested) {
@@ -292,10 +335,11 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
         forceNewInstance: args.forceNewInstance,
         reservedPort: configManager.getCurrentPort(),
         isPortOccupied: async (candidate) =>
+          launchingPorts.has(candidate) ||
           connectionManager.hasBrowser('localhost', candidate) ||
           chromeLauncher.isRunning(candidate) ||
           await isPortHeldByOther(candidate),
-        findFreePort: () => findAvailablePort(configManager.getChromeConfig().startingDebugPort),
+        findFreePort: () => claimFreePort(configManager.getChromeConfig().startingDebugPort, held),
       });
       if (decision.decision === 'forced-port-in-use') {
         await debugLog('index', `launch: forceNewInstance requested port ${decision.port} but it is already in use`);
@@ -324,7 +368,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
             wanted: words(wantHeadless), running: words(runningHeadless), runningHeadless: String(runningHeadless),
           });
         }
-        port = await findAvailablePort(configManager.getChromeConfig().startingDebugPort);
+        port = await claimFreePort(configManager.getChromeConfig().startingDebugPort, held);
       }
       await debugLog('index', `launch called: port=${port}, requested=${args.port}, reserved=${configManager.getCurrentPort()}, profileHolder=${profileHolderPort ?? 'none'}, forceNewInstance=${args.forceNewInstance}, url=${args.url}, autoConnect=${args.autoConnect}, connection=${args.connection}`);
       const url = args.url;
@@ -419,7 +463,16 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
           const proxyArgs = args.proxy
             ? (await startProxyFor(proxyKey, url)).chromeArgs
             : [];
-          const result = await chromeLauncher.launch(port, launchUrl, portReserver, args.headless ?? false, [...proxyArgs, ...(args.chromeArgs ?? [])], profileName, requested ? proxyKey : undefined);
+          const launchOn = (onPort: number) => chromeLauncher.launch(onPort, launchUrl, portReserver, args.headless ?? false, [...proxyArgs, ...(args.chromeArgs ?? [])], profileName, requested ? proxyKey : undefined);
+          // A port split leaves 127.0.0.1:<port> to its other holder, so the
+          // retry takes the next free port. An unnamed proxied launch keys its
+          // proxy by port, and a new port would leave that key on the old one.
+          const result = await launchOn(port).catch(async (error) => {
+            if (!(error instanceof PortSplitError) || args.port !== undefined || (!requested && args.proxy)) throw error;
+            await debugLog('index', `${error.message} Relaunching on a fresh port.`);
+            port = await claimFreePort(port + 1, held);
+            return launchOn(port);
+          });
           await debugLog('index', `Chrome launched successfully: ${JSON.stringify(result)}`);
           isNewBrowser = true;
         }
@@ -436,11 +489,11 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
 
         if (autoConnect) {
           try {
-            // Chrome is already ready (launch() waits for port binding)
-            // Add small delay for new browser to ensure full initialization
+            // The debugger connects to the first page target, and a Chrome that
+            // answers /json/version can still be creating its first page.
             if (isNewBrowser) {
-              await debugLog('index', `Waiting 500ms for new Chrome browser to stabilize...`);
-              await new Promise(resolve => setTimeout(resolve, 500));
+              const waited = await pageTargetListed(port, 500);
+              await debugLog('index', `First page target on ${port} after ${waited}ms`);
             }
 
             // Create connection managers for this tab

@@ -110,6 +110,11 @@ export class ProfileLockedError extends Error {
 /** Bytes of Chrome's stderr retained for a launch that failed. */
 export const STDERR_TAIL_BYTES = 4096;
 
+/** Readiness probes 100ms apart before the interval widens to 1s. */
+const READY_FAST_PROBES = 20;
+/** Readiness probes in all: 20 at 100ms, then 25 at 1s. */
+const READY_PROBES = 45;
+
 /**
  * What was observed while a launch ran. Every field is a reading taken during
  * the launch; none of them names a cause or a remedy, because the session that
@@ -155,6 +160,19 @@ export class ChromeLaunchFailure extends Error {
   constructor(message: string, public readonly observations: LaunchObservations) {
     super(message);
     this.name = 'ChromeLaunchFailure';
+  }
+}
+
+/**
+ * Thrown when Chrome bound its debugging port on [::1] alone. Chrome falls
+ * back to IPv6 when 127.0.0.1:<port> is held at spawn, and the debugger client
+ * resolves localhost to 127.0.0.1 alone, so a connect to that Chrome is
+ * refused while a free-port search binding 127.0.0.1 returns the same port.
+ */
+export class PortSplitError extends Error {
+  constructor(public readonly port: number) {
+    super(`Chrome bound port ${port} on [::1] alone: 127.0.0.1:${port} was held by another process at spawn.`);
+    this.name = 'PortSplitError';
   }
 }
 
@@ -472,6 +490,15 @@ export class ChromeLauncher {
     });
   }
 
+  private async answersOnIpv6(port: number): Promise<boolean> {
+    try {
+      const response = await fetch(`http://[::1]:${port}/json/version`, { signal: AbortSignal.timeout(500) });
+      return response.ok && (await response.text()).includes('"Browser"');
+    } catch {
+      return false;
+    }
+  }
+
   /**
    * Wait for Chrome debugging port to become ready
    * Polls the /json/version endpoint until Chrome is inspectable
@@ -481,7 +508,7 @@ export class ChromeLauncher {
    */
   private async waitForChromeReady(
     port: number,
-    maxAttempts: number = 15,
+    maxAttempts: number = READY_PROBES,
     probeFailures: string[] = [],
     hasExited: () => boolean = () => false
   ): Promise<void> {
@@ -494,8 +521,9 @@ export class ChromeLauncher {
 
       let failure: string;
       try {
-        // Use a race between fetch and timeout
-        const fetchPromise = fetch(`http://localhost:${port}/json/version`);
+        // 127.0.0.1, the address the debugger client resolves localhost to:
+        // fetch tries [::1] as well and would pass a Chrome the client cannot reach.
+        const fetchPromise = fetch(`http://127.0.0.1:${port}/json/version`);
         const timeoutPromise = new Promise((_, reject) =>
           setTimeout(() => reject(new Error('timeout')), 1000)
         );
@@ -524,6 +552,8 @@ export class ChromeLauncher {
 
         failure = `${error}`;
 
+        if (await this.answersOnIpv6(port)) throw new PortSplitError(port);
+
         // Chrome not ready yet, continue polling
         // Only log every 5 attempts to reduce noise
         if (i % 5 === 0) {
@@ -533,8 +563,9 @@ export class ChromeLauncher {
 
       probeFailures.push(failure);
 
-      // Linear backoff: 500ms + (attempt * 200ms)
-      await new Promise(resolve => setTimeout(resolve, 500 + i * 200));
+      // Chrome binds within 0.5-1.5s of spawn, read at 100ms grain; a Chrome
+      // slower than 2s is polled once a second for the rest of the ~27s budget.
+      await new Promise(resolve => setTimeout(resolve, i < READY_FAST_PROBES ? 100 : 1000));
     }
 
     throw new Error(`Chrome debugging port ${port} did not become inspectable in ${maxAttempts} probes.`);
@@ -860,7 +891,7 @@ export class ChromeLauncher {
         elapsedMs: Date.now() - spawnedAt,
       });
       try {
-        await this.waitForChromeReady(port, 15, probeFailures, () => processExited);
+        await this.waitForChromeReady(port, READY_PROBES, probeFailures, () => processExited);
       } catch (waitError) {
         await debugLog('ChromeLauncher', `waitForChromeReady failed: ${waitError}`);
 
@@ -901,6 +932,7 @@ export class ChromeLauncher {
         if (waitError instanceof Error && waitError.message.includes('reserved by another MCP instance')) {
           throw waitError;
         }
+        if (waitError instanceof PortSplitError) throw waitError;
         throw new ChromeLaunchFailure(`${waitError}`, takeObservations(observedExitCode, observedExitSignal));
       }
 
@@ -951,7 +983,7 @@ export class ChromeLauncher {
 
       // A typed failure carries the readings taken during the launch; wrapping
       // it in a new Error would discard both the type and the readings.
-      if (error instanceof ChromeLaunchFailure) {
+      if (error instanceof ChromeLaunchFailure || error instanceof PortSplitError) {
         throw error;
       }
 

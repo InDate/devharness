@@ -251,6 +251,11 @@ runs against (see Quick Start).
 - `status`: one connection's debugger - connected, runtime, paused, breakpoint counts, source maps. `browsers`: the Chrome processes this session launched, with their recent exits and why
 - `browser resetLauncher` kills nothing: it forgets the Chromes this session tracks, after one closed outside devharness, and leaves their profile directories for the next startup sweep
 
+**Group**: `group` (actions: create, list, close)
+- A group is a named set of connections, so a sequence driving several browsers reads them in one call. `create` makes an empty group; `connection launch` with `group` adds a browser to it, and `connection list` reports each browser's group
+- `list` gives each group's members and which still hold a live connection. `close` closes every member and ends the group
+- `replay history`, `proxy events`, `network list` and `console list` take `group`: alone it returns one headline line per browser and a line for traffic one browser's call caused on another; with `connection`, `failed` or a search it returns merged rows tagged by browser. A repeat read lists only what is new since the last one
+
 **Breakpoint**: `breakpoint` (actions: set, remove, list, setLogpoint, validate, resetCounter, waitForScript, setDOMBreakpoint, setEventBreakpoint, setXHRBreakpoint, await)
 - `waitForScript`: block until a script URL loads, so you can breakpoint code that isn't parsed yet
 - `await`: wait for a breakpoint to be hit rather than polling

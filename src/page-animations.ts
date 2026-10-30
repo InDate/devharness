@@ -89,11 +89,19 @@ function installPageAnimations(g: any): void {
     return id;
   };
 
-  const elementName = (target: any): string | undefined => {
-    if (!target || typeof target.tagName !== 'string') return undefined;
+  const ownName = (target: any): string => {
     if (target.id) return `#${target.id}`;
     const classes = typeof target.className === 'string' ? target.className.trim().split(/\s+/).filter(Boolean).slice(0, 2) : [];
     return target.tagName.toLowerCase() + classes.map((one: string) => `.${one}`).join('');
+  };
+  // An element inside a shadow root is named through its host, and the
+  // host's host outward: the Drafts chip's ping read as span.ping alone,
+  // which names no element a reader can find in the document.
+  const elementName = (target: any): string | undefined => {
+    if (!target || typeof target.tagName !== 'string') return undefined;
+    const names = [ownName(target)];
+    for (let host = target.getRootNode?.()?.host; host && typeof host.tagName === 'string'; host = host.getRootNode?.()?.host) names.unshift(ownName(host));
+    return names.join(' › ');
   };
 
   // A transition's keyframes hold its start and end values, keyed by the property in camel case.

@@ -711,6 +711,17 @@ function installPageTrigger(g: any): void {
       }
     };
     const observer = new g.MutationObserver(recordChanges);
+    // A change inside a shadow root never reaches an observer of the document,
+    // so the Drafts chip's ping read from page load with no root (key 5).
+    // Each shadow root the page attaches is observed as it is made.
+    const attachShadow = g.Element?.prototype?.attachShadow;
+    if (typeof attachShadow === 'function') {
+      g.Element.prototype.attachShadow = function (this: any, ...args: unknown[]) {
+        const root = attachShadow.apply(this, args);
+        try { observer.observe(root, { subtree: true, attributes: true, childList: true }); } catch { /* a root the observer refuses */ }
+        return root;
+      };
+    }
     // The observer's own callback waits for the microtask checkpoint, which a
     // held page's frame step reaches only after running every frame callback
     // it held: the toast's fade-in, set in its second frame callback, read as
@@ -737,19 +748,31 @@ function installPageTrigger(g: any): void {
     return { words: current(), root: liveRoot() };
   };
   /**
-   * What set an element going as of `at`: the newest change on it or an
-   * ancestor made by then, else the live mark where it already stood then,
-   * else the page load where the page was still loading then.
+   * What started a CSS transition or keyframe animation created at `at`. A
+   * CSS animation starts only on a change to its element or an ancestor, an
+   * insertion included, or on a hover; with neither, its rules came with the
+   * page, and a press made straight after the load and before the first
+   * style recalc took the hero title's rise (load-rise-stays-with-load). So:
+   * the newest change made by then, else a hover where the start is read at
+   * its own moment, else the page load while the page was loading then, else
+   * a mark live then.
    */
-  const causeAsOf = (target: any, at: number): { words?: string; root?: Root } => {
+  const causeOfCssStart = (target: any, at: number, readNow: boolean): { words?: string; root?: Root } => {
     let newest: Change | undefined;
     for (let node = target; node; node = node.parentNode ?? node.host) {
       const change = changed.get(node);
       if (change && change.at <= at && at - change.at <= CHANGE_MS && (!newest || change.at > newest.at)) newest = change;
     }
     if (newest) return newest;
-    if (last && last.live && last.at <= at) return { words: current(), root: liveRoot() };
-    if (loadedAt === undefined || at <= loadedAt + LOAD_TAIL_MS) return { words: 'page load' };
+    if (readNow) {
+      try { if (target && target.matches && target.matches(':hover')) return { words: lastHover?.words ?? 'hover', root: lastHover?.root }; } catch { /* a node with no matches */ }
+      for (let node = target; node; node = node.parentNode ?? node.host) {
+        const left = unhovered.get(node);
+        if (left) return left;
+      }
+    }
+    if (g.document.readyState !== 'complete' || loadedAt === undefined || at <= loadedAt + LOAD_TAIL_MS) return { words: 'page load' };
+    if (readNow || (last && last.live && last.at <= at)) return { words: current(), root: liveRoot() };
     return {};
   };
   const pageRate = (): number => {
@@ -781,7 +804,13 @@ function installPageTrigger(g: any): void {
       const name = event.propertyName || event.animationName;
       const object = startedObject(event.target, name, event.pseudoElement);
       const delay = type === 'animationstart' ? Number(object && (object as any).effect?.getTiming?.().delay) || 0 : 0;
-      const cause = delay > 0 ? causeAsOf(event.target, now() - delay / pageRate()) : causeOfElement(event.target);
+      // The event can land frames after the delay ran out, as a page's first
+      // frames after a load do, so the time since creation is read from the
+      // animation's own start on the document timeline where it has one.
+      const startTime = object ? (object as any).startTime : null;
+      const timelineNow = g.document?.timeline?.currentTime;
+      const sinceCreated = typeof startTime === 'number' && typeof timelineNow === 'number' ? Math.max(delay, timelineNow - startTime) : delay;
+      const cause = causeOfCssStart(event.target, delay > 0 ? now() - sinceCreated / pageRate() : now(), delay <= 0);
       if (!cause.words) return;
       const named = started.get(event.target) ?? new Map<string, { words: string; root?: Root }>();
       if (named.get(name)?.root) release(named.get(name)!.root);
@@ -802,6 +831,10 @@ function installPageTrigger(g: any): void {
     // An element that lists no animations of its own keeps the cause by name.
     const byName = typeof target.getAnimations !== 'function' && name ? started.get(target)?.get(name) : undefined;
     if (byName) return { words: byName.words, root: byName.root ?? causeOfElement(target).root };
+    // Read before its run event - Chrome reports it created at the style
+    // recalc - a CSS animation's cause is ordered as its run event's is, so a
+    // press made straight after the load does not take the page's own rise.
+    if (name !== undefined) return causeOfCssStart(target, now(), true);
     return causeOfElement(target);
   };
   // A transition or keyframe animation ending or cancelled releases its root once.

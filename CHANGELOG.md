@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Motion inside a shadow root is named through its host and credited to
+  its input.** A row named an element in a shadow root by itself, such as
+  `span.ping`, which no reader can find in the document, and the tracker
+  watched the document alone, so a change inside the root carried no cause.
+  The row now reads `#chip › span.ping`, and each shadow root the page
+  attaches is watched.
+- **A page's own CSS animation stays with the page load.** A CSS animation
+  on an element no change touched was credited to whatever input was live
+  when it was read, so a press made straight after a load took the hero
+  title's rise. Its cause is now read in order: a change to the element,
+  a hover, the page load while the page loads, then a live input.
 - **A delayed keyframe animation is credited to the cause that created it.**
   Its `animationstart` waits out the delay, so the hero title's page-load
   rise, 100ms in, went to a press made inside those 100ms. An animation with

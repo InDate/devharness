@@ -26,14 +26,20 @@ function pageWithTracker() {
   const observers: Array<(records: any[]) => void> = [];
   // Records a change queued and no microtask has delivered yet, which takeRecords() hands over.
   const pendingRecords: any[] = [];
+  // What each observer was asked to watch.
+  const observed: object[] = [];
   class MutationObserver {
     constructor(callback: (records: any[]) => void) { observers.push(callback); }
-    observe() {}
+    observe(target: object) { observed.push(target); }
     takeRecords() { return pendingRecords.splice(0); }
+  }
+  class Element {
+    attachShadow() { return { kind: 'shadow-root' }; }
   }
   const page: any = new EventTarget();
   Object.assign(page, {
     EventTarget,
+    Element,
     Document,
     MutationObserver,
     document: { readyState: 'complete', documentElement: {}, addEventListener: () => {} },
@@ -60,7 +66,7 @@ function pageWithTracker() {
   page.queueChange = (target: object) => { pendingRecords.push({ type: 'attributes', attributeName: 'style', target }); };
   /** Deliver the queued changes to the page's observers, as the microtask checkpoint does. */
   const deliver = () => { const records = pendingRecords.splice(0); if (records.length) for (const callback of observers) callback(records); };
-  return { page, fire, turn, reports, tasks, transitions, clock, mutate, deliver };
+  return { page, fire, turn, reports, tasks, transitions, clock, mutate, deliver, observed };
 }
 
 describe('the work outstanding under an input\'s root', () => {
@@ -189,6 +195,42 @@ describe('the work outstanding under an input\'s root', () => {
     clock.ms = 2100;
     fire('animationstart', { target: card, animationName: 'rise', pseudoElement: '' });
     expect(tracker.rootOfAnimation(pop)?.id).toBe(keyRoot);
+  });
+
+  it("reads a delayed animation's creation from its start on the document timeline, when its animationstart lands late", () => {
+    const { page, fire, clock } = pageWithTracker();
+    const tracker = vm.runInContext("globalThis[Symbol.for('devharness.trigger')]", page);
+    const title: any = { matches: () => false };
+    const rise = { animationName: 'rise', startTime: 10, effect: { target: title, pseudoElement: null, getTiming: () => ({ delay: 100 }) } };
+    title.getAnimations = () => [rise];
+    fire('load', {});
+    clock.ms = 600;
+    fire('keydown', { key: '5' });
+    clock.ms = 900;
+    page.document.timeline = { currentTime: 900 };
+    fire('animationstart', { target: title, animationName: 'rise', pseudoElement: '' });
+
+    expect(tracker.rootOfAnimation(rise)).toBeUndefined();
+  });
+
+  it("reads a CSS animation on an element no change touched, read before its run event, as the page load's while the page loads", () => {
+    const { page, fire, clock } = pageWithTracker();
+    const tracker = vm.runInContext("globalThis[Symbol.for('devharness.trigger')]", page);
+    const title = { matches: () => false };
+    fire('load', {});
+    clock.ms = 20;
+    fire('keydown', { key: '5' });
+
+    const rise = { animationName: 'rise', effect: { target: title } };
+    expect(tracker.rootOfAnimation(rise)).toBeUndefined();
+    expect(tracker.ofAnimation(rise)).toBe('page load');
+  });
+
+  it('watches each shadow root the page attaches for the changes made in it', () => {
+    const { page, observed } = pageWithTracker();
+    const root = vm.runInContext('new Element().attachShadow({ mode: "open" })', page);
+
+    expect(observed).toContain(root);
   });
 
   it('credits the transition of an element the page scrolled from under the pointer to that scroll', () => {

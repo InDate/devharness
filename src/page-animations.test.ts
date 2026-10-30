@@ -81,6 +81,15 @@ describe('the page\'s own animation list', () => {
     expect(animations.sweep().created).toEqual([expect.objectContaining({ name: 'spin', type: 'CSSAnimation', element: 'span.dot' })]);
   });
 
+  it('names an element inside a shadow root through its host', () => {
+    const { animations, shadowList } = pageWithAnimations();
+    const chip = { ...element('mail-chip', { id: 'chip' }), getRootNode: () => ({}) };
+    const pill = { ...element('span', { className: 'ping' }), getRootNode: () => ({ host: chip }) };
+    shadowList.push(fakeAnimation({ animationName: 'ping', target: pill }));
+
+    expect(animations.sweep().created).toEqual([expect.objectContaining({ name: 'ping', element: '#chip › span.ping' })]);
+  });
+
   it('reports an animation gone from the list, finished or cancelled', () => {
     const { animations, documentList } = pageWithAnimations();
     const done = fakeAnimation({ transitionProperty: 'opacity' });

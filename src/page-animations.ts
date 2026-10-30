@@ -36,6 +36,8 @@ export interface PageAnimation {
   from?: string;
   to?: string;
   frames?: number;
+  /** A motion with no Animation object: how long it ran on wall time, ms, where `duration` is page time and a slower rate stretches the one past the other. */
+  wallDuration?: number;
   /** What set it going, as the page's trigger tracker read it. */
   trigger?: string;
   /** Who made it - CSS, JS, SVG, MEDIA, ME, HARNESS, BROWSER - with the page's ref to what made it and that thing's name. */

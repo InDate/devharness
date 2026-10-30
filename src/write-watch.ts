@@ -62,6 +62,8 @@ export interface PageWrite {
 export interface WriteMotion {
   type: PageAnimation['type'];
   durationMs: number;
+  /** A frame-measured motion's length on wall time, ms, which a slower rate stretches past `durationMs`. */
+  wallMs?: number;
   frames?: number;
   from?: string;
   to?: string;
@@ -785,6 +787,7 @@ function fileOf(url: string): string {
 export function motionOf(read: PageAnimation): WriteMotion {
   return {
     type: read.type, durationMs: Math.round(read.duration),
+    ...(read.wallDuration !== undefined ? { wallMs: Math.round(read.wallDuration) } : {}),
     ...(read.frames !== undefined ? { frames: read.frames } : {}),
     ...(read.from !== undefined ? { from: read.from } : {}),
     ...(read.to !== undefined ? { to: read.to } : {}),

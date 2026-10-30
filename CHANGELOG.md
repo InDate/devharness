@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A slowed motion's row ends where the motion did, with its frames.** The
+  page's motion watch stamped each run in page time, which devharness placed
+  on wall time, so at a rate of 0.25 a run's end landed early by its wall
+  length less its page length, and Chrome's frames, 4ms of page time apart,
+  merged into one frame each. A run is now stamped and its frames spaced on
+  wall time, and its row still shows its length in page time.
 - **A slower `hold rate` slows frame-stepped motion and smooth scrolls.** The
   page clock slowed page time, while Chrome still handed the app a frame
   callback on every frame, so a canvas that moves a fixed step per frame ran

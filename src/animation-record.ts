@@ -148,21 +148,23 @@ export class AnimationRecord {
    * step, and no animation to seek or pause. Its open report adds it, credited
    * to the step in effect when it began, so that step reads it while it is
    * still moving; its close report fills in how it ran and ends it. Each is
-   * placed on wall time from the page time its report carries. A close whose
+   * placed on wall time from the native time its report carries. A close whose
    * open never arrived - motion detection turned on part-way through - adds it
-   * already ended.
+   * already ended. Its length shows page time, which a slower rate or a hold
+   * holds short of the wall time it took.
    */
   takeMotion(report: MotionReport, arrivedAt: number): void {
     const key = `motion:${report.doc}:${report.id}`;
     const startedAt = arrivedAt - Math.max(0, report.sentMs - report.startMs);
-    const ran = Math.max(0, Math.round(report.endMs - report.startMs));
+    const ran = Math.max(0, Math.round(report.pageEndMs - report.pageStartMs));
+    const wallRan = Math.max(0, Math.round(report.endMs - report.startMs));
     const closing = report.phase === 'close';
     const read: PageAnimation = {
       id: report.id, doc: 'motion', name: report.property, type: MOTION_TYPES[report.source],
       ...(report.element ? { element: report.element } : {}),
       duration: ran, delay: 0, easing: '', looping: false,
       playState: closing ? 'finished' : 'running', currentTime: ran,
-      from: report.from, to: report.to, frames: report.frames,
+      from: report.from, to: report.to, frames: report.frames, wallDuration: wallRan,
       ...(report.trigger ? { trigger: report.trigger } : {}),
       ...(report.maker ? { maker: report.maker } : {}),
       ...(report.makerRef !== undefined ? { makerRef: report.makerRef } : {}),

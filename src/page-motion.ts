@@ -39,12 +39,15 @@ export interface MotionReport {
   property: string;
   from: string;
   to: string;
-  /** Page time the motion opened and last changed, ms. */
+  /** Wall time the motion opened and last changed, ms on the page's native performance timeline. */
   startMs: number;
   endMs: number;
+  /** Page time at the same two moments: the length a row shows, which a slower rate or a hold keeps short of the wall time. */
+  pageStartMs: number;
+  pageEndMs: number;
   /** Frames it changed in. */
   frames: number;
-  /** Page time the report was sent, ms: devharness places the motion on wall time from it. */
+  /** Wall time the report was sent, ms: devharness places the motion on its own clock from it. */
   sentMs: number;
   /** What set it going, as the page's trigger tracker read it when it opened. */
   trigger?: string;
@@ -77,14 +80,18 @@ function installPageMotion(g: any): void {
   if (typeof g.document === 'undefined' || g[Symbol.for('devharness.motion')]) return;
 
   const QUIET_MS = 120;
-  // Changes closer than this fall in one frame.
+  // Changes closer than this fall in one frame, on wall time, since frames
+  // arrive on it: a page clock at 0.25 stood Chrome's frames 4ms of page time
+  // apart and counted a 230-frame scroll as 9 (30 Oct).
   const FRAME_GAP_MS = 8;
   const SVG_ATTRIBUTES = ['transform', 'd', 'opacity', 'x', 'y', 'cx', 'cy', 'r', 'width', 'height', 'points', 'fill', 'stroke', 'stroke-dashoffset', 'viewBox'];
 
   const timers = g[Symbol.for('devharness.clock')]?.native ?? { setTimeout: g.setTimeout.bind(g), clearTimeout: g.clearTimeout.bind(g) };
   const frame: ((run: () => void) => unknown) | undefined = g[Symbol.for('devharness.clock')]?.native?.requestAnimationFrame
     ?? (typeof g.requestAnimationFrame === 'function' ? g.requestAnimationFrame.bind(g) : undefined);
-  const now = (): number => g.performance.now();
+  const clock = g[Symbol.for('devharness.clock')];
+  const now: () => number = clock?.native?.perfNow ?? g.performance.now.bind(g.performance);
+  const pageNow = (): number => g.performance.now();
   const nameOf = (element: any): string => {
     const named = g[Symbol.for('devharness.animations')]?.name?.(element);
     if (named) return named;
@@ -92,7 +99,7 @@ function installPageMotion(g: any): void {
   };
 
   let on = false;
-  interface Run { id: number; source: string; element: string; property: string; from: string; to: string; startMs: number; endMs: number; frames: number; trigger?: string; maker?: string; makerRef?: number; makerName?: string; makerAt?: { url: string; line: number }; stoppedBy?: MotionStop; root?: { id: string; step?: string }; rootFrom?: 'property' }
+  interface Run { id: number; source: string; element: string; property: string; from: string; to: string; startMs: number; endMs: number; pageStartMs: number; pageEndMs: number; frames: number; trigger?: string; maker?: string; makerRef?: number; makerName?: string; makerAt?: { url: string; line: number }; stoppedBy?: MotionStop; root?: { id: string; step?: string }; rootFrom?: 'property' }
   // Numbers each motion in this document; the document's own id names which.
   let nextRun = 1;
   const doc = Math.random().toString(36).slice(2, 10);
@@ -122,9 +129,9 @@ function installPageMotion(g: any): void {
   };
   const closeQuiet = (all = false) => {
     sweepTimer = undefined;
-    const t = now();
+    const pageT = pageNow();
     for (const [key, run] of runs) {
-      if (all || t - run.endMs >= QUIET_MS) { runs.delete(key); closeRun(run); }
+      if (all || pageT - run.pageEndMs >= QUIET_MS) { runs.delete(key); closeRun(run); }
     }
     if (runs.size && !all) sweepTimer = timers.setTimeout(() => closeQuiet(), QUIET_MS);
   };
@@ -141,20 +148,22 @@ function installPageMotion(g: any): void {
   const note = (source: string, element: any, property: string, from: string, to: string) => {
     if (!on) return;
     const t = now();
+    const pageT = pageNow();
     const name = nameOf(element);
     const key = `${source}|${name}|${property}`;
     const run = runs.get(key);
     // A run whose frames start arriving under another input's root - a
     // scroll call taking over a wheel's scroll - splits there, each part
     // under its own cause, and the new part's from-value is where it was.
-    const taken = run && t - run.endMs < QUIET_MS ? (source === 'scroll' ? tracker()?.rootOfScroll?.() : tracker()?.rootNow?.()) : undefined;
+    const taken = run && pageT - run.pageEndMs < QUIET_MS ? (source === 'scroll' ? tracker()?.rootOfScroll?.() : tracker()?.rootNow?.()) : undefined;
     // Inputs of one step - the wheel ticks of one scroll step - carry one run.
     const split = run !== undefined && taken !== undefined && newerRoot(taken.id, run.root?.id) && (taken.step === undefined || taken.step !== run.root?.step);
     if (split) from = run!.to;
-    if (run && t - run.endMs < QUIET_MS && !split) {
+    if (run && pageT - run.pageEndMs < QUIET_MS && !split) {
       if (t - run.endMs >= FRAME_GAP_MS) run.frames++;
       run.to = to;
       run.endMs = t;
+      run.pageEndMs = pageT;
     } else {
       if (run) { runs.delete(key); closeRun(run); }
       const trigger = triggerOf(source);
@@ -168,7 +177,7 @@ function installPageMotion(g: any): void {
       const inherited = live || source === 'scroll' || (trigger !== undefined && trigger !== 'frame loop') ? undefined : rootedWrites.get(key);
       const root = live ?? inherited;
       if (root && source !== 'scroll') rootedWrites.set(key, root);
-      const opened: Run = { id: nextRun++, source, element: name, property, from, to, startMs: t, endMs: t, frames: 1, ...(trigger ? { trigger } : {}), ...maker, ...(root ? { root } : {}), ...(inherited ? { rootFrom: 'property' as const } : {}) };
+      const opened: Run = { id: nextRun++, source, element: name, property, from, to, startMs: t, endMs: t, pageStartMs: pageT, pageEndMs: pageT, frames: 1, ...(trigger ? { trigger } : {}), ...maker, ...(root ? { root } : {}), ...(inherited ? { rootFrom: 'property' as const } : {}) };
       runs.set(key, opened);
       const callback = tracker()?.runningCallback?.();
       if (callback) drawnBy.set(opened, callback);
@@ -194,6 +203,7 @@ function installPageMotion(g: any): void {
     const diff = [...after.filter(one => !before.includes(one)).map(one => `+${one}`), ...before.filter(one => !after.includes(one)).map(one => `-${one}`)];
     if (diff.length === 0) return;
     const t = now();
+    const pageT = pageNow();
     const trigger = tracker()?.current?.();
     const root = tracker()?.rootNow?.();
     const maker = tracker()?.runningMaker?.() ?? {};
@@ -201,7 +211,7 @@ function installPageMotion(g: any): void {
     const judge = () => {
       const animated = runEvents.some(one => one.at >= t && (one.target === element || element.contains?.(one.target)));
       if (on && !animated) {
-        const run: Run = { id: nextRun++, source: 'class', element: nameOf(element), property: 'class', from: before.join(' '), to: diff.join(' '), startMs: t, endMs: t, frames: 1, ...(trigger ? { trigger } : {}), ...maker, ...(root ? { root } : {}) };
+        const run: Run = { id: nextRun++, source: 'class', element: nameOf(element), property: 'class', from: before.join(' '), to: diff.join(' '), startMs: t, endMs: t, pageStartMs: pageT, pageEndMs: pageT, frames: 1, ...(trigger ? { trigger } : {}), ...maker, ...(root ? { root } : {}) };
         report(run, 'open');
         report(run, 'close');
       }
@@ -273,7 +283,7 @@ function installPageMotion(g: any): void {
       const at = Number(element.currentTime).toFixed(3);
       const trigger = tracker()?.ofCall?.(['play'], tracker()?.current?.() ?? 'autoplay');
       const root = tracker()?.rootOfCall?.(['play']);
-      const opened: Run = { id: nextRun++, source: 'media', element: nameOf(element), property: 'currentTime', from: at, to: at, startMs: now(), endMs: now(), frames: 0, ...(trigger ? { trigger } : {}), ...(tracker()?.mediaMaker?.(element) ?? {}), ...(root ? { root } : {}) };
+      const opened: Run = { id: nextRun++, source: 'media', element: nameOf(element), property: 'currentTime', from: at, to: at, startMs: now(), endMs: now(), pageStartMs: pageNow(), pageEndMs: pageNow(), frames: 0, ...(trigger ? { trigger } : {}), ...(tracker()?.mediaMaker?.(element) ?? {}), ...(root ? { root } : {}) };
       playing.set(element, opened);
       report(opened, 'open');
       return;
@@ -285,7 +295,7 @@ function installPageMotion(g: any): void {
     const stoppedBy: MotionStop = element.ended
       ? { ...(tracker()?.maker?.('MEDIA', element) ?? { maker: 'MEDIA' }), trigger: 'ended' }
       : { ...(tracker()?.mediaMaker?.(element, 'pause') ?? { maker: 'MEDIA' }), trigger: tracker()?.ofCall?.(['pause'], 'paused') ?? 'paused', ...withRoot(tracker()?.rootOfCall?.(['pause'])) };
-    report({ ...started, to: Number(element.currentTime).toFixed(3), endMs: now(), stoppedBy }, 'close');
+    report({ ...started, to: Number(element.currentTime).toFixed(3), endMs: now(), pageEndMs: pageNow(), stoppedBy }, 'close');
   };
   // One SMIL run is one motion from its begin event to its end event, however
   // long it runs: its frames change the animated value, which no record shows.
@@ -300,7 +310,7 @@ function installPageMotion(g: any): void {
       const target = animate.targetElement ?? animate.parentElement;
       const trigger = tracker()?.ofCall?.(['beginElement', 'beginElementAt'], declared);
       const root = tracker()?.rootOfCall?.(['beginElement', 'beginElementAt']);
-      const opened: Run = { id: nextRun++, source: 'smil', element: nameOf(target), property: animate.getAttribute?.('attributeName') ?? 'smil', from: animate.getAttribute?.('from') ?? '', to: animate.getAttribute?.('to') ?? '', startMs: now(), endMs: now(), frames: 0, ...(trigger ? { trigger } : {}), ...svgMaker(animate), ...(root ? { root } : {}) };
+      const opened: Run = { id: nextRun++, source: 'smil', element: nameOf(target), property: animate.getAttribute?.('attributeName') ?? 'smil', from: animate.getAttribute?.('from') ?? '', to: animate.getAttribute?.('to') ?? '', startMs: now(), endMs: now(), pageStartMs: pageNow(), pageEndMs: pageNow(), frames: 0, ...(trigger ? { trigger } : {}), ...svgMaker(animate), ...(root ? { root } : {}) };
       begun.set(animate, opened);
       report(opened, 'open');
       return;
@@ -308,7 +318,7 @@ function installPageMotion(g: any): void {
     const opened = begun.get(animate);
     if (opened === undefined) return;
     begun.delete(animate);
-    report({ ...opened, endMs: now() }, 'close');
+    report({ ...opened, endMs: now(), pageEndMs: pageNow() }, 'close');
   };
   let lastScroll = { x: g.scrollX ?? 0, y: g.scrollY ?? 0 };
   const onScroll = () => {

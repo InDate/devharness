@@ -2,26 +2,37 @@ import { describe, it, expect } from 'vitest';
 import vm from 'node:vm';
 import { MOTION_BINDING, MOTION_KEY, PAGE_MOTION_SOURCE, type MotionReport } from './page-motion.js';
 import { AnimationRecord } from './animation-record.js';
+import { motionOf } from './write-watch.js';
 import { markedNow } from './proxy/cause-timeline.js';
 
-/** A page with a clock of its own: page time moved by hand, the native timers run by hand, mutations fed by hand. */
+/**
+ * A page with a clock of its own: page time and wall time moved by hand, page
+ * time at `rate` of wall time, the native timers run on wall time by hand,
+ * mutations and window events fed by hand.
+ */
 function pageWithMotion() {
   let pageNow = 1000;
+  let wallNow = 1000;
+  let rate = 1;
+  let trigger: string | undefined;
   let observerCallback: ((records: any[]) => void) | undefined;
   const timers: Array<{ at: number; run: () => void }> = [];
   const reports: MotionReport[] = [];
   class Context2D { canvas: any; constructor(canvas: any) { this.canvas = canvas; } fillRect() {} }
   const documentListeners = new Map<string, (event: any) => void>();
+  const windowListeners = new Map<string, (event: any) => void>();
   const page: any = {
     document: { addEventListener: (type: string, fn: (event: any) => void) => { documentListeners.set(type, fn); }, removeEventListener: () => {}, documentElement: { tagName: 'HTML' } },
     performance: { now: () => pageNow },
-    addEventListener: () => {}, removeEventListener: () => {},
+    scrollX: 0, scrollY: 0,
+    addEventListener: (type: string, fn: (event: any) => void) => { windowListeners.set(type, fn); }, removeEventListener: () => {},
     setTimeout: () => 0, clearTimeout: () => {},
     MutationObserver: class { constructor(callback: (records: any[]) => void) { observerCallback = callback; } observe() {} disconnect() {} },
     CanvasRenderingContext2D: Context2D,
     [MOTION_BINDING]: (payload: string) => reports.push(JSON.parse(payload)),
   };
-  page[Symbol.for('devharness.clock')] = { native: { setTimeout: (run: () => void, ms: number) => { timers.push({ at: pageNow + ms, run }); return timers.length; }, clearTimeout: () => {} } };
+  page[Symbol.for('devharness.clock')] = { native: { perfNow: () => wallNow, setTimeout: (run: () => void, ms: number) => { timers.push({ at: wallNow + ms, run }); return timers.length; }, clearTimeout: () => {} } };
+  page[Symbol.for('devharness.trigger')] = { current: () => trigger, scrollCause: () => trigger };
   page[Symbol.for('devharness.animations')] = { name: (element: any) => element?.id ? `#${element.id}` : 'div' };
   vm.createContext(page);
   vm.runInContext(PAGE_MOTION_SOURCE, page);
@@ -32,11 +43,20 @@ function pageWithMotion() {
     element.attrs.style = style;
     observerCallback?.([{ type: 'attributes', attributeName: 'style', target: element, oldValue }]);
   };
-  /** Move page time on and run the native timers that come due, as the browser would. */
+  /** Move wall time on, and page time at its rate, and run the native timers that come due, as the browser would. */
   const advance = (ms: number) => {
-    pageNow += ms;
-    for (let due = timers.findIndex(t => t.at <= pageNow); due >= 0; due = timers.findIndex(t => t.at <= pageNow)) timers.splice(due, 1)[0].run();
+    wallNow += ms;
+    pageNow += ms * rate;
+    for (let due = timers.findIndex(t => t.at <= wallNow); due >= 0; due = timers.findIndex(t => t.at <= wallNow)) timers.splice(due, 1)[0].run();
   };
+  /** Run page time at this multiple of wall time, as hold rate does. */
+  const setRate = (value: number) => { rate = value; };
+  /** What the page's trigger tracker reads as the cause of what runs now. */
+  const setTrigger = (words: string | undefined) => { trigger = words; };
+  /** Scroll the page to `y` and fire its scroll event, as the browser does each frame of a scroll. */
+  const scrollTo = (y: number) => { page.scrollY = y; windowListeners.get('scroll')?.({ type: 'scroll' }); };
+  /** Fire the window event of this type, as the browser does. */
+  const fireWindow = (type: string) => windowListeners.get(type)?.({ type });
   /** Set an element's class attribute, as the page's code does. */
   const writeClass = (target: { attrs: Record<string, string> }, className: string) => {
     const oldValue = target.attrs.class ?? '';
@@ -45,7 +65,8 @@ function pageWithMotion() {
   };
   /** Dispatch an event the page's document hears in its capture phase. */
   const fire = (type: string, event: any) => documentListeners.get(type)?.({ type, ...event });
-  return { page, motion, writeStyle, writeClass, fire, advance, reports, Context2D };
+  page.document.scrollingElement = { id: 'page', tagName: 'HTML' };
+  return { page, motion, writeStyle, writeClass, fire, advance, setRate, setTrigger, scrollTo, fireWindow, reports, Context2D };
 }
 
 describe('the page\'s watch of motion with no Animation object', () => {
@@ -113,10 +134,34 @@ describe('a class change that starts no animation', () => {
   });
 });
 
+describe('a motion on a page slowed by rate', () => {
+  it('counts its frames on wall time and gives its length in page time', () => {
+    const { motion, writeStyle, advance, setRate, reports } = pageWithMotion();
+    setRate(0.25);
+    motion.start();
+    for (let px = 1; px <= 8; px++) { writeStyle(`height: ${px * 8}px;`); advance(16); }
+    advance(800);
+
+    const close = reports.find(r => r.phase === 'close')!;
+    expect(close.frames).toBe(8);
+    expect(close.endMs - close.startMs).toBe(112);
+    expect(close.pageEndMs - close.pageStartMs).toBe(28);
+  });
+});
+
 describe('a motion report in the page\'s record', () => {
+  it('keeps the page-time length for the row and the wall-time length for where it ended', () => {
+    const record = new AnimationRecord('conn');
+    record.takeMotion({ id: 4, doc: 'd', phase: 'close', source: 'scroll', element: 'html', property: 'scrollY', from: '3298', to: '0', startMs: 1000, endMs: 4584, pageStartMs: 1000, pageEndMs: 1896, frames: 203, sentMs: 4704 }, 60_000);
+
+    const [entry] = record.list();
+    expect(entry.read).toMatchObject({ duration: 896, wallDuration: 3584 });
+    expect(motionOf(entry.read!)).toMatchObject({ durationMs: 896, wallMs: 3584 });
+  });
+
   it('stands as an ended entry of its kind, with its change for the row', () => {
     const record = new AnimationRecord('conn');
-    record.takeMotion({ id: 1, doc: 'd', phase: 'close', source: 'style', element: '#acc-body', property: 'height', from: '0px', to: '58px', startMs: 1000, endMs: 1300, frames: 19, sentMs: 1420 }, 50_000);
+    record.takeMotion({ id: 1, doc: 'd', phase: 'close', source: 'style', element: '#acc-body', property: 'height', from: '0px', to: '58px', startMs: 1000, endMs: 1300, pageStartMs: 1000, pageEndMs: 1300, frames: 19, sentMs: 1420 }, 50_000);
 
     const [entry] = record.list();
     expect(entry).toMatchObject({ kind: 'height #acc-body', via: 'motion', gone: 'finished', createdAt: 49_580 });
@@ -129,13 +174,13 @@ describe('a motion report in the page\'s record', () => {
     const record = new AnimationRecord('conn');
     const changes: string[] = [];
     record.watch((_, change) => changes.push(change));
-    record.takeMotion({ id: 7, doc: 'd', phase: 'open', source: 'style', element: '#acc-body', property: 'height', from: '', to: '4px', startMs: 1000, endMs: 1000, frames: 1, sentMs: 1000 }, 300_016);
+    record.takeMotion({ id: 7, doc: 'd', phase: 'open', source: 'style', element: '#acc-body', property: 'height', from: '', to: '4px', startMs: 1000, endMs: 1000, pageStartMs: 1000, pageEndMs: 1000, frames: 1, sentMs: 1000 }, 300_016);
 
     expect(record.live()).toHaveLength(1);
     expect(record.list()[0]).toMatchObject({ createdIn: { entry: 29 }, read: { playState: 'running' } });
 
     markedNow(undefined, 300_200);
-    record.takeMotion({ id: 7, doc: 'd', phase: 'close', source: 'style', element: '#acc-body', property: 'height', from: '', to: '58px', startMs: 1000, endMs: 1300, frames: 19, sentMs: 1420 }, 300_436);
+    record.takeMotion({ id: 7, doc: 'd', phase: 'close', source: 'style', element: '#acc-body', property: 'height', from: '', to: '58px', startMs: 1000, endMs: 1300, pageStartMs: 1000, pageEndMs: 1300, frames: 19, sentMs: 1420 }, 300_436);
 
     expect(record.list()).toHaveLength(1);
     expect(record.list()[0]).toMatchObject({ createdIn: { entry: 29 }, gone: 'finished', read: { duration: 300, to: '58px', frames: 19, playState: 'finished' } });
@@ -149,7 +194,7 @@ describe('a motion a later step stopped', () => {
     markedNow({ kind: 'command', index: 11 }, 100_900);
     const record = new AnimationRecord('conn');
     // Played at page 1000 under #9, paused at page 1900 under #11, reported at 1910.
-    record.takeMotion({ id: 2, doc: 'd', phase: 'close', source: 'media', element: '#promo', property: 'currentTime', from: '0.015', to: '0.900', startMs: 1000, endMs: 1900, frames: 0, sentMs: 1910 }, 100_910);
+    record.takeMotion({ id: 2, doc: 'd', phase: 'close', source: 'media', element: '#promo', property: 'currentTime', from: '0.015', to: '0.900', startMs: 1000, endMs: 1900, pageStartMs: 1000, pageEndMs: 1900, frames: 0, sentMs: 1910 }, 100_910);
 
     const [entry] = record.list();
     expect(entry.createdIn).toMatchObject({ index: 9 });
@@ -163,7 +208,7 @@ describe('a motion that ends under the step it began in', () => {
     markedNow({ kind: 'replay', runId: 'r', step: 1, entry: 3 }, 200_000);
     markedNow({ kind: 'replay', runId: 'r', step: 1, entry: 3 }, 200_100);
     const record = new AnimationRecord('conn');
-    record.takeMotion({ id: 3, doc: 'd', phase: 'close', source: 'style', element: '#acc-body', property: 'height', from: '', to: '58px', startMs: 1000, endMs: 1300, frames: 19, sentMs: 1420 }, 200_500);
+    record.takeMotion({ id: 3, doc: 'd', phase: 'close', source: 'style', element: '#acc-body', property: 'height', from: '', to: '58px', startMs: 1000, endMs: 1300, pageStartMs: 1000, pageEndMs: 1300, frames: 19, sentMs: 1420 }, 200_500);
 
     expect(record.list()[0].endedIn).toBeUndefined();
   });
@@ -219,7 +264,7 @@ describe('a stop placed by its cause, not by when its report arrived', () => {
     markedNow({ kind: 'command', index: 11 }, 400_900);
     const record = new AnimationRecord('conn');
     // Paused 2ms into #11 by the page's clock, which runs behind: by time the pause lands in #9.
-    record.takeMotion({ id: 4, doc: 'd', phase: 'close', source: 'media', element: '#promo', property: 'currentTime', from: '0.015', to: '0.050', startMs: 1000, endMs: 1050, frames: 0, sentMs: 1051,
+    record.takeMotion({ id: 4, doc: 'd', phase: 'close', source: 'media', element: '#promo', property: 'currentTime', from: '0.015', to: '0.050', startMs: 1000, endMs: 1050, pageStartMs: 1000, pageEndMs: 1050, frames: 0, sentMs: 1051,
       root: { id: 'p:9', step: JSON.stringify({ kind: 'command', index: 9 }) },
       stoppedBy: { maker: 'MEDIA', trigger: 'key [ · pause()', root: { id: 'p:11', step: JSON.stringify({ kind: 'command', index: 11 }) } } }, 400_051);
 
@@ -230,7 +275,7 @@ describe('a stop placed by its cause, not by when its report arrived', () => {
     markedNow({ kind: 'command', index: 20 }, 500_000);
     markedNow({ kind: 'command', index: 21 }, 500_100);
     const record = new AnimationRecord('conn');
-    record.takeMotion({ id: 5, doc: 'd', phase: 'close', source: 'text', element: '#counter', property: 'text', from: '0', to: '1248', startMs: 1000, endMs: 1624, frames: 39, sentMs: 1625,
+    record.takeMotion({ id: 5, doc: 'd', phase: 'close', source: 'text', element: '#counter', property: 'text', from: '0', to: '1248', startMs: 1000, endMs: 1624, pageStartMs: 1000, pageEndMs: 1624, frames: 39, sentMs: 1625,
       root: { id: 'p:20', step: JSON.stringify({ kind: 'command', index: 20 }) } }, 500_625);
 
     expect(record.list()[0].endedIn).toBeUndefined();

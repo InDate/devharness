@@ -179,7 +179,7 @@ function endsBefore(rows: Row[]): Map<Row, string> {
     const from = rows[i - 1].command.timestamp;
     const to = row.command.timestamp;
     const lines = motions.flatMap(one => {
-      const end = one.at + one.motion!.durationMs;
+      const end = one.at + (one.motion!.wallMs ?? one.motion!.durationMs);
       if (end <= from || end >= to) return [];
       if (motions.some(next => next.key === one.key && next.connection === one.connection && next.at > end && next.at < to)) return [];
       const foreign = foreignTo(one, readingConnection(row.command));

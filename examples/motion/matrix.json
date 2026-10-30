@@ -1290,8 +1290,9 @@
       "cells": {
         "credit": {
           "expect": "Under each scroll step",
-          "today": "gap",
-          "basis": "code"
+          "today": "works",
+          "basis": "sequence:motion-makers-no-waits",
+          "note": "The #hero-bg transform the scroll listener writes is one run under each scroll step: the wheel scroll (step 14), 5 frames, and the jump (step 15), 54 frames, matched in every bench play against a baseline on the same build"
         },
         "source": {
           "expect": "JS, started by scroll · wheel, the scroll listener",
@@ -1679,9 +1680,9 @@
       "cells": {
         "credit": {
           "expect": "Back up step starts the row; Pause, Faster and Cancel steps change it",
-          "today": "gap",
-          "basis": "sequence:credit-every-catalog-key",
-          "note": "Back up's ring and text credited to press j, Cancelled to press x, by root; the pause (l) and the faster rate (z) record no row, since a change of an Animation object's playback is not observed"
+          "today": "works",
+          "basis": "sequence:backup-playback-credit",
+          "note": "Back up's ring is credited to press j by root. Pause, Play, Faster and Cancel each own one playback row on #ring-arc: 1× → paused, paused → 1×, 1× → 4× and 4× → -4×. A call that changes a running animation's playback starts nothing and writes nothing, so the motion watch reports it, reading a rate updatePlaybackRate or reverse left pending"
         },
         "source": {
           "expect": "JS, started by the playback call under key j, l, z or x",

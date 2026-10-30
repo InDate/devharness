@@ -760,13 +760,15 @@ export function logpointLine(args: Array<{ value?: unknown }>): { key: string; v
 export const CARRIER: Record<PageAnimation['type'], string> = {
   CSSTransition: 'transition', CSSAnimation: 'css animation', WebAnimation: 'web animation',
   StyleWrites: 'js style', AttributeWrites: 'js attribute', TextWrites: 'js text',
-  Canvas: 'canvas', Media: 'media', SMIL: 'smil', Scroll: 'scroll', ClassChange: 'class',
+  Canvas: 'canvas', Media: 'media', SMIL: 'smil', Scroll: 'scroll', ClassChange: 'class', Playback: 'playback',
 };
 
 export function animationValue(read: PageAnimation): string {
   const carrier = CARRIER[read.type];
   // A class change that started no animation: what the page shows changed at once.
   if (read.type === 'ClassChange') return `${carrier} ${read.to ?? ''}, changed, no motion`;
+  // A call that paused, played, sped or reversed an animation already running.
+  if (read.type === 'Playback') return `${carrier} ${read.from ?? ''} → ${read.to ?? ''}`;
   if (read.frames !== undefined) {
     const change = read.from ? ` ${clip(read.from)} → ${clip(read.to ?? '')}` : read.to ? ` → ${clip(read.to)}` : '';
     // Open, its close not yet reported: how it ran is not known yet.

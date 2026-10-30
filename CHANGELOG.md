@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Pausing, playing, speeding or reversing a running animation is a row
+  of its step.** Such a call starts no animation and writes nothing, so
+  Chrome's reports and the DOM carried no trace of it, and a step that only
+  paused or sped one owned nothing. Each call is now one change on the
+  animation's element, from the playback it had to the one it leaves, such
+  as `animation #ring-arc playback 1× → 4×`, credited to the cause live
+  when it was made; a rate `updatePlaybackRate` or `reverse` leaves pending
+  reads as the rate they set.
 - **A scroll stays one row when the page stalls part-way through it.** A
   motion run closed after 120ms without a change, so a main thread busy for
   313ms in the middle of a smooth scroll split it into two rows, and the

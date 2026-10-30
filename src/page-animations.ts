@@ -53,7 +53,7 @@ export interface PageAnimation {
 }
 
 /** Motion the page makes with no Animation object (`page-motion.ts`), named by what carried it. */
-export type MotionType = 'StyleWrites' | 'AttributeWrites' | 'TextWrites' | 'Canvas' | 'Media' | 'SMIL' | 'Scroll' | 'ClassChange';
+export type MotionType = 'StyleWrites' | 'AttributeWrites' | 'TextWrites' | 'Canvas' | 'Media' | 'SMIL' | 'Scroll' | 'ClassChange' | 'Playback';
 
 /** What a sweep found since the one before it. */
 export interface SweepReading {
@@ -67,6 +67,10 @@ function installPageAnimations(g: any): void {
   if (typeof g.document === 'undefined' || g[Symbol.for('devharness.animations')]) return;
 
   const ids = new WeakMap<object, number>();
+  // Taken before the motion watch wraps them, so a pause devharness makes
+  // reads as no playback change of the app's.
+  const nativePause = g.Animation?.prototype?.pause;
+  const nativePlay = g.Animation?.prototype?.play;
   // Held weakly so a finished animation the page dropped is collected; a
   // WeakRef-less engine keeps them, bounded by `live`.
   const Ref = typeof g.WeakRef === 'function' ? g.WeakRef : class { constructor(private value: object) {} deref() { return this.value; } };
@@ -192,8 +196,8 @@ function installPageAnimations(g: any): void {
     describe(animation: object) { return describe(animation); },
     /** Put an animation at `ms` of its own time. */
     seek(id: number, ms: number) { const animation = animationOf(id); if (!animation) return false; animation.currentTime = Math.max(0, Number(ms) || 0); return true; },
-    pause(id: number) { const animation = animationOf(id); if (!animation) return false; animation.pause(); return true; },
-    play(id: number) { const animation = animationOf(id); if (!animation) return false; animation.play(); return true; },
+    pause(id: number) { const animation = animationOf(id); if (!animation) return false; (nativePause ?? animation.pause).call(animation); return true; },
+    play(id: number) { const animation = animationOf(id); if (!animation) return false; (nativePlay ?? animation.play).call(animation); return true; },
     /** Give an animation other duration and delay, in ms. */
     retime(id: number, timing: { duration?: number; delay?: number }) {
       const animation = animationOf(id);

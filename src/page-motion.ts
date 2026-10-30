@@ -35,7 +35,7 @@ export interface MotionReport {
   doc: string;
   /** `open` at its first change; `close` once it has stopped, with how it ran. */
   phase: 'open' | 'close';
-  source: 'style' | 'attribute' | 'text' | 'canvas' | 'media' | 'smil' | 'scroll' | 'class';
+  source: 'style' | 'attribute' | 'text' | 'canvas' | 'media' | 'smil' | 'scroll' | 'class' | 'playback';
   element: string;
   property: string;
   from: string;
@@ -290,6 +290,56 @@ function installPageMotion(g: any): void {
   // it shows change no DOM, so the run is bounded by the element's own events.
   const playing = new Map<any, Run>();
   const withRoot = (root: { id: string; step?: string } | undefined) => (root ? { root } : {});
+
+  // A call that pauses, plays, speeds or reverses an Animation already
+  // running starts no animation and writes nothing, so Chrome's reports and
+  // the DOM carry no trace of it: Pause and Faster on the backup ring left
+  // their steps empty (credit-every-catalog-key). Each such call is one
+  // change on the animation's element, from the playback it had to the one
+  // it leaves, under the cause live when it was made.
+  // updatePlaybackRate() and reverse() set a rate the animation takes a
+  // frame later, which playbackRate does not show until then: a reverse
+  // straight after a 4× read 1× → -1× (30 Oct). The rate each call leaves
+  // is kept here and read before playbackRate; setting playbackRate itself
+  // drops a pending one, as the browser does.
+  const pendingRates = new WeakMap<object, number>();
+  const rateOf = (animation: any): number => pendingRates.get(animation) ?? Number(animation.playbackRate);
+  const playbackOf = (animation: any): string => (animation.playState === 'paused' ? 'paused' : `${rateOf(animation)}×`);
+  const playback = (animation: any, change: () => void, pending?: number) => {
+    const from = playbackOf(animation);
+    change();
+    if (pending !== undefined) pendingRates.set(animation, pending);
+    if (!on) return;
+    const to = playbackOf(animation);
+    if (from === to) return;
+    const t = now();
+    const pageT = pageNow();
+    const trigger = tracker()?.current?.();
+    const root = tracker()?.rootNow?.();
+    const run: Run = { id: nextRun++, source: 'playback', element: nameOf(animation.effect?.target), property: 'animation', from, to, startMs: t, endMs: t, pageStartMs: pageT, pageEndMs: pageT, frames: 1, ...(trigger ? { trigger } : {}), ...(tracker()?.runningMaker?.() ?? {}), ...withRoot(root) };
+    report(run, 'open');
+    report(run, 'close');
+  };
+  const AnimationProto = g.Animation?.prototype;
+  if (AnimationProto) {
+    for (const method of ['pause', 'play', 'reverse', 'updatePlaybackRate']) {
+      const original = AnimationProto[method];
+      if (typeof original !== 'function') continue;
+      AnimationProto[method] = function (this: any, ...args: unknown[]) {
+        let result: unknown;
+        const pending = method === 'updatePlaybackRate' ? Number(args[0]) : method === 'reverse' ? -rateOf(this) : undefined;
+        playback(this, () => { result = original.apply(this, args); }, pending);
+        return result;
+      };
+    }
+    const rate = Object.getOwnPropertyDescriptor(AnimationProto, 'playbackRate');
+    if (rate?.set && rate.get) {
+      Object.defineProperty(AnimationProto, 'playbackRate', {
+        ...rate,
+        set(this: any, value: number) { pendingRates.delete(this); playback(this, () => rate.set!.call(this, value)); },
+      });
+    }
+  }
   const onMedia = (event: any) => {
     const element = event.target;
     if (!on || !element || typeof element.currentTime !== 'number') return;

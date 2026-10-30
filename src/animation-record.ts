@@ -41,7 +41,7 @@ function entryOfCursor(cursor: ProxyCursor | undefined): number | undefined {
 }
 
 const MOTION_TYPES: Record<MotionReport['source'], MotionType> = {
-  style: 'StyleWrites', attribute: 'AttributeWrites', text: 'TextWrites', canvas: 'Canvas', media: 'Media', smil: 'SMIL', scroll: 'Scroll', class: 'ClassChange',
+  style: 'StyleWrites', attribute: 'AttributeWrites', text: 'TextWrites', canvas: 'Canvas', media: 'Media', smil: 'SMIL', scroll: 'Scroll', class: 'ClassChange', playback: 'Playback',
 };
 import { ownFunction, ownScript } from './utils/own-script.js';
 

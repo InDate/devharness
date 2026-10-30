@@ -19,6 +19,19 @@ function pageWithMotion() {
   const timers: Array<{ at: number; run: () => void }> = [];
   const reports: MotionReport[] = [];
   class Context2D { canvas: any; constructor(canvas: any) { this.canvas = canvas; } fillRect() {} }
+  /** An Animation whose updatePlaybackRate() and reverse() leave the rate pending, as the browser's do until the next frame. */
+  class Animation {
+    playState = 'running';
+    effect = { target: { id: 'ring-arc' } };
+    rate = 1;
+    pending: number | undefined;
+    get playbackRate() { return this.rate; }
+    set playbackRate(value: number) { this.rate = value; this.pending = undefined; }
+    pause() { this.playState = 'paused'; }
+    play() { this.playState = 'running'; }
+    updatePlaybackRate(value: number) { this.pending = value; }
+    reverse() { this.pending = -(this.pending ?? this.rate); }
+  }
   const documentListeners = new Map<string, (event: any) => void>();
   const windowListeners = new Map<string, (event: any) => void>();
   const page: any = {
@@ -29,6 +42,7 @@ function pageWithMotion() {
     setTimeout: () => 0, clearTimeout: () => {},
     MutationObserver: class { constructor(callback: (records: any[]) => void) { observerCallback = callback; } observe() {} disconnect() {} },
     CanvasRenderingContext2D: Context2D,
+    Animation,
     [MOTION_BINDING]: (payload: string) => reports.push(JSON.parse(payload)),
   };
   page[Symbol.for('devharness.clock')] = { native: { perfNow: () => wallNow, setTimeout: (run: () => void, ms: number) => { timers.push({ at: wallNow + ms, run }); return timers.length; }, clearTimeout: () => {} } };
@@ -66,7 +80,7 @@ function pageWithMotion() {
   /** Dispatch an event the page's document hears in its capture phase. */
   const fire = (type: string, event: any) => documentListeners.get(type)?.({ type, ...event });
   page.document.scrollingElement = { id: 'page', tagName: 'HTML' };
-  return { page, motion, writeStyle, writeClass, fire, advance, setRate, setTrigger, scrollTo, fireWindow, reports, Context2D };
+  return { page, motion, writeStyle, writeClass, fire, advance, setRate, setTrigger, scrollTo, fireWindow, reports, Context2D, run: (source: string) => vm.runInContext(source, page) };
 }
 
 describe('the page\'s watch of motion with no Animation object', () => {
@@ -199,6 +213,27 @@ describe('a scroll whose events stall part-way', () => {
     expect(reports.map(r => r.phase)).toEqual(['open']);
     advance(200);
     expect(reports.map(r => r.phase)).toEqual(['open', 'close']);
+  });
+});
+
+describe('a call that changes a running animation\'s playback', () => {
+  it('reads as one change each, from the playback it had to the one it leaves, a pending rate included', () => {
+    const { motion, run, reports } = pageWithMotion();
+    motion.start();
+    run('globalThis.ring = new Animation(); ring.pause(); ring.play(); ring.updatePlaybackRate(4); ring.reverse();');
+
+    const closes = reports.filter(r => r.phase === 'close');
+    expect(closes.map(r => `${r.from} → ${r.to}`)).toEqual(['1× → paused', 'paused → 1×', '1× → 4×', '4× → -4×']);
+    expect(closes[0]).toMatchObject({ source: 'playback', element: '#ring-arc', property: 'animation', frames: 1 });
+  });
+
+  it('reads as nothing while the watch is off, or where the call leaves the playback as it was', () => {
+    const { motion, run, reports } = pageWithMotion();
+    run('globalThis.ring = new Animation(); ring.pause();');
+    motion.start();
+    run('ring.pause();');
+
+    expect(reports).toHaveLength(0);
   });
 });
 

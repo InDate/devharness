@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A motion that cuts another short names both causes.** A transition
+  started while another on its element and property still ran starts from
+  where that one stood, so the gap between the two inputs sets its start
+  value and length; its row named only its own cause. The row now carries
+  the one it cut short, as `cuts short key c`.
 - **A step that starts an animation repeating forever settles.** The
   tracker held the step's cause until the animation ended, so a spinner a
   failed send never hides left the step unsettled for good, and its reply's

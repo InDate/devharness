@@ -1385,6 +1385,7 @@ export function CrossingRow({
           {event.maker && <><dt>made by</dt><dd>{MAKERS[event.maker] ?? event.maker}{event.makerName ? ` · ${event.makerName}` : ''}</dd></>}
           {event.makerSource && <><dt>code</dt><dd><code>{event.makerSource}</code></dd></>}
           {event.trigger && <><dt>source</dt><dd title="every way work entered the page on the way to this motion, first to last">{event.trigger}</dd></>}
+          {event.cuts && <><dt>cuts short</dt><dd title="the motion on this element and property still running when this one started, whose state this one started from">{event.cuts}</dd></>}
         </dl>
       )}
       {film?.taken && <FilmStrip base={base} dir={film.taken.dir} />}

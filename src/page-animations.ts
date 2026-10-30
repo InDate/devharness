@@ -50,6 +50,8 @@ export interface PageAnimation {
   root?: { id: string; step?: string };
   /** See `MotionReport.rootFrom`. */
   rootFrom?: 'property';
+  /** The motion on its element and property it cut short, whose state it started from: that one's trigger and root. */
+  cuts?: { trigger: string; root?: { id: string; step?: string } };
 }
 
 /** Motion the page makes with no Animation object (`page-motion.ts`), named by what carried it. */
@@ -123,6 +125,7 @@ function installPageAnimations(g: any): void {
     const trigger = tracker?.ofAnimation?.(animation);
     const maker = tracker?.animationMaker?.(animation) ?? {};
     const root = tracker?.rootOfAnimation?.(animation);
+    const cut = tracker?.cutOf?.(animation);
     const ends = type === 'CSSTransition' ? transitionEnds(effect, String(animation.transitionProperty)) : undefined;
     return {
       id: idOf(animation),
@@ -140,6 +143,7 @@ function installPageAnimations(g: any): void {
       ...(trigger ? { trigger } : {}),
       ...maker,
       ...(root ? { root } : {}),
+      ...(cut ? { cuts: { trigger: cut.words, ...(cut.root ? { root: cut.root } : {}) } } : {}),
     };
   };
 

@@ -298,6 +298,57 @@ describe('the work outstanding under an input\'s root', () => {
     expect(tracker.rootOfAnimation(dim)?.id).toBe(dimRoot);
   });
 
+  it.each([['its cancel before its run', ['transitioncancel', 'transitionrun']], ['its run before its cancel', ['transitionrun', 'transitioncancel']]])('names the running transition one cuts short, read before its run event and after %s', (_, order) => {
+    const { fire, turn, mutate, page } = pageWithTracker();
+    const tracker = vm.runInContext("globalThis[Symbol.for('devharness.trigger')]", page);
+    let listed: object[] = [];
+    const panel = { matches: () => false, getAnimations: () => listed };
+    fire('keydown', { key: 'c' });
+    const dimRoot = tracker.rootNow().id;
+    mutate(panel);
+    const dim = { transitionProperty: 'opacity', effect: { target: panel, pseudoElement: null } };
+    listed = [dim];
+    fire('transitionrun', { target: panel, propertyName: 'opacity', pseudoElement: '' });
+    turn();
+
+    fire('keydown', { key: 'v' });
+    mutate(panel);
+    const reversed = { transitionProperty: 'opacity', effect: { target: panel, pseudoElement: null } };
+    listed = [reversed];
+
+    expect(tracker.cutOf(dim)).toBeUndefined();
+    expect(tracker.cutOf(reversed)).toEqual({ words: 'key c', root: expect.objectContaining({ id: dimRoot }) });
+
+    for (const type of order) fire(type, { target: panel, propertyName: 'opacity', pseudoElement: '' });
+
+    expect(tracker.ofAnimation(reversed)).toBe('key v');
+    expect(tracker.cutOf(reversed)).toEqual({ words: 'key c', root: expect.objectContaining({ id: dimRoot }) });
+  });
+
+  it('names no cut for a transition that starts after the one before it ended', () => {
+    const { fire, turn, mutate, page, clock } = pageWithTracker();
+    const tracker = vm.runInContext("globalThis[Symbol.for('devharness.trigger')]", page);
+    let listed: object[] = [];
+    const panel = { matches: () => false, getAnimations: () => listed };
+    fire('keydown', { key: 'c' });
+    mutate(panel);
+    listed = [{ transitionProperty: 'opacity', effect: { target: panel, pseudoElement: null } }];
+    fire('transitionrun', { target: panel, propertyName: 'opacity', pseudoElement: '' });
+    clock.ms += 200;
+    fire('transitionend', { target: panel, propertyName: 'opacity', pseudoElement: '' });
+    turn();
+
+    clock.ms += 500;
+    fire('keydown', { key: 'v' });
+    mutate(panel);
+    const back = { transitionProperty: 'opacity', effect: { target: panel, pseudoElement: null } };
+    listed = [back];
+
+    expect(tracker.cutOf(back)).toBeUndefined();
+    fire('transitionrun', { target: panel, propertyName: 'opacity', pseudoElement: '' });
+    expect(tracker.cutOf(back)).toBeUndefined();
+  });
+
   it('runs a view transition\'s update under the root of the input that started it, and credits its pseudo-elements\' animations to it', async () => {
     const { page, fire, turn, reports, transitions } = pageWithTracker();
     const tracker = vm.runInContext("globalThis[Symbol.for('devharness.trigger')]", page);

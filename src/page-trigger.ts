@@ -794,6 +794,22 @@ function installPageTrigger(g: any): void {
         && one.effect?.target === target && (one.effect?.pseudoElement || undefined) === on && !ofStart.has(one));
     } catch { return undefined; }
   };
+  // A transition that starts while another on its element and property still
+  // runs starts from where that one stood, so the gap between the two inputs
+  // sets its start value and length: key c's dim, turned back by v's reply
+  // 50ms in, ran 175ms from 0.56 (credit-reversed-transition). It carries the
+  // cause of the one it cut short. The cut one's cancel event fires in the
+  // same frame as the new one's run event, and either may come first.
+  const ongoing = new WeakMap<object, Map<string, { words: string; root?: Root }>>();
+  const cancelled = new WeakMap<object, Map<string, { words: string; root?: Root; at: number }>>();
+  const cutShort = new WeakMap<object, { words: string; root?: Root }>();
+  const SAME_FRAME_MS = 50;
+  const cutBefore = (target: any, name: string): { words: string; root?: Root } | undefined => {
+    const running = ongoing.get(target)?.get(name);
+    if (running) return running;
+    const cut = cancelled.get(target)?.get(name);
+    return cut && now() - cut.at <= SAME_FRAME_MS ? { words: cut.words, ...(cut.root ? { root: cut.root } : {}) } : undefined;
+  };
   // A keyframe animation's animationstart waits out its delay, while it was
   // created at the style recalc before it: the hero title's page-load rise,
   // 100ms in, went to a press made inside that 100ms (iframe-credit, 30 Oct).
@@ -811,10 +827,17 @@ function installPageTrigger(g: any): void {
       const timelineNow = g.document?.timeline?.currentTime;
       const sinceCreated = typeof startTime === 'number' && typeof timelineNow === 'number' ? Math.max(delay, timelineNow - startTime) : delay;
       const cause = causeOfCssStart(event.target, delay > 0 ? now() - sinceCreated / pageRate() : now(), delay <= 0);
+      const cut = cutBefore(event.target, name);
+      ongoing.get(event.target)?.delete(name);
+      cancelled.get(event.target)?.delete(name);
       if (!cause.words) return;
       const named = started.get(event.target) ?? new Map<string, { words: string; root?: Root }>();
       if (named.get(name)?.root) release(named.get(name)!.root);
       const begun = { words: cause.words, ...(cause.root ? { root: cause.root } : {}) };
+      const running = ongoing.get(event.target) ?? new Map<string, { words: string; root?: Root }>();
+      running.set(name, begun);
+      ongoing.set(event.target, running);
+      if (object && cut) cutShort.set(object, cut);
       named.set(name, begun);
       started.set(event.target, named);
       if (object) ofStart.set(object, begun);
@@ -855,6 +878,13 @@ function installPageTrigger(g: any): void {
     listen(g, type, (event: any) => {
       const named = started.get(event.target);
       const name = event.propertyName || event.animationName;
+      const running = ongoing.get(event.target)?.get(name);
+      ongoing.get(event.target)?.delete(name);
+      if (running && type.endsWith('cancel')) {
+        const cut = cancelled.get(event.target) ?? new Map<string, { words: string; root?: Root; at: number }>();
+        cut.set(name, { ...running, at: now() });
+        cancelled.set(event.target, cut);
+      }
       const begun = named?.get(name);
       if (!begun?.root) return;
       named!.set(name, { words: begun.words });
@@ -943,6 +973,17 @@ function installPageTrigger(g: any): void {
       const transitioned = ofViewTransition(animation);
       if (transitioned) return transitioned.words;
       return causeOfStart(animation).words;
+    },
+    /**
+     * The cause and root of the transition or keyframe animation this one cut
+     * short on its element and property; undefined where it started from rest.
+     * Read before its run event, the one still running under that name.
+     */
+    cutOf(animation: any): { words: string; root?: Root } | undefined {
+      if (ofStart.has(animation)) return cutShort.get(animation);
+      const target = animation && animation.effect && animation.effect.target;
+      const name = animation && (animation.transitionProperty || animation.animationName);
+      return target && name !== undefined ? cutBefore(target, name) : undefined;
     },
     /** What called one of `methods` within the last second, newest first, else `fallback`. */
     ofCall(methods: string[], fallback: string): string {

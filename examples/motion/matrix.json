@@ -2302,9 +2302,9 @@
       "cells": {
         "credit": {
           "expect": "Each motion credited to its own press; a motion both presses shaped names both",
-          "today": "gap",
+          "today": "works",
           "basis": "sequence:credit-reversed-transition",
-          "note": "Key c’s transition is credited to c and the reversal to v’s reply, each by its own root; the reversal, shaped by both, names v’s reply alone"
+          "note": "Key c’s transition is credited to c and the reversal to v’s reply, each by its own root; the reversal carries cuts short key c, the transition whose state it started from"
         },
         "seen": {
           "today": "works",

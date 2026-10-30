@@ -858,6 +858,8 @@ export interface BoundaryEvent {
   url: string;
   /** A motion row's trigger: what set the motion going, as the page read it when it started. */
   trigger?: string;
+  /** The trigger of the motion it cut short on its element and property, whose state it started from. */
+  cuts?: string;
   /** A motion row's maker - CSS, JS, SVG, MEDIA, ME, BROWSER - and what its go-to reveals. */
   maker?: string;
   makerRef?: number;

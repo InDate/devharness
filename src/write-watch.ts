@@ -87,6 +87,8 @@ export interface WriteMotion {
   byRoot?: true;
   /** See `MotionReport.rootFrom`. */
   rootFrom?: 'property';
+  /** See `PageAnimation.cuts`. */
+  cuts?: { trigger: string; root?: PageRoot };
   /** A function maker's first line of source, as Chrome describes it: `() => { masthead.style.height…`. */
   makerSource?: string;
   /** Its frames are still coming: how it runs is read when its close report arrives. */
@@ -815,6 +817,7 @@ export function motionOf(read: PageAnimation): WriteMotion {
     ...(read.makerAt ? { makerAt: read.makerAt } : {}),
     ...(read.root ? { root: read.root } : {}),
     ...(read.rootFrom ? { rootFrom: read.rootFrom } : {}),
+    ...(read.cuts ? { cuts: read.cuts } : {}),
     ...(read.frames !== undefined && read.playState === 'running' ? { moving: true as const } : {}),
   };
 }

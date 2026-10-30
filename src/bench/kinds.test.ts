@@ -4,7 +4,7 @@
  * and a field matched by value holds only when it carries the same value.
  */
 import { describe, it, expect } from 'vitest';
-import { compareExpected, sentDiffers, verdictOf } from './kinds.js';
+import { compareExpected, compareKinds, countKinds, sentDiffers, verdictOf } from './kinds.js';
 
 const recorded = { n: 1, statuses: [200], body: '{"token":"s-old","ok":true}' };
 const observed = { n: 1, statuses: [200] };
@@ -68,5 +68,34 @@ describe('a document or binary body', () => {
   it('is compared on its size band where binary', () => {
     expect(verdictOf({ n: 1, statuses: [200], band: 's' }, { n: 1, statuses: [200] }, undefined, undefined, false, { payloadClass: 'binary', band: 'l' }))
       .toEqual({ verdict: 'mismatch', reasons: ['size l, recorded s'] });
+  });
+});
+
+describe('a motion paced by a clock outside the step', () => {
+  const motion = (url: string, trigger?: string) => ({ kind: 'write' as const, direction: 'in' as const, url, ...(trigger ? { trigger } : {}) });
+
+  it('is counted by presence when a reply, push, timer or the browser drives it, and so is its stopped row', () => {
+    const kinds = countKinds([
+      motion('animation:transform #progress', 'reply GET /api/sync'),
+      motion('animation:transform #progress', 'reply GET /api/sync'),
+      motion('animation:transform #progress stopped'),
+      motion('animation:transform #hero-bg', 'scroll · hover #card'),
+      motion('animation:transform #hero-bg', 'scroll · browser'),
+    ]);
+    expect(kinds['animation transform #progress'].presence).toBe(true);
+    expect(kinds['animation transform #progress stopped'].presence).toBe(true);
+    expect(kinds['animation transform #hero-bg'].presence).toBe(true);
+  });
+
+  it('keeps its count when the step\'s input starts it directly', () => {
+    const kinds = countKinds([motion('animation:scale .like', 'key l'), motion('animation:scale .like', 'key l')]);
+    expect(kinds['animation scale .like'].presence).toBeUndefined();
+    expect(compareKinds({ 'animation scale .like': { n: 1 } }, kinds)).toEqual(['animation scale .like ×2, recorded ×1']);
+  });
+
+  it('matches a recording counted by number once the replay finds its pace outside the step', () => {
+    const replayed = countKinds([motion('animation:transform #hero-bg', 'scroll · wheel'), motion('animation:transform #hero-bg', 'scroll · browser')]);
+    expect(compareKinds({ 'animation transform #hero-bg': { n: 1 } }, replayed)).toEqual([]);
+    expect(verdictOf({ n: 1 }, replayed['animation transform #hero-bg'], undefined)?.verdict).toBe('match');
   });
 });

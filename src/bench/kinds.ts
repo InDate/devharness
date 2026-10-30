@@ -191,7 +191,9 @@ export interface KindCount {
   /**
    * Counted as present or absent rather than by number: a message the app
    * sends on its own schedule lands under whichever step is running, so its
-   * number measures how long the step took, not what it did.
+   * number measures how long the step took, not what it did. A motion paced
+   * by a reply's chunks, a push, a timer or the browser carrying a scroll on
+   * is counted the same way: its number measures that pace.
    */
   presence?: true;
   /** The payload of the last of this kind, as the proxy or the write watch kept it: a structured body only. */
@@ -203,7 +205,12 @@ export interface KindCount {
 }
 
 type Countable = Pick<BoundaryEvent, 'kind' | 'url' | 'direction'>
-  & Partial<Pick<BoundaryEvent, 'method' | 'preview' | 'status' | 'answeredAs'>>;
+  & Partial<Pick<BoundaryEvent, 'method' | 'preview' | 'status' | 'answeredAs' | 'trigger'>>;
+
+/** Causes on a clock of their own, as a motion's trigger names them: what they start runs as many times as that clock ticks. */
+const PACED_CAUSE = /^(after )?(reply|push|timer) |^browser$/;
+const pacedBy = (trigger: string | undefined) => !!trigger && trigger.split(' · ').some(cause => PACED_CAUSE.test(cause));
+const STOPPED = ' stopped';
 
 /** One kind's name as it reads on a step: `POST /draft`, `← "tag":"big"`, `localStorage socket-app:draft`. */
 export function kindOf(event: Countable): string {
@@ -220,10 +227,15 @@ export function countKinds(events: Countable[]): Record<string, KindCount> {
     const held = counts[kind] ??= { n: 0 };
     held.n += 1;
     if (event.kind === 'frame' && event.direction === 'in') held.presence = true;
+    if (event.kind === 'write' && pacedBy(event.trigger)) held.presence = true;
     if (event.kind === 'request' && event.status !== undefined && event.answeredAs !== 'replaced') {
       const statuses = held.statuses ??= [];
       if (!statuses.includes(event.status)) statuses.push(event.status);
     }
+  }
+  // A stopped row carries no trigger: it ends as many runs as its motion started.
+  for (const [kind, count] of Object.entries(counts)) {
+    if (kind.endsWith(STOPPED) && counts[kind.slice(0, -STOPPED.length)]?.presence) count.presence = true;
   }
   return counts;
 }
@@ -243,7 +255,8 @@ export function compareKinds(recorded: Record<string, KindCount>, observed: Reco
     if (was.presence) continue;
     const now = observed[kind];
     if (!now) { lines.push(`missing: ${kind}`); continue; }
-    if (!now.presence && now.n !== was.n) lines.push(`${kind} ×${now.n}, recorded ×${was.n}`);
+    if (now.presence) continue;
+    if (now.n !== was.n) lines.push(`${kind} ×${now.n}, recorded ×${was.n}`);
     const before = (was.statuses ?? []).slice().sort().join('/');
     const after = (now.statuses ?? []).slice().sort().join('/');
     if (before && after && before !== after) lines.push(`${kind} ${after}, recorded ${before}`);
@@ -418,7 +431,7 @@ export function verdictOf(
   if (recorded.presence && !marksFields(mark)) return { verdict: 'match', reasons: [] };
   const reasons: string[] = [];
   if (!recorded.presence) {
-    if (observed.n !== recorded.n) reasons.push(`×${observed.n}, recorded ×${recorded.n}`);
+    if (!observed.presence && observed.n !== recorded.n) reasons.push(`×${observed.n}, recorded ×${recorded.n}`);
     const before = (recorded.statuses ?? []).slice().sort().join('/');
     const after = (observed.statuses ?? []).slice().sort().join('/');
     if (before !== after) reasons.push(`status ${after || '—'}, recorded ${before || '—'}`);

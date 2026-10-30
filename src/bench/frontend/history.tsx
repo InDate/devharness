@@ -1,6 +1,7 @@
 /** @jsxImportSource preact */
 import { Fragment } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
+import { browserQuery, useBrowserChoice } from './browser-choice.js';
 import { Row } from './row.js';
 import { CLIENT_ID, RunMark } from './editing.js';
 import { Glyph } from './glyph.js';
@@ -43,15 +44,21 @@ export function History({ base, onGoTo, entry: focus, onGoToEvent, onGoToStep }:
   /** Open `sequence`'s card on the home page with its 0-based `step` marked, leaving from History `entry`. */
   onGoToStep?: (sequence: string, step: number, entry: number) => void;
 }) {
-  const [entries, setEntries] = useState<HistoryEntry[] | null>(null);
+  const [read, setRead] = useState<HistoryEntry[] | null>(null);
   const [reading, setReading] = useState<number | null>(null);
   const [openRuns, setOpenRuns] = useState<Set<string>>(new Set());
   // What each call caused is drawn from the bench's boundary, as the Traffic
   // tab reads it, and judged against the open sequence's recording as the
   // Sequence tab judges it.
   const [view, setView] = useState<BenchView | null>(null);
-  const activity = useActivity(base, view?.sequence, view?.motionDetect, view?.film);
+  // Calls on the chosen browser alone; with every browser chosen, every call.
+  const choice = useBrowserChoice();
+  const activity = useActivity(base, view?.sequence, view?.motionDetect, view?.film, browserQuery(choice));
   const [favourites, setFavourites] = useState<ToolFavourite[]>([]);
+  const entries = read && choice ? read.filter(entry => entry.connection === choice) : read;
+  // Grouped before the browser filter: the calls between two runs, on no
+  // browser, are what keep the runs apart.
+  const items = read ? narrowed(grouped(read), choice) : null;
 
   useEffect(() => {
     fetch(`${base}/favourites`)
@@ -99,7 +106,7 @@ export function History({ base, onGoTo, entry: focus, onGoToEvent, onGoToStep }:
         fetch(`${base}/history`).catch(() => null),
         fetch(`${base}/state?client=${CLIENT_ID}`).catch(() => null),
       ]);
-      if (live && res?.ok) setEntries(await res.json());
+      if (live && res?.ok) setRead(await res.json());
       if (live && state?.ok) setView(await state.json());
     };
     void poll();
@@ -111,12 +118,12 @@ export function History({ base, onGoTo, entry: focus, onGoToEvent, onGoToStep }:
   // go-to left from: opened, with the run that holds it unfolded, once the
   // list holding it has been read.
   useEffect(() => {
-    if (focus == null || !entries) return;
+    if (focus == null || !items) return;
     setReading(focus);
-    const group = grouped(entries).find((item): item is RunGroup =>
+    const group = items.find((item): item is RunGroup =>
       item.kind === 'run' && (item.steps.some(step => step.index === focus) || item.calls.some(call => call.index === focus)));
     if (group) setOpenRuns(now => new Set(now).add(`run-${group.steps[group.steps.length - 1].index}`));
-  }, [focus, entries === null]);
+  }, [focus, items === null]);
   useGoToAnyTarget();
 
   // A run's step is judged by the verdicts the open sequence holds, which are
@@ -128,7 +135,9 @@ export function History({ base, onGoTo, entry: focus, onGoToEvent, onGoToStep }:
   };
 
   if (!entries) return <div class="hint">reading the history…</div>;
-  if (entries.length === 0) return <p class="hint nothing">no tool calls since devharness started</p>;
+  if (entries.length === 0) {
+    return <p class="hint nothing">{choice ? `no tool calls on ${choice} since devharness started` : 'no tool calls since devharness started'}</p>;
+  }
 
   const callRow = (entry: HistoryEntry) => (
     <Row key={entry.index} id={`history-${entry.index}`}
@@ -181,7 +190,7 @@ export function History({ base, onGoTo, entry: focus, onGoToEvent, onGoToStep }:
     const running = group.steps.some(step => step.failed === undefined) || group.calls.some(call => call.failed === undefined);
     const from = (group.calls[group.calls.length - 1] ?? group.steps[group.steps.length - 1]).from;
     const at = new Date(group.steps[0].at).toLocaleTimeString();
-    const span = group.steps.length === 1 ? 'step 1' : `steps 1–${group.steps.length}`;
+    const span = stepSpan(group.steps);
     // Played again whole, on the browser its steps drove: a bench play walked
     // it a step per call, and the first of those calls runs step 1 alone.
     const connection = group.steps.find(step => step.connection)?.connection;
@@ -235,7 +244,7 @@ export function History({ base, onGoTo, entry: focus, onGoToEvent, onGoToStep }:
     if (calls.length) blocks.push(<ol key={`calls-${calls[0].index}`} class="activitycards">{calls.map(callRow)}</ol>);
     calls = [];
   };
-  for (const item of grouped(entries)) {
+  for (const item of items!) {
     if (item.kind === 'call') { calls.push(item.entry); continue; }
     flush();
     blocks.push(runRows(item));
@@ -254,6 +263,19 @@ export function History({ base, onGoTo, entry: focus, onGoToEvent, onGoToStep }:
  */
 function listedWalker(call: HistoryEntry, group: RunGroup): boolean {
   return walks(call) && call.failed === true && !group.steps.some(step => step.failed);
+}
+
+/**
+ * The places in the run of the steps listed, 1-based: a browser filter leaves
+ * some steps out, so the count of steps listed is not where they stood.
+ */
+function stepSpan(steps: HistoryEntry[]): string {
+  const places = [...new Set(steps.map(step => step.runStep).filter((n): n is number => n !== undefined))]
+    .sort((a, b) => a - b).map(n => n + 1);
+  if (places.length < steps.length) return steps.length === 1 ? 'step 1' : `steps 1–${steps.length}`;
+  if (places.length === 1) return `step ${places[0]}`;
+  const contiguous = places[places.length - 1] - places[0] === places.length - 1;
+  return contiguous ? `steps ${places[0]}–${places[places.length - 1]}` : `steps ${places.join(', ')}`;
 }
 
 /** A `step` or `finish` call: it carries a run on rather than starting one. */
@@ -304,6 +326,20 @@ function grouped(entries: HistoryEntry[]): HistoryItem[] {
     folded.push(item);
   }
   return folded.reverse();
+}
+
+/**
+ * The groups holding calls on `choice` alone, each run keeping only its steps
+ * and calls on that browser; every group where no browser is chosen.
+ */
+function narrowed(items: HistoryItem[], choice: string | null): HistoryItem[] {
+  if (!choice) return items;
+  const on = (entry: HistoryEntry) => entry.connection === choice;
+  return items.flatMap((item): HistoryItem[] => {
+    if (item.kind === 'call') return on(item.entry) ? [item] : [];
+    const steps = item.steps.filter(on);
+    return steps.length ? [{ ...item, steps, calls: item.calls.filter(on) }] : [];
+  });
 }
 
 /**

@@ -342,6 +342,10 @@ export interface ConnectionRow {
   title?: string;
   /** The states the disc draws that stand on this connection, in the disc's order. */
   modes?: DiscMode[];
+  /** The group this connection belongs to. */
+  group?: string;
+  /** The page is a bench: a bench opened on it would read its own page. */
+  bench?: true;
 }
 
 /** What the state disc draws, one slice each: recording, the page held, traffic held, a run playing, a run paused. */
@@ -900,6 +904,8 @@ export interface BoundaryEvent {
   root?: string;
   verdict?: string;
   evidence?: { shape?: string; [key: string]: unknown };
+  /** The browser it crossed in, on a read that spans the bench connection's group. */
+  connection?: string;
 }
 
 /** What the boundary holds, in the counts a reader needs at a glance. */
@@ -1069,6 +1075,8 @@ export interface HiddenKind {
 
 /** What `GET /proxy/events` answers with. */
 export interface BoundaryState {
+  /** A read of one group member whose page no bench watches: its storage writes and motion are not taken. */
+  unwatched?: true;
   /** How many writes the page watch holds - storage, motion, sockets closed, workers: the Browser tab's count. */
   pageWrites: number;
   /** What was done while a run stood paused - a person's inputs, hold steps - listed in that pause beside its traffic. */

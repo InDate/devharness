@@ -11,6 +11,7 @@ import { Issues } from './issues.js';
 import { Running } from './running.js';
 import { EnableProxy } from './enable-proxy.js';
 import { ConnectionPicker } from './connection-picker.js';
+import { browserChoice, browserQuery, readBrowserChoice, useBrowserChoice } from './browser-choice.js';
 import { DISC_TONES, discFill, discSaid } from './disc.js';
 import { About } from './sequence.js';
 import { Editing, type CardAsk } from './editing.js';
@@ -106,6 +107,9 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
   // A response a traffic row asked to see: the panel opens on it.
   const [revealed, setRevealed] = useState<string | null>(null);
   const showHidden = useShowHidden();
+  // The browser the proxy panel reads and acts on: the chosen member, or with
+  // every browser chosen the bench's own, whose counts sum the group's.
+  const choice = useBrowserChoice();
   useEffect(() => onRevealResponse((key) => { setRevealed(key); setShowing('proxy'); }), []);
   useEscape(showing !== null, () => setShowing(null));
   const [boundary, setBoundary] = useState<BoundaryState | null>(null);
@@ -153,7 +157,7 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
   useEffect(() => {
     let live = true;
     const poll = async () => {
-      const res = await fetch(`${base}/proxy/events?since=`).catch(() => null);
+      const res = await fetch(`${base}/proxy/events?since=${browserQuery(choice)}`).catch(() => null);
       if (live && res?.ok) setBoundary(await res.json());
     };
     void poll();
@@ -162,7 +166,7 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
     // the app's own traffic.
     const timer = setInterval(poll, running || recording ? 400 : 800);
     return () => { live = false; clearInterval(timer); };
-  }, [base, running, recording]);
+  }, [base, running, recording, choice]);
 
   /**
    * What the proxy button is lit for: the newest arrivals since the last poll,
@@ -173,6 +177,8 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
   /** The newest arrival, kept after the light fades, so the panel can say what lit it. */
   const [latest, setLatest] = useState<{ tone: 'failed' | 'caused' | 'own'; said: string; at: number } | null>(null);
   const lastSeen = useRef<string | undefined>(undefined);
+  // Another browser's list is not an arrival: its first read starts the count again.
+  useEffect(() => { lastSeen.current = undefined; }, [choice]);
   useEffect(() => {
     const events = boundary?.events ?? [];
     const newest = events[events.length - 1];
@@ -551,7 +557,7 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
             aria-label="ABOUT"
             onClick={async () => {
               setShowing('about');
-              const res = await fetch(`${base}/proxy/events?since=`).catch(() => null);
+              const res = await fetch(`${base}/proxy/events?since=${browserQuery(choice)}`).catch(() => null);
               if (res?.ok) setBoundary(await res.json());
             }}><Glyph of="info" /></button>
           {/* The hub fills once the run carries a value or a step captures
@@ -824,19 +830,23 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
                     const res = await fetch(`${base}/boundary/refuse`, {
                       method: 'POST',
                       headers: { 'content-type': 'application/json' },
-                      body: JSON.stringify({ on }),
+                      body: JSON.stringify({ on, ...(choice ? { browser: choice } : {}) }),
                     });
                     setProxyAsked(await res.text());
                   }}
                   onClear={async () => {
-                    const res = await fetch(`${base}/proxy/clear`, { method: 'POST' });
+                    const res = await fetch(`${base}/proxy/clear`, {
+                      method: 'POST',
+                      headers: { 'content-type': 'application/json' },
+                      body: JSON.stringify(choice ? { browser: choice } : {}),
+                    });
                     setProxyAsked(await res.text());
                   }}
                   onOpen={async () => {
                     const res = await fetch(`${base}/proxy/allow`, {
                       method: 'POST',
                       headers: { 'content-type': 'application/json' },
-                      body: JSON.stringify({ hosts: [] }),
+                      body: JSON.stringify({ hosts: [], ...(choice ? { browser: choice } : {}) }),
                     });
                     setProxyAsked(await res.text());
                   }}
@@ -844,7 +854,7 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
                     const res = await fetch(`${base}/proxy/allow`, {
                       method: 'POST',
                       headers: { 'content-type': 'application/json' },
-                      body: JSON.stringify({ hosts }),
+                      body: JSON.stringify({ hosts, ...(choice ? { browser: choice } : {}) }),
                     });
                     setProxyAsked(await res.text());
                   }}
@@ -918,6 +928,8 @@ function addressOf(place: Place): string {
   if (place.tool) query.set('tool', place.tool);
   if (place.action) query.set('action', place.action);
   if (place.entry !== null) query.set('entry', String(place.entry));
+  const browser = browserChoice();
+  if (browser) query.set('browser', browser);
   const search = query.toString();
   return `${location.pathname}${search ? `?${search}` : ''}`;
 }
@@ -997,12 +1009,13 @@ function Bench() {
   const [counts, setCounts] = useState<{
     traffic?: number; browser?: number; proxied?: boolean; history?: number; failed?: number; running?: number; issues?: number;
   }>({});
+  const choice = useBrowserChoice();
   useEffect(() => {
     let live = true;
     // Asked for after the last event read, so a poll carries the new events only; the totals cover them all.
     let trafficSince = '';
     const read = async () => {
-      const boundary = await fetch(`${BASE}/proxy/events?since=${encodeURIComponent(trafficSince)}`)
+      const boundary = await fetch(`${BASE}/proxy/events?since=${encodeURIComponent(trafficSince)}${browserQuery(choice)}`)
         .then(res => (res.ok ? res.json() : null)).catch(() => null) as
         { running: boolean; events: Array<{ id: string }>; totals: { events: number } | null; pageWrites: number } | null;
       if (boundary?.events.length) trafficSince = boundary.events[boundary.events.length - 1].id;
@@ -1011,11 +1024,12 @@ function Bench() {
         fetch(`${BASE}/servers`).then(res => (res.ok ? res.json() : null)).catch(() => null),
         fetch(`${BASE}/running`).then(res => (res.ok ? res.json() : null)).catch(() => null),
         fetch(`${BASE}/issues`).then(res => (res.ok ? res.json() : null)).catch(() => null),
-      ]) as [Array<{ failed?: boolean }> | null, Array<{ running: boolean }> | null, { connections: unknown[] } | null, unknown[] | null];
+      ]) as [Array<{ failed?: boolean; connection?: string }> | null, Array<{ running: boolean }> | null, { connections: unknown[] } | null, unknown[] | null];
       if (!live) return;
+      const listed = history?.filter(entry => !choice || entry.connection === choice) ?? null;
       setCounts({
         ...(boundary && { proxied: boundary.running, browser: boundary.pageWrites, ...(boundary.totals && { traffic: boundary.totals.events }) }),
-        ...(history && { history: history.length, failed: history.filter(entry => entry.failed).length }),
+        ...(listed && { history: listed.length, failed: listed.filter(entry => entry.failed).length }),
         ...(servers && running && { running: servers.filter(server => server.running).length + running.connections.length }),
         ...(issues && { issues: issues.length }),
       });
@@ -1023,7 +1037,7 @@ function Bench() {
     void read();
     const timer = setInterval(read, 5000);
     return () => { live = false; clearInterval(timer); };
-  }, []);
+  }, [choice]);
   /** The sequence the session last reported open; undefined before the first report. */
   const shown = useRef<string | null | undefined>(undefined);
   /**
@@ -1077,6 +1091,7 @@ function Bench() {
   useEffect(() => {
     const onPop = () => {
       const back = placeOf();
+      readBrowserChoice();
       if (back.tab === 'history' && back.entry !== null) askSection(`history-${back.entry}`);
       setAt(back);
       reach(back.sequence);

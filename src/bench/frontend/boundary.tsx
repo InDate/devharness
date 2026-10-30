@@ -8,6 +8,7 @@ import { askedSection, goToSection, useGoToAnyTarget, useGoToTarget } from './go
 import { useEscape } from './escape.js';
 import { Fold, Row } from './row.js';
 import { EnableProxy } from './enable-proxy.js';
+import { browserQuery, useBrowserChoice } from './browser-choice.js';
 
 export type { BoundaryEvent, BoundaryState, BoundaryTotals } from '../wire.js';
 export { socketName } from './crossing.js';
@@ -102,7 +103,7 @@ function group(events: BoundaryEvent[]): Group[] {
     const cause = event.commandIndex ?? event.entry ?? event.openedBy;
     const key = event.kind === 'request'
       ? event.id
-      : `${cause ?? ''}|${event.url}|${event.direction}|${event.evidence?.shape ?? event.size}`;
+      : `${event.connection ?? ''}|${cause ?? ''}|${event.url}|${event.direction}|${event.evidence?.shape ?? event.size}`;
     const held = byKey.get(key);
     if (held) {
       held.events.push(event);
@@ -154,7 +155,9 @@ export function tabOf(event: BoundaryEvent): 'traffic' | 'browser' {
  * or an element made. Read from the page, so it needs no proxy.
  */
 export function Browser({ base, onGoToEntry }: { base: string; onGoToEntry?: (entry: number) => void }): preact.JSX.Element {
-  const activity = useActivity(base, undefined);
+  // The chosen member's page; with every browser chosen, the bench's own.
+  const choice = useBrowserChoice();
+  const activity = useActivity(base, undefined, true, undefined, browserQuery(choice, true));
   const [open, setOpen] = useState<string | null>(null);
   useEscape(open !== null, () => setOpen(null));
   const done = useMemo(
@@ -163,6 +166,9 @@ export function Browser({ base, onGoToEntry }: { base: string; onGoToEntry?: (en
   useGoToAnyTarget();
 
   if (!activity.boundary) return <div class="hint">reading the page…</div>;
+  if (activity.boundary.unwatched) {
+    return <div class="hint">no bench watches {choice}'s page, so its storage writes and motion are not taken - the connection picker opens a bench on it</div>;
+  }
   if (done.length === 0) return <div class="hint">the page has done nothing here yet - storage writes land as they happen, and MOTION in the bar records what it animates</div>;
   return (
     <div class="traffic browser">
@@ -188,7 +194,8 @@ export function Browser({ base, onGoToEntry }: { base: string; onGoToEntry?: (en
 }
 
 export function Traffic({ base, onGoToEntry }: { base: string; onGoToEntry?: (entry: number) => void }): preact.JSX.Element {
-  const activity = useActivity(base, undefined);
+  const choice = useBrowserChoice();
+  const activity = useActivity(base, undefined, true, undefined, browserQuery(choice));
   const state = activity.boundary;
   const [filters, setFilters] = useState<Filter[]>([]);
   const [menu, setMenu] = useState<{ event: BoundaryEvent; x: number; y: number } | null>(null);
@@ -311,7 +318,7 @@ export function Traffic({ base, onGoToEntry }: { base: string; onGoToEntry?: (en
         </div>
       )}
       {(state.holding || (state.queued?.length ?? 0) > 0) && (
-        <Waiting base={base} queued={state.queued ?? []} />
+        <Waiting base={base} queued={state.queued ?? []} browser={choice} />
       )}
       {repeating.length > 0 && (
         <section class="repeating">
@@ -367,10 +374,10 @@ export function Traffic({ base, onGoToEntry }: { base: string; onGoToEntry?: (en
  * else has moved. Recorded as it crosses, so it lands under the step that let
  * it through.
  */
-function Waiting({ base, queued }: { base: string; queued: QueuedView[] }) {
+function Waiting({ base, queued, browser }: { base: string; queued: QueuedView[]; browser: string | null }) {
   const here = useGoToTarget<HTMLElement>('waiting');
   const letThrough = (id: number) => void fetch(`${base}/hold/let`, {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id }),
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, ...(browser ? { browser } : {}) }),
   }).catch(() => {});
   return (
     <section class="waiting" id="waiting" ref={here}>

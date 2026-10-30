@@ -679,6 +679,7 @@ export function createSequenceDriver(
       const session = resolveSessionName(getSessionInfo()?.shortId);
       const listed: any = await unlisted(() => executeToolCall('connection', { action: 'list' })).catch(() => null);
       const [readers, unread] = await Promise.all([streamReaders(session), unreadEvents(session)]);
+      const benchUrls = [...sessions.values()].map(open => open.benchUrl).filter(Boolean);
       return {
         stream: getEventStreamPath(session),
         ...(readers !== undefined && { readers }),
@@ -690,6 +691,8 @@ export function createSequenceDriver(
           connected: meta.connected, paused: meta.paused,
           ...(meta.url !== undefined && { url: meta.url }),
           ...(meta.title !== undefined && { title: meta.title }),
+          ...(meta.group !== undefined && { group: meta.group }),
+          ...(typeof meta.url === 'string' && benchUrls.some(url => meta.url.startsWith(url)) && { bench: true }),
         })),
       };
     },

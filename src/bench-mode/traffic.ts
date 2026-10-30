@@ -58,6 +58,24 @@ export function summariseBoundary(
 }
 
 /** The open sequence's positions, which a rule can be bound to. */
+/** Several browsers' totals as one, each count summed; null where no browser has a proxy. */
+export function sumTotals(each: Array<BoundaryTotals | null>): BoundaryTotals | null {
+  const present = each.filter((one): one is BoundaryTotals => one !== null);
+  if (present.length === 0) return null;
+  const add = (a: Record<string, number>, b: Record<string, number>) => {
+    const sum = { ...a };
+    for (const [key, n] of Object.entries(b)) sum[key] = (sum[key] ?? 0) + n;
+    return sum;
+  };
+  return present.reduce((sum, one) => ({
+    events: sum.events + one.events, requests: sum.requests + one.requests, failed: sum.failed + one.failed,
+    out: sum.out + one.out, in: sum.in + one.in, owned: sum.owned + one.owned, free: sum.free + one.free,
+    ruled: sum.ruled + one.ruled, shapesRuled: sum.shapesRuled + one.shapesRuled, holds: sum.holds + one.holds,
+    levels: add(sum.levels, one.levels), roots: add(sum.roots, one.roots),
+    sockets: add(sum.sockets, one.sockets) as BoundaryTotals['sockets'],
+  }));
+}
+
 export function openSteps(connection: string): Array<{ index: number; label: string }> {
   const steps = sessions.get(connection)?.sequences?.active()?.steps ?? [];
   return steps.map((step, index) => ({ index, label: step.label }));

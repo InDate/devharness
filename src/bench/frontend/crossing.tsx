@@ -1281,6 +1281,7 @@ export function CrossingRow({
       onLeave={() => setPointing(false)}
       label={pointing && makerGo && makerWords ? <span class="what">{makerWords}</span>
         : pointing && causeWords && onGoToCause ? <span class="what">{causeWords}</span> : <>
+        {event.connection && <span class="tag browsertag" title="the browser it crossed in">{event.connection}</span>}
         {renaming && actions?.rename
           ? <LabelInput
               value={named ?? ''}

@@ -75,7 +75,7 @@ export interface BenchHandlers {
   discard: () => Promise<void>;
   tick: (request: { steps?: number; budgetMs?: number }) => Promise<void>;
   stepTraffic: () => Promise<void>;
-  releaseWaiting: (id: number) => Promise<void>;
+  releaseWaiting: (id: number, browser?: string) => Promise<void>;
   openDevtools: () => Promise<string>;
   /** Open DevTools at what made a motion, by the page's ref to it. */
   revealMaker: (ref: number) => Promise<string>;
@@ -113,7 +113,8 @@ export interface BenchHandlers {
   /** Close the browser dialog over the app's page: OK, or Cancel. */
   answerDialog: (accept: boolean) => Promise<void>;
   /** What the proxy has seen, when this browser was launched through one. */
-  proxyEvents: (sinceId: string | null) => Promise<BoundaryState>;
+  /** `browser`: `*` for every member of the connection's group, or one member's name. */
+  proxyEvents: (sinceId: string | null, browser?: string) => Promise<BoundaryState>;
   /** Every response kept on disk, across every site and sequence. */
   ruleCatalogue: () => Promise<RuleCatalogueEntry[]>;
   /** One sequence's steps, for its row on the list of sequences. */
@@ -165,9 +166,9 @@ export interface BenchHandlers {
    * Scope what this browser may reach. An empty list reaches every host, which
    * is what browsing without a sequence needs.
    */
-  allowHosts: (hosts: string[]) => Promise<string>;
+  allowHosts: (hosts: string[], browser?: string) => Promise<string>;
   /** Drop the recorded events, keeping every rule and the scope. */
-  clearBoundary: () => Promise<string>;
+  clearBoundary: (browser?: string) => Promise<string>;
   /** Decide what happens to one kind of traffic from now on. */
   setRule: (rule: Record<string, unknown>) => Promise<void>;
   /** Drop the decision against one key. */
@@ -193,7 +194,7 @@ export interface BenchHandlers {
   /** Move one kind to the adjacent step, or between the last step and the gutter. */
   moveActivity: (move: ActivityMove) => Promise<void>;
   /** Answer every unmatched write 403, or forward it. */
-  setRefuseWrites: (on: boolean) => Promise<string>;
+  setRefuseWrites: (on: boolean, browser?: string) => Promise<string>;
   /** Write the decisions onto the open sequence. */
   saveRules: () => Promise<string>;
   recordSequence: (name: string, withAgent: boolean, startUrl: string) => Promise<void>;
@@ -302,6 +303,11 @@ async function readJson(req: IncomingMessage): Promise<any> {
   } catch {
     return {};
   }
+}
+
+/** The group member a proxy action names in its body, where it names one. */
+function browserIn(body: { browser?: unknown }): string | undefined {
+  return typeof body.browser === 'string' && body.browser ? body.browser : undefined;
 }
 
 function send(res: ServerResponse, status: number, body: string, contentType: string): void {
@@ -539,16 +545,17 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
           return send(res, 200, await handlers.saveRules(), 'text/plain; charset=utf-8');
         }
         if (req.method === 'POST' && route === '/proxy/clear') {
-          return send(res, 200, await handlers.clearBoundary(), 'text/plain; charset=utf-8');
+          const body = await readJson(req);
+          return send(res, 200, await handlers.clearBoundary(browserIn(body)), 'text/plain; charset=utf-8');
         }
         if (req.method === 'POST' && route === '/boundary/refuse') {
           const body = await readJson(req);
-          return send(res, 200, await handlers.setRefuseWrites(!!body.on), 'text/plain; charset=utf-8');
+          return send(res, 200, await handlers.setRefuseWrites(!!body.on, browserIn(body)), 'text/plain; charset=utf-8');
         }
         if (req.method === 'POST' && route === '/proxy/allow') {
           const body = await readJson(req);
           const hosts = Array.isArray(body.hosts) ? body.hosts.map(String) : [];
-          return send(res, 200, await handlers.allowHosts(hosts), 'text/plain; charset=utf-8');
+          return send(res, 200, await handlers.allowHosts(hosts, browserIn(body)), 'text/plain; charset=utf-8');
         }
         if (req.method === 'POST' && route === '/bench/open') {
           const { connection } = await readJson(req);
@@ -575,8 +582,9 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
         }
 
         if (req.method === 'GET' && route.startsWith('/proxy/events')) {
-          const since = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams.get('since') || null;
-          return send(res, 200, JSON.stringify(await handlers.proxyEvents(since)), 'application/json');
+          const params = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams;
+          const since = params.get('since') || null;
+          return send(res, 200, JSON.stringify(await handlers.proxyEvents(since, params.get('browser') || undefined)), 'application/json');
         }
 
         if (req.method === 'GET' && route === '/state') {
@@ -595,7 +603,7 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
             case '/save': await handlers.save(String(body.comment ?? '')); break;
             case '/discard': await handlers.discard(); break;
             case '/step-traffic': await handlers.stepTraffic(); break;
-            case '/hold/let': await handlers.releaseWaiting(Number(body.id)); break;
+            case '/hold/let': await handlers.releaseWaiting(Number(body.id), browserIn(body)); break;
             case '/devtools': {
               const said = await handlers.openDevtools();
               return send(res, 200, said, 'text/plain; charset=utf-8');

@@ -30,8 +30,9 @@ import type { MotionSetting } from '../bench/kinds.js';
 import { answerBenchDialog, cancelSequence, replayMotionStep, setStepMotion, discardUnsavedSequence, undoSequence, saveUnsavedSequence, untitledName, commentSequenceStep, describeSequence, dismissSequenceFailure, repairSequenceStep, editSequenceStep, getSequenceState, gotoSequenceStep, insertSequenceCheck, insertSequenceTimer, moveSequenceStep, playSequence, removeSequence, removeSequenceStep, removeSequenceVariable, selectSequence, setSequenceBaseUrl, setSequenceSecret, setSequenceVariable, stepSequence, setPausePoint } from './sequence.js';
 import { markFilm } from './motion-film.js';
 import { type BenchSession, sessions } from './session.js';
-import { openSequence, openSteps, recordedStepOf, summariseBoundary, writeEvents } from './traffic.js';
+import { openSequence, openSteps, recordedStepOf, sumTotals, summariseBoundary, writeEvents } from './traffic.js';
 import { openerEntryOf } from '../activity-index.js';
+import { groupOf, membersOf } from '../groups.js';
 
 /** What the bench server calls, for one connection's session and page. */
 /**
@@ -80,6 +81,93 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
       const label = labels.get(cause);
       return label ? { ...event, causeLabel: label } : event;
     });
+  };
+
+  /** The browsers a bench read spans: every member of this connection's group, or this connection alone. */
+  const membersHere = (): string[] => {
+    const group = groupOf(connection);
+    return group ? membersOf(group) : [connection];
+  };
+
+  /**
+   * The browser an event or pin id came from, and the proxy's own id. Every
+   * proxy numbers its events and pins from one, so an id from a member other
+   * than this connection carries that member's name and a slash before it.
+   */
+  const memberOf = (id: string): { member: string; id: string } => {
+    const member = membersHere().find(name => name !== connection && id.startsWith(`${name}/`));
+    return member ? { member, id: id.slice(member.length + 1) } : { member: connection, id };
+  };
+
+  /** The member a proxy action names, where it names one; this connection otherwise. */
+  const shownBrowser = (browser?: string): string => (browser && membersHere().includes(browser) ? browser : connection);
+
+  /** What one browser's proxy and page watch hold after `sinceId`, with causes labelled where `label` holds. */
+  const boundaryOf = (member: string, sinceId: string | null, label: boolean): BoundaryState => {
+    const proxy = getProxy(member);
+    if (!proxy) {
+      return {
+        running: false, baselineBarred: getMessage('BENCH_BASELINE_NO_PROXY').trim(), allowed: [], refused: 0, refusals: [],
+        refusesWrites: false, refusedWrites: 0,
+        rules: rulesOf(member), names: namesOf(member),
+        checkOutcomes: checkOutcomesFor(member),
+        pauseActions: pauseActionsFor(member),
+        events: writeEvents(member), totals: null, steps: openSteps(member),
+        pageWrites: sessions.get(member)?.writeWatch?.writes.length ?? 0,
+        ...(sessions.get(member)?.site ? { site: sessions.get(member)!.site } : {}),
+        hidden: hiddenOf(member),
+        ...(openSequence(member) ? { forSequence: openSequence(member) } : {}),
+      };
+    }
+    const all = proxy.eventsIn();
+    const rules = proxy.shapeRules();
+    // Asked for by id rather than by clock: the list only grows, and an id
+    // cannot land twice the way a millisecond can.
+    const at = sinceId ? all.findIndex(e => e.id === sinceId) : -1;
+    const events = [...all.slice(at + 1).map(event => ({
+      ...event,
+      ...(() => {
+        const opener = openerEntryOf(event.id);
+        return opener !== undefined ? { openedBy: opener } : {};
+      })(),
+      // The level and whether any step owns it are read here rather than
+      // recomputed in the pane: both are policy over stored evidence, and a
+      // second copy of that policy in the browser would drift from this one.
+      level: levelOf(event),
+      owned: causeOf(event) !== undefined,
+      ...recordedStepOf(member, event),
+      root: event.evidence?.initiator,
+      // What a person decided this shape is. A verdict settles every frame
+      // of that kind, so a row carries the one assigned to its shape even
+      // when the decision was made on a different frame.
+      verdict: event.evidence?.shape ? rules[event.evidence.shape] : undefined,
+    })) as unknown as BoundaryEvent[],
+      ...writeEvents(member, at >= 0 ? all[at].at : 0)].sort((a, b) => a.at - b.at);
+    return {
+      running: true,
+      pageWrites: sessions.get(member)?.writeWatch?.writes.length ?? 0,
+      allowed: proxy.listAllowedHosts(),
+      refused: proxy.blocked,
+      refusals: proxy.refusals(),
+      refusesWrites: proxy.refusesWrites,
+      refusedWrites: proxy.refusedWrites,
+      rules: rulesOf(member),
+      ...(sessions.get(member)?.site ? { site: sessions.get(member)!.site } : {}),
+      checkOutcomes: checkOutcomesFor(member),
+      pauseActions: pauseActionsFor(member),
+      hidden: hiddenOf(member),
+      names: namesOf(member),
+      events: label ? labelCauses(events) : events,
+      // Counted over everything the proxy holds, not over what this pane has
+      // accumulated: a reader who opened the tab late would otherwise see a
+      // summary of their own arrival time.
+      totals: summariseBoundary(all, rules, proxy.socketShapes(), proxy.openSockets(),
+        proxy.listPins().length + proxy.listFramePins().length),
+      steps: openSteps(member),
+      queued: proxy.queue.list(),
+      holding: proxy.queue.held,
+      ...(openSequence(member) ? { forSequence: openSequence(member) } : {}),
+    };
   };
 
   return {
@@ -147,7 +235,7 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
       await recordBenchCall(connection, 'hold', { action: 'step', layers: ['ui'], ...request }, line);
     },
     stepTraffic: async () => { await stepTraffic(connection); },
-    releaseWaiting: async (id: number) => { getProxy(connection)?.queue.releaseOne(id); },
+    releaseWaiting: async (id: number, browser?: string) => { getProxy(shownBrowser(browser))?.queue.releaseOne(id); },
     openDevtools: async () => openDevtools(connection),
     revealMaker: async (ref: number) => revealMaker(connection, ref),
     changeHold: async (action, layers) => {
@@ -188,9 +276,12 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
     repairStep: async (accept: 'selector' | 'element') => { await repairSequenceStep(connection, accept); },
     answerDialog: async (accept: boolean) => { await answerBenchDialog(connection, accept); },
     // A write's value is held by the write watch, which no proxy carries.
-    proxyBody: async (id: string) => getProxy(connection)?.bodyOf(id)
-      ?? sessions.get(connection)?.writeWatch?.writes.find(write => write.id === id)?.value
-      ?? null,
+    proxyBody: async (asked: string) => {
+      const { member, id } = memberOf(asked);
+      return getProxy(member)?.bodyOf(id)
+        ?? sessions.get(member)?.writeWatch?.writes.find(write => write.id === id)?.value
+        ?? null;
+    },
 
     /**
      * Send one reading back to whoever is driving, with the evidence behind it.
@@ -200,8 +291,9 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
      * read goes with the note, because the next step is changing that rule and
      * a report without its inputs cannot be acted on.
      */
-    proxyInvestigate: async (id: string, note: string) => {
-      const live = getProxy(connection);
+    proxyInvestigate: async (asked: string, note: string) => {
+      const { member, id } = memberOf(asked);
+      const live = getProxy(member);
       if (!live) return 'no proxy';
       const event = live.eventsIn().find(e => e.id === id);
       if (!event) return 'that event has been dropped from the ring';
@@ -210,7 +302,7 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
         ? live.eventsIn().filter(e => e.evidence?.shape === shape).length
         : 1;
       await appendEvent(sessions.get(connection)?.session ?? connection, 'investigate', {
-        connection,
+        connection: member,
         note,
         reading: {
           level: levelOf(event), owned: causeOf(event) !== undefined,
@@ -226,16 +318,16 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
       return `sent \u00b7 ${shape ?? event.url} \u00b7 ${alike} of this kind`;
     },
 
-    clearBoundary: async () => {
-      const live = getProxy(connection);
+    clearBoundary: async (browser?: string) => {
+      const live = getProxy(shownBrowser(browser));
       if (!live) return 'no proxy';
       const held = live.eventsIn().length;
       live.clear();
       return held ? `cleared ${held} event${held === 1 ? '' : 's'}` : 'nothing was held';
     },
 
-    allowHosts: async (hosts: string[]) => {
-      const live = getProxy(connection);
+    allowHosts: async (hosts: string[], browser?: string) => {
+      const live = getProxy(shownBrowser(browser));
       if (!live) return 'no proxy';
       live.allowOnly(hosts);
       return hosts.length
@@ -266,8 +358,9 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
      * locally. A frame is held by what it carried, since a socket message has
      * no other durable handle on it.
      */
-    proxyHold: async (id: string) => {
-      const live = getProxy(connection);
+    proxyHold: async (asked: string) => {
+      const { member, id } = memberOf(asked);
+      const live = getProxy(member);
       if (!live) return { text: 'no proxy' };
       const event = live.eventsIn().find(e => e.id === id);
       if (!event) return { text: 'gone' };
@@ -282,20 +375,21 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
         // The pin's id goes back with the answer: without it the pane can hold
         // a value and never let go of it, since nothing else names which hold
         // belongs to which row.
-        return { text: 'HELD', pin: pin.id };
+        return { text: 'HELD', pin: member === connection ? pin.id : `${member}/${pin.id}` };
       }
       if (body === undefined) return { text: 'BINARY - NOT HELD' };
       const pin = live.pinFrame({
         urlIncludes: event.url, direction: event.direction === 'out' ? 'sent' : 'received',
         textIncludes: body, replaceWith: body,
       });
-      return { text: 'HELD', pin: pin.id };
+      return { text: 'HELD', pin: member === connection ? pin.id : `${member}/${pin.id}` };
     },
 
-    proxyRelease: async (pin: string) => {
-      const live = getProxy(connection);
+    proxyRelease: async (asked: string) => {
+      const { member, id } = memberOf(asked);
+      const live = getProxy(member);
       if (!live) return 'no proxy';
-      return live.unpin(pin) ? 'RELEASED' : 'ALREADY GONE';
+      return live.unpin(id) ? 'RELEASED' : 'ALREADY GONE';
     },
 
     ruleCatalogue: async () => (await sessions.get(connection)?.sequences?.catalogueRules().catch(() => [])) ?? [],
@@ -351,69 +445,32 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
       if (!sequences) throw new Error('This bench holds no replay side to run tools through');
       return sequences.callTool(tool, args);
     },
-    proxyEvents: async (sinceId: string | null): Promise<BoundaryState> => {
-      const proxy = getProxy(connection);
-      if (!proxy) {
-        return {
-          running: false, baselineBarred: getMessage('BENCH_BASELINE_NO_PROXY').trim(), allowed: [], refused: 0, refusals: [],
-          refusesWrites: false, refusedWrites: 0,
-          rules: rulesOf(connection), names: namesOf(connection),
-          checkOutcomes: checkOutcomesFor(connection),
-          pauseActions: pauseActionsFor(connection),
-          events: writeEvents(connection), totals: null, steps: openSteps(connection),
-          pageWrites: sessions.get(connection)?.writeWatch?.writes.length ?? 0,
-          ...(sessions.get(connection)?.site ? { site: sessions.get(connection)!.site } : {}),
-          hidden: hiddenOf(connection),
-          ...(openSequence(connection) ? { forSequence: openSequence(connection) } : {}),
-        };
-      }
-      const all = proxy.eventsIn();
-      const rules = proxy.shapeRules();
-      // Asked for by id rather than by clock: the list only grows, and an id
-      // cannot land twice the way a millisecond can.
-      const at = sinceId ? all.findIndex(e => e.id === sinceId) : -1;
+    /**
+     * Without `browser`, or for a connection in no group, this connection's
+     * boundary. With it, the group's: `*` merges every member's events in time
+     * order and reads the proxy settings from this connection; a member's name
+     * reads that member alone. Each event then carries the browser it crossed in.
+     */
+    proxyEvents: async (sinceId: string | null, browser?: string): Promise<BoundaryState> => {
+      const members = membersHere();
+      if (browser === undefined || members.length < 2) return boundaryOf(connection, sinceId, true);
+      const shown = browser === '*' ? members : [shownBrowser(browser)];
+      const head = shown.length === 1 ? shown[0] : connection;
+      const reads = shown.map(member => ({ member, state: boundaryOf(member, null, false) }));
+      const merged = reads
+        .flatMap(({ member, state }) => state.events.map(event => ({
+          ...event, connection: member, ...(member === connection ? {} : { id: `${member}/${event.id}` }),
+        })))
+        .sort((a, b) => a.at - b.at);
+      const at = sinceId ? merged.findIndex(event => event.id === sinceId) : -1;
+      const headState = reads.find(read => read.member === head)?.state ?? boundaryOf(head, null, false);
       return {
-        running: true,
-        pageWrites: sessions.get(connection)?.writeWatch?.writes.length ?? 0,
-        allowed: proxy.listAllowedHosts(),
-        refused: proxy.blocked,
-        refusals: proxy.refusals(),
-        refusesWrites: proxy.refusesWrites,
-        refusedWrites: proxy.refusedWrites,
-        rules: rulesOf(connection),
-        ...(sessions.get(connection)?.site ? { site: sessions.get(connection)!.site } : {}),
-        checkOutcomes: checkOutcomesFor(connection),
-        pauseActions: pauseActionsFor(connection),
-        hidden: hiddenOf(connection),
-        names: namesOf(connection),
-        // The level and whether any step owns it are read here rather than
-        // recomputed in the pane: both are policy over stored evidence, and a
-        // second copy of that policy in the browser would drift from this one.
-        events: labelCauses([...all.slice(at + 1).map(event => ({
-          ...event,
-          ...(() => {
-            const opener = openerEntryOf(event.id);
-            return opener !== undefined ? { openedBy: opener } : {};
-          })(),
-          level: levelOf(event),
-          owned: causeOf(event) !== undefined,
-          ...recordedStepOf(connection, event),
-          root: event.evidence?.initiator,
-          // What a person decided this shape is. A verdict settles every frame
-          // of that kind, so a row carries the one assigned to its shape even
-          // when the decision was made on a different frame.
-          verdict: event.evidence?.shape ? rules[event.evidence.shape] : undefined,
-        })) as unknown as BoundaryEvent[],
-          ...writeEvents(connection, at >= 0 ? all[at].at : 0)].sort((a, b) => a.at - b.at)),
-        // Counted over everything the proxy holds, not over what this pane has
-        // accumulated: a reader who opened the tab late would otherwise see a
-        // summary of their own arrival time.
-        totals: summariseBoundary(all, rules, proxy.socketShapes(), proxy.openSockets(),
-          proxy.listPins().length + proxy.listFramePins().length),
-        steps: openSteps(connection),
-        queued: proxy.queue.list(),
-        holding: proxy.queue.held,
-        ...(openSequence(connection) ? { forSequence: openSequence(connection) } : {}),
+        ...headState,
+        running: reads.some(read => read.state.running),
+        pageWrites: reads.reduce((sum, read) => sum + read.state.pageWrites, 0),
+        events: labelCauses(merged.slice(at + 1)),
+        totals: sumTotals(reads.map(read => read.state.totals)),
+        ...(shown.length === 1 && !sessions.get(head)?.writeWatch ? { unwatched: true } : {}),
       };
     },
     keepRecordedStep: async () => { await keepRecordedStep(connection); },
@@ -571,8 +628,8 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
       const failure = await session.sequences.saveExpected(step, kind, expected);
       if (failure) session.sequenceFailure = failure;
     },
-    setRefuseWrites: async (on: boolean) => {
-      const live = getProxy(connection);
+    setRefuseWrites: async (on: boolean, browser?: string) => {
+      const live = getProxy(shownBrowser(browser));
       if (!live) return 'no proxy';
       live.refuseUnmatchedWrites(on);
       await persistRules(connection, false, on ? 'unmatched writes refused' : 'unmatched writes forwarded');

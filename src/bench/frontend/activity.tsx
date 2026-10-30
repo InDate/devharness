@@ -20,7 +20,11 @@ import type { BenchView, BoundaryEvent, BoundaryState, SequenceState } from '../
  * what a row can do. Read by every screen that lists a step's activity, so the
  * rows it shows and the decisions made on them are the same wherever they are.
  */
-export function useActivity(base: string, sequence: SequenceState | undefined, motionDetect = true, film?: BenchView['film']) {
+/**
+ * `browser` is the `browser` query the boundary is read with (see
+ * `browserQuery`): empty reads the bench's own browser alone.
+ */
+export function useActivity(base: string, sequence: SequenceState | undefined, motionDetect = true, film?: BenchView['film'], browser = '') {
   const [boundary, setBoundary] = useState<BoundaryState | null>(null);
   const [reading, setReading] = useState<string | null>(null);
   // Each row's last verdict, kept while the payload of a newer crossing of its
@@ -51,14 +55,14 @@ export function useActivity(base: string, sequence: SequenceState | undefined, m
     let live = true;
     const poll = async () => {
       try {
-        const res = await fetch(`${base}/proxy/events?since=`);
+        const res = await fetch(`${base}/proxy/events?since=${browser}`);
         if (live) setBoundary(await res.json());
       } catch { /* the bench outlives a restart */ }
     };
     void poll();
     const timer = setInterval(poll, 600);
     return () => { live = false; clearInterval(timer); };
-  }, [base]);
+  }, [base, browser]);
 
 
   const post = async (path: string, body?: Record<string, unknown>) => {

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'preact/hooks';
 import { ToolGlyph } from './tool-glyph.js';
 import { Glyph } from './glyph.js';
 import { Row } from './row.js';
+import { useBrowserChoice } from './browser-choice.js';
 import { NO_TOOL_VALUES, type ToolCard, type ToolFavourite, type ToolGroup, type ToolRun, type ToolValues } from '../wire.js';
 
 type Schema = Record<string, any>;
@@ -172,7 +173,10 @@ export function Tools({ base, client, seed, tool, action: placedAction, onPlace 
     ? { [seedAction === undefined ? seed.tool : `${seed.tool}.${seedAction}`]: JSON.stringify(seed.args, null, 2) }
     : {}));
   const [runs, setRuns] = useState<Record<string, ToolRun | 'running'>>({});
-  const [context, setContext] = useState<ToolContext>({ connection: '', pageUrl: '' });
+  const [read, setContext] = useState<ToolContext>({ connection: '', pageUrl: '' });
+  // Calls run against the chosen browser of the group; with every browser chosen, the bench's own.
+  const choice = useBrowserChoice();
+  const context = choice ? { ...read, connection: choice } : read;
   const [values, setValues] = useState<ToolValues>(NO_TOOL_VALUES);
   const [favourites, setFavourites] = useState<ToolFavourite[]>([]);
   const [readingFavourite, setReadingFavourite] = useState<string | null>(null);

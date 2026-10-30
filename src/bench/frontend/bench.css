@@ -1042,6 +1042,13 @@ nav button.unproxied { color: var(--alert); }
    dot where the disc stands. */
 .connpick { display: inline-flex; align-items: center; gap: 6px; align-self: center; margin-right: 10px; color: var(--muted); }
 .connpick:hover .tabbadge { background: var(--fg); }
+/* Group and browser rows carry their mark before the name; while the group is
+   chosen its browsers' rows are lit. A browser of the group chosen puts its
+   own dot on the face in place of the bench's disc. */
+.connpick select svg { flex: 0 0 auto; margin-right: 6px; color: var(--muted); }
+.connpick.memberface selectedcontent .conndot { display: block; position: absolute; right: 9px; top: 50%; transform: translateY(-50%); }
+.connpick.memberface .statedisc-slot { display: none; }
+.tag.browsertag { color: var(--muted); }
 .connface { position: relative; display: inline-flex; align-items: center; }
 .connface .statedisc-slot { position: absolute; right: 9px; top: 50%; transform: translateY(-50%); margin: 0; z-index: 1; }
 .connpick select, .connpick select::picker(select) { appearance: base-select; }
@@ -1063,6 +1070,9 @@ nav button.unproxied { color: var(--alert); }
 .connpick option .conndot { margin-left: auto; }
 .connpick option:hover { background: var(--panel); }
 .connpick option:checked { color: var(--fg); }
+.connpick option.lit, .connpick option.lit svg { color: var(--accent); }
+.connpick option:disabled { opacity: 0.5; cursor: default; }
+.connpick option:disabled:hover { background: none; }
 .connpick option::checkmark { display: none; }
 .conndot { flex: 0 0 auto; width: 12px; height: 12px; border-radius: 50%; }
 .conndot.idle { box-shadow: inset 0 0 0 1.5px var(--muted); }

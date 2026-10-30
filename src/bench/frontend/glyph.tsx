@@ -31,6 +31,12 @@ export function Glyph({ of }: { of: string }) {
     cog: <><circle cx="8" cy="8" r="3" /><path d="M8 1.4v1.8M8 12.8v1.8M1.4 8h1.8M12.8 8h1.8M3.3 3.3l1.3 1.3M11.4 11.4l1.3 1.3M12.7 3.3l-1.3 1.3M4.6 11.4l-1.3 1.3" /></>,
     cogset: <><circle cx="8" cy="8" r="3" fill="currentColor" /><path d="M8 1.4v1.8M8 12.8v1.8M1.4 8h1.8M12.8 8h1.8M3.3 3.3l1.3 1.3M11.4 11.4l1.3 1.3M12.7 3.3l-1.3 1.3M4.6 11.4l-1.3 1.3" /></>,
     box: <rect x="2.6" y="4" width="10.8" height="8" rx="1" />,
+    // Two browser windows, one behind the other: the browsers of a group.
+    group: <><path d="M4.5 4.5V2.6h9v7h-2" /><rect x="2.5" y="6.4" width="9" height="7" rx="0.8" /><path d="M2.5 8.6h9" /></>,
+    // One browser window: a single browser, beside the group's two.
+    browser: <><rect x="2.5" y="3.5" width="11" height="9" rx="0.8" /><path d="M2.5 6h11" /></>,
+    // A workbench, top and two legs: a browser whose page is the bench.
+    bench: <><path d="M1.8 6h12.4" /><path d="M2.5 6v1.8h11V6" /><path d="M4 7.8v5.2M12 7.8v5.2" /></>,
     code: <><path d="M5.5 4.5 2 8l3.5 3.5" /><path d="M10.5 4.5 14 8l-3.5 3.5" /></>,
     screen: <><rect x="2" y="3" width="12" height="8.5" rx="1" /><path d="M6 14h4" /><path d="M8 11.5V14" /></>,
     network: <><path d="M2 6h10" /><path d="M9.5 3.5 12 6 9.5 8.5" /><path d="M14 10H4" /><path d="M6.5 7.5 4 10l2.5 2.5" /></>,

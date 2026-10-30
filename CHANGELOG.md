@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A step that starts an animation repeating forever settles.** The
+  tracker held the step's cause until the animation ended, so a spinner a
+  failed send never hides left the step unsettled for good, and its reply's
+  request read as still arriving in every play. Such an animation's hold now
+  ends a task after it starts; the animation keeps its cause.
 - **A Web Animation's end is a row of its step when the step is compared.**
   Chrome reports no finish of a Web Animation, so the record learnt of one
   at its next sweep of the page, which could come two steps later; the

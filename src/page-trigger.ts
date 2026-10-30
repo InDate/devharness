@@ -819,6 +819,19 @@ function installPageTrigger(g: any): void {
       started.set(event.target, named);
       if (object) ofStart.set(object, begun);
       hold(cause.root);
+      // An animation that repeats forever adds nothing after it starts, and
+      // held its step open for good: the send spinner a failed send never
+      // hides left key i's step unsettled, its reply's POST read as still
+      // arriving in every play. Its hold ends a task after it starts; the
+      // object keeps its cause for the row.
+      const iterations = object ? (object as any).effect?.getComputedTiming?.().iterations : undefined;
+      if (iterations === Infinity && cause.root) {
+        nextTask(() => {
+          if (named.get(name) !== begun) return;
+          named.set(name, { words: begun.words });
+          release(cause.root);
+        });
+      }
     }, { capture: true, passive: true });
   }
   /** What started a CSS transition or keyframe animation: its own run event's cause, else the newest change on its element. */

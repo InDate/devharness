@@ -226,6 +226,24 @@ describe('the work outstanding under an input\'s root', () => {
     expect(tracker.ofAnimation(rise)).toBe('page load');
   });
 
+  it('lets an input settle once the animation it started repeating forever has started, keeping the animation its cause', () => {
+    const { page, fire, turn, mutate, reports } = pageWithTracker();
+    const tracker = vm.runInContext("globalThis[Symbol.for('devharness.trigger')]", page);
+    const spinner: any = { matches: () => false };
+    const spin = { animationName: 'spin', effect: { target: spinner, pseudoElement: null, getTiming: () => ({ delay: 0 }), getComputedTiming: () => ({ iterations: Infinity }) } };
+    spinner.getAnimations = () => [spin];
+    fire('keydown', { key: 'i' });
+    const keyRoot = tracker.rootNow().id;
+    mutate(spinner);
+    fire('animationstart', { target: spinner, animationName: 'spin', pseudoElement: '' });
+    turn();
+    turn();
+    turn();
+
+    expect(reports.filter(one => one.id === keyRoot).at(-1)).toEqual({ id: keyRoot, open: false });
+    expect(tracker.rootOfAnimation(spin)?.id).toBe(keyRoot);
+  });
+
   it('watches each shadow root the page attaches for the changes made in it', () => {
     const { page, observed } = pageWithTracker();
     const root = vm.runInContext('new Element().attachShadow({ mode: "open" })', page);

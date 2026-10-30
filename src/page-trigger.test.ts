@@ -156,6 +156,16 @@ describe('the work outstanding under an input\'s root', () => {
     expect(tracker.current()).toBe('drag');
   });
 
+  it("credits a transition in a same-origin frame to the parent's input, where the parent's code changed the frame", () => {
+    const { page, mutate } = pageWithTracker();
+    const tracker = vm.runInContext("globalThis[Symbol.for('devharness.trigger')]", page);
+    page.parent = { [Symbol.for('devharness.trigger')]: { current: () => 'key 6', rootNow: () => ({ id: 'top:4' }) } };
+    const box = { matches: () => false };
+    mutate(box);
+
+    expect(tracker.rootOfAnimation({ effect: { target: box }, transitionProperty: 'transform' })?.id).toBe('top:4');
+  });
+
   it('credits the transition of an element the page scrolled from under the pointer to that scroll', () => {
     const { page, fire } = pageWithTracker();
     const tracker = vm.runInContext("globalThis[Symbol.for('devharness.trigger')]", page);

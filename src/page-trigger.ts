@@ -684,12 +684,26 @@ function installPageTrigger(g: any): void {
   interface Change { words: string; at: number; root?: Root }
   const changed = new WeakMap<object, Change>();
   if (typeof g.MutationObserver === 'function') {
+    // A same-origin frame's own tracker marks none of its parent's input, so
+    // a change the parent's code makes in it - a key handler calling into the
+    // frame - read as the frame's page load, with no root (credit-every-
+    // catalog-key, key 6). With no live mark of its own, a frame takes the
+    // live cause of the document that embeds it.
+    const parentCause = (): { words?: string; root?: Root } | undefined => {
+      if (last && last.live) return undefined;
+      try {
+        const parent = g.parent !== g ? g.parent?.[Symbol.for('devharness.trigger')] : undefined;
+        const words = parent?.current?.(false);
+        return words ? { words, root: parent.rootNow?.() } : undefined;
+      } catch { return undefined; }
+    };
     const recordChanges = (records: any[]) => {
       if (!records.length) return;
-      const words = current();
+      const inherited = parentCause();
+      const words = inherited?.words ?? current();
       if (!words) return;
       const at = now();
-      const root = liveRoot();
+      const root = inherited ? inherited.root : liveRoot();
       const change: Change = { words, at, ...(root ? { root } : {}) };
       for (const record of records) {
         changed.set(record.target, change);

@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Motion in a same-origin frame is credited to the parent's input that
+  set it off.** A frame runs a tracker of its own, which marks none of the
+  parent's input, so a key handler calling into the frame left its motion
+  reading as the frame's page load, placed by time. A frame with no live
+  cause of its own now takes the live cause of the document that embeds it.
 - **A drag reads as a drag from its first move.** An element taking pointer
   capture gets a `pointerover` at the point of the move that follows, and
   the tracker read that move as a pointer standing still, so it marked no

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { PageTime, attachPageTime } from './page-time.js';
+import { PageTime, attachPageTime, pageTimeOf } from './page-time.js';
 import { forgetConnection, recordHeld, recordReleased } from './hold.js';
 
 /** A page time over a session that logs each command as the CSS rate or the clock control it is. */
@@ -38,6 +38,36 @@ describe('page time - the clock and the CSS rate driven together', () => {
 
     expect(log).toEqual(['clock rate', 'clock resume', 'css 0.25']);
     expect(time.playbackRate).toBe(0.25);
+  });
+
+  it('sets the page speed again on a new document, and nothing at real time', async () => {
+    const log: string[] = [];
+    let fire: () => void = () => {};
+    const detach = attachPageTime('navigated', {
+      send: async (method: string, params?: Record<string, unknown>) => {
+        if (method === 'Animation.setPlaybackRate') log.push(`css ${params?.playbackRate}`);
+        if (method === 'Runtime.evaluate') log.push(`clock ${/\]\?\.([a-zA-Z]+\([^)]*\))/.exec(String(params?.expression))?.[1]}`);
+        return { result: {} };
+      },
+    }, undefined, watcher => { fire = watcher; return () => {}; });
+    const time = pageTimeOf('navigated')!;
+
+    fire();
+    await new Promise(r => setTimeout(r, 0));
+    expect(log).toEqual([]);
+
+    await time.setRate(0.25);
+    log.length = 0;
+    fire();
+    await new Promise(r => setTimeout(r, 0));
+    expect(log).toEqual(['css 0.25', 'clock rate(0.25)']);
+
+    await time.setRate(1);
+    log.length = 0;
+    fire();
+    await new Promise(r => setTimeout(r, 0));
+    expect(log).toEqual([]);
+    detach();
   });
 
   it('answers nothing for a page with no clock, and goes on', async () => {

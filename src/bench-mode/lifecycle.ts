@@ -57,8 +57,13 @@ export async function startBench(params: {
   // The page's own time where the bench was handed its debugger connection;
   // a bench on a tab of its own drives one through its own session, kept to
   // itself so it stands in for no other tab's.
-  const time = (params.debugger ? pageTimeOf(connection) : undefined)
-    ?? new PageTime(connection, { send: (method, args) => client.send(method as any, args as any) });
+  const debuggerTime = params.debugger ? pageTimeOf(connection) : undefined;
+  const time = debuggerTime ?? new PageTime(connection, { send: (method, args) => client.send(method as any, args as any) });
+  if (!debuggerTime) {
+    client.on('Runtime.executionContextCreated', (event: any) => {
+      if (event.context?.auxData?.isDefault) void time.newDocument();
+    });
+  }
 
   const session: BenchSession = {
     client,

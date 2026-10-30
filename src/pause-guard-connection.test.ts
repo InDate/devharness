@@ -13,6 +13,7 @@ function pausedConnections() {
     getPausedInfo: () => ({ paused: true, location: { url: 'app.js', lineNumber: 4 } }),
     getCallStack: () => [],
     watchPause: () => () => {},
+    watchNewDocument: () => () => {},
   } as any;
   connectionManager.createConnection(cdp, undefined, undefined, undefined, 'localhost', 9229, 'api-server');
   return connectionManager.getAllConnections();

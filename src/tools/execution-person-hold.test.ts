@@ -18,6 +18,7 @@ function fakeCdpManager() {
     getLogpointLimitExceeded: () => undefined,
     getCallStack: () => [],
     watchPause: () => () => {},
+    watchNewDocument: () => () => {},
     send: async () => ({}),
     pause: async () => { state.paused = true; },
     resume: async () => { state.paused = false; state.resumes++; },

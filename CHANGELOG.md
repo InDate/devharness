@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A rate set with `hold rate` holds across a navigation.** A new document
+  starts its CSS animations and its page clock at 1×, while devharness kept
+  the rate it was given, so after a navigation the page ran at real time and
+  the bench's speed control still read the slower rate. Each new document now
+  takes the rate again as its execution context is created, on a debugger
+  connection and on a bench with none.
+
 ## [0.17.5] - 2026-10-29
 
 ### Fixed

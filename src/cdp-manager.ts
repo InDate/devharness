@@ -133,6 +133,7 @@ export class CDPManager {
   private pauseCallback: (() => void) | null = null;
   private resumeCallback: (() => void) | null = null;
   private pauseWatchers = new Set<(paused: boolean, event?: any) => void>();
+  private documentWatchers = new Set<() => void>();
 
   // DOMDebugger state for advanced breakpoints
   private domBreakpoints: Map<string, DOMBreakpointInfo> = new Map();
@@ -175,6 +176,12 @@ export class CDPManager {
   watchPause(watcher: (paused: boolean, event?: any) => void): () => void {
     this.pauseWatchers.add(watcher);
     return () => { this.pauseWatchers.delete(watcher); };
+  }
+
+  /** Receive each new document's default execution context, for as long as the returned stop is not called. */
+  watchNewDocument(watcher: () => void): () => void {
+    this.documentWatchers.add(watcher);
+    return () => { this.documentWatchers.delete(watcher); };
   }
 
   private notePause(paused: boolean, event?: any): void {
@@ -384,6 +391,14 @@ export class CDPManager {
       Runtime.consoleAPICalled((params: CDPConsoleMessage) => {
         if (this.consoleMessageCallback) {
           this.consoleMessageCallback(params);
+        }
+      });
+
+      // An iframe's context counts as well: the CSS rate is set for every frame's timeline at once.
+      Runtime.executionContextCreated((params: any) => {
+        if (!params.context?.auxData?.isDefault) return;
+        for (const watcher of this.documentWatchers) {
+          try { watcher(); } catch { /* one watcher's failure leaves the others fed */ }
         }
       });
 

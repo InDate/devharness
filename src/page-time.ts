@@ -114,6 +114,14 @@ export class PageTime {
     await this.control(`rate(${Number(playbackRate)})`);
   }
 
+  /**
+   * A new document starts its CSS animations and its clock at 1×, while the
+   * page's speed outlasts the document; a speed other than 1 is set on it again.
+   */
+  async newDocument(): Promise<void> {
+    if (this.speed !== 1) await this.setRate(this.speed);
+  }
+
   /** Queue the app's frame callbacks in place of Chrome's frames; false on a page with no clock. */
   async holdFrames(): Promise<boolean> {
     return (await this.control('holdFrames() === true')) === true;
@@ -203,12 +211,14 @@ function heldByDevharness(connection: string): boolean {
  * Make the page time of a connection, driven through `channel`; returns its
  * detach. With `watchPause`, page time follows the page's stops: it stops
  * when the page stops under a hold of devharness's, and runs when the page
- * runs under none - whoever paused or resumed it.
+ * runs under none - whoever paused or resumed it. With `watchNewDocument`,
+ * each new document takes the page's speed.
  */
 export function attachPageTime(
   connection: string,
   channel: TimeChannel,
   watchPause?: (watcher: (paused: boolean) => void) => () => void,
+  watchNewDocument?: (watcher: () => void) => () => void,
 ): () => void {
   const time = new PageTime(connection, channel);
   pageTimes.set(connection, time);
@@ -217,8 +227,10 @@ export function attachPageTime(
     if (paused && held) void time.pauseClock();
     else if (!paused && !held) void time.resumeClock();
   });
+  const unwatchDocuments = watchNewDocument?.(() => void time.newDocument());
   return () => {
     unwatch?.();
+    unwatchDocuments?.();
     if (pageTimes.get(connection) === time) pageTimes.delete(connection);
   };
 }

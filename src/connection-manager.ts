@@ -210,7 +210,10 @@ export class ConnectionManager {
     // The page's time is driven through the same session that stops its code,
     // and stops with a code hold: a timer set before the hold fires as though
     // the hold took no time.
-    const detachTime = attachPageTime(reference, { send: (method, params) => cdp.send(method, params) }, watcher => cdp.watchPause(watcher));
+    const detachTime = attachPageTime(
+      reference, { send: (method, params) => cdp.send(method, params) },
+      watcher => cdp.watchPause(watcher), watcher => cdp.watchNewDocument(watcher),
+    );
     const time = pageTimeOf(reference)!;
     const detach = attachLayer(reference, 'code', {
       engage: async () => { await time.pauseClock(); await cdp.pause(); return standing(); },

@@ -36,6 +36,7 @@ function pausedCdp(url = 'app.js', lineNumber = 41) {
     getScriptUrl: () => url,
     getCallStack: () => [],
     watchPause: () => () => {},
+    watchNewDocument: () => () => {},
     waitForPause: vi.fn(async () => undefined),
     setBreakpoint: vi.fn(async () => ({ breakpointId: 'bp-1', location: { lineNumber, columnNumber: 0 } })),
     removeBreakpoint: vi.fn(async () => undefined),

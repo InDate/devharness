@@ -271,9 +271,10 @@ export function currentCursor(): ProxyCursor | undefined {
  * Each call as it started, newest last: every tool call an agent makes, and
  * every step a run takes, read-only ones included. A check of what a step
  * owns names that step by how many calls back it stands, so the list holds
- * every call, and each carries its History entry once the call is recorded.
+ * every call, and each carries its History entry once the call is recorded,
+ * and the connection it ran on where it names one.
  */
-export interface CallStart { at: number; entry?: number }
+export interface CallStart { at: number; entry?: number; connection?: string }
 const callStarts: CallStart[] = [];
 const MAX_CALL_STARTS = 500;
 
@@ -283,9 +284,11 @@ export function noteCallStart(call: Omit<CallStart, 'at'> = {}, at = Date.now())
 }
 
 /** The newest call's History entry: a run step is noted before its call is recorded. */
-export function nameNewestCall(entry: number): void {
+export function nameNewestCall(entry: number, connection?: string): void {
   const newest = callStarts[callStarts.length - 1];
-  if (newest && newest.entry === undefined) newest.entry = entry;
+  if (!newest || newest.entry !== undefined) return;
+  newest.entry = entry;
+  if (connection !== undefined) newest.connection = connection;
 }
 
 /**

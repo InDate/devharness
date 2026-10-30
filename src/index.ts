@@ -547,8 +547,9 @@ async function executeToolCall(calledName: string, calledParams: Record<string, 
     // A run's step was already counted as a call by the executor that ran it,
     // and a replay call walks steps counted on their own; a second start
     // would stand between a traffic check and the step it counts back to.
-    if (!runsCalls(toolName) && !place.run) noteCallStart({ entry: index });
-    else if (place.run) nameNewestCall(index!);
+    const called = typeof validation.data.connection === 'string' ? sanitizeReference(validation.data.connection) : undefined;
+    if (!runsCalls(toolName) && !place.run) noteCallStart({ entry: index, ...(called ? { connection: called } : {}) });
+    else if (place.run) nameNewestCall(index!, called);
     // A run marked this step before its call was recorded; the entry joins
     // what the step causes to the call that caused it.
     if (place.run) attachEntryToCursor(index);
@@ -847,7 +848,8 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
       commandIndex = commandRecorder.getCurrentHistoryIndex();
       // A replay call walks steps that each start a call of their own; counted
       // too, it would stand between a traffic check and the step it counts back to.
-      if (!runsCalls(toolName)) noteCallStart({ entry: commandIndex });
+      const called = typeof validation.data.connection === 'string' ? sanitizeReference(validation.data.connection) : undefined;
+      if (!runsCalls(toolName)) noteCallStart({ entry: commandIndex, ...(called ? { connection: called } : {}) });
     }
 
     // Check for failed monitored ports

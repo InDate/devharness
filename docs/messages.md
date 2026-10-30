@@ -4812,6 +4812,15 @@ No baseline taken for "{{sequence}}" on `{{connection}}`, and the one before it 
 
 ---
 
+## BENCH_BASELINE_NO_PROXY
+
+**Type:** error
+**Code:** BENCH_BASELINE_NO_PROXY
+
+a baseline keeps what crosses the proxy, and this browser was not launched through one
+
+---
+
 ## BENCH_NOT_ACTIVE
 
 **Type:** error
@@ -4828,6 +4837,24 @@ No baseline taken for "{{sequence}}" on `{{connection}}`, and the one before it 
 **Once per session:**
 
 Called directly, a check answers held or failed and the call itself succeeds; `assert` is a check whose failure stops a run, and `wait` a check with a time limit. `owns` counts what is credited to the step `stepsBack` names, by credit in the observation log rather than by time: the default 1 is the call before the check, every call counts, in a run each step, and the answer names where a matching observation credited elsewhere went. A request or frame match follows a pin's rules. The count is read once the roots credited to that step settle, its work in the page done, so a later arrival cannot break it; `withinMs` bounds the wait on a step whose work runs on, a loop, at 10s where unset. As a sequence step, `connection` comes from the run, and a `{ run }` outcome with no `resumeAt` carries on at the next step.
+
+---
+
+## CHECK_OWNS_NO_PROXY
+
+**Type:** error
+**Code:** CHECK_OWNS_NO_PROXY
+
+A count of requests or frames reads what crosses the proxy, and "{{connection}}", the browser of the call {{back}} back, was not launched through one, so its traffic is never recorded and the count would read 0 whatever it sent. Launch it with `connection({ action: 'launch', connection: '{{connection}}', proxy: true })`.
+
+---
+
+## CHECK_SOCKET_NO_PROXY
+
+**Type:** error
+**Code:** CHECK_SOCKET_NO_PROXY
+
+A socket check reads what crosses the proxy, and "{{connection}}" was not launched through one. Launch it with `connection({ action: 'launch', connection: '{{connection}}', proxy: true })`.
 
 ---
 

@@ -2,6 +2,7 @@ import { entrySettled, onEntrySettled } from '../root-credit.js';
 import { getOutputPath } from '../helpers/paths.js';
 import { debugLog } from '../debug-logger.js';
 import { getProxy } from '../proxy/registry.js';
+import { getMessage } from '../messages.js';
 import type { ProxyEvent } from '../proxy/intercept-proxy.js';
 import type { StepTraffic } from '../annotation.js';
 import type { SequenceState, RunRow, RunsView } from '../bench/wire.js';
@@ -134,7 +135,7 @@ export async function baselineSequence(connection: string): Promise<SequenceStat
   if (!session?.sequences) return undefined;
   const proxy = getProxy(connection);
   if (!proxy) {
-    session.sequenceFailure = 'a baseline keeps what crosses the proxy, and this browser was not launched through one';
+    session.sequenceFailure = getMessage('BENCH_BASELINE_NO_PROXY').trim();
     return getSequenceState(connection);
   }
   await letGoForRun(session);

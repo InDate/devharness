@@ -20,6 +20,8 @@ import { isExtendedSelector, parseExtendedSelector } from '../utils/selector-res
 import { abortableSleep, isAbortError, throwIfAborted } from '../utils/abort.js';
 import { evaluateCondition, type ExecutionContext } from './replay-executor.js';
 import { callBack, getProxy } from '../proxy/registry.js';
+import { readsCrossings } from '../bench/check-words.js';
+import { getMessage } from '../messages.js';
 import type { CrossingMatch, ProxyEvent } from '../proxy/intercept-proxy.js';
 import { observationsIn, observationsOf, recordOf, type Observation, type ObservationKind } from '../observation-log.js';
 import { whenSettled } from '../root-credit.js';
@@ -528,9 +530,7 @@ async function readerFor(
   if (form === 'socket') {
     const proxy = deps.connection ? getProxy(deps.connection) : undefined;
     if (!proxy) {
-      throw new CheckError(
-        `a socket check reads what crosses the proxy, and "${deps.connection ?? '(no connection)'}" was not launched through one - connection({ action: 'launch', proxy: true })`,
-        'no-proxy');
+      throw new CheckError(getMessage('CHECK_SOCKET_NO_PROXY', { connection: deps.connection ?? '(no connection)' }), 'no-proxy');
     }
     const wantOpen = spec.condition !== 'closed';
     return async () => {
@@ -545,6 +545,11 @@ async function readerFor(
     const call = callBack(back);
     if (!call) throw new CheckError(`no call stands ${back} back`, 'invalid');
     const match = spec.owns!;
+    // Requests and frames are recorded only as they cross a proxy, so a step on
+    // a browser outside one owns none whatever it sent.
+    if (readsCrossings(match) && call.connection !== undefined && !getProxy(call.connection)) {
+      throw new CheckError(getMessage('CHECK_OWNS_NO_PROXY', { connection: call.connection, back }), 'no-proxy');
+    }
     const operator = spec.operator ?? 'gte';
     const target = spec.count ?? 1;
     // What the step caused lands until its roots settle, so the count is read

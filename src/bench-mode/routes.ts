@@ -6,6 +6,7 @@ import { appendEvent } from '../session-events.js';
 import { holdableLayers, holderWord, holdReading } from '../hold.js';
 import type { BenchHandlers } from '../bench-control.js';
 import { getProxy, checkOutcomesFor } from '../proxy/registry.js';
+import { getMessage } from '../messages.js';
 import { levelOf, causeOf } from '../proxy/intercept-proxy.js';
 import { getIssues } from '../issue-tracker.js';
 import { addFavourite, readFavourites, removeFavourite } from './favourites.js';
@@ -354,7 +355,7 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
       const proxy = getProxy(connection);
       if (!proxy) {
         return {
-          running: false, allowed: [], refused: 0, refusals: [],
+          running: false, baselineBarred: getMessage('BENCH_BASELINE_NO_PROXY').trim(), allowed: [], refused: 0, refusals: [],
           refusesWrites: false, refusedWrites: 0,
           rules: rulesOf(connection), names: namesOf(connection),
           checkOutcomes: checkOutcomesFor(connection),

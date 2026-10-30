@@ -574,7 +574,7 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
             // step; its time is what the button's words carry.
             const at = Math.max(0, ...(sequence.steps ?? []).map(step => step.traffic?.recordedAt ?? 0));
             const stop = barred({ idle: true })
-              ?? (boundary && !boundary.running ? 'a baseline keeps what crosses the proxy, and this browser was not launched through one' : null);
+              ?? (boundary && !boundary.running ? boundary.baselineBarred ?? null : null);
             const when = at ? new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null;
             return (
               <button class={rebaselining ? 'chip-toggle sure' : 'chip-toggle'} {...held(stop)}

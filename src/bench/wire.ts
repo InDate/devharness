@@ -1074,6 +1074,8 @@ export interface BoundaryState {
   /** Every hidden kind held for the site, each marked as the open sequence uses it. */
   hidden?: HiddenKind[];
   running: boolean;
+  /** Why a baseline cannot be kept, sent while the browser runs outside the proxy. */
+  baselineBarred?: string;
   /** The origin whose site rules are armed, when one is known. */
   site?: string;
   /** A person's names for kinds of traffic, by rule key. */

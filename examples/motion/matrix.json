@@ -112,7 +112,9 @@
       },
       "slow": {
         "expect": "rate sets its playback rate",
-        "today": "unmeasured"
+        "today": "works",
+        "basis": "sequence:slow-carries-across-navigation",
+        "note": "A check fails the run unless the Folders panel's transform transition runs at 0.1 to 0.45 of wall time on a page loaded after rate 0.25, read from its first started frame, with the page clock at 0.25"
       }
     },
     "css-keyframes": {
@@ -127,7 +129,9 @@
       },
       "slow": {
         "expect": "rate sets its playback rate",
-        "today": "unmeasured"
+        "today": "works",
+        "basis": "sequence:slow-carries-across-navigation",
+        "note": "A check fails the run unless the badge's pop keyframes run at 0.1 to 0.45 of wall time on a page loaded after rate 0.25, and the catalog marquee at 0.6 to 1.4 once rate 1 is set and a new page loaded"
       }
     },
     "waapi": {

@@ -149,6 +149,47 @@ describe('a motion on a page slowed by rate', () => {
   });
 });
 
+describe('a scroll whose events stall part-way', () => {
+  it('stays one motion past the quiet time, and closes at its scrollend', () => {
+    const { motion, advance, scrollTo, fireWindow, reports } = pageWithMotion();
+    motion.start();
+    for (const y of [100, 200, 300]) { scrollTo(y); advance(16); }
+    advance(313);
+    for (const y of [2000, 3000, 3298]) { scrollTo(y); advance(16); }
+
+    expect(reports.map(r => r.phase)).toEqual(['open']);
+    fireWindow('scrollend');
+    expect(reports.map(r => r.phase)).toEqual(['open', 'close']);
+    expect(reports[1]).toMatchObject({ source: 'scroll', property: 'scrollY', from: '0', to: '3298', frames: 6 });
+  });
+
+  it("keeps what the page's scroll handler writes in one motion with the scroll, closed at the same scrollend", () => {
+    const { motion, writeStyle, advance, setTrigger, fireWindow, reports } = pageWithMotion();
+    motion.start();
+    setTrigger('scroll · key . · scrollIntoView()');
+    writeStyle('transform: translateY(40px);');
+    advance(16);
+    advance(313);
+    writeStyle('transform: translateY(1319px);');
+    advance(16);
+
+    expect(reports.filter(r => r.phase === 'close')).toHaveLength(0);
+    fireWindow('scrollend');
+    expect(reports.filter(r => r.phase === 'close')).toMatchObject([{ property: 'transform', to: 'translateY(1319px)', frames: 2 }]);
+  });
+
+  it('closes a scroll that raises no scrollend once it has been still for a second', () => {
+    const { motion, advance, scrollTo, reports } = pageWithMotion();
+    motion.start();
+    scrollTo(100);
+    advance(16);
+    advance(900);
+    expect(reports.map(r => r.phase)).toEqual(['open']);
+    advance(200);
+    expect(reports.map(r => r.phase)).toEqual(['open', 'close']);
+  });
+});
+
 describe('a motion report in the page\'s record', () => {
   it('keeps the page-time length for the row and the wall-time length for where it ended', () => {
     const record = new AnimationRecord('conn');

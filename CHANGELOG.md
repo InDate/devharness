@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A scroll stays one row when the page stalls part-way through it.** A
+  motion run closed after 120ms without a change, so a main thread busy for
+  313ms in the middle of a smooth scroll split it into two rows, and the
+  step mismatched its baseline. A scroll, and what the page's scroll handlers
+  write, now closes at the `scrollend` Chrome fires once the scroll has
+  nothing left to move; a scroll that raises none closes after 1s still.
 - **A slowed motion's row ends where the motion did, with its frames.** The
   page's motion watch stamped each run in page time, which devharness placed
   on wall time, so at a rate of 0.25 a run's end landed early by its wall

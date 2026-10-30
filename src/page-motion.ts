@@ -12,7 +12,8 @@
  *
  * Changes to one element's one property in a row are one motion: it opens at
  * the first change and closes once no change has come for QUIET_MS of page
- * time, so a 60-frame loop reads as one row and not sixty. A held page's time
+ * time, so a 60-frame loop reads as one row and not sixty; a scroll, and what
+ * the page's scroll handlers write, closes at the scrollend. A held page's time
  * stands still, so a motion it interrupts stays open until the page runs on.
  * Each motion is reported twice through the binding devharness adds: as it
  * opens, so its step reads it while the step's comparison runs, and as it
@@ -80,6 +81,13 @@ function installPageMotion(g: any): void {
   if (typeof g.document === 'undefined' || g[Symbol.for('devharness.motion')]) return;
 
   const QUIET_MS = 120;
+  // A scroll ends at its scrollend, which Chrome fires once the position has
+  // no updates pending however long the main thread stalls; a stall of 313ms
+  // mid-scroll split one Jump into two runs under the 120ms gap (30 Oct).
+  // A page's scroll handler writes on each scroll event, so what it writes
+  // stalls with the scroll and closes with it. This gap closes only a scroll
+  // that raises no scrollend.
+  const SCROLL_QUIET_MS = 1000;
   // Changes closer than this fall in one frame, on wall time, since frames
   // arrive on it: a page clock at 0.25 stood Chrome's frames 4ms of page time
   // apart and counted a 230-frame scroll as 9 (30 Oct).
@@ -127,11 +135,13 @@ function installPageMotion(g: any): void {
     // The cancelling root was held open for this stop, once however many runs one loop drew.
     if (cancel?.held) { cancel.held = undefined; tracker()?.release?.(cancel.root); }
   };
+  const scrollBound = (run: Run): boolean => run.source === 'scroll' || run.trigger?.startsWith('scroll') === true;
+  const quietOf = (run: Run): number => (scrollBound(run) ? SCROLL_QUIET_MS : QUIET_MS);
   const closeQuiet = (all = false) => {
     sweepTimer = undefined;
     const pageT = pageNow();
     for (const [key, run] of runs) {
-      if (all || pageT - run.pageEndMs >= QUIET_MS) { runs.delete(key); closeRun(run); }
+      if (all || pageT - run.pageEndMs >= quietOf(run)) { runs.delete(key); closeRun(run); }
     }
     if (runs.size && !all) sweepTimer = timers.setTimeout(() => closeQuiet(), QUIET_MS);
   };
@@ -155,11 +165,11 @@ function installPageMotion(g: any): void {
     // A run whose frames start arriving under another input's root - a
     // scroll call taking over a wheel's scroll - splits there, each part
     // under its own cause, and the new part's from-value is where it was.
-    const taken = run && pageT - run.pageEndMs < QUIET_MS ? (source === 'scroll' ? tracker()?.rootOfScroll?.() : tracker()?.rootNow?.()) : undefined;
+    const taken = run && pageT - run.pageEndMs < quietOf(run) ? (source === 'scroll' ? tracker()?.rootOfScroll?.() : tracker()?.rootNow?.()) : undefined;
     // Inputs of one step - the wheel ticks of one scroll step - carry one run.
     const split = run !== undefined && taken !== undefined && newerRoot(taken.id, run.root?.id) && (taken.step === undefined || taken.step !== run.root?.step);
     if (split) from = run!.to;
-    if (run && pageT - run.pageEndMs < QUIET_MS && !split) {
+    if (run && pageT - run.pageEndMs < quietOf(run) && !split) {
       if (t - run.endMs >= FRAME_GAP_MS) run.frames++;
       run.to = to;
       run.endMs = t;
@@ -327,6 +337,9 @@ function installPageMotion(g: any): void {
     if (at.x !== lastScroll.x) note('scroll', g.document.scrollingElement ?? g.document.documentElement, 'scrollX', String(Math.round(lastScroll.x)), String(Math.round(at.x)));
     lastScroll = at;
   };
+  const onScrollEnd = () => {
+    for (const [key, run] of runs) if (scrollBound(run)) { runs.delete(key); closeRun(run); }
+  };
 
   g[Symbol.for('devharness.motion')] = {
     /** Watch the page's motion from now on. */
@@ -339,11 +352,12 @@ function installPageMotion(g: any): void {
         characterData: true, characterDataOldValue: true, childList: true,
       });
       // Registered as devharness's own, so the trigger tracker leaves them unwrapped.
-      tracker()?.own?.(onMedia); tracker()?.own?.(onSmil); tracker()?.own?.(onScroll); tracker()?.own?.(onRunEvent);
+      tracker()?.own?.(onMedia); tracker()?.own?.(onSmil); tracker()?.own?.(onScroll); tracker()?.own?.(onScrollEnd); tracker()?.own?.(onRunEvent);
       for (const type of ['play', 'pause', 'ended']) g.document.addEventListener(type, onMedia, true);
       for (const type of ['beginEvent', 'endEvent']) g.document.addEventListener(type, onSmil, true);
       for (const type of ['transitionrun', 'animationstart']) g.document.addEventListener(type, onRunEvent, true);
       g.addEventListener('scroll', onScroll, { passive: true });
+      g.addEventListener('scrollend', onScrollEnd, { passive: true });
       return true;
     },
     /** Stop watching; open motions close and report as they stand. */
@@ -354,6 +368,7 @@ function installPageMotion(g: any): void {
       for (const type of ['beginEvent', 'endEvent']) g.document.removeEventListener(type, onSmil, true);
       for (const type of ['transitionrun', 'animationstart']) g.document.removeEventListener(type, onRunEvent, true);
       g.removeEventListener('scroll', onScroll);
+      g.removeEventListener('scrollend', onScrollEnd);
       closeQuiet(true);
       on = false;
       return true;

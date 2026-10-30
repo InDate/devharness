@@ -150,7 +150,7 @@ describe('a motion on a page slowed by rate', () => {
 });
 
 describe('a scroll whose events stall part-way', () => {
-  it('stays one motion past the quiet time, and closes at its scrollend', () => {
+  it('stays one motion past the quiet time, and closes once the quiet time has passed after its scrollend', () => {
     const { motion, advance, scrollTo, fireWindow, reports } = pageWithMotion();
     motion.start();
     for (const y of [100, 200, 300]) { scrollTo(y); advance(16); }
@@ -159,11 +159,12 @@ describe('a scroll whose events stall part-way', () => {
 
     expect(reports.map(r => r.phase)).toEqual(['open']);
     fireWindow('scrollend');
+    advance(240);
     expect(reports.map(r => r.phase)).toEqual(['open', 'close']);
     expect(reports[1]).toMatchObject({ source: 'scroll', property: 'scrollY', from: '0', to: '3298', frames: 6 });
   });
 
-  it("keeps what the page's scroll handler writes in one motion with the scroll, closed at the same scrollend", () => {
+  it("keeps what the page's scroll handler writes in one motion with the scroll, closed after the same scrollend", () => {
     const { motion, writeStyle, advance, setTrigger, fireWindow, reports } = pageWithMotion();
     motion.start();
     setTrigger('scroll · key . · scrollIntoView()');
@@ -175,7 +176,18 @@ describe('a scroll whose events stall part-way', () => {
 
     expect(reports.filter(r => r.phase === 'close')).toHaveLength(0);
     fireWindow('scrollend');
+    advance(240);
     expect(reports.filter(r => r.phase === 'close')).toMatchObject([{ property: 'transform', to: 'translateY(1319px)', frames: 2 }]);
+  });
+
+  it('reads the ticks of one wheel scroll, each followed by its own scrollend, as one motion', () => {
+    const { motion, advance, scrollTo, fireWindow, reports } = pageWithMotion();
+    motion.start();
+    for (const y of [400, 800, 1200, 1600, 2000]) { scrollTo(y); fireWindow('scrollend'); advance(16); }
+    advance(240);
+
+    expect(reports.map(r => r.phase)).toEqual(['open', 'close']);
+    expect(reports[1]).toMatchObject({ source: 'scroll', from: '0', to: '2000', frames: 5 });
   });
 
   it('closes a scroll that raises no scrollend once it has been still for a second', () => {

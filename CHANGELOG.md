@@ -13,8 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   motion run closed after 120ms without a change, so a main thread busy for
   313ms in the middle of a smooth scroll split it into two rows, and the
   step mismatched its baseline. A scroll, and what the page's scroll handlers
-  write, now closes at the `scrollend` Chrome fires once the scroll has
-  nothing left to move; a scroll that raises none closes after 1s still.
+  write, now waits for the `scrollend` Chrome fires once the scroll has
+  nothing left to move, and closes 120ms after it unless the next tick of a
+  wheel carries it on; a scroll that raises none closes after 1s still.
+- **A baseline waits for its steps to settle before it replies.** Its reply
+  came back while the last step's motion still ran, so a play started
+  straight after navigated away from it and the baseline kept that step
+  mid-motion, its later rows missing. It now waits for its steps' causes to
+  settle, up to the 10s a run's reply waits, and takes its traffic again.
 - **A slowed motion's row ends where the motion did, with its frames.** The
   page's motion watch stamped each run in page time, which devharness placed
   on wall time, so at a rate of 0.25 a run's end landed early by its wall

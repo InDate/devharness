@@ -13,7 +13,7 @@
  * Changes to one element's one property in a row are one motion: it opens at
  * the first change and closes once no change has come for QUIET_MS of page
  * time, so a 60-frame loop reads as one row and not sixty; a scroll, and what
- * the page's scroll handlers write, closes at the scrollend. A held page's time
+ * the page's scroll handlers write, waits for its scrollend before that gap. A held page's time
  * stands still, so a motion it interrupts stays open until the page runs on.
  * Each motion is reported twice through the binding devharness adds: as it
  * opens, so its step reads it while the step's comparison runs, and as it
@@ -81,12 +81,14 @@ function installPageMotion(g: any): void {
   if (typeof g.document === 'undefined' || g[Symbol.for('devharness.motion')]) return;
 
   const QUIET_MS = 120;
-  // A scroll ends at its scrollend, which Chrome fires once the position has
-  // no updates pending however long the main thread stalls; a stall of 313ms
-  // mid-scroll split one Jump into two runs under the 120ms gap (30 Oct).
-  // A page's scroll handler writes on each scroll event, so what it writes
-  // stalls with the scroll and closes with it. This gap closes only a scroll
-  // that raises no scrollend.
+  // A scroll waits for its scrollend, which Chrome fires once the position
+  // has no updates pending however long the main thread stalls; a stall of
+  // 313ms mid-scroll split one Jump into two runs under the 120ms gap
+  // (30 Oct). Chrome also fires one after each tick of a wheel, so the
+  // scrollend returns the run to the 120ms gap, where the next tick of the
+  // same scroll carries it on. A page's scroll handler writes on each scroll
+  // event, so what it writes waits with the scroll. This gap closes only a
+  // scroll that raises no scrollend.
   const SCROLL_QUIET_MS = 1000;
   // Changes closer than this fall in one frame, on wall time, since frames
   // arrive on it: a page clock at 0.25 stood Chrome's frames 4ms of page time
@@ -136,7 +138,8 @@ function installPageMotion(g: any): void {
     if (cancel?.held) { cancel.held = undefined; tracker()?.release?.(cancel.root); }
   };
   const scrollBound = (run: Run): boolean => run.source === 'scroll' || run.trigger?.startsWith('scroll') === true;
-  const quietOf = (run: Run): number => (scrollBound(run) ? SCROLL_QUIET_MS : QUIET_MS);
+  const scrollEnded = new WeakSet<Run>();
+  const quietOf = (run: Run): number => (scrollBound(run) && !scrollEnded.has(run) ? SCROLL_QUIET_MS : QUIET_MS);
   const closeQuiet = (all = false) => {
     sweepTimer = undefined;
     const pageT = pageNow();
@@ -174,6 +177,7 @@ function installPageMotion(g: any): void {
       run.to = to;
       run.endMs = t;
       run.pageEndMs = pageT;
+      scrollEnded.delete(run);
     } else {
       if (run) { runs.delete(key); closeRun(run); }
       const trigger = triggerOf(source);
@@ -338,7 +342,7 @@ function installPageMotion(g: any): void {
     lastScroll = at;
   };
   const onScrollEnd = () => {
-    for (const [key, run] of runs) if (scrollBound(run)) { runs.delete(key); closeRun(run); }
+    for (const run of runs.values()) if (scrollBound(run)) scrollEnded.add(run);
   };
 
   g[Symbol.for('devharness.motion')] = {

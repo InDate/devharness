@@ -301,6 +301,8 @@ export interface HistoryCommand extends RecordedCommand {
   runStep?: number;
   /** The {{env:}} names this step resolved from a file, and that file - never a value. */
   env?: StepEnv;
+  /** A run's step params as its sequence held them, tokens unresolved, where any param held one. */
+  written?: Record<string, any>;
   /**
    * When a run's step marked the boundary. The executor marks before the
    * step's call is recorded, so `timestamp` falls a few ms inside the window
@@ -601,7 +603,7 @@ export class CommandRecorder {
   /**
    * Record a command (always-on, automatic)
    */
-  async recordCommand(tool: string, params: Record<string, any>, options?: { delay?: number; comment?: string; result?: any; from?: CallChannel; run?: string; runStep?: number; env?: StepEnv }): Promise<void> {
+  async recordCommand(tool: string, params: Record<string, any>, options?: { delay?: number; comment?: string; result?: any; from?: CallChannel; run?: string; runStep?: number; env?: StepEnv; written?: Record<string, unknown> }): Promise<void> {
     // Reset history viewed flag when the agent records a command
     // (it must view history again before inserting). A step the bench or a
     // run adds is not the agent's, and leaves what it viewed standing. A replay
@@ -646,6 +648,7 @@ export class CommandRecorder {
       ...(options?.run !== undefined && { run: options.run }),
       ...(options?.runStep !== undefined && { runStep: options.runStep }),
       ...(options?.env && { env: options.env }),
+      ...(options?.written && { written: JSON.parse(JSON.stringify(options.written)) }),
     };
 
     this.history.push(command);
@@ -766,9 +769,15 @@ export class CommandRecorder {
       // Written as the check it is: assert and wait are faces of it.
       const step = asCheckStep({ tool: cmd.tool, params: paramsClone });
       const fingerprint: ElementFingerprint | undefined = cmd.result?._meta?.click?.fingerprint ?? cmd.result?._meta?.element?.fingerprint;
+      // A param the run resolved from a token goes back to the token as written;
+      // the rest are matched against earlier captures.
+      const params = substituteCapturedValues(step.params, captures);
+      for (const [key, value] of Object.entries(cmd.written ?? {})) {
+        if (key in params && JSON.stringify(value).includes('{{')) params[key] = value;
+      }
       commands.push({
         tool: step.tool,
-        params: substituteCapturedValues(step.params, captures),
+        params,
         ...(cmd.delay !== undefined && { delay: cmd.delay }),
         ...(cmd.comment && { comment: cmd.comment }),
         recordedAt: idx,

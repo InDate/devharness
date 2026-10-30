@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the bench's speed control still read the slower rate. Each new document now
   takes the rate again as its execution context is created, on a debugger
   connection and on a bench with none.
+- **`replay create` keeps the `{{var:...}}` a run's step was written with.**
+  History held a run's steps with their tokens resolved, and `create` matched
+  the values back to earlier captures, which leaves common numbers such as 0
+  as literals; a saved check then compared against the value one run read.
+  A run's step now carries its params as written beside its history entry,
+  and `create` puts back each param that held a token.
 
 ## [0.17.5] - 2026-10-29
 

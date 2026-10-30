@@ -65,6 +65,30 @@ describe('replay create - templatizes literals against earlier saveAs captures',
     expect(created.commands[1].params.selector).toBe('[data-row-key="{{var:personId}}"]');
   });
 
+  it('keeps the token a run\'s step was written with, whatever value it resolved to', async () => {
+    const { recorder, replay } = await makeRecorderWithReplay();
+
+    await recorder.recordCommand(
+      'inspect',
+      { action: 'evaluateExpression', expression: '({ at: 0, wall: 33.4 })', saveAs: 'badge' },
+      { result: evalResult({ at: 0, wall: 33.4 }), run: 'steps', runStep: 0 }
+    );
+    await recorder.recordCommand(
+      'inspect',
+      { action: 'evaluateExpression', expression: 'now - 0 > 0 && wall - 33.4 > 0' },
+      {
+        result: evalResult(true), run: 'steps', runStep: 1,
+        written: { action: 'evaluateExpression', expression: 'now - {{var:badge.at}} > 0 && wall - {{var:badge.wall}} > 0' },
+      }
+    );
+
+    const res = await replay.handler({ action: 'create', name: 'written-tokens', indices: [0, 1] } as any);
+    expect(res.isError).toBeUndefined();
+
+    const created = recorder.listSequences()[0];
+    expect(created.commands[1].params.expression).toBe('now - {{var:badge.at}} > 0 && wall - {{var:badge.wall}} > 0');
+  });
+
   it('does not rewrite a literal that only happens to match a common/short number', async () => {
     const { recorder, replay } = await makeRecorderWithReplay();
 

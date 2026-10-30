@@ -36,7 +36,7 @@ import { getMessage, isElementNotFoundFailure } from '../messages.js';
 import type { CheckOutcome as CheckAction } from './check-tools.js';
 import { assertAsCheck, subjectOf as subjectOfCheck, waitAsCheck } from './check-engine.js';
 import type { CheckOutcome as CheckOutcomeRecord, RanStep } from '../proxy/registry.js';
-import { asStep, atRunStep, atRunStepEnv, originChannel, withinRun } from '../call-origin.js';
+import { asStep, atRunStep, atRunStepEnv, atRunStepWritten, originChannel, withinRun } from '../call-origin.js';
 import { showingPickers } from '../dialog-monitor.js';
 import { addressedConnection, addressesConnection, createsConnection, createdName, isLaunchStep } from './connection-steps.js';
 
@@ -1235,6 +1235,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
       // A stored variable with a value for the run's origin stores that one.
       const forOrigin = ctx.runOrigin !== undefined ? cmd.byOrigin?.[ctx.runOrigin] : undefined;
       if (forOrigin !== undefined) params.expression = JSON.stringify(forOrigin);
+      if (JSON.stringify(cmd.params ?? {}).includes('{{')) atRunStepWritten(cmd.params);
       params = interpolateParams(params, variableStore, runTimestamp, ctx.runEnv, ctx.runEnvFile, ctx.runOrigin);
       if (ctx.runEnv && ctx.runEnvFile) {
         const names = [...new Set([...JSON.stringify(cmd.params).matchAll(/\{\{env:([A-Za-z_][A-Za-z0-9_]*)\}\}/g)]

@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A delayed keyframe animation is credited to the cause that created it.**
+  Its `animationstart` waits out the delay, so the hero title's page-load
+  rise, 100ms in, went to a press made inside those 100ms. An animation with
+  a delay now takes the cause as of its creation: an element change made by
+  then, a mark already live then, or the page load.
 - **Motion in a same-origin frame is credited to the parent's input that
   set it off.** A frame runs a tracker of its own, which marks none of the
   parent's input, so a key handler calling into the frame left its motion

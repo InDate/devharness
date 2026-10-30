@@ -736,6 +736,26 @@ function installPageTrigger(g: any): void {
     }
     return { words: current(), root: liveRoot() };
   };
+  /**
+   * What set an element going as of `at`: the newest change on it or an
+   * ancestor made by then, else the live mark where it already stood then,
+   * else the page load where the page was still loading then.
+   */
+  const causeAsOf = (target: any, at: number): { words?: string; root?: Root } => {
+    let newest: Change | undefined;
+    for (let node = target; node; node = node.parentNode ?? node.host) {
+      const change = changed.get(node);
+      if (change && change.at <= at && at - change.at <= CHANGE_MS && (!newest || change.at > newest.at)) newest = change;
+    }
+    if (newest) return newest;
+    if (last && last.live && last.at <= at) return { words: current(), root: liveRoot() };
+    if (loadedAt === undefined || at <= loadedAt + LOAD_TAIL_MS) return { words: 'page load' };
+    return {};
+  };
+  const pageRate = (): number => {
+    const rate = g[Symbol.for('devharness.clock')]?.state?.().rate;
+    return typeof rate === 'number' && rate > 0 ? rate : 1;
+  };
   const started = new WeakMap<object, Map<string, { words: string; root?: Root }>>();
   // A transition that reverses a running one shares its element and property
   // name, and exists a frame before its run event: read by name in that
@@ -751,17 +771,23 @@ function installPageTrigger(g: any): void {
         && one.effect?.target === target && (one.effect?.pseudoElement || undefined) === on && !ofStart.has(one));
     } catch { return undefined; }
   };
+  // A keyframe animation's animationstart waits out its delay, while it was
+  // created at the style recalc before it: the hero title's page-load rise,
+  // 100ms in, went to a press made inside that 100ms (iframe-credit, 30 Oct).
+  // A delayed animation takes the cause as of its creation; a transitionrun
+  // fires at creation, before any delay.
   for (const type of ['transitionrun', 'animationstart']) {
     listen(g, type, (event: any) => {
-      const cause = causeOfElement(event.target);
+      const name = event.propertyName || event.animationName;
+      const object = startedObject(event.target, name, event.pseudoElement);
+      const delay = type === 'animationstart' ? Number(object && (object as any).effect?.getTiming?.().delay) || 0 : 0;
+      const cause = delay > 0 ? causeAsOf(event.target, now() - delay / pageRate()) : causeOfElement(event.target);
       if (!cause.words) return;
       const named = started.get(event.target) ?? new Map<string, { words: string; root?: Root }>();
-      const name = event.propertyName || event.animationName;
       if (named.get(name)?.root) release(named.get(name)!.root);
       const begun = { words: cause.words, ...(cause.root ? { root: cause.root } : {}) };
       named.set(name, begun);
       started.set(event.target, named);
-      const object = startedObject(event.target, name, event.pseudoElement);
       if (object) ofStart.set(object, begun);
       hold(cause.root);
     }, { capture: true, passive: true });

@@ -166,6 +166,31 @@ describe('the work outstanding under an input\'s root', () => {
     expect(tracker.rootOfAnimation({ effect: { target: box }, transitionProperty: 'transform' })?.id).toBe('top:4');
   });
 
+  it('credits a delayed keyframe animation to the cause live when it was created, not to an input made inside its delay', () => {
+    const { page, fire, clock } = pageWithTracker();
+    const tracker = vm.runInContext("globalThis[Symbol.for('devharness.trigger')]", page);
+    const delayed = (target: any) => ({ animationName: 'rise', effect: { target, pseudoElement: null, getTiming: () => ({ delay: 100 }) } });
+    const title: any = { matches: () => false };
+    const rise = delayed(title);
+    title.getAnimations = () => [rise];
+    fire('load', {});
+    clock.ms = 60;
+    fire('keydown', { key: '6' });
+    clock.ms = 100;
+    fire('animationstart', { target: title, animationName: 'rise', pseudoElement: '' });
+    expect(tracker.rootOfAnimation(rise)).toBeUndefined();
+
+    clock.ms = 2000;
+    fire('keydown', { key: 'g' });
+    const keyRoot = tracker.rootNow().id;
+    const card: any = { matches: () => false };
+    const pop = delayed(card);
+    card.getAnimations = () => [pop];
+    clock.ms = 2100;
+    fire('animationstart', { target: card, animationName: 'rise', pseudoElement: '' });
+    expect(tracker.rootOfAnimation(pop)?.id).toBe(keyRoot);
+  });
+
   it('credits the transition of an element the page scrolled from under the pointer to that scroll', () => {
     const { page, fire } = pageWithTracker();
     const tracker = vm.runInContext("globalThis[Symbol.for('devharness.trigger')]", page);

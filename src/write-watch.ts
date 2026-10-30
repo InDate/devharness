@@ -59,6 +59,9 @@ export interface PageWrite {
   cursor?: ProxyCursor;
 }
 
+/** Longest a settle waits on the sweep that ends the animations finished by then. */
+const SETTLE_SWEEP_MS = 250;
+
 export interface WriteMotion {
   type: PageAnimation['type'];
   durationMs: number;
@@ -219,7 +222,18 @@ export class WriteWatch {
     // inside its window with nothing in flight.
     // A person's input named in History after a motion it started or stopped
     // was recorded: the row moves to that input's entry.
-    if (this.connection) this.detach.push(setSettleGate(this.connection, () => this.drained()));
+    // Chrome reports no finish of a Web Animation, so the record learns of one
+    // at a sweep of the page's own list; the heart's root settled a task after
+    // its finish, its step was compared, and the stop row landed two steps
+    // later (credit-every-catalog-key, key q). A settle sweeps first, bounded
+    // short since a page whose code is held answers no sweep.
+    if (this.connection) {
+      const connection = this.connection;
+      this.detach.push(setSettleGate(connection, async () => {
+        await animationRecordOf(connection).settle(this.client, SETTLE_SWEEP_MS);
+        await this.drained();
+      }));
+    }
     this.detach.push(onRootNamed((id, cursor) => {
       for (const write of this.writes) {
         if (write.motion?.root?.id !== id || write.motion.byRoot) continue;

@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A Web Animation's end is a row of its step when the step is compared.**
+  Chrome reports no finish of a Web Animation, so the record learnt of one
+  at its next sweep of the page, which could come two steps later; the
+  heart's step was compared without its end and mismatched its baseline. A
+  settle now sweeps the page's own list first, bounded at 250ms.
 - **Motion inside a shadow root is named through its host and credited to
   its input.** A row named an element in a shadow root by itself, such as
   `span.ping`, which no reader can find in the document, and the tracker

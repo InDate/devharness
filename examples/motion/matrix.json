@@ -981,8 +981,9 @@
       "cells": {
         "credit": {
           "expect": "Drag: under the pointer steps, following the pointer. Release: release step, spring or snap. g: press step, spring",
-          "today": "gap",
-          "basis": "code"
+          "today": "works",
+          "basis": "sequence:sheet-drag-credit",
+          "note": "Press g owns the spring open (from key g · frame loop); a 60px drag of the handle owns its follow and the spring back, one run, and a 160px drag owns its follow and the snap shut, each from drag. A drag is one step, so its follow and its release share it. The pointerover that pointer capture fires at the first move's point had read that move as a pointer standing still, and the drag as a hover"
         },
         "source": {
           "expect": "JS, started by drag"

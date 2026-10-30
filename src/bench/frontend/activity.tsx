@@ -8,7 +8,7 @@ import {
   ignoreMatches,
   type FilmRow, type RowMoves, type RuleActions, type RuleScope, type RowVerdict,
 } from './crossing.js';
-import { countKinds, kindOf, marksFields, type KindCount } from '../kinds.js';
+import { countKinds, kindOf, marksFields, raceFor, racesOf, type KindCount, type Race } from '../kinds.js';
 import { compareStep, isAnimationKind, placementOf, passOf, pausesOf } from '../step-compare.js';
 import { Row } from './row.js';
 import { useShowHidden } from './focus.js';
@@ -113,6 +113,14 @@ export function useActivity(base: string, sequence: SequenceState | undefined, m
   const missing = new Map<number, Array<{ kind: string; verdict: RowVerdict }>>();
   const tally = { mismatch: 0, unexpected: 0, missing: 0 };
   bodiesWanted.current = [];
+  const races = replayed ? racesOf(
+    sequence!.steps.map(step => step.traffic?.kinds),
+    sequence!.steps.map(step => (step.index < sequence!.currentStep ? listed.ran.get(step.index) ?? [] : undefined)),
+  ) : new Map<string, Race>();
+  const raced = (kind: string) => {
+    const race = raceFor(kind, races);
+    return race ? { race } : {};
+  };
   for (const step of replayed ? sequence!.steps : []) {
     const recorded = step.traffic?.kinds;
     if (!recorded || step.index >= sequence!.currentStep) continue;
@@ -145,7 +153,7 @@ export function useActivity(base: string, sequence: SequenceState | undefined, m
       }
       if (one.verdict !== 'match') tally[one.verdict] += 1;
       verdicts.set(rowOf(step.index, row), {
-        verdict: one.verdict, reasons: one.reasons,
+        verdict: one.verdict, reasons: one.reasons, ...(one.verdict === 'match' ? {} : raced(kind)),
         ...(was ? { recorded: was } : {}),
         onUpdate: () => void (async () => {
           const payload = bodies[one.event.id]
@@ -161,7 +169,7 @@ export function useActivity(base: string, sequence: SequenceState | undefined, m
     const absent = compared.missing.map(({ kind, recorded: was }) => ({
       kind,
       verdict: {
-        verdict: 'missing' as const, reasons: [], recorded: was,
+        verdict: 'missing' as const, reasons: [], recorded: was, ...raced(kind),
         onUpdate: () => void post('/sequence/recorded', { step: step.index, kind, recorded: null }),
       },
     }));

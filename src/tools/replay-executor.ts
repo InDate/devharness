@@ -20,7 +20,7 @@ import { crossingsOf } from '../step-slice.js';
 import { watchingMotion } from '../bench-mode/motion-detect.js';
 import { applyStepMotion } from '../bench-mode/motion-rules.js';
 import { startStepFilms } from '../bench-mode/motion-film.js';
-import { kindOf, type MotionSetting } from '../bench/kinds.js';
+import { kindOf, racesOf, raceReason, type MotionSetting } from '../bench/kinds.js';
 import { writeEvents } from '../bench-mode/traffic.js';
 import { sessions } from '../bench-mode/session.js';
 import type { ExecuteToolCall } from '../types.js';
@@ -2097,6 +2097,11 @@ async function compareBehaviour(
   };
   const matchSteps = (): NonNullable<ExecutionResult['behaviourDrift']> => {
     const drift: NonNullable<ExecutionResult['behaviourDrift']> = [];
+    const races = racesOf(commands.map(command => command.traffic?.kinds), commands.map((_, index) => (indices.includes(index) ? ranAt(index) : undefined)));
+    const raced = (kind: string, reasons: string[]) => {
+      const race = raceReason(kind, races);
+      return race ? [...reasons, race] : reasons;
+    };
 
     for (const [position, index] of indices.entries()) {
       const traffic = commands[index].traffic;
@@ -2127,8 +2132,8 @@ async function compareBehaviour(
             : one.verdict === undefined ? ['payload not held']
             : arriving && one.recorded && short(one.kind, one.recorded.n) ? ['still arriving']
             : one.reasons,
-        })),
-        ...compared.missing.map(one => ({ kind: one.kind, reasons: [arriving ? 'still arriving' : 'missing'] })),
+        })).map(one => (one.reasons[0] === 'still arriving' ? one : { ...one, reasons: raced(one.kind, one.reasons) })),
+        ...compared.missing.map(one => ({ kind: one.kind, reasons: arriving ? ['still arriving'] : raced(one.kind, ['missing']) })),
       ];
       ctx.commandRecorder?.noteStepMatch?.(run, index, {
         matched: compared.kinds.length - compared.kinds.filter(one => one.verdict !== 'match').length,

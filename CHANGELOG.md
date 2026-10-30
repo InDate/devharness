@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A mismatch a timing race made names the race.** Whether a second input
+  lands inside the first input's motion is set by the gap between them, so
+  a motion cut short in the recording and run out on a play read as a
+  missing stop row, with nothing in the app changed. A baseline now marks
+  each motion that cut another short; a mismatch on that motion, or on its
+  stop row, where only one side cut it, carries the step that cut it and
+  the side. The bench draws a missing motion row as a motion row, with no
+  payload box.
 - **`replay insert` keeps the browser each step ran in.** An insert into a
   named sequence whose own steps named no browser took the browser off every
   step it brought in, so steps recorded in two browsers were saved bare and

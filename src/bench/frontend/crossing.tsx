@@ -58,7 +58,7 @@ export function describe(event: BoundaryEvent, typed = true): string {
 }
 
 export { ignoreCoversKind, ignoreMatches, isFrame, keyOf, frameMatch, leadingPairs } from '../kinds.js';
-import { ignoreMatches, isFrame, keyOf, leavesOf, marksFields, samePayload, shapeOf, typeOfLeaf, type ExpectedValue, type KindCount, type Verdict } from '../kinds.js';
+import { ignoreMatches, isFrame, keyOf, leavesOf, marksFields, raceWords, samePayload, shapeOf, typeOfLeaf, type ExpectedValue, type KindCount, type Race, type Verdict } from '../kinds.js';
 import { lineDiff, sideBySide } from './diff.js';
 import { jsonLines } from './json-lines.js';
 import { Fold, LabelInput, Row, type RowSlots } from './row.js';
@@ -213,6 +213,8 @@ export interface RowVerdict {
   recorded?: KindCount;
   /** Write this run's count, statuses and payload over the recording; on a missing row, drop the kind. */
   onUpdate: () => void;
+  /** A motion cut short on one side of the comparison and not the other, which this row's difference comes from. */
+  race?: Race;
 }
 
 export const VERDICT_WORDS: Record<RowVerdict['verdict'], string> = {
@@ -234,7 +236,7 @@ function Badge({ verdict, ignored }: { verdict?: RowVerdict; ignored?: boolean }
   if (ignored) return <span class="badge ignored" title="ignored: listed, and left out of comparisons">ignored</span>;
   if (!verdict) return null;
   return (
-    <span class={`badge ${verdict.verdict}`} title={verdict.reasons.join(' · ') || undefined}>
+    <span class={`badge ${verdict.verdict}`} title={verdict.race ? raceWords(verdict.race) : verdict.reasons.join(' · ') || undefined}>
       {BADGE_WORDS[verdict.verdict]}
     </span>
   );
@@ -424,8 +426,10 @@ function markedPaths(mark: ExpectedValue): string {
  */
 function comparison(verdict: RowVerdict | undefined, mark: ExpectedValue | undefined, stored = false): string | undefined {
   if (!verdict) return marksFields(mark) ? `compared on ${markedPaths(mark!)}` : undefined;
-  if (verdict.verdict === 'unexpected') return 'Not in the recording';
-  if (verdict.verdict === 'missing') return 'Recorded, not produced by this run';
+  if (verdict.race) return raceWords(verdict.race);
+  const why = verdict.reasons.length ? ` · ${verdict.reasons.join(', ')}` : '';
+  if (verdict.verdict === 'unexpected') return `Not in the recording${why}`;
+  if (verdict.verdict === 'missing') return `Recorded, not produced by this run${why}`;
   if (verdict.verdict === 'mismatch') return `Differs · ${verdict.reasons.join(', ')}`;
   if (verdict.recorded?.presence && !marksFields(mark)) return 'Arrived, as recorded';
   if (marksFields(mark)) return `Matches on ${markedPaths(mark!)}`;
@@ -471,16 +475,22 @@ export function MissingRow({ kind, verdict, open, onOpen, moves }: {
   // A frame's kind starts with its arrow and names no socket, so the arrow
   // goes where a live frame row has it and the source is left blank.
   const frame = head === '←' || head === '→';
+  // A motion's kind is `animation <name> <element>`, a stop row's with
+  // `stopped` after it; drawn as the live motion row it stands for, it
+  // carries no payload to show.
+  const motion = head === 'animation';
+  const stopped = motion && rest[rest.length - 1] === 'stopped';
+  const label = stopped ? `stopped ${rest.slice(0, -1).join(' ')}` : rest.join(' ');
   return (
     <Row
-      classes={['missing']}
+      classes={['missing', motion ? 'storewrite' : '']}
       columns={moves ? ['remove', 'up', 'down'] : ['remove']}
-      source={frame ? '' : head}
+      source={frame ? '' : motion ? 'MOTION' : head}
       way={frame ? head : ''}
       title="recorded on this step, and not produced by this run"
       badge={<Badge verdict={verdict} />}
-      label={<span class="what">{rest.join(' ')}</span>}
-      reading={<span class="meta">recorded ×{verdict.recorded?.n ?? 0}</span>}
+      label={<span class="what">{label}</span>}
+      reading={<span class="meta">{verdict.race ? 'timing race · ' : ''}recorded ×{verdict.recorded?.n ?? 0}</span>}
       slots={{
         remove: () => verdict.onUpdate(),
         ...(moves?.up ? { up: moves.up } : {}), ...(moves?.down ? { down: moves.down } : {}),
@@ -491,7 +501,7 @@ export function MissingRow({ kind, verdict, open, onOpen, moves }: {
       onOpen={onOpen}
     >
       <div class="body">
-        <PayloadBox verdict={verdict} replayed={undefined} />
+        {!motion && <PayloadBox verdict={verdict} replayed={undefined} />}
         <BodyFoot summary={comparison(verdict, undefined)} />
       </div>
     </Row>

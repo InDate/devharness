@@ -202,10 +202,12 @@ export interface KindCount {
   sent?: string;
   /** The size band of the last binary body of this kind. */
   band?: string;
+  /** A motion of this kind started over one still running on its element and property, from where that one stood. */
+  cuts?: true;
 }
 
 type Countable = Pick<BoundaryEvent, 'kind' | 'url' | 'direction'>
-  & Partial<Pick<BoundaryEvent, 'method' | 'preview' | 'status' | 'answeredAs' | 'trigger'>>;
+  & Partial<Pick<BoundaryEvent, 'method' | 'preview' | 'status' | 'answeredAs' | 'trigger' | 'cuts'>>;
 
 /** Causes on a clock of their own, as a motion's trigger names them: what they start runs as many times as that clock ticks. */
 const PACED_CAUSE = /^(after )?(reply|push|timer) |^browser$/;
@@ -228,6 +230,7 @@ export function countKinds(events: Countable[]): Record<string, KindCount> {
     held.n += 1;
     if (event.kind === 'frame' && event.direction === 'in') held.presence = true;
     if (event.kind === 'write' && pacedBy(event.trigger)) held.presence = true;
+    if (event.kind === 'write' && event.cuts) held.cuts = true;
     if (event.kind === 'request' && event.status !== undefined && event.answeredAs !== 'replaced') {
       const statuses = held.statuses ??= [];
       if (!statuses.includes(event.status)) statuses.push(event.status);
@@ -267,9 +270,58 @@ export function compareKinds(recorded: Record<string, KindCount>, observed: Reco
   return lines;
 }
 
+/** The motion a kind is a row of: a stop row's motion, else the kind itself. */
+const motionKind = (kind: string) => (kind.endsWith(STOPPED) ? kind.slice(0, -STOPPED.length) : kind);
+
+/** A motion one side of a pass cut short and the other did not: the 0-based step that cut it, and the side. */
+export interface Race { step: number; side: 'recording' | 'play' }
+
+/**
+ * The motions the recording cut short and this play did not, or this play
+ * and not the recording, by kind. A second input landing while the first
+ * input's motion still runs cuts it short, and whether it lands inside that
+ * motion is set by the gap between the two steps: the menu's open
+ * transitions were cut short by its close in the recording and ran out
+ * first on a play, and the stop rows the cut adds read as missing from one
+ * step and new in the next, with nothing in the app changed
+ * (credit-every-catalog-key, 30 Oct).
+ */
+export function racesOf(recorded: Array<Record<string, KindCount> | undefined>, ran: Array<Countable[] | undefined>): Map<string, Race> {
+  const cutIn = (steps: Array<Record<string, KindCount> | undefined>) => {
+    const cut = new Map<string, number>();
+    steps.forEach((kinds, step) => {
+      for (const [kind, count] of Object.entries(kinds ?? {})) if (count.cuts && !cut.has(kind)) cut.set(kind, step);
+    });
+    return cut;
+  };
+  const was = cutIn(recorded);
+  const now = cutIn(ran.map(events => (events ? countKinds(events) : undefined)));
+  const races = new Map<string, Race>();
+  for (const [kind, step] of was) if (!now.has(kind)) races.set(kind, { step, side: 'recording' });
+  for (const [kind, step] of now) if (!was.has(kind)) races.set(kind, { step, side: 'play' });
+  return races;
+}
+
+/** The race behind a mismatch on `kind`: its motion's, a stop row's included; undefined where none stands behind it. */
+export function raceFor(kind: string, races: Map<string, Race>): Race | undefined {
+  return races.get(motionKind(kind));
+}
+
+/** The reason a mismatch on `kind` carries where a race stands behind it; undefined where none does. */
+export function raceReason(kind: string, races: Map<string, Race>): string | undefined {
+  const race = raceFor(kind, races);
+  return race ? `race: step ${race.step + 1} cut it short in the ${race.side} only` : undefined;
+}
+
+/** A race as one line of its row: which side cut the motion short, at which step, and how it ran on the other. */
+export function raceWords(race: Race): string {
+  const [cut, ran] = race.side === 'recording' ? ['the recording', 'this play'] : ['this play', 'the recording'];
+  return `Timing race · cut short by step ${race.step + 1} in ${cut}, finished first in ${ran}`;
+}
+
 /**
  * The kinds of pushed message a recording received that a whole replay did
- * not: the server that stopped pushing, which is the difference in them that
+ * not:the server that stopped pushing, which is the difference in them that
  * holds across runs.
  */
 export function missingPushes(recordedSteps: Array<Record<string, KindCount> | undefined>, seen: Countable[]): string[] {

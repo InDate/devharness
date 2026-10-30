@@ -703,8 +703,21 @@ function installPageTrigger(g: any): void {
     }
     return { words: current(), root: liveRoot() };
   };
-  const ofElement = (target: any): string | undefined => causeOfElement(target).words;
   const started = new WeakMap<object, Map<string, { words: string; root?: Root }>>();
+  // A transition that reverses a running one shares its element and property
+  // name, and exists a frame before its run event: read by name in that
+  // frame, it takes the cause of the one it replaced. The cause is kept
+  // against the Animation object itself, which only its own run event sets.
+  const ofStart = new WeakMap<object, { words: string; root?: Root }>();
+  // An event names no pseudo-element as '', an effect as null.
+  const startedObject = (target: any, name: string, pseudo: unknown): object | undefined => {
+    if (typeof target?.getAnimations !== 'function') return undefined;
+    const on = pseudo || undefined;
+    try {
+      return target.getAnimations({ subtree: on !== undefined }).find((one: any) => (one.transitionProperty || one.animationName) === name
+        && one.effect?.target === target && (one.effect?.pseudoElement || undefined) === on && !ofStart.has(one));
+    } catch { return undefined; }
+  };
   for (const type of ['transitionrun', 'animationstart']) {
     listen(g, type, (event: any) => {
       const cause = causeOfElement(event.target);
@@ -712,11 +725,26 @@ function installPageTrigger(g: any): void {
       const named = started.get(event.target) ?? new Map<string, { words: string; root?: Root }>();
       const name = event.propertyName || event.animationName;
       if (named.get(name)?.root) release(named.get(name)!.root);
-      named.set(name, { words: cause.words, ...(cause.root ? { root: cause.root } : {}) });
+      const begun = { words: cause.words, ...(cause.root ? { root: cause.root } : {}) };
+      named.set(name, begun);
       started.set(event.target, named);
+      const object = startedObject(event.target, name, event.pseudoElement);
+      if (object) ofStart.set(object, begun);
       hold(cause.root);
     }, { capture: true, passive: true });
   }
+  /** What started a CSS transition or keyframe animation: its own run event's cause, else the newest change on its element. */
+  const causeOfStart = (animation: any): { words?: string; root?: Root } => {
+    const own = ofStart.get(animation);
+    if (own) return own;
+    const target = animation && animation.effect && animation.effect.target;
+    if (!target) return {};
+    const name = animation.transitionProperty || animation.animationName;
+    // An element that lists no animations of its own keeps the cause by name.
+    const byName = typeof target.getAnimations !== 'function' && name ? started.get(target)?.get(name) : undefined;
+    if (byName) return { words: byName.words, root: byName.root ?? causeOfElement(target).root };
+    return causeOfElement(target);
+  };
   // A transition or keyframe animation ending or cancelled releases its root once.
   for (const type of ['transitionend', 'transitioncancel', 'animationend', 'animationcancel']) {
     listen(g, type, (event: any) => {
@@ -809,9 +837,7 @@ function installPageTrigger(g: any): void {
       if (called) return called;
       const transitioned = ofViewTransition(animation);
       if (transitioned) return transitioned.words;
-      const target = animation && animation.effect && animation.effect.target;
-      const name = animation && (animation.transitionProperty || animation.animationName);
-      return (target && name && started.get(target)?.get(name)?.words) ?? (target ? ofElement(target) : undefined);
+      return causeOfStart(animation).words;
     },
     /** What called one of `methods` within the last second, newest first, else `fallback`. */
     ofCall(methods: string[], fallback: string): string {
@@ -834,9 +860,7 @@ function installPageTrigger(g: any): void {
       if (made) return made;
       const transitioned = ofViewTransition(animation);
       if (transitioned) return transitioned.root;
-      const target = animation && animation.effect && animation.effect.target;
-      const name = animation && (animation.transitionProperty || animation.animationName);
-      return (target && name && started.get(target)?.get(name)?.root) ?? (target ? causeOfElement(target).root : undefined);
+      return causeOfStart(animation).root;
     },
     /** The root of this scroll's cause. */
     rootOfScroll: (): Root | undefined => scrollCauseMark()?.root,

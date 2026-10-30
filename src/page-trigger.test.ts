@@ -23,10 +23,16 @@ function pageWithTracker() {
       return { finished };
     }
   }
+  const observers: Array<(records: any[]) => void> = [];
+  class MutationObserver {
+    constructor(callback: (records: any[]) => void) { observers.push(callback); }
+    observe() {}
+  }
   const page: any = new EventTarget();
   Object.assign(page, {
     EventTarget,
     Document,
+    MutationObserver,
     document: { readyState: 'complete', documentElement: {}, addEventListener: () => {} },
     performance: { now: () => clock.ms },
     setTimeout: (run: () => void) => { tasks.push(run); return tasks.length; },
@@ -45,7 +51,9 @@ function pageWithTracker() {
     for (const frame of frames.splice(0)) frame();
     for (let task = tasks.shift(); task; task = tasks.shift()) task();
   };
-  return { page, fire, turn, reports, tasks, transitions, clock };
+  /** Deliver a class change on `target` to the page's observers, as the microtask after the change does. */
+  const mutate = (target: object) => { for (const callback of observers) callback([{ type: 'attributes', attributeName: 'class', target }]); };
+  return { page, fire, turn, reports, tasks, transitions, clock, mutate };
 }
 
 describe('the work outstanding under an input\'s root', () => {
@@ -125,6 +133,36 @@ describe('the work outstanding under an input\'s root', () => {
     fire('transitionrun', { target: card, propertyName: 'transform' });
 
     expect(tracker.rootOfAnimation({ effect: { target: card }, transitionProperty: 'transform' })?.id).toBe(keyRoot);
+  });
+
+  it.each([['an element', ''], ['a pseudo-element', '::backdrop']])('credits a transition on %s that reverses a running one to the change that reversed it, before and after its run event', (_, pseudoElement) => {
+    const { page, fire, turn, mutate } = pageWithTracker();
+    const tracker = vm.runInContext("globalThis[Symbol.for('devharness.trigger')]", page);
+    let listed: object[] = [];
+    const panel = { matches: () => false, getAnimations: () => listed };
+    fire('keydown', { key: 'c' });
+    const dimRoot = tracker.rootNow().id;
+    mutate(panel);
+    const dim = { transitionProperty: 'opacity', effect: { target: panel, pseudoElement: pseudoElement || null } };
+    listed = [dim];
+    fire('transitionrun', { target: panel, propertyName: 'opacity', pseudoElement });
+    turn();
+
+    fire('keydown', { key: 'v' });
+    const undimRoot = tracker.rootNow().id;
+    mutate(panel);
+    const reversed = { transitionProperty: 'opacity', effect: { target: panel, pseudoElement: pseudoElement || null } };
+    listed = [reversed];
+    turn();
+
+    expect(tracker.rootOfAnimation(reversed)?.id).toBe(undimRoot);
+    expect(tracker.ofAnimation(reversed)).toBe('key v');
+
+    fire('transitioncancel', { target: panel, propertyName: 'opacity', pseudoElement });
+    fire('transitionrun', { target: panel, propertyName: 'opacity', pseudoElement });
+
+    expect(tracker.rootOfAnimation(reversed)?.id).toBe(undimRoot);
+    expect(tracker.rootOfAnimation(dim)?.id).toBe(dimRoot);
   });
 
   it('runs a view transition\'s update under the root of the input that started it, and credits its pseudo-elements\' animations to it', async () => {

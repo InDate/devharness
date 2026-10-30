@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
-import { ancestorTty, waitForTerminalDesktop, releaseWhenHeld, terminalDisplay, HELD_AFTER_MS, type DesktopWaitIo } from './terminal-desktop.js';
+import { describe, it, expect } from 'vitest';
+import { ancestorTty, waitForTerminalDesktop, terminalDisplay, type DesktopWaitIo } from './terminal-desktop.js';
 
 /** `ps -A -o pid=,ppid=,tty=` rows for a server under claude, under a Terminal login shell. */
 const TABLE = `
@@ -96,35 +96,6 @@ describe('waitForTerminalDesktop', () => {
     const fake = fakeIo({ psTable: async () => { throw new Error('ps failed'); } });
     expect(await waitForTerminalDesktop(never, fake.io)).toBe('skipped: no tty');
     expect(fake.started).toEqual([]);
-  });
-});
-
-describe('releaseWhenHeld', () => {
-  afterEach(() => { vi.useRealTimers(); });
-
-  it('settles early with the tty once a desktop wait inside the call holds past HELD_AFTER_MS, and carries the call to its end', async () => {
-    vi.useFakeTimers();
-    const fake = fakeIo();
-    const outcome = releaseWhenHeld(async () => `opened after ${await waitForTerminalDesktop(never, fake.io)}`);
-    await vi.advanceTimersByTimeAsync(HELD_AFTER_MS);
-    const held = await outcome;
-    expect(held).toMatchObject({ done: false, tty: '/dev/ttys027' });
-    fake.finish('5');
-    expect(await (held as { rest: Promise<string> }).rest).toBe('opened after 5');
-  });
-
-  it('returns the reply when the wait ends before HELD_AFTER_MS, the Terminal\'s desktop already showing', async () => {
-    vi.useFakeTimers();
-    const fake = fakeIo();
-    const outcome = releaseWhenHeld(async () => `opened after ${await waitForTerminalDesktop(never, fake.io)}`);
-    await vi.advanceTimersByTimeAsync(10);
-    fake.finish('5');
-    await vi.advanceTimersByTimeAsync(HELD_AFTER_MS);
-    expect(await outcome).toEqual({ done: true, value: 'opened after 5' });
-  });
-
-  it('rejects with the call\'s failure when it fails before holding', async () => {
-    await expect(releaseWhenHeld(async () => { throw new Error('launch failed'); })).rejects.toThrow('launch failed');
   });
 });
 

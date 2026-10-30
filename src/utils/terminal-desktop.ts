@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from 'async_hooks';
 import { execFile, spawn } from 'child_process';
 import type { ChildProcess } from 'child_process';
 import { randomBytes } from 'crypto';
@@ -7,31 +6,6 @@ import { dirname, join } from 'path';
 import { debugLog } from '../debug-logger.js';
 import { getGlobalBase } from '../helpers/paths.js';
 import { isProcessAlive } from '../helpers/process-liveness.js';
-
-/**
- * A wait still holding after this long is one the person ends by switching
- * desktops: the wait script returns within one check when the Terminal's
- * desktop is already showing.
- */
-export const HELD_AFTER_MS = 1000;
-
-/** The MCP call a desktop wait runs under, which returns early once the wait holds. */
-const heldCall = new AsyncLocalStorage<(tty: string) => void>();
-
-export type HeldOrDone<T> = { done: true; value: T } | { done: false; tty: string; rest: Promise<T> };
-
-/**
- * Runs `call`, and settles early when a desktop wait inside it holds past
- * HELD_AFTER_MS. The caller is blocked for the whole wait otherwise, with no
- * channel to the session until the client backgrounds it at 120s; settled
- * early, the reply carries the hold and `rest` carries the call to its end.
- */
-export function releaseWhenHeld<T>(call: () => Promise<T>): Promise<HeldOrDone<T>> {
-  return new Promise((resolve, reject) => {
-    const rest = heldCall.run(tty => resolve({ done: false, tty, rest }), call);
-    rest.then(value => resolve({ done: true, value }), reject);
-  });
-}
 
 /**
  * macOS places a new window on the desktop (Space) showing when the window is
@@ -285,10 +259,7 @@ export async function waitForTerminalDesktop(stop: Promise<unknown>, io: Desktop
   }
   const wait = io.startWait(tty, raiseAfterIdleSeconds);
   await debugLog('TerminalDesktop', `Holding a new window until the desktop of the Terminal on ${tty} is showing`);
-  const release = heldCall.getStore();
-  const holding = release ? setTimeout(() => release(tty), HELD_AFTER_MS) : undefined;
   const reading = await Promise.race([wait.result, stop.then(() => 'stopped')]);
-  clearTimeout(holding);
   wait.kill();
   await debugLog('TerminalDesktop', `Desktop wait for ${tty} returned: ${reading}`);
   return reading;
@@ -314,8 +285,7 @@ export function desktopLockPath(): string {
 /**
  * Takes the desktop lock, waiting while a live server holds it, and returns
  * its release. Returns a release that does nothing where no desktop wait runs:
- * off macOS, with CDP_TOOLS_DESKTOP_WAIT=0, or with no Terminal tty. A lock
- * wait past HELD_AFTER_MS settles the MCP call early, as a desktop wait does.
+ * off macOS, with CDP_TOOLS_DESKTOP_WAIT=0, or with no Terminal tty.
  */
 export async function holdDesktop(io: DesktopWaitIo = systemIo, path: string = desktopLockPath()): Promise<() => void> {
   const none = () => {};
@@ -323,8 +293,6 @@ export async function holdDesktop(io: DesktopWaitIo = systemIo, path: string = d
   const tty = ancestorTty(await io.psTable().catch(() => ''), io.pid);
   if (!tty) return none;
   const token = `${io.pid}:${randomBytes(6).toString('hex')}`;
-  const release = heldCall.getStore();
-  const holding = release ? setTimeout(() => release(tty), HELD_AFTER_MS) : undefined;
   try {
     fs.mkdirSync(dirname(path), { recursive: true });
     for (;;) {
@@ -345,8 +313,6 @@ export async function holdDesktop(io: DesktopWaitIo = systemIo, path: string = d
   } catch (error) {
     await debugLog('TerminalDesktop', `Desktop lock at ${path} could not be taken, so this launch runs unserialised: ${error}`);
     return none;
-  } finally {
-    clearTimeout(holding);
   }
   return () => {
     if (readLock(path) === token) fs.rmSync(path, { force: true });

@@ -4522,24 +4522,6 @@ Could not open a tab for this session: {{message}}
 
 ---
 
-## CALL_HELD_FOR_DESKTOP
-
-**Type:** success
-**Summary:** {{call}} (called {{calledAt}}) is held until the Terminal's desktop is showing
-
-Chrome opens a new window on the desktop of the Terminal on {{tty}}, and that desktop is not showing. Ask the person to switch to it. `{{call}}` carries on in the background, and the event stream reports its reply as a `launch` event with `calledAt` {{calledAt}} once the window opens; a `launch` event with another `calledAt` finishes an earlier call. A call on this connection before that event starts nothing.
-
----
-
-## CALL_WAITS_ON_HELD_LAUNCH
-
-**Type:** success
-**Summary:** {{call}} started nothing: {{connection}} is still launching
-
-`{{launching}}` (called {{calledAt}}) holds the launch of {{connection}} until the desktop of the Terminal on {{tty}} is showing, so no browser stands on that connection yet and `{{call}}` ran nothing. The event stream reports `{{launching}}`'s reply as a `launch` event with `calledAt` {{calledAt}} once the window opens; call again after it. A `launch` event with another `calledAt` finishes an earlier call.
-
----
-
 ## BENCH_STEP_SETTLED
 
 **Type:** success

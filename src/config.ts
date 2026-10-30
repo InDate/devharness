@@ -174,6 +174,21 @@ export interface ChromeConfig {
    * the process working directory; a leading `~/` is expanded.
    */
   persistentProfileRoot: string;
+  /**
+   * On macOS, raise the Terminal window a launch runs under when its desktop
+   * is not showing, once keyboard and mouse have been idle for
+   * raiseTerminalAfterIdleSeconds (default: true). Off, the first Chrome window
+   * holds until the person switches to that desktop. Raising moves keyboard
+   * focus to the Terminal, and the idle bound keeps that focus change out of
+   * typing or pointing in progress.
+   */
+  raiseTerminalWhenIdle: boolean;
+  /**
+   * Seconds keyboard and mouse stay idle before that raise (default: 1). A
+   * shorter bound raises inside pauses between keystrokes; a longer one
+   * leaves the window held longer after the person stops.
+   */
+  raiseTerminalAfterIdleSeconds: number;
 }
 
 /**
@@ -344,6 +359,8 @@ const DEFAULT_CONFIG: CdpToolsConfig = {
     inactivityTimeoutMinutes: 5,
     inactivityPollingMinutes: 2,
     persistentProfileRoot: '',  // '' = global ~/.devharness/profiles
+    raiseTerminalWhenIdle: true,
+    raiseTerminalAfterIdleSeconds: 1,
   },
   portMonitoring: {
     portMonitoringFreqMs: {
@@ -770,6 +787,8 @@ export class ConfigManager {
         inactivityTimeoutMinutes: loaded.chrome?.inactivityTimeoutMinutes ?? defaults.chrome.inactivityTimeoutMinutes,
         inactivityPollingMinutes: loaded.chrome?.inactivityPollingMinutes ?? defaults.chrome.inactivityPollingMinutes,
         persistentProfileRoot: loaded.chrome?.persistentProfileRoot ?? defaults.chrome.persistentProfileRoot,
+        raiseTerminalWhenIdle: loaded.chrome?.raiseTerminalWhenIdle ?? defaults.chrome.raiseTerminalWhenIdle,
+        raiseTerminalAfterIdleSeconds: loaded.chrome?.raiseTerminalAfterIdleSeconds ?? defaults.chrome.raiseTerminalAfterIdleSeconds,
       },
       portMonitoring: {
         portMonitoringFreqMs: {

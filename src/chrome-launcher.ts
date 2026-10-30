@@ -13,7 +13,8 @@ import { getGlobalBase } from './helpers/paths.js';
 import { getErrorMessage } from './messages.js';
 import type { PortReserver } from './port-reserver.js';
 import { debugLog } from './debug-logger.js';
-import { waitForTerminalDesktop, terminalDisplay, type TerminalDisplay } from './utils/terminal-desktop.js';
+import { configManager, type ChromeConfig } from './config.js';
+import { waitForTerminalDesktop, terminalDisplay, holdDesktop, type TerminalDisplay } from './utils/terminal-desktop.js';
 import { rememberedBounds, placeWindow, type WindowBounds } from './window-memory.js';
 import WebSocket from 'ws';
 
@@ -738,6 +739,14 @@ export class ChromeLauncher {
       args.push(url);
     }
 
+    // Chrome's process starts once the Terminal's desktop is showing, so its
+    // startup, Dock icon and first window all land after the switch to it.
+    // The desktop lock spans from here to the first window, so another
+    // server's switch cannot land between the two.
+    const releaseDesktop = headless ? () => {} : await holdDesktop();
+    const raiseAfter = raiseAfterIdleSeconds(configManager.getChromeConfig());
+    if (!headless) await waitForTerminalDesktop(new Promise(() => {}), undefined, raiseAfter);
+
     // Track whether we released the reservation (so we can re-reserve on failure)
     let didReleaseReservation = false;
 
@@ -912,7 +921,10 @@ export class ChromeLauncher {
       chromeProcess.removeListener('error', exitHandler);
 
       if (!headless) {
-        const reading = await waitForTerminalDesktop(new Promise(resolve => chromeProcess.once('exit', resolve)));
+        // Chrome's startup takes a second or two after the wait above, and a
+        // desktop switch by the person inside it would put the window on the
+        // desktop switched to; read again just before the window is created.
+        const reading = await waitForTerminalDesktop(new Promise(resolve => chromeProcess.once('exit', resolve)), undefined, raiseAfter);
         const remembered = windowKey ? await rememberedBounds(windowKey) : undefined;
         await openBackgroundWindow(port, url ?? 'about:blank', terminalDisplay(reading), remembered);
       }
@@ -944,6 +956,8 @@ export class ChromeLauncher {
       }
 
       throw new Error(`Failed to launch Chrome: ${error}`);
+    } finally {
+      releaseDesktop();
     }
   }
 
@@ -1460,6 +1474,11 @@ export class ChromeLauncher {
  * which shows the window without activating Chrome. Every later tool attaches
  * to a page target, so a launch that leaves none returns no connection.
  */
+/** The idle bound a launch raises its Terminal after, or undefined with the raise off. */
+function raiseAfterIdleSeconds(chrome: ChromeConfig): number | undefined {
+  return chrome.raiseTerminalWhenIdle ? chrome.raiseTerminalAfterIdleSeconds : undefined;
+}
+
 async function openBackgroundWindow(port: number, url: string, display?: TerminalDisplay, remembered?: WindowBounds): Promise<void> {
   const version = (await (await fetch(`http://localhost:${port}/json/version`)).json()) as { webSocketDebuggerUrl: string };
   const ws = new WebSocket(version.webSocketDebuggerUrl);

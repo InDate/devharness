@@ -263,11 +263,17 @@ function installPageTrigger(g: any): void {
   // an earlier step's; so the hover takes the cause of the scroll running now.
   let pointerAt: { x: number; y: number } | undefined;
   const stayed = (event: any) => pointerAt !== undefined && event.clientX === pointerAt.x && event.clientY === pointerAt.y;
+  // A drag's move is read against the move before it: an element taking
+  // pointer capture gets a pointerover at the point of the move that follows,
+  // which read that move as a pointer standing still, and a sheet dragged by
+  // its handle opened its run from the hover (30 Oct).
+  let movedAt: { x: number; y: number } | undefined;
   listen(g, 'pointermove', (event: any) => {
     if (!event.isTrusted) return;
-    const still = stayed(event);
+    const moved = movedAt === undefined || event.clientX !== movedAt.x || event.clientY !== movedAt.y;
     pointerAt = { x: event.clientX, y: event.clientY };
-    if (event.buttons && !still) lastInput = mark('input', 'drag', { scrolls: true });
+    movedAt = pointerAt;
+    if (event.buttons && moved) lastInput = mark('input', 'drag', { scrolls: true });
   }, { capture: true, passive: true });
   // An element the pointer leaves loses its hover by the same cause as the
   // element it arrives on: the pointerover that follows names it.

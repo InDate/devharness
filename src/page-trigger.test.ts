@@ -143,6 +143,19 @@ describe('the work outstanding under an input\'s root', () => {
     expect(tracker.rootOfAnimation({ effect: { target: toast }, transitionProperty: 'opacity' })?.id).toBe(keyRoot);
   });
 
+  it("reads a drag's first move as the drag, after the pointerover that pointer capture fires at the same point", () => {
+    const { page, fire } = pageWithTracker();
+    const tracker = vm.runInContext("globalThis[Symbol.for('devharness.trigger')]", page);
+    const handle = { matches: () => false };
+    fire('pointerover', { pointerType: 'mouse', clientX: 686, clientY: 1722, buttons: 0, target: handle });
+    fire('pointermove', { pointerType: 'mouse', clientX: 686, clientY: 1722, buttons: 0, target: handle });
+    fire('pointerdown', { pointerType: 'mouse', clientX: 686, clientY: 1722, buttons: 1, target: handle });
+    fire('pointerover', { pointerType: 'mouse', clientX: 686, clientY: 1737, buttons: 1, target: handle });
+    fire('pointermove', { pointerType: 'mouse', clientX: 686, clientY: 1737, buttons: 1, target: handle });
+
+    expect(tracker.current()).toBe('drag');
+  });
+
   it('credits the transition of an element the page scrolled from under the pointer to that scroll', () => {
     const { page, fire } = pageWithTracker();
     const tracker = vm.runInContext("globalThis[Symbol.for('devharness.trigger')]", page);

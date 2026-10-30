@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A drag reads as a drag from its first move.** An element taking pointer
+  capture gets a `pointerover` at the point of the move that follows, and
+  the tracker read that move as a pointer standing still, so it marked no
+  drag and the sheet a handle drag moved read `from hover`. A move is now
+  read against the move before it.
 - **A transition a frame callback sets off is credited to the input behind
   it on a held page.** The tracker read which cause changed an element from
   its mutation observer, whose callback waits for the microtask checkpoint;

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { promises as fsp } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -199,10 +199,9 @@ describe('issue-tracker', () => {
     ].join('\n');
     await fsp.writeFile(join(itemsDir, 'feature-042-externally-added-issue.md'), externalFile, 'utf-8');
 
-    // Wait past the debounce window for the watcher's rescan to land.
-    await new Promise(resolve => setTimeout(resolve, 500));
-
-    const issues = await getIssues();
-    expect(issues.some(i => i.id === 42 && i.title === 'Externally added issue')).toBe(true);
+    await vi.waitFor(async () => {
+      const issues = await getIssues();
+      expect(issues.some(i => i.id === 42 && i.title === 'Externally added issue')).toBe(true);
+    }, { timeout: 5000 });
   });
 });

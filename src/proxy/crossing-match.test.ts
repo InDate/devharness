@@ -3,7 +3,7 @@
  * matches, counting from when it is set. Also the socket state a socket check
  * reads, and the headers an upgrade carries upstream.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import { createServer, request as httpRequest, type Server, type IncomingHttpHeaders } from 'node:http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { InterceptProxy, frameMatches, fieldOf, requestMatches } from './intercept-proxy.js';
@@ -83,11 +83,9 @@ describe('socket state and upgrade headers', () => {
     const { proxy, port } = await freshProxy();
     expect(proxy.socketOpen('/live')).toBe(false);
     const socket = await socketThrough(port, '/live');
-    await settled();
-    expect(proxy.socketOpen('/live')).toBe(true);
+    await vi.waitFor(() => expect(proxy.socketOpen('/live')).toBe(true));
     socket.close();
-    await settled();
-    expect(proxy.socketOpen('/live')).toBe(false);
+    await vi.waitFor(() => expect(proxy.socketOpen('/live')).toBe(false));
   });
 
   it('carries the page\'s cookie and authorization onto the upstream socket', async () => {

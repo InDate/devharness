@@ -183,6 +183,7 @@ describe('devharness watch', () => {
 
   it('runs when the recorded pid does not hold the stream open', async () => {
     writeFileSync(stream(), '');
+    writeFileSync(join(dir, 'events', `${SESSION}.cursor`), '0');
     writeFileSync(join(dir, 'events', `${SESSION}.${process.pid}.watch`), JSON.stringify({ pid: process.pid }));
 
     const watch = start([`--session=${SESSION}`], { CLAUDE_CODE_MESSAGING_SOCKET: `/claude/${process.pid}.sock` });

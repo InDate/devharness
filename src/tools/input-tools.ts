@@ -3,6 +3,7 @@
  */
 
 import { currentCursor } from '../proxy/registry.js';
+import { readTabStops } from '../tab-order.js';
 import { stepToken } from '../root-credit.js';
 import { bringHiddenPageToFront } from '../utils/front-tab.js';
 import { z } from 'zod';
@@ -722,7 +723,7 @@ export function createInputTools(
                   }
 
                   // Get post-click state
-                  const postClickState = await page.evaluate((clickedSelector: string) => {
+                  const postClickRead = await page.evaluate((clickedSelector: string) => {
                     const focused = (globalThis as any).document.activeElement;
                     let focusInfo = null;
                     if (focused && focused !== (globalThis as any).document.body) {
@@ -739,14 +740,6 @@ export function createInputTools(
                       };
                     }
 
-                    // Get tabbable elements
-                    const tabbable = Array.from((globalThis as any).document.querySelectorAll(
-                      'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])'
-                    )).filter((el: any) => {
-                      const style = (globalThis as any).window.getComputedStyle(el);
-                      return style.display !== 'none' && style.visibility !== 'hidden' && !el.disabled;
-                    });
-
                     // Helper to format element for display
                     const formatEl = (el: any) => {
                       const tag = el.tagName.toLowerCase();
@@ -757,18 +750,6 @@ export function createInputTools(
                       }
                       return `${tag}${text ? ` "${text}"` : ''}`;
                     };
-
-                    let prevTabbable: string[] = [];
-                    let nextTabbable: string[] = [];
-                    if (focused) {
-                      const currentIndex = tabbable.indexOf(focused);
-                      if (currentIndex !== -1) {
-                        // Previous 5 tabbable elements
-                        prevTabbable = tabbable.slice(Math.max(0, currentIndex - 5), currentIndex).map(formatEl);
-                        // Next 5 tabbable elements
-                        nextTabbable = tabbable.slice(currentIndex + 1, currentIndex + 6).map(formatEl);
-                      }
-                    }
 
                     // Get child interactive elements of clicked element
                     let childInteractive: string[] = [];
@@ -784,12 +765,12 @@ export function createInputTools(
 
                     return {
                       focusInfo,
-                      prevTabbable,
-                      nextTabbable,
                       childInteractive,
                       url: (globalThis as any).window.location.href,
                     };
                   }, selector);
+                  const tabStops = await readTabStops(page);
+                  const postClickState = { ...postClickRead, prevTabbable: tabStops.prev, nextTabbable: tabStops.next };
 
                   return {
                     selector,
@@ -2095,7 +2076,7 @@ async function getFocusedElementInfo(page: any): Promise<{
   prevTabbable: string[];
   nextTabbable: string[];
 } | null> {
-  return await page.evaluate(() => {
+  const read = await page.evaluate(() => {
     const focused = (globalThis as any).document.activeElement;
     if (!focused || focused === (globalThis as any).document.body) {
       return null;
@@ -2126,49 +2107,17 @@ async function getFocusedElementInfo(page: any): Promise<{
       if (classes) selector = `${tag}.${classes}`;
     }
 
-    // Helper to format element for display
-    const formatEl = (el: any) => {
-      const elTag = el.tagName.toLowerCase();
-      const elText = el.textContent?.trim().substring(0, 20) ||
-        el.getAttribute('aria-label') ||
-        el.getAttribute('placeholder') ||
-        '';
-      const elType = el.getAttribute('type');
-      if (elTag === 'input') {
-        return `${elTag}[${elType || 'text'}]${elText ? ` "${elText}"` : ''}`;
-      }
-      return `${elTag}${elText ? ` "${elText}"` : ''}`;
-    };
-
-    // Get tabbable elements
-    const tabbable = Array.from((globalThis as any).document.querySelectorAll(
-      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-    )).filter((el: any) => {
-      const style = (globalThis as any).window.getComputedStyle(el);
-      return style.display !== 'none' && style.visibility !== 'hidden';
-    });
-
-    const currentIndex = tabbable.indexOf(focused);
-    let prevTabbable: string[] = [];
-    let nextTabbable: string[] = [];
-
-    if (currentIndex !== -1) {
-      // Previous 3 tabbable elements
-      prevTabbable = tabbable.slice(Math.max(0, currentIndex - 3), currentIndex).map(formatEl);
-      // Next 3 tabbable elements
-      nextTabbable = tabbable.slice(currentIndex + 1, currentIndex + 4).map(formatEl);
-    }
-
     return {
       description,
       tag,
       type,
       text: text || undefined,
       selector,
-      prevTabbable,
-      nextTabbable,
     };
   });
+  if (!read) return null;
+  const tabStops = await readTabStops(page);
+  return { ...read, prevTabbable: tabStops.prev, nextTabbable: tabStops.next };
 }
 
 /**

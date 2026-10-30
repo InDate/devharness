@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`replay insert` keeps the browser each step ran in.** An insert into a
+  named sequence whose own steps named no browser took the browser off every
+  step it brought in, so steps recorded in two browsers were saved bare and
+  a run played them all in one. It now takes the browser off only when the
+  steps brought in name one browser and the sequence declares at most one.
 - **A motion that cuts another short names both causes.** A transition
   started while another on its element and property still ran starts from
   where that one stood, so the gap between the two inputs sets its start

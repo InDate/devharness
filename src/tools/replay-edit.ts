@@ -39,11 +39,16 @@ async function insertIntoNamed(args: ReplayArgs, recorder: CommandRecorder) {
   }
   const existingCommands = rehydrateStepConnections(sequence);
   const insertAfter = args.insertAfterStep ?? existingCommands.length;
-  // A sequence whose steps name no browser runs against whichever one the run
-  // is given; a step brought in naming the browser it was tried in would pin
-  // itself there and split the run across two.
+  // A sequence whose steps name no browser, and which declares at most one,
+  // runs against whichever browser the run is given; a step brought in naming
+  // the browser it was tried in would pin itself there and split the run
+  // across two. Steps brought in naming two browsers, or into a sequence
+  // declaring several, keep their names: stripped, each lands on the run's
+  // one browser.
   const unpinned = !existingCommands.some(command => addressedConnection(command) !== undefined);
-  const brought = unpinned
+  const declaresOneBrowser = (sequence.requiredConnections?.length ?? 0) <= 1;
+  const broughtBrowsers = new Set(commandsToInsert.map(addressedConnection).filter(name => name !== undefined));
+  const brought = unpinned && declaresOneBrowser && broughtBrowsers.size <= 1
     ? commandsToInsert.map(command => {
         if (addressedConnection(command) === undefined) return command;
         const { connection: _pinned, ...params } = command.params ?? {};

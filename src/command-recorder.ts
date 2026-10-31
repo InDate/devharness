@@ -159,6 +159,12 @@ export interface CommandSequence {
   boundaryHiddenOff?: string[];
   createdAt: number;
   /**
+   * The press length, in ms, from which a recorded click or tap replays held
+   * down for its recorded `pressMs`; a shorter press replays as a quick one.
+   * DEFAULT_HOLD_THRESHOLD_MS (src/press-hold.ts) when absent. A step's own `holdMs` overrides it.
+   */
+  holdThresholdMs?: number;
+  /**
    * The connection every step was recorded against, when `create` hoisted a
    * uniform per-step `connection` off the steps (bug-018). Hoisting is
    * what keeps a sequence portable, but it is lossy: without this, a later

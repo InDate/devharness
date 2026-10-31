@@ -15,6 +15,7 @@ import {
 } from '../interaction-recorder.js';
 import { getFormattedResponse, withOnce } from '../messages.js';
 import { sequenceNeedsProxy } from './replay-connections.js';
+import { DEFAULT_HOLD_THRESHOLD_MS } from '../press-hold.js';
 
 // =============================================================================
 // Result Formatting
@@ -1122,6 +1123,8 @@ export function formatDeclarations(sequence: CommandSequence, persistedTo?: stri
   lines.push(sockets.length === 0
     ? '- **Sockets:** none declared - socket health is only checked when a run asks for it'
     : `- **Sockets:** ${sockets.map(s => `\`${s}\``).join(', ')} - checked on every run, without asking`);
+
+  lines.push(`- **Hold threshold:** ${sequence.holdThresholdMs ?? DEFAULT_HOLD_THRESHOLD_MS}ms${sequence.holdThresholdMs === undefined ? ' (default)' : ''} - a recorded click or tap pressed this long or longer replays held for its recorded length`);
 
   const tags = sequence.tags ?? [];
   lines.push(tags.length === 0

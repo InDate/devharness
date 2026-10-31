@@ -39,6 +39,7 @@ import { CANCELLED } from './session.js';
 import { heldRulesOf, type SiteReader } from './rules.js';
 import { routedReplayCall } from '../tools/replay-schema.js';
 import { capturedBy } from '../build-info.js';
+import { DEFAULT_HOLD_THRESHOLD_MS, resolvePressHold } from '../press-hold.js';
 
 /**
  * Stands in for the bench's own address inside a recorded sequence.
@@ -120,8 +121,28 @@ function subjectOf(params: Record<string, any>): string {
   return String(subject ?? '');
 }
 
+/**
+ * The name a pointer step reads under in place of its action: what the press
+ * was, from its button, count and hold against `holdThresholdMs`. Without it,
+ * a hold, a double click and a right click on one element all read as
+ * `input.click`. The step itself keeps `click` or `tap`; the name is the label's.
+ */
+function pressName(params: Record<string, any>, holdThresholdMs: number): string {
+  const action = params.action;
+  if (action === 'scroll') return params.modifiers?.includes('Control') ? 'trackpadPinch' : action;
+  if (action !== 'click' && action !== 'tap') return action;
+  const count = params.clickCount ?? 1;
+  const held = resolvePressHold(params, holdThresholdMs).holdMs;
+  if (action === 'tap') return count === 2 ? 'doubleTap' : held ? 'longPress' : 'tap';
+  if (params.button === 'right') return 'rightClick';
+  if (params.button === 'middle') return 'middleClick';
+  if (count === 2) return 'doubleClick';
+  if (count === 3) return 'tripleClick';
+  return held ? 'pressAndHold' : 'leftClick';
+}
+
 /** One line per recorded command, enough to recognise it in a list. */
-export function labelFor(command: { tool: string; params: Record<string, any> }): string {
+export function labelFor(command: { tool: string; params: Record<string, any> }, holdThresholdMs = DEFAULT_HOLD_THRESHOLD_MS): string {
   const { tool, params } = command;
   // A check reads as what it checks, the same words its row and the run's
   // report use.
@@ -136,7 +157,8 @@ export function labelFor(command: { tool: string; params: Record<string, any> })
   if (tool === 'assert') return `assert ${subjectOfCheck(assertAsCheck(params ?? {})).replace(/"(\{\{var:[^}]+\}\})"/g, '$1')}`;
   if (tool === 'wait' && params?.ms !== undefined) return `wait for ${params.ms}ms`;
   if (tool === 'wait' && params?.selectorGone !== undefined) return `wait ${params.selectorGone} absent`;
-  const head = params?.action ? `${tool}.${params.action}` : tool;
+  const action = tool === 'input' && params?.action ? pressName(params, holdThresholdMs) : params?.action;
+  const head = action ? `${tool}.${action}` : tool;
   const subject = subjectOf(params);
   return `${head}${subject ? ' ' + subject.slice(0, 80) : ''}`;
 }
@@ -720,7 +742,7 @@ export function createSequenceDriver(
       return {
         ...(sequence.startUrl ? { startUrl: String(sequence.startUrl) } : {}),
         steps: commands.map(command => ({
-          label: labelFor(command), tool: command.tool, notes: command.annotations?.length ?? 0,
+          label: labelFor(command, sequence.holdThresholdMs), tool: command.tool, notes: command.annotations?.length ?? 0,
           ...(['check', 'assert', 'wait'].includes(command.tool) ? { params: command.params } : {}),
         })),
         teardown: (sequence.teardown ?? []).map(labelFor),
@@ -781,7 +803,7 @@ export function createSequenceDriver(
         steps: commands.map(command => {
           const resolved = resolvedFor(command, store);
           return {
-            label: labelFor(command),
+            label: labelFor(command, sequence.holdThresholdMs),
             ...(command.comment ? { comment: command.comment } : {}),
             ...(resolved ? { resolved } : {}),
             ...(typeof command.params?.saveAs === 'string' ? { captures: command.params.saveAs } : {}),

@@ -48,6 +48,7 @@ export * from './replay-conditions.js';
 export * from './replay-step-checks.js';
 import type { ExecutionContext, StepResult, BreakpointHitInfo, ExecutionResult } from './replay-types.js';
 import { countStepTraffic } from '../step-traffic.js';
+import { resolvePressHold } from '../press-hold.js';
 import {
   TOOLS_ACCEPTING_CONNECTION, actsWithoutConnection, analyzeSequenceConnections, extractConnectionFromSequence,
   analyzeRecordedStepConnections, probeLiveConnectionReferences, formatMissingStepConnection,
@@ -1281,6 +1282,9 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
         || (['check', 'assert', 'wait'].includes(cmd.tool) && params.selector))) {
         params.expect = cmd.fingerprint;
       }
+
+      // A recorded press replays held, or quick, against this sequence's threshold.
+      if (cmd.tool === 'input') params = resolvePressHold(params, sequence.holdThresholdMs);
 
       // A per-step connection is a reference from the RECORDING session, so
       // rebind it onto this one before anything uses it, then require that it

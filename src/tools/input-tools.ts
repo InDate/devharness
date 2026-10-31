@@ -38,7 +38,7 @@ const coordinateSchema = z.object({
 
 // Consolidated input tool schema
 const inputToolSchema = z.object({
-  action: z.enum(['click', 'type', 'press', 'hover', 'focus', 'focusNext', 'focusPrevious', 'drag', 'scroll', 'mousemove', 'pinch', 'tap', 'swipe']),
+  action: z.enum(['click', 'type', 'press', 'hover', 'focus', 'focusNext', 'focusPrevious', 'drag', 'scroll', 'mousemove', 'pinch', 'rotate', 'tap', 'swipe']),
   connection: z.string(),
 
   // Selector-based actions
@@ -47,7 +47,11 @@ const inputToolSchema = z.object({
   dismissStrategy: z.enum(['accept', 'reject', 'close', 'remove', 'auto']).optional(),
 
   // click
-  clickCount: z.number().optional(),
+  clickCount: z.number().optional().describe('click/tap: presses in a row; 2 fires dblclick'),
+  button: z.enum(['left', 'right', 'middle']).optional().describe('click: the button pressed (default left)'),
+  modifiers: z.array(z.enum(['Shift', 'Control', 'Alt', 'Meta'])).optional()
+    .describe('click/scroll: keys held through the press; Control on scroll is a trackpad pinch'),
+  holdMs: z.number().min(0).optional().describe('click/tap: ms the press stays down before release, a long press'),
   expect: z.record(z.any()).optional().describe('click/type/hover: the element meant, as a fingerprint; another element is not acted on'),
 
   // type
@@ -92,6 +96,11 @@ const inputToolSchema = z.object({
 
   // pinch
   scaleFactor: z.number().optional().describe('>1 zoom in, <1 zoom out'),
+  frames: z.array(z.object({
+    afterMs: z.number().min(0),
+    points: z.array(z.object({ id: z.number(), x: z.number(), y: z.number() })),
+  })).min(1).optional()
+    .describe('pinch/rotate: the contacts down at each frame, ms after the frame before, as a recording captures them; in place of scaleFactor'),
 
   // Change detection
   detectChanges: z.boolean().optional(),
@@ -224,9 +233,28 @@ async function onElement(page: any, selector: string, action: (handle: any) => P
 async function clickSelector(
   page: any,
   selector: string,
-  options: { clickCount?: number } = {}
+  options: { clickCount?: number; button?: 'left' | 'right' | 'middle'; holdMs?: number } = {}
 ): Promise<void> {
   await onElement(page, selector, handle => clickElement(page, handle, { ...options, as: `click ${selector}` }));
+}
+
+/**
+ * Run a press with keys held through it. Puppeteer stamps every mouse event
+ * with the keys its keyboard holds down, so the press reaches the page with
+ * shiftKey, ctrlKey, altKey or metaKey set, as a Shift-click does.
+ */
+async function withModifiers<T>(page: any, keys: string[] | undefined, run: () => Promise<T>): Promise<T> {
+  if (!keys?.length) return run();
+  const down: string[] = [];
+  try {
+    for (const key of keys) {
+      await page.keyboard.down(key);
+      down.push(key);
+    }
+    return await run();
+  } finally {
+    for (const key of down.reverse()) await page.keyboard.up(key).catch(() => {});
+  }
 }
 
 /** Hover without the lifecycle wait - see clickSelector. */
@@ -410,8 +438,11 @@ async function readFocusedField(page: any): Promise<{ tag: string; value: string
   });
 }
 
+/** The gap between the taps of a double tap: a page reads two taps within ~300ms as one double tap. */
+const TAP_GAP_MS = 80;
+
 /** The actions that dispatch mouse or touch events, which Chrome hit-tests against a rendered frame. */
-const POINTER_ACTIONS = new Set(['click', 'hover', 'drag', 'scroll', 'mousemove', 'tap', 'swipe', 'pinch']);
+const POINTER_ACTIONS = new Set(['click', 'hover', 'drag', 'scroll', 'mousemove', 'tap', 'swipe', 'pinch', 'rotate']);
 
 /**
  * The answer to an input refused for reaching another element than `expect`:
@@ -555,10 +586,67 @@ export function createInputTools(
 
         await checkAborted();
 
+        /**
+         * Recorded contacts sent frame by frame at their recorded offsets.
+         * Each event lists every contact down after it, and Chrome diffs that
+         * list against the one before: a contact new to it lands, one missing
+         * from it lifts. A frame with no contacts is the touchEnd, which CDP
+         * takes with an empty list only.
+         */
+        const replayTouchFrames = async (frames: NonNullable<InputArgs['frames']>): Promise<any> => {
+          const result = await executeWithPauseDetection(
+            targetCdpManager,
+            async () => {
+              const client = await openSession(page);
+              const touchPoints = (points: typeof frames[number]['points']) =>
+                points.map(p => ({ id: p.id, x: Math.round(p.x), y: Math.round(p.y) }));
+              let down = new Set<number>();
+              try {
+                return await withReplayBypass(page, async () => {
+                  const startedAt = Date.now();
+                  let at = 0;
+                  for (const frame of frames) {
+                    throwIfAborted(abortSignal);
+                    at += frame.afterMs;
+                    const wait = startedAt + at - Date.now();
+                    if (wait > 0) await abortableSleep(wait, abortSignal);
+                    const ids = new Set(frame.points.map(p => p.id));
+                    const type = ids.size === 0 ? 'touchEnd' : [...ids].some(id => !down.has(id)) ? 'touchStart' : 'touchMove';
+                    await client.send('Input.dispatchTouchEvent', { type, touchPoints: touchPoints(frame.points) });
+                    down = ids;
+                  }
+                  return { spanMs: Date.now() - startedAt, contacts: new Set(frames.flatMap(f => f.points.map(p => p.id))).size };
+                });
+              } finally {
+                // A replay cut short lifts what it left down.
+                if (down.size) await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }).catch(() => {});
+                await client.detach().catch(() => {});
+              }
+            },
+            action
+          );
+          {
+            const stopped = stoppedResponse(result, action, 'page');
+            if (stopped) return stopped;
+          }
+          const r = result.result!;
+          return {
+            content: [{ type: 'text', text: `${action === 'rotate' ? 'Rotated' : 'Pinched'} (touch) with ${r.contacts} contacts over ${frames.length} recorded frames in ${r.spanMs}ms` }],
+            _meta: { tool: 'input', action, timestamp: Date.now(), touchFrames: { frames: frames.length, contacts: r.contacts, spanMs: r.spanMs } },
+          };
+        };
+
         try {
           switch (action) {
             case 'click': {
-              const { selector: rawSelector, clickCount = 1, handleModals = false, dismissStrategy = 'auto', x, y } = args;
+              const { selector: rawSelector, clickCount = 1, handleModals = false, dismissStrategy = 'auto', x, y, button, holdMs } = args;
+              // A held press reads as one in the reply, so a long press that opened nothing is told apart from a click.
+              const pressWords = [
+                button && button !== 'left' ? `${button} ` : '',
+                args.modifiers?.length ? `${args.modifiers.join('+')}+` : '',
+              ].join('');
+              const clickedWord = pressWords ? `${pressWords.charAt(0).toUpperCase()}${pressWords.slice(1)}clicked` : 'Clicked';
+              const heldWords = holdMs ? ` held ${holdMs}ms` : '';
 
               // Coordinate-based click (for canvas/3D apps)
               if (typeof x === 'number' && typeof y === 'number') {
@@ -567,12 +655,12 @@ export function createInputTools(
                 const refused = await refuseOtherElement(page, args.expect as ElementFingerprint | undefined, fingerprint);
                 if (refused) return elementMismatch('click', `(${x}, ${y})`, refused, fingerprint);
                 await checkAborted(); // last exit before the click goes on the wire
-                await withReplayBypass(page, () => page.mouse.click(x, y, { clickCount }));
+                await withReplayBypass(page, () => withModifiers(page, args.modifiers, () => page.mouse.click(x, y, { clickCount, button, delay: holdMs })));
                 const postClickUrl = page.url();
                 return {
                   content: [{
                     type: 'text',
-                    text: `Clicked at coordinates (${x}, ${y})`
+                    text: `${clickedWord} at coordinates (${x}, ${y})${heldWords}`
                   }],
                   _meta: {
                     tool: 'input',
@@ -714,7 +802,7 @@ export function createInputTools(
 
                   // Perform the click - use wrapper to bypass replay blocker overlay
                   await checkAborted(); // last exit before the click goes on the wire
-                  await withReplayBypass(page, () => clickSelector(page, selector, { clickCount }));
+                  await withReplayBypass(page, () => withModifiers(page, args.modifiers, () => clickSelector(page, selector, { clickCount, button, holdMs })));
 
                   // Check if breakpoint was hit during click - if so, skip post-click evaluation
                   // which would hang because page JS is paused
@@ -898,7 +986,7 @@ export function createInputTools(
                   content: [
                     {
                       type: 'text',
-                      text: `Clicked element \`${rawSelector}\`${changesText}${postClickInfo}\n\n${warnings.map(w => `**Warning:** ${w}`).join('\n')}`,
+                      text: `${clickedWord} element \`${rawSelector}\`${heldWords}${changesText}${postClickInfo}\n\n${warnings.map(w => `**Warning:** ${w}`).join('\n')}`,
                     },
                   ],
                   _meta: clickMeta,
@@ -910,7 +998,7 @@ export function createInputTools(
                 content: [
                   {
                     type: 'text',
-                    text: `Clicked element: \`${rawSelector}\`${changesText}${postClickInfo}`,
+                    text: `${clickedWord} element: \`${rawSelector}\`${heldWords}${changesText}${postClickInfo}`,
                   },
                 ],
                 _meta: clickMeta,
@@ -1673,6 +1761,9 @@ export function createInputTools(
                       await mouse.move(x, y);
                     }
 
+                    // Keys held for the gesture stamp every wheel event, so a
+                    // Control-held gesture reaches the page as a trackpad pinch.
+                    for (const key of args.modifiers ?? []) await page.keyboard.down(key);
                     // Chrome acknowledges a wheel event only after the renderer
                     // has handled it, ~14ms on an idle page; an await per event
                     // adds that to every gap. Each event goes out at its own
@@ -1691,6 +1782,7 @@ export function createInputTools(
                       }
                     } finally {
                       const settled = await Promise.allSettled(sent);
+                      for (const key of [...(args.modifiers ?? [])].reverse()) await page.keyboard.up(key).catch(() => {});
                       const failed = settled.find((outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected');
                       if (failed) throw failed.reason;
                     }
@@ -1746,7 +1838,7 @@ export function createInputTools(
                 content: [
                   {
                     type: 'text',
-                    text: `Scrolled ${directionParts.join(' and ')}${positionInfo}${spread}\n**Page position:** (${scrollResult?.scrollPosition.scrollX}, ${scrollResult?.scrollPosition.scrollY}) of (${scrollResult?.scrollPosition.maxScrollX}, ${scrollResult?.scrollPosition.maxScrollY})`,
+                    text: `Scrolled ${directionParts.join(' and ')}${positionInfo}${spread}${args.modifiers?.length ? ` with ${args.modifiers.join('+')} held` : ''}\n**Page position:** (${scrollResult?.scrollPosition.scrollX}, ${scrollResult?.scrollPosition.scrollY}) of (${scrollResult?.scrollPosition.maxScrollX}, ${scrollResult?.scrollPosition.maxScrollY})`,
                   },
                 ],
                 _meta: { tool: 'input', action: 'scroll', timestamp: Date.now(), ...(events > 1 ? { wheel: { events, spanMs: scrollResult?.spanMs, askedMs } } : {}), ...(scrollPoint ? { element: scrollPoint.fingerprint ?? null } : {}), ...(scrollPoint?.outside ? { outsideViewport: { viewport: scrollPoint.outside } } : {}) },
@@ -1945,10 +2037,21 @@ export function createInputTools(
                   try {
                     return await withReplayBypass(page, async () => {
                       throwIfAborted(abortSignal);
+                      // The taps before the last of a double tap, each lifted
+                      // TAP_GAP_MS before the next lands, inside the gap a
+                      // page reads as one double tap.
+                      if (!isSwipe) {
+                        for (let tap = 1; tap < (args.clickCount ?? 1); tap++) {
+                          await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point(start!.x, start!.y)] });
+                          await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+                          await abortableSleep(TAP_GAP_MS, abortSignal);
+                        }
+                      }
                       await client.send('Input.dispatchTouchEvent', {
                         type: 'touchStart',
                         touchPoints: [point(start!.x, start!.y)],
                       });
+                      if (!isSwipe && args.holdMs) await abortableSleep(args.holdMs, abortSignal);
                       if (isSwipe) {
                         // Paced by default. Unpaced, the moves arrive within a few
                         // ms of each other - velocity of several px/ms, which
@@ -1996,13 +2099,21 @@ export function createInputTools(
                   type: 'text',
                   text: isSwipe
                     ? `Swiped (touch) from (${r.from.x},${r.from.y}) on ${pointReading(fromPoint)} to (${r.to.x},${r.to.y}) on ${pointReading(toPoint)} in ${r.steps} steps${leaveDown ? ', contact still down: `input({ action: \'swipe\', finish: true })` lifts it once released' : ''}`
-                    : `Tapped (touch) at (${r.from.x},${r.from.y}) on ${pointReading(fromPoint)}`,
+                    : `${(args.clickCount ?? 1) > 1 ? `Tapped ${args.clickCount} times` : 'Tapped'} (touch) at (${r.from.x},${r.from.y}) on ${pointReading(fromPoint)}${args.holdMs ? `, held ${args.holdMs}ms` : ''}`,
                 }],
                 _meta: { tool: 'input', action: args.action, timestamp: Date.now(), ...(leaveDown ? { contactDown: true } : {}), elements: { from: fromPoint.fingerprint ?? null, to: toPoint.fingerprint ?? null }, ...(fromPoint.outside || toPoint.outside ? { outsideViewport: { from: !!fromPoint.outside, to: !!toPoint.outside, viewport: fromPoint.outside ?? toPoint.outside } } : {}) },
               };
             }
 
+            case 'rotate':
             case 'pinch': {
+              if (args.frames) return replayTouchFrames(args.frames);
+              if (args.action === 'rotate') {
+                return createErrorResponse('INVALID_PARAMETER', {
+                  parameter: 'frames', value: 'missing',
+                  message: 'rotate replays recorded contacts: frames holds them, as a recording writes them.',
+                });
+              }
               const { x, y, scaleFactor } = args;
 
               if (scaleFactor === undefined) {
@@ -2075,7 +2186,7 @@ export function createInputTools(
             default:
               return createErrorResponse('INVALID_ACTION', {
                 action,
-                validActions: 'click, type, press, hover, focus, focusNext, focusPrevious, drag, scroll, mousemove, pinch, tap, swipe'
+                validActions: 'click, type, press, hover, focus, focusNext, focusPrevious, drag, scroll, mousemove, pinch, rotate, tap, swipe'
               });
           }
         } finally {

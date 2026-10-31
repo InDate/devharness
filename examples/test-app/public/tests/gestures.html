@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gesture Recording Test</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      max-width: 640px;
+      margin: 20px auto;
+      padding: 0 20px;
+      background: #f5f5f5;
+    }
+    h1 { color: #333; border-bottom: 3px solid #9333ea; padding-bottom: 8px; font-size: 22px; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; margin: 10px 0; }
+    .target {
+      background: white;
+      border: 2px solid #9333ea;
+      border-radius: 8px;
+      padding: 14px 18px;
+      user-select: none;
+      -webkit-user-select: none;
+      cursor: pointer;
+    }
+    #pinch-area {
+      height: 160px;
+      background: white;
+      border: 2px dashed #9333ea;
+      border-radius: 8px;
+      touch-action: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #drop-zone {
+      flex: 1;
+      min-height: 50px;
+      background: #ede9fe;
+      border: 2px dashed #7e22ce;
+      border-radius: 8px;
+      padding: 14px;
+    }
+    #log { background: white; border-radius: 8px; padding: 10px 14px; min-height: 40px; font-family: monospace; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <h1>Gestures</h1>
+
+  <div class="row">
+    <div class="target" id="hold-btn" data-testid="hold-btn">Press and hold</div>
+    <div class="target" id="dbl-target" data-testid="dbl-target">Double click</div>
+    <div class="target" id="ctx-target" data-testid="ctx-target">Right click</div>
+    <div class="target" id="aux-target" data-testid="aux-target">Middle click</div>
+    <div class="target" id="mod-target" data-testid="mod-target">Modifier click</div>
+    <div class="target" id="tap-target" data-testid="tap-target">Tap (touch)</div>
+  </div>
+
+  <div id="pinch-area" data-testid="pinch-area">Pinch, rotate or ctrl+wheel here</div>
+
+  <div class="row">
+    <div class="target" id="drag-a" data-testid="drag-a" draggable="true">Drag me</div>
+    <div id="drop-zone" data-testid="drop-zone">Drop here</div>
+  </div>
+
+  <ol id="log" data-testid="log"></ol>
+
+  <script>
+    // Each control appends what it received, read back as window.__gestures.
+    window.__gestures = [];
+    const log = (entry) => {
+      window.__gestures.push(entry);
+      const li = document.createElement('li');
+      li.textContent = entry;
+      document.getElementById('log').appendChild(li);
+    };
+    const HOLD_MS = 500;
+
+    // Press and hold: held once the press outlasts HOLD_MS, quick when released before.
+    const hold = document.getElementById('hold-btn');
+    let holdTimer = null;
+    let holdStart = 0;
+    hold.addEventListener('pointerdown', (e) => {
+      holdStart = performance.now();
+      holdTimer = setTimeout(() => {
+        holdTimer = null;
+        log(`hold:${e.pointerType}`);
+      }, HOLD_MS);
+    });
+    const endHold = (e) => {
+      if (holdTimer) {
+        clearTimeout(holdTimer);
+        holdTimer = null;
+        log(`quick:${e.pointerType}:${Math.round(performance.now() - holdStart)}ms`);
+      }
+    };
+    hold.addEventListener('pointerup', endHold);
+    hold.addEventListener('pointercancel', endHold);
+    hold.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    document.getElementById('dbl-target').addEventListener('dblclick', () => log('dblclick'));
+
+    document.getElementById('ctx-target').addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      log(`contextmenu:button${e.button}`);
+    });
+
+    document.getElementById('aux-target').addEventListener('auxclick', (e) => {
+      if (e.button === 1) log('auxclick:middle');
+    });
+
+    document.getElementById('mod-target').addEventListener('click', (e) => {
+      const keys = [e.shiftKey && 'shift', e.ctrlKey && 'ctrl', e.altKey && 'alt', e.metaKey && 'meta'].filter(Boolean);
+      log(`click:${keys.join('+') || 'none'}`);
+    });
+
+    // Touch only: a mouse click never reaches these handlers.
+    const tap = document.getElementById('tap-target');
+    let tapStart = 0;
+    tap.addEventListener('touchstart', () => { tapStart = performance.now(); }, { passive: true });
+    tap.addEventListener('touchend', () => log(`touchtap:${Math.round(performance.now() - tapStart)}ms`));
+    tap.addEventListener('dblclick', () => log('touch-dblclick'));
+
+    // Two contacts: the spacing ratio and the turn of the line between them, from first to last.
+    const area = document.getElementById('pinch-area');
+    let startSpan = null;
+    let startAngle = null;
+    let last = null;
+    const measure = (touches) => {
+      const [a, b] = touches;
+      return {
+        span: Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY),
+        angle: Math.atan2(b.clientY - a.clientY, b.clientX - a.clientX) * 180 / Math.PI,
+      };
+    };
+    area.addEventListener('touchmove', (e) => {
+      if (e.touches.length < 2) return;
+      const m = measure(e.touches);
+      if (startSpan === null) { startSpan = m.span; startAngle = m.angle; }
+      last = m;
+    }, { passive: true });
+    area.addEventListener('touchend', (e) => {
+      if (e.touches.length > 0 || !last) return;
+      log(`pinch:scale${(last.span / startSpan).toFixed(1)}:turn${Math.round(last.angle - startAngle)}`);
+      startSpan = null;
+      last = null;
+    });
+    let wheelLogged = 0;
+    area.addEventListener('wheel', (e) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      if (performance.now() - wheelLogged > 300) log('wheel:ctrl');
+      wheelLogged = performance.now();
+    }, { passive: false });
+
+    // HTML5 drag and drop
+    const drag = document.getElementById('drag-a');
+    drag.addEventListener('dragstart', (e) => e.dataTransfer.setData('text/plain', 'drag-a'));
+    const zone = document.getElementById('drop-zone');
+    zone.addEventListener('dragover', (e) => e.preventDefault());
+    zone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      log(`drop:${e.dataTransfer.getData('text/plain')}`);
+    });
+  </script>
+</body>
+</html>

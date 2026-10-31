@@ -373,7 +373,7 @@ async function saveBeside(recorder: CommandRecorder, sequenceId: string, beside:
 function declarationsOf(sequence: CommandSequence): Partial<CommandSequence> {
   const source = sequence as any;
   const kept: Record<string, unknown> = {};
-  for (const key of ['requiredConnections', 'requiredSockets', 'proxy', 'tags', 'recordedConnection', 'shapeRules', 'boundaryRefuse']) {
+  for (const key of ['requiredConnections', 'requiredSockets', 'proxy', 'tags', 'recordedConnection', 'shapeRules', 'boundaryRefuse', 'holdThresholdMs']) {
     if (source[key] !== undefined) kept[key] = JSON.parse(JSON.stringify(source[key]));
   }
   return kept as Partial<CommandSequence>;
@@ -850,13 +850,15 @@ async function writeBack(sequence: CommandSequence, recorder: CommandRecorder): 
  * browser" unexpressible.
  */
 export async function handleDeclare(args: ReplayArgs, recorder: CommandRecorder) {
-  if (args.requiredConnections === undefined && args.requiredSockets === undefined && args.tags === undefined && args.proxy === undefined) {
+  if (args.requiredConnections === undefined && args.requiredSockets === undefined && args.tags === undefined && args.proxy === undefined
+    && args.holdThresholdMs === undefined) {
     return createErrorResponse('MISSING_PARAMETER', {
       action: 'declare',
-      missing: 'requiredConnections, requiredSockets, tags or proxy',
+      missing: 'requiredConnections, requiredSockets, tags, proxy or holdThresholdMs',
       message: 'The "declare" action needs at least one of "requiredConnections" (browsers the sequence needs), ' +
         '"requiredSockets" (URL substrings of the WebSockets its assertions ride on), "tags" (what kind of ' +
-        'sequence this is, which runAll selects on), or "proxy" (the run crosses the proxy). Pass [] to clear a list.',
+        'sequence this is, which runAll selects on), "proxy" (the run crosses the proxy), or "holdThresholdMs" ' +
+        '(the press length from which a recorded click or tap replays held). Pass [] to clear a list.',
     });
   }
 
@@ -917,6 +919,11 @@ export async function handleDeclare(args: ReplayArgs, recorder: CommandRecorder)
 
   if (args.proxy !== undefined) {
     (sequence as any).proxy = args.proxy || undefined;
+  }
+
+  // null returns the sequence to DEFAULT_HOLD_THRESHOLD_MS.
+  if (args.holdThresholdMs !== undefined) {
+    sequence.holdThresholdMs = args.holdThresholdMs ?? undefined;
   }
 
   if (args.requiredSockets !== undefined) {

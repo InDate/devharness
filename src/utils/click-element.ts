@@ -20,11 +20,12 @@ import type { Page } from 'puppeteer-core';
 export async function clickElement(
   page: Pick<Page, 'mouse'>,
   handle: OwnScrollHandle & { clickablePoint(): Promise<{ x: number; y: number }> },
-  options: { clickCount?: number; as?: string } = {}
+  options: { clickCount?: number; button?: 'left' | 'right' | 'middle'; holdMs?: number; as?: string } = {}
 ): Promise<void> {
   await scrollIntoViewAs(handle, options.as ?? 'click');
   const { x, y } = await handle.clickablePoint();
-  await page.mouse.click(x, y, { clickCount: options.clickCount });
+  // `delay` is the time between mousedown and mouseup: a long press.
+  await page.mouse.click(x, y, { clickCount: options.clickCount, button: options.button, delay: options.holdMs });
 }
 
 type OwnScrollHandle = {

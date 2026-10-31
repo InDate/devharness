@@ -45,6 +45,7 @@ const replayArgsSchema = z.object({
   }).strict()).optional().describe('declare: the browsers this sequence needs. Replaces the whole list; [] clears it'),
   proxy: z.boolean().optional().describe('declare: the run needs its connection to cross the proxy; a live one outside it plays in a proxied window the run opens'),
   tags: z.array(z.string()).optional().describe("declare: kinds of sequence, e.g. ['ui'], replacing the list. runAll: run only sequences carrying one of these"),
+  holdThresholdMs: z.number().min(0).nullable().optional().describe('declare: press ms from which a recorded click or tap replays held (default 500); null resets'),
   requiredSockets: z.array(z.string()).optional().describe("declare: URL substrings of the WebSockets its assertions ride on, e.g. ['/api/sync/socket'], replacing the list"),
   connections: z.record(z.string()).optional().describe('run: { "<recorded connection>": "<connection here>" }, rebinding a multi-connection sequence onto this session'),
   record: z.boolean().optional(),

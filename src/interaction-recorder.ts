@@ -35,8 +35,15 @@ export interface ElementInfo {
   };
 }
 
+export interface PointerModifiers {
+  ctrl?: boolean;
+  alt?: boolean;
+  shift?: boolean;
+  meta?: boolean;
+}
+
 export interface MouseEvent {
-  type: 'mousemove' | 'mousedown' | 'mouseup' | 'wheel' | 'click' | 'dblclick';
+  type: 'mousemove' | 'mousedown' | 'mouseup' | 'wheel' | 'click' | 'dblclick' | 'contextmenu';
   x: number;
   y: number;
   timestamp: number;
@@ -45,6 +52,38 @@ export interface MouseEvent {
   deltaX?: number;
   deltaY?: number;
   clickCount?: number;
+  modifiers?: PointerModifiers;
+  elementInfo?: ElementInfo;
+}
+
+/** One contact on the screen, in viewport pixels; `id` is the Touch.identifier, constant for the life of the contact. */
+export interface TouchPoint {
+  id: number;
+  x: number;
+  y: number;
+}
+
+/**
+ * A touch event, with every contact down once it has run: a touchend lists
+ * the contacts still down, so a gesture ends at the touchend that lists none.
+ */
+export interface TouchInputEvent {
+  type: 'touchstart' | 'touchmove' | 'touchend' | 'touchcancel';
+  timestamp: number;
+  touches: TouchPoint[];
+  /** The contacts this event added, moved or lifted. */
+  changed: TouchPoint[];
+  elementInfo?: ElementInfo;
+}
+
+/**
+ * An HTML5 drag: the browser's own drag runs between `dragstart` and `drop`,
+ * and the page receives no mousemove or mouseup while it runs.
+ */
+export interface DragDropEvent {
+  type: 'dragstart' | 'drop' | 'dragend';
+  timestamp: number;
+  point: { x: number; y: number };
   elementInfo?: ElementInfo;
 }
 
@@ -129,7 +168,7 @@ export interface CheckEvent {
   timestamp: number;
 }
 
-export type InputEvent = MouseEvent | KeyboardEvent | PasteEvent | NavigationEvent | CommentEvent | TimerEvent | VariableEvent | CheckEvent;
+export type InputEvent = MouseEvent | TouchInputEvent | DragDropEvent | KeyboardEvent | PasteEvent | NavigationEvent | CommentEvent | TimerEvent | VariableEvent | CheckEvent;
 
 export interface RecordingOptions {
   showOverlay?: boolean;
@@ -307,6 +346,14 @@ export function isCommentEvent(event: InputEvent): event is CommentEvent {
 
 export function isPasteEvent(event: InputEvent): event is PasteEvent {
   return event.type === 'paste';
+}
+
+export function isTouchEvent(event: InputEvent): event is TouchInputEvent {
+  return 'touches' in event;
+}
+
+export function isDragDropEvent(event: InputEvent): event is DragDropEvent {
+  return event.type === 'dragstart' || event.type === 'drop' || event.type === 'dragend';
 }
 
 // =============================================================================
@@ -683,6 +730,9 @@ export async function startRecording(
         if ((globalThis as any).__cdpRecordingPaused) return;
         if ((globalThis as any).__cdpCommentModalOpen) return;
         if (isOurUI(e.target)) return;
+        // The mouse events a touch produces after it ends: the touch events
+        // carry the gesture, and these would record it a second time as a click.
+        if (e.sourceCapabilities?.firesTouchEvents) return;
         const event: any = {
           type,
           x: e.clientX,
@@ -691,14 +741,61 @@ export async function startRecording(
           button: e.button,
           buttons: e.buttons,
         };
+        if (e.ctrlKey || e.altKey || e.shiftKey || e.metaKey) {
+          event.modifiers = {
+            ctrl: e.ctrlKey || undefined,
+            alt: e.altKey || undefined,
+            shift: e.shiftKey || undefined,
+            meta: e.metaKey || undefined,
+          };
+        }
         if (type === 'wheel') {
           event.deltaX = e.deltaX;
           event.deltaY = e.deltaY;
         }
+        // detail is the press's place in a run of presses: 2 on the second
+        // press of a double click, or on the one press a CDP double click sends.
         if (type === 'click' || type === 'dblclick') {
-          event.clickCount = type === 'dblclick' ? 2 : 1;
+          event.clickCount = e.detail || 1;
         }
         event.elementInfo = getElementInfo(e.target);
+        (globalThis as any).__cdpRecordingEvents.push(event);
+        updateOverlay(event, type);
+      };
+
+      const touchPoints = (list: any): any[] => Array.from(list ?? []).map((t: any) => ({
+        id: t.identifier,
+        x: Math.round(t.clientX),
+        y: Math.round(t.clientY),
+      }));
+
+      // Capture touch event
+      const captureTouchEvent = (e: any, type: string) => {
+        if ((globalThis as any).__cdpRecordingPaused) return;
+        if ((globalThis as any).__cdpCommentModalOpen) return;
+        if (isOurUI(e.target)) return;
+        const event: any = {
+          type,
+          timestamp: Date.now(),
+          touches: touchPoints(e.touches),
+          changed: touchPoints(e.changedTouches),
+        };
+        if (type === 'touchstart') event.elementInfo = getElementInfo(e.target);
+        (globalThis as any).__cdpRecordingEvents.push(event);
+        if (type !== 'touchmove') updateOverlay(event, type);
+      };
+
+      // Capture HTML5 drag event: the element dragged, and the element it lands on
+      const captureDragEvent = (e: any, type: string) => {
+        if ((globalThis as any).__cdpRecordingPaused) return;
+        if ((globalThis as any).__cdpCommentModalOpen) return;
+        if (isOurUI(e.target)) return;
+        const event: any = {
+          type,
+          timestamp: Date.now(),
+          point: { x: Math.round(e.clientX), y: Math.round(e.clientY) },
+          elementInfo: getElementInfo(e.target),
+        };
         (globalThis as any).__cdpRecordingEvents.push(event);
         updateOverlay(event, type);
       };
@@ -1308,6 +1405,14 @@ export async function startRecording(
         wheel: (e: any) => captureMouseEvent(e, 'wheel'),
         click: (e: any) => captureMouseEvent(e, 'click'),
         dblclick: (e: any) => captureMouseEvent(e, 'dblclick'),
+        contextmenu: (e: any) => captureMouseEvent(e, 'contextmenu'),
+        touchstart: (e: any) => captureTouchEvent(e, 'touchstart'),
+        touchmove: (e: any) => captureTouchEvent(e, 'touchmove'),
+        touchend: (e: any) => captureTouchEvent(e, 'touchend'),
+        touchcancel: (e: any) => captureTouchEvent(e, 'touchcancel'),
+        dragstart: (e: any) => captureDragEvent(e, 'dragstart'),
+        drop: (e: any) => captureDragEvent(e, 'drop'),
+        dragend: (e: any) => captureDragEvent(e, 'dragend'),
         keydown: (e: any) => captureKeyEvent(e, 'keydown'),
         keyup: (e: any) => captureKeyEvent(e, 'keyup'),
         paste: (e: any) => capturePasteEvent(e),
@@ -1320,6 +1425,9 @@ export async function startRecording(
       doc.addEventListener('wheel', listeners.wheel, { capture: true, passive: true });
       doc.addEventListener('click', listeners.click, { capture: true, passive: true });
       doc.addEventListener('dblclick', listeners.dblclick, { capture: true, passive: true });
+      for (const type of ['contextmenu', 'touchstart', 'touchmove', 'touchend', 'touchcancel', 'dragstart', 'drop', 'dragend']) {
+        doc.addEventListener(type, listeners[type], { capture: true, passive: true });
+      }
       doc.addEventListener('keydown', listeners.keydown, { capture: true, passive: true });
       doc.addEventListener('keyup', listeners.keyup, { capture: true, passive: true });
       doc.addEventListener('paste', listeners.paste, { capture: true });
@@ -1375,6 +1483,9 @@ export async function startRecording(
             doc.removeEventListener('wheel', listeners.wheel, { capture: true });
             doc.removeEventListener('click', listeners.click, { capture: true });
             doc.removeEventListener('dblclick', listeners.dblclick, { capture: true });
+            for (const type of ['contextmenu', 'touchstart', 'touchmove', 'touchend', 'touchcancel', 'dragstart', 'drop', 'dragend']) {
+              doc.removeEventListener(type, listeners[type], { capture: true });
+            }
             doc.removeEventListener('keydown', listeners.keydown, { capture: true });
             doc.removeEventListener('keyup', listeners.keyup, { capture: true });
             doc.removeEventListener('paste', listeners.paste, { capture: true });
@@ -1497,7 +1608,8 @@ export function simplifyEvents(
 
   for (const event of events) {
     if (isKeyboardEvent(event) || isNavigationEvent(event) || isCommentEvent(event) || isPasteEvent(event)
-      || isTimerEvent(event) || isVariableEvent(event) || isCheckEvent(event)) {
+      || isTimerEvent(event) || isVariableEvent(event) || isCheckEvent(event)
+      || isTouchEvent(event) || isDragDropEvent(event)) {
       flushPending();
       simplified.push(event);
       continue;
@@ -1538,6 +1650,132 @@ export function simplifyEvents(
 
 /** The longest quiet between two wheel events of one gesture; a trackpad's momentum tail runs 16-34ms apart. */
 const GESTURE_GAP_MS = 150;
+
+/** Travel in px a contact stays within for its gesture to be a tap; past it, the gesture is a swipe. */
+const TAP_SLOP_PX = 10;
+/** The longest gap between two taps that fire as a double tap, and the furthest apart they land. */
+const DOUBLE_TAP_GAP_MS = 300;
+const DOUBLE_TAP_SLOP_PX = 25;
+/** The turn in degrees between two contacts past which a two-contact gesture is a rotate rather than a pinch. */
+const ROTATE_MIN_DEG = 15;
+/** The most moves a recorded swipe replays in. */
+const SWIPE_MAX_STEPS = 30;
+
+const MODIFIER_KEYS: Array<[keyof PointerModifiers, string]> = [['ctrl', 'Control'], ['alt', 'Alt'], ['shift', 'Shift'], ['meta', 'Meta']];
+
+/** The keys held through a press, as the input tool names them. */
+function modifierKeys(modifiers: PointerModifiers | undefined): string[] {
+  return MODIFIER_KEYS.filter(([flag]) => modifiers?.[flag]).map(([, key]) => key);
+}
+
+function pressModifiers(modifiers: PointerModifiers | undefined): { modifiers?: string[] } {
+  const keys = modifierKeys(modifiers);
+  return keys.length ? { modifiers: keys } : {};
+}
+
+/** A selector to aim at, or the point when the element has none or is a canvas. */
+function pointTarget(
+  elementInfo: ElementInfo | undefined,
+  point: { x: number; y: number },
+  preferCoordinates: boolean,
+  preferSelectors: boolean,
+): Record<string, any> {
+  const selector = elementInfo?.selector;
+  const useSelector = selector && (preferSelectors || (!preferCoordinates && !elementInfo?.isCanvas));
+  return useSelector ? { selector } : { x: point.x, y: point.y };
+}
+
+/**
+ * A left click with no modifiers: the kind a double click is made of. `counted`
+ * admits one already carrying a clickCount, which a triple click extends.
+ */
+function isPlainClick(command: { tool: string; params: Record<string, any> }, counted = false): boolean {
+  const { params } = command;
+  return command.tool === 'input' && params.action === 'click'
+    && params.button === undefined && params.modifiers === undefined && (counted || params.clickCount === undefined);
+}
+
+function sameClickTarget(a: Record<string, any>, b: Record<string, any>): boolean {
+  if (a.selector || b.selector) return a.selector === b.selector;
+  return Math.hypot(a.x - b.x, a.y - b.y) <= DOUBLE_TAP_SLOP_PX;
+}
+
+/**
+ * The step one touch gesture replays as. One contact that stays within
+ * TAP_SLOP_PX is a tap with its press length; one that travels is a swipe
+ * over the time it moved. Two or more contacts are a pinch, or a rotate when
+ * the line between the first two turns past ROTATE_MIN_DEG; either replays
+ * the contacts frame by frame as they were recorded, since a pinch rebuilt
+ * from a scale factor runs at Chrome's own pace and along a line Chrome picks.
+ */
+export function touchGestureCommand(
+  gesture: TouchInputEvent[],
+  preferCoordinates = false,
+  preferSelectors = false,
+): { tool: string; params: Record<string, any> } {
+  const first = gesture[0];
+  const last = gesture[gesture.length - 1];
+  const start = first.touches[0];
+  const contacts = Math.max(...gesture.map(event => event.touches.length));
+
+  if (contacts === 1) {
+    let travel = 0;
+    let end = start;
+    let moves = 0;
+    let lastMoveAt = first.timestamp;
+    for (const event of gesture) {
+      const point = event.touches[0] ?? event.changed[0];
+      if (!point) continue;
+      travel = Math.max(travel, Math.hypot(point.x - start.x, point.y - start.y));
+      end = point;
+      if (event.type === 'touchmove') {
+        moves++;
+        lastMoveAt = event.timestamp;
+      }
+    }
+    if (travel <= TAP_SLOP_PX) {
+      return {
+        tool: 'input',
+        params: {
+          action: 'tap',
+          ...pointTarget(first.elementInfo, start, preferCoordinates, preferSelectors),
+          pressMs: last.timestamp - first.timestamp,
+        },
+      };
+    }
+    return {
+      tool: 'input',
+      params: {
+        action: 'swipe',
+        from: { x: start.x, y: start.y },
+        to: { x: end.x, y: end.y },
+        durationMs: lastMoveAt - first.timestamp,
+        steps: Math.min(SWIPE_MAX_STEPS, Math.max(1, moves)),
+      },
+    };
+  }
+
+  // Touch.identifier values run on from one gesture to the next; numbered in
+  // the order the contacts land, the frames read the same on every recording.
+  const ids = new Map<number, number>();
+  const frames = gesture.map((event, k) => ({
+    afterMs: k === 0 ? 0 : event.timestamp - gesture[k - 1].timestamp,
+    points: event.touches.map(point => {
+      if (!ids.has(point.id)) ids.set(point.id, ids.size);
+      return { id: ids.get(point.id)!, x: point.x, y: point.y };
+    }),
+  }));
+
+  const pair = frames.filter(frame => frame.points.some(p => p.id === 0) && frame.points.some(p => p.id === 1));
+  const angle = (frame: typeof frames[number]) => {
+    const a = frame.points.find(p => p.id === 0)!;
+    const b = frame.points.find(p => p.id === 1)!;
+    return Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI;
+  };
+  let turn = pair.length > 1 ? angle(pair[pair.length - 1]) - angle(pair[0]) : 0;
+  turn = ((turn + 540) % 360) - 180;
+  return { tool: 'input', params: { action: Math.abs(turn) > ROTATE_MIN_DEG ? 'rotate' : 'pinch', frames } };
+}
 
 export interface CommandConversionOptions {
   simplify?: boolean;
@@ -1594,9 +1832,27 @@ export function eventsToCommands(
     }
   };
 
+  // Use selector when available, unless preferCoordinates is set or element is canvas.
+  // Selector-based clicks are more reliable as they survive layout changes.
+  // preferSelectors forces the selector whenever one exists (canvas included)
+  // and wins over preferCoordinates when both flags are set.
+  const clickTarget = (event: MouseEvent): Record<string, any> =>
+    pointTarget(event.elementInfo, { x: event.x, y: event.y }, preferCoordinates, preferSelectors);
+
+  // Touch events a gesture already took, skipped when the loop reaches them.
+  const consumed = new Set<number>();
+  // The length of the left press whose click comes next.
+  let pendingPressMs: number | null = null;
+  // The last tap step, which a second tap close in time and place turns into a double tap.
+  let lastTap: { command: { params: Record<string, any> }; endedAt: number; x: number; y: number } | null = null;
+
   let i = 0;
   while (i < processedEvents.length) {
     const event = processedEvents[i];
+    if (consumed.has(i)) {
+      i++;
+      continue;
+    }
 
     if (isTimerEvent(event)) {
       addCommand({ tool: 'check', params: { afterMs: event.ms } }, event.timestamp);
@@ -1746,25 +2002,99 @@ export function eventsToCommands(
       continue;
     }
 
+    // Touch gestures: the contacts from a touchstart with none down to the
+    // touchend that lifts the last one.
+    if (isTouchEvent(event)) {
+      if (event.type !== 'touchstart' || event.touches.length !== event.changed.length) {
+        i++;
+        continue;
+      }
+      const gesture: TouchInputEvent[] = [];
+      for (let j = i; j < processedEvents.length; j++) {
+        const next = processedEvents[j];
+        if (!isTouchEvent(next)) continue;
+        gesture.push(next);
+        consumed.add(j);
+        if ((next.type === 'touchend' || next.type === 'touchcancel') && next.touches.length === 0) break;
+      }
+      const step = touchGestureCommand(gesture, preferCoordinates, preferSelectors);
+      const first = gesture[0];
+      const last = gesture[gesture.length - 1];
+      const point = first.touches[0];
+      if (step.params.action === 'tap' && lastTap && first.timestamp - lastTap.endedAt <= DOUBLE_TAP_GAP_MS
+        && Math.hypot(point.x - lastTap.x, point.y - lastTap.y) <= DOUBLE_TAP_SLOP_PX
+        && commands[commands.length - 1] === lastTap.command) {
+        lastTap.command.params.clickCount = (lastTap.command.params.clickCount ?? 1) + 1;
+        delete lastTap.command.params.pressMs;
+        lastTap.endedAt = last.timestamp;
+      } else {
+        addCommand(step, first.timestamp);
+        lastTap = step.params.action === 'tap'
+          ? { command: commands[commands.length - 1], endedAt: last.timestamp, x: point.x, y: point.y }
+          : null;
+      }
+      lastTypedSelector = null;
+      i++;
+      continue;
+    }
+
+    // An HTML5 drag outside a mouse press reaches here alone; the press that
+    // started it carries the step.
+    if (isDragDropEvent(event)) {
+      i++;
+      continue;
+    }
+
     // Mouse events
     if (!isMouseEvent(event)) {
       i++;
       continue;
     }
 
-    // Drag detection
+    // A right press is carried by its contextmenu event, which macOS fires
+    // between the press and its release; scanned to the release, the press
+    // would pass over it.
+    if (event.type === 'mousedown' && event.button === 2) {
+      i++;
+      continue;
+    }
+
     if (event.type === 'mousedown') {
       const dragStart = { x: Math.max(0, event.x), y: Math.max(0, event.y) };
       let dragEnd = dragStart;
       let j = i + 1;
 
-      while (j < processedEvents.length && processedEvents[j].type !== 'mouseup') {
+      while (j < processedEvents.length && processedEvents[j].type !== 'mouseup' && processedEvents[j].type !== 'dragstart') {
         const nextEvent = processedEvents[j];
         if (isMouseEvent(nextEvent) && nextEvent.type === 'mousemove') {
           // Clamp coordinates to valid viewport bounds (negative coords are outside viewport)
           dragEnd = { x: Math.max(0, nextEvent.x), y: Math.max(0, nextEvent.y) };
         }
         j++;
+      }
+
+      // HTML5 drag: the browser's drag runs from dragstart to drop and sends
+      // no mouseup, so the drop's point ends the step. A drag the browser
+      // cancelled lands on no drop and ends at its dragend.
+      if (j < processedEvents.length && processedEvents[j].type === 'dragstart') {
+        let k = j + 1;
+        let drop: DragDropEvent | undefined;
+        while (k < processedEvents.length && processedEvents[k].type !== 'dragend') {
+          const next = processedEvents[k];
+          if (isDragDropEvent(next) && next.type === 'drop') drop = next;
+          k++;
+        }
+        const dragend = processedEvents[k] as DragDropEvent | undefined;
+        const landing = drop?.point ?? dragend?.point;
+        if (landing) {
+          addCommand({ tool: 'input', params: { action: 'drag', from: dragStart, to: { x: Math.max(0, landing.x), y: Math.max(0, landing.y) } } }, event.timestamp);
+        }
+        // The mouseup and click a page can receive after the drop belong to the drag.
+        k++;
+        while (k < processedEvents.length && (processedEvents[k].type === 'mouseup' || processedEvents[k].type === 'click')) k++;
+        pendingPressMs = null;
+        i = k;
+        continue;
       }
 
       if (j < processedEvents.length && processedEvents[j].type === 'mouseup') {
@@ -1780,24 +2110,52 @@ export function eventsToCommands(
 
         if (distance > 5) {
           addCommand({ tool: 'input', params: { action: 'drag', from: dragStart, to: dragEnd } }, event.timestamp);
+          pendingPressMs = null;
+        } else if (event.button === 1) {
+          // A middle press fires auxclick and no click, so the press is the step.
+          addCommand({ tool: 'input', params: { action: 'click', ...clickTarget(event), button: 'middle', ...pressModifiers(event.modifiers) } }, event.timestamp);
+          pendingPressMs = null;
+        } else if (event.button === 0) {
+          // The click that follows carries the step; this press gives it its length.
+          pendingPressMs = mouseup.timestamp - event.timestamp;
         }
         i = j + 1;
         continue;
       }
     }
 
+    // Right click: contextmenu fires with no click. A Control-click on macOS
+    // fires it from the left button, the same gesture as a right press.
+    if (event.type === 'contextmenu') {
+      const modifiers = event.button === 0 && event.modifiers?.ctrl ? { ...event.modifiers, ctrl: undefined } : event.modifiers;
+      addCommand({ tool: 'input', params: { action: 'click', ...clickTarget(event), button: 'right', ...pressModifiers(modifiers) } }, event.timestamp);
+      lastTypedSelector = null;
+      i++;
+      continue;
+    }
+
+    // The dblclick that follows a press with clickCount 2 adds nothing to its step.
+    if (event.type === 'dblclick') {
+      i++;
+      continue;
+    }
+
     // Scroll
     // A gesture is the wheel events that follow one another with no gap over
     // GESTURE_GAP_MS. One step carries them with their offsets, and replays
     // them at those offsets: a step per event pays a step's own work between
-    // every event, and a trackpad sends one every 16ms.
+    // every event, and a trackpad sends one every 16ms. A trackpad pinch
+    // arrives as wheel events with ctrlKey set, so the modifiers held split
+    // one gesture from the next and travel with the step.
     if (event.type === 'wheel' && (event.deltaX || event.deltaY)) {
       const gesture: MouseEvent[] = [event];
+      const held = modifierKeys(event.modifiers).join('+');
       let j = i + 1;
       while (j < processedEvents.length) {
         const next = processedEvents[j];
         if (!isMouseEvent(next) || next.type !== 'wheel') break;
         if (next.timestamp - gesture[gesture.length - 1].timestamp > GESTURE_GAP_MS) break;
+        if (modifierKeys(next.modifiers).join('+') !== held) break;
         if (next.deltaX || next.deltaY) gesture.push(next);
         j++;
       }
@@ -1811,29 +2169,42 @@ export function eventsToCommands(
               afterMs: k === 0 ? 0 : wheel.timestamp - gesture[k - 1].timestamp,
             })),
           };
-      addCommand({ tool: 'input', params }, event.timestamp);
+      addCommand({ tool: 'input', params: { ...params, ...pressModifiers(event.modifiers) } }, event.timestamp);
       i = j;
       continue;
     }
 
     // Click
-    if (event.type === 'click') {
-      const elementInfo = event.elementInfo;
-      const selector = elementInfo?.selector;
-      const isCanvas = elementInfo?.isCanvas;
-
-      // Use selector when available, unless preferCoordinates is set or element is canvas.
-      // Selector-based clicks are more reliable as they survive layout changes.
-      // preferSelectors forces the selector whenever one exists (canvas included)
-      // and wins over preferCoordinates when both flags are set.
-      const useSelector = selector && (preferSelectors || (!preferCoordinates && !isCanvas));
-
-      if (useSelector) {
-        addCommand({ tool: 'input', params: { action: 'click', selector } }, event.timestamp);
+    // A click past the first of a run (detail 2 on a double click) joins the
+    // plain click before it on the same target, as a person's double click
+    // reaches the page as two presses. With no such click before it, the press
+    // is the whole run, as a CDP double click sends it, and stands with its count.
+    if (event.type === 'click' && (event.clickCount ?? 1) > 1) {
+      const target = clickTarget(event);
+      const previous = commands[commands.length - 1];
+      if (previous && isPlainClick(previous, true) && sameClickTarget(previous.params, target)) {
+        previous.params.clickCount = event.clickCount;
+        delete previous.params.pressMs;
       } else {
-        // Coordinate-based click for canvas/3D elements or when no selector available
-        addCommand({ tool: 'input', params: { action: 'click', x: event.x, y: event.y } }, event.timestamp);
+        addCommand({ tool: 'input', params: { action: 'click', ...target, ...pressModifiers(event.modifiers), clickCount: event.clickCount } }, event.timestamp);
       }
+      pendingPressMs = null;
+      lastTypedSelector = null;
+      i++;
+      continue;
+    }
+
+    if (event.type === 'click') {
+      addCommand({
+        tool: 'input',
+        params: {
+          action: 'click',
+          ...clickTarget(event),
+          ...pressModifiers(event.modifiers),
+          ...(pendingPressMs !== null ? { pressMs: pendingPressMs } : {}),
+        },
+      }, event.timestamp);
+      pendingPressMs = null;
       // Reset lastTypedSelector on click - typing after a click should replace, not append
       lastTypedSelector = null;
       i++;

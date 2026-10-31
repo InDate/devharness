@@ -2064,7 +2064,7 @@ export function eventsToCommands(
       let dragEnd = dragStart;
       let j = i + 1;
 
-      while (j < processedEvents.length && processedEvents[j].type !== 'mouseup' && processedEvents[j].type !== 'dragstart') {
+      while (j < processedEvents.length && !['mouseup', 'dragstart', 'contextmenu'].includes(processedEvents[j].type)) {
         const nextEvent = processedEvents[j];
         if (isMouseEvent(nextEvent) && nextEvent.type === 'mousemove') {
           // Clamp coordinates to valid viewport bounds (negative coords are outside viewport)
@@ -2094,6 +2094,14 @@ export function eventsToCommands(
         while (k < processedEvents.length && (processedEvents[k].type === 'mouseup' || processedEvents[k].type === 'click')) k++;
         pendingPressMs = null;
         i = k;
+        continue;
+      }
+
+      // A Control-click on macOS fires contextmenu from the left press, which
+      // carries the step as a right click.
+      if (j < processedEvents.length && processedEvents[j].type === 'contextmenu') {
+        pendingPressMs = null;
+        i = j;
         continue;
       }
 

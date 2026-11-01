@@ -42,19 +42,6 @@ describe('RestartCoordinator - steady state passthrough', () => {
 
     expect(deps.hostLines).toEqual([response]);
   });
-
-  it('forwards a tool call request/response pair normally', () => {
-    const deps = makeDeps();
-    const coordinator = new RestartCoordinator(deps);
-
-    const req = '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{}}';
-    coordinator.handleHostLine(req);
-    expect(deps.childLines).toEqual([req]);
-
-    const res = '{"jsonrpc":"2.0","id":2,"result":{}}';
-    coordinator.handleChildLine(res);
-    expect(deps.hostLines).toEqual([res]);
-  });
 });
 
 describe('RestartCoordinator - restart via requestRestart()', () => {

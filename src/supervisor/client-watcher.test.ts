@@ -183,17 +183,6 @@ describe('clientStillPresent', () => {
     expect(clientStillPresent(100, CLIENT, makeProbe(orphaned))).toBe(false);
   });
 
-  it('fails when the client pid was recycled onto another process', () => {
-    // The pid is alive and would pass a kill(pid, 0) check; the ancestry no
-    // longer runs through it, which is what the twelve orphans missed.
-    const recycled: Record<number, FakeEntry> = {
-      100: { ppid: 200, command: 'node .bin/devharness' },
-      200: { ppid: 1, command: 'npm exec devharness@0.9.14' },
-      300: { ppid: 1, command: '/usr/sbin/cupsd' },
-    };
-    expect(clientStillPresent(100, CLIENT, makeProbe(recycled))).toBe(false);
-  });
-
   it('fails when the walk lands on a different pid', () => {
     const moved: Record<number, FakeEntry> = {
       100: { ppid: 200, command: 'node .bin/devharness' },

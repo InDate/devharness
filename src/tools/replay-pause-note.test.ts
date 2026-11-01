@@ -102,15 +102,21 @@ describe('a pause point with a note', () => {
     }]);
   });
 
-  it('a pause point that does not notify stops the run without writing an instruction', async () => {
+  it('a pause point that does not notify stops the run without writing an instruction, and finish runs the step and the teardown', async () => {
     const sequence = freshSequence();
     Object.assign(sequence.commands[1], { pauseBefore: true, pauseHolds: [] });
-    const { replay, run, ran } = makeReplay(sequence);
+    sequence.teardown = [{ tool: 'dom', params: { action: 'querySelector', selector: '#teardown' } }];
+    const { run, recorder, ran } = makeReplay(sequence);
 
     const paused = await run.handler({ action: 'sequence', sequenceId: 'seq-note', connection: CONNECTION, wait: true });
     expect(ran).toEqual(['#a']);
+    expect(recorder.getActiveSequence()).toMatchObject({ currentStep: 1 });
     expect(textOf(paused)).not.toContain('To carry out before step');
     expect(events.appended).toEqual([]);
+
+    await run.handler({ action: 'finish' });
+    expect(ran).toEqual(['#a', '#b', '#teardown']);
+    expect(recorder.getActiveSequence()).toBeNull();
   });
 });
 

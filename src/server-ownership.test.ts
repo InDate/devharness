@@ -133,7 +133,7 @@ describe('stopOwnedServers', () => {
     expect(await waitForExit(pid)).toBe(true);
   }, 20000);
 
-  it('leaves a server claimed by a session whose pid was recycled', async () => {
+  it('stops a server whose other claimant\'s pid was recycled', async () => {
     const manager = managerFor(OWN_SUPERVISOR);
     const pid = await startServer(manager, 'shared');
     await storeFor(OTHER_SUPERVISOR).claim('shared', workDir, false);

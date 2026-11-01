@@ -116,12 +116,8 @@ describe('readSupervisorSessionConfig - global config', () => {
 });
 
 describe('idleCheckIntervalMs', () => {
-  it('checks every 5 minutes at the shipped 2 hour default', () => {
-    // The production timing, verified directly rather than inferred: two hours
-    // is too long to wait out in a test, so the arithmetic is the thing tested.
-    const thresholdMs = DEFAULT_IDLE_SUSPEND_MINUTES * 60_000;
-    expect(thresholdMs).toBe(7_200_000);
-    expect(idleCheckIntervalMs(thresholdMs)).toBe(300_000);
+  it('checks every 5 minutes at the shipped default', () => {
+    expect(idleCheckIntervalMs(DEFAULT_IDLE_SUSPEND_MINUTES * 60_000)).toBe(300_000);
   });
 
   it('suspends within a quarter of the threshold for shorter settings', () => {

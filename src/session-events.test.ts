@@ -5,7 +5,7 @@
  * arms one watch, and a kind added later arrives on it without a second one.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -47,23 +47,15 @@ afterEach(() => {
 });
 
 describe('appendEvent', () => {
-  it('writes one line per event, each stamped and kinded', async () => {
+  it('writes one stamped, kinded line per event, every kind in the one file a watch reads', async () => {
     await appendEvent(SESSION, 'block', { guard: 'port', tool: 'navigate' });
     await appendEvent(SESSION, 'message', { from: 'bbbbbbbb' });
 
     const events = readStream();
+    expect(getEventStreamPath(SESSION)).toBe(join(getEventsDir(), 'aaaaaaaa.jsonl'));
     expect(events.map(e => e.kind)).toEqual(['block', 'message']);
     expect(events[0]).toMatchObject({ kind: 'block', guard: 'port', tool: 'navigate' });
     expect(typeof events[0].ts).toBe('string');
-  });
-
-  it('puts every kind in the one file, so one watch covers them all', async () => {
-    await appendEvent(SESSION, 'block', {});
-    await appendEvent(SESSION, 'message', {});
-    await appendEvent(SESSION, 'block', {});
-
-    expect(getEventStreamPath(SESSION)).toBe(join(getEventsDir(), 'aaaaaaaa.jsonl'));
-    expect(readStream()).toHaveLength(3);
   });
 });
 
@@ -80,8 +72,7 @@ describe.skipIf(!hasLsof)('streamReaders', () => {
     await appendEvent(SESSION, 'block', {});
     const tail = spawn('tail', ['-f', '-n0', getEventStreamPath(SESSION)]);
     try {
-      await new Promise(resolve => setTimeout(resolve, 300));
-      expect(await streamReaders(SESSION)).toBeGreaterThan(0);
+      await vi.waitFor(async () => expect(await streamReaders(SESSION)).toBeGreaterThan(0), { timeout: 5000 });
     } finally {
       tail.kill();
     }

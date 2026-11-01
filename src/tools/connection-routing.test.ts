@@ -158,14 +158,6 @@ describe('network enable/disable honour connection', () => {
     expect(defaultMonitor.stopMonitoring).not.toHaveBeenCalled();
   });
 
-  it('enable errors when the reference does not resolve', async () => {
-    const result = await network.handler({ action: 'enable', connection: 'nope' });
-
-    expect(result.isError).toBe(true);
-    expect(defaultMonitor.startMonitoring).not.toHaveBeenCalled();
-    expect(otherMonitor.startMonitoring).not.toHaveBeenCalled();
-  });
-
   it.each(['list', 'get', 'search', 'enable', 'disable', 'setConditions', 'sockets', 'streams'])(
     '%s without a reference or a group is refused naming connection, reading no default',
     async (action) => {

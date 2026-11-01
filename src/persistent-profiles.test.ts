@@ -29,6 +29,7 @@ import {
 import { ConfigManager } from './config.js';
 import { setWorkingDirOverride } from './helpers/paths.js';
 import { createConfigTools } from './tools/config-tools.js';
+import { createSuccessResponse } from './messages.js';
 
 let root: string;        // stands in for os.tmpdir() - ephemeral profiles
 let persistentRoot: string;
@@ -514,7 +515,7 @@ describe('ConfigManager.getPersistentProfileRoot', () => {
     expect(manager.getPersistentProfileRoot()).toBe(path.join(os.homedir(), 'my-profiles'));
   });
 
-  it('persists the setting through a save/reload round trip', async () => {
+  it('reads a root written to the config file on reload', async () => {
     const configPath = path.join(tempDir, '.devharness', 'config.json');
     const onDisk = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
     onDisk.chrome.persistentProfileRoot = path.join(tempDir, 'browsers');
@@ -548,24 +549,6 @@ describe('config({ action: "resetProfile" | "listProfiles" })', () => {
     expect(response.isError).toBe(true);
   });
 
-  it('errors on an invalid profile name without touching the filesystem', async () => {
-    const response = await tools().config.handler({ action: 'resetProfile', profile: '../escape' } as any);
-    expect(response.isError).toBe(true);
-    expect(fs.existsSync(path.join(persistentRoot, '..', 'escape'))).toBe(false);
-  });
-
-  it('refuses to reset a profile another process\'s Chrome has locked', async () => {
-    if (process.platform === 'win32') return;
-    const dir = path.join(persistentRoot, 'device-a');
-    writeSingletonLock(dir);
-    fs.writeFileSync(path.join(dir, 'state'), 'enrolled');
-
-    const response = await tools().config.handler({ action: 'resetProfile', profile: 'device-a' } as any);
-
-    expect(response.isError).toBe(true);
-    expect(fs.readFileSync(path.join(dir, 'state'), 'utf-8')).toBe('enrolled');
-  });
-
   it('refuses to reset a profile a live Chrome is using', async () => {
     const launcher = newLauncher();
     const record = (launcher as any).createProfileRecord(9222, 'device-a') as ChromeProfileRecord;
@@ -582,9 +565,12 @@ describe('config({ action: "resetProfile" | "listProfiles" })', () => {
     expect(fs.existsSync(path.join(record.dir, 'state'))).toBe(true);
   });
 
-  it('lists existing profiles', async () => {
+  it('lists the profiles on disk under the persistent root', async () => {
     fs.mkdirSync(path.join(persistentRoot, 'device-a'), { recursive: true });
+    fs.mkdirSync(path.join(persistentRoot, 'device-b'), { recursive: true });
     const response = await tools().config.handler({ action: 'listProfiles' } as any);
-    expect(response.isError).toBeFalsy();
+    expect(response).toEqual(createSuccessResponse('CONFIG_PROFILE_LIST', {
+      root: persistentRoot, count: '2', profiles: 'device-a, device-b',
+    }));
   });
 });

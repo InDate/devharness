@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createNetworkTools } from './network-tools.js';
 
 function request(id: string, url: string, method: string, status?: number) {
@@ -14,11 +14,12 @@ function networkWith(requests: any[]) {
     isActive: () => true,
     getRequests: () => requests,
     getCount: () => requests.length,
+    startMonitoring: vi.fn(),
   };
   const resolve = async (reason: string) => reason === 'shop-web-app'
     ? { connection: {}, cdpManager: {}, puppeteerManager: { isConnected: () => true }, networkMonitor: monitor }
     : null;
-  return createNetworkTools(resolve).network;
+  return Object.assign(createNetworkTools(resolve).network, { monitor });
 }
 
 const search = (network: any, params: Record<string, unknown>) =>
@@ -68,5 +69,6 @@ describe('a network call naming no connection that exists', () => {
       expect(result.isError, action).toBe(true);
       expect(result.content[0].text, action).toContain('"no-such-tab"');
     }
+    expect(network.monitor.startMonitoring).not.toHaveBeenCalled();
   });
 });

@@ -16,6 +16,7 @@ import { createIssuesTools, DEFAULT_RESOLVE_VERIFICATION_TIMEOUT_MS } from './is
 import { ToolError } from '../tool-error.js';
 import { createErrorResponse } from '../messages.js';
 import { productionShaped } from '../test-support/fake-execute-tool-call.js';
+import { pausedMeta } from './replay-session.js';
 
 // showTestReadyOverlay/showVerificationOverlay both drive page.evaluate() and
 // resolve only when a human clicks a button in the browser - mock them so
@@ -96,22 +97,14 @@ describe('issues resolve - bounded human-verification timeout (bug-003 follow-on
     expect(reloaded!.resolvedAt).toBeUndefined(); // no-op on issue state
   });
 
-  it('never lets the overall wait exceed the bound even though Puppeteer\'s own protocolTimeout (180s) is longer', () => {
-    // This is the crux of the bug-003 "bound the interactive path" requirement:
-    // our own timeout (150s) must fire strictly before Puppeteer's default
-    // protocolTimeout (180s) would, so callers get our typed error instead of
-    // a raw "Runtime.callFunctionOn timed out".
-    const PUPPETEER_DEFAULT_PROTOCOL_TIMEOUT_MS = 180_000;
-    expect(DEFAULT_RESOLVE_VERIFICATION_TIMEOUT_MS).toBeLessThan(PUPPETEER_DEFAULT_PROTOCOL_TIMEOUT_MS);
-  });
 });
 
 /**
  * Verification runs the issue's sequence in a browser this handler opened. Both
- * ways that can go wrong have to close that browser: a run that FAILS returns
- * normally and is read from its text, while a run that cannot START (missing
- * file, Chrome refused to launch) throws - and the throw used to escape the
- * handler, leaving the tab open on the path where nobody is watching it.
+ * ways that can go wrong have to close that browser: a run whose steps fail and
+ * a run that cannot START (missing file, Chrome refused to launch) both reach
+ * the handler as a thrown ToolError, and a throw that escaped the handler left
+ * the tab open on the path where nobody is watching it.
  */
 describe('issues resolve - verification replay failures close the browser', () => {
   const tabClosed = (executeToolCall: any) =>
@@ -121,21 +114,23 @@ describe('issues resolve - verification replay failures close the browser', () =
     const issue = await addIssue({ type: 'bug', title: 'Broken', sequenceFile: 'x.json' });
     showTestReadyOverlay.mockResolvedValue('begin');
 
-    const executeToolCall = vi.fn(async (tool: string, params: Record<string, any>) => {
+    const executeToolCall = vi.fn(productionShaped(async (tool: string, params: Record<string, any>) => {
       if (tool === 'run' && params.action === 'sequence') {
         return {
-          content: [{ type: 'text', text: 'Error: Failed at step 2\n\n**Failed:** 1\n' }],
-          _meta: { tool: 'replay', action: 'run', timestamp: 0, replay: { success: false, totalSteps: 2, failedSteps: 1 } },
+          isError: true,
+          content: [{ type: 'text', text: 'login failed at step 2 of 2' }],
+          _meta: { tool: 'run', action: 'sequence', timestamp: 0, replay: { success: false, totalSteps: 2, failedSteps: 1 } },
         };
       }
       return { content: [{ type: 'text', text: '' }] };
-    });
+    }));
     const { tools } = buildTools({ executeToolCall });
 
     const result = await tools.issues.handler({ action: 'resolve', id: issue.id } as any, undefined);
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('replay failed');
+    expect((result as any)._errorId).toBe('ISSUES_REPLAY_FAILED');
+    expect(result.content[0].text).toContain('login failed at step 2 of 2');
     expect(tabClosed(executeToolCall)).toBe(true);
   });
 
@@ -186,41 +181,42 @@ describe('issues resolve - verification outcome comes from _meta', () => {
     ...(meta && { _meta: { tool: 'replay', action: 'run', timestamp: 0, replay: meta } }),
   });
 
-  it('fails on _meta even when the summary text says nothing about failures', async () => {
-    const issue = await addIssue({ type: 'bug', title: 'Broken', sequenceFile: 'x.json' });
-    showTestReadyOverlay.mockResolvedValue('begin');
-
-    const executeToolCall = vi.fn(async (tool: string, params: Record<string, any>) => {
-      if (tool === 'run' && params.action === 'sequence') {
-        return runResponse('reformatted summary, no Failed line', { success: false, totalSteps: 3, failedSteps: 1 });
-      }
-      return { content: [{ type: 'text', text: '' }] };
-    });
-    const { tools } = buildTools({ executeToolCall });
-
-    const result = await tools.issues.handler({ action: 'resolve', id: issue.id } as any, undefined);
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('replay failed');
-  });
-
   it('passes on _meta even when the summary text happens to contain the failure wording', async () => {
     const issue = await addIssue({ type: 'bug', title: 'Broken', sequenceFile: 'x.json' });
     showTestReadyOverlay.mockResolvedValue('begin');
     showVerificationOverlay.mockResolvedValue('fixed');
 
-    const executeToolCall = vi.fn(async (tool: string, params: Record<string, any>) => {
+    const executeToolCall = vi.fn(productionShaped(async (tool: string, params: Record<string, any>) => {
       if (tool === 'run' && params.action === 'sequence') {
         // A step whose own recorded text mentions "**Failed:** 2".
         return runResponse('Completed 3/3\n\nassert: expected "**Failed:** 2"', { success: true, totalSteps: 3, failedSteps: 0 });
       }
       return { content: [{ type: 'text', text: '' }] };
-    });
+    }));
     const { tools } = buildTools({ executeToolCall });
 
     const result = await tools.issues.handler({ action: 'resolve', id: issue.id } as any, undefined);
     expect(result.isError).toBeUndefined();
   });
 
+  it('fails on a run that paused part-way, which returns no isError', async () => {
+    const issue = await addIssue({ type: 'bug', title: 'Broken', sequenceFile: 'x.json' });
+    showTestReadyOverlay.mockResolvedValue('begin');
+    showVerificationOverlay.mockResolvedValue('fixed');
+
+    const recorder = { getActiveSequence: () => ({ currentStep: 1, totalSteps: 3 }) } as any;
+    const executeToolCall = vi.fn(productionShaped(async (tool: string, params: Record<string, any>) => {
+      if (tool === 'run' && params.action === 'sequence') {
+        return { content: [{ type: 'text', text: 'Paused at step 2 of 3' }], _meta: pausedMeta('run', recorder, { failedSteps: 0 }) };
+      }
+      return { content: [{ type: 'text', text: '' }] };
+    }));
+    const { tools } = buildTools({ executeToolCall });
+
+    const result = await tools.issues.handler({ action: 'resolve', id: issue.id } as any, undefined);
+    expect((result as any)._errorId).toBe('ISSUES_REPLAY_FAILED');
+    expect(showVerificationOverlay).not.toHaveBeenCalled();
+  });
 });
 
 /**

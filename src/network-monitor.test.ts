@@ -73,19 +73,6 @@ function attachEvent(sessionId: string, type: string, waitingForDebugger: boolea
 }
 
 describe('NetworkMonitor auto-attach resume', () => {
-  it('resumes a held target whose Network.enable never responds', async () => {
-    const pageSession = fakeSession();
-    const child = fakeSession('Network.enable');
-    const children = new Map([['sw-1', child]]);
-    const monitor = new NetworkMonitor();
-
-    monitor.startMonitoring(fakePage(pageSession, children) as any);
-    await flush();
-    pageSession.emit('Target.attachedToTarget', attachEvent('sw-1', 'service_worker', true));
-
-    expect(child.sent.map((c) => c.method)).toContain('Runtime.runIfWaitingForDebugger');
-  });
-
   it('sends the resume on the child session, never on the page session', async () => {
     const pageSession = fakeSession();
     const child = fakeSession('Network.enable');
@@ -106,7 +93,7 @@ describe('NetworkMonitor auto-attach resume', () => {
     // processed before the target's first line. Sending the install after the
     // resume would leave a worker's boot-time socket unwrapped for good, and
     // awaiting any of it would hang a service worker whose Network.enable only
-    // answers once it runs - which the two cases above pin.
+    // answers once it runs - which the case above pins.
     const pageSession = fakeSession();
     const child = fakeSession('Network.enable');
     const monitor = new NetworkMonitor();

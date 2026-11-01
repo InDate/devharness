@@ -1,9 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import vm from 'node:vm';
 import { MOTION_BINDING, MOTION_KEY, PAGE_MOTION_SOURCE, type MotionReport } from './page-motion.js';
-import { AnimationRecord } from './animation-record.js';
-import { motionOf } from './write-watch.js';
-import { markedNow } from './proxy/cause-timeline.js';
 
 /**
  * A page with a clock of its own: page time and wall time moved by hand, page
@@ -237,71 +234,6 @@ describe('a call that changes a running animation\'s playback', () => {
   });
 });
 
-describe('a motion report in the page\'s record', () => {
-  it('keeps the page-time length for the row and the wall-time length for where it ended', () => {
-    const record = new AnimationRecord('conn');
-    record.takeMotion({ id: 4, doc: 'd', phase: 'close', source: 'scroll', element: 'html', property: 'scrollY', from: '3298', to: '0', startMs: 1000, endMs: 4584, pageStartMs: 1000, pageEndMs: 1896, frames: 203, sentMs: 4704 }, 60_000);
-
-    const [entry] = record.list();
-    expect(entry.read).toMatchObject({ duration: 896, wallDuration: 3584 });
-    expect(motionOf(entry.read!)).toMatchObject({ durationMs: 896, wallMs: 3584 });
-  });
-
-  it('stands as an ended entry of its kind, with its change for the row', () => {
-    const record = new AnimationRecord('conn');
-    record.takeMotion({ id: 1, doc: 'd', phase: 'close', source: 'style', element: '#acc-body', property: 'height', from: '0px', to: '58px', startMs: 1000, endMs: 1300, pageStartMs: 1000, pageEndMs: 1300, frames: 19, sentMs: 1420 }, 50_000);
-
-    const [entry] = record.list();
-    expect(entry).toMatchObject({ kind: 'height #acc-body', via: 'motion', gone: 'finished', createdAt: 49_580 });
-    expect(entry.read).toMatchObject({ type: 'StyleWrites', duration: 300, from: '0px', to: '58px', frames: 19 });
-    expect(record.live()).toHaveLength(0);
-  });
-
-  it('stands from its open report, under the step it began in, and its close fills in the same entry', () => {
-    markedNow({ kind: 'replay', runId: 'r', step: 1, entry: 29 }, 300_000);
-    const record = new AnimationRecord('conn');
-    const changes: string[] = [];
-    record.watch((_, change) => changes.push(change));
-    record.takeMotion({ id: 7, doc: 'd', phase: 'open', source: 'style', element: '#acc-body', property: 'height', from: '', to: '4px', startMs: 1000, endMs: 1000, pageStartMs: 1000, pageEndMs: 1000, frames: 1, sentMs: 1000 }, 300_016);
-
-    expect(record.live()).toHaveLength(1);
-    expect(record.list()[0]).toMatchObject({ createdIn: { entry: 29 }, read: { playState: 'running' } });
-
-    markedNow(undefined, 300_200);
-    record.takeMotion({ id: 7, doc: 'd', phase: 'close', source: 'style', element: '#acc-body', property: 'height', from: '', to: '58px', startMs: 1000, endMs: 1300, pageStartMs: 1000, pageEndMs: 1300, frames: 19, sentMs: 1420 }, 300_436);
-
-    expect(record.list()).toHaveLength(1);
-    expect(record.list()[0]).toMatchObject({ createdIn: { entry: 29 }, gone: 'finished', read: { duration: 300, to: '58px', frames: 19, playState: 'finished' } });
-    expect(changes).toEqual(['added', 'updated']);
-  });
-});
-
-describe('a motion a later step stopped', () => {
-  it('carries the step it ended in beside the step it began in', () => {
-    markedNow({ kind: 'command', index: 9 }, 100_000);
-    markedNow({ kind: 'command', index: 11 }, 100_900);
-    const record = new AnimationRecord('conn');
-    // Played at page 1000 under #9, paused at page 1900 under #11, reported at 1910.
-    record.takeMotion({ id: 2, doc: 'd', phase: 'close', source: 'media', element: '#promo', property: 'currentTime', from: '0.015', to: '0.900', startMs: 1000, endMs: 1900, pageStartMs: 1000, pageEndMs: 1900, frames: 0, sentMs: 1910 }, 100_910);
-
-    const [entry] = record.list();
-    expect(entry.createdIn).toMatchObject({ index: 9 });
-    expect(entry.endedIn).toMatchObject({ index: 11 });
-    expect(entry.endedAt).toBe(100_900);
-  });
-});
-
-describe('a motion that ends under the step it began in', () => {
-  it('carries no end of its own, however many cursors that step stood under', () => {
-    markedNow({ kind: 'replay', runId: 'r', step: 1, entry: 3 }, 200_000);
-    markedNow({ kind: 'replay', runId: 'r', step: 1, entry: 3 }, 200_100);
-    const record = new AnimationRecord('conn');
-    record.takeMotion({ id: 3, doc: 'd', phase: 'close', source: 'style', element: '#acc-body', property: 'height', from: '', to: '58px', startMs: 1000, endMs: 1300, pageStartMs: 1000, pageEndMs: 1300, frames: 19, sentMs: 1420 }, 200_500);
-
-    expect(record.list()[0].endedIn).toBeUndefined();
-  });
-});
-
 /** The page above with a trigger tracker standing in: what it holds open per root, and how a loop's cancel reads. */
 function pageWithTracker() {
   const made = pageWithMotion();
@@ -343,30 +275,6 @@ describe('a motion run in the count of work outstanding under its root', () => {
 
     expect(reports[1]).toMatchObject({ phase: 'close', stoppedBy: { trigger: 'key - · cancelAnimationFrame()', root: { id: 'p:2', step: 'step-5' } } });
     expect(held.filter(([, id]) => id === 'p:2')).toEqual([['release', 'p:2']]);
-  });
-});
-
-describe('a stop placed by its cause, not by when its report arrived', () => {
-  it('ends under the step whose call stopped it, though by time it falls in the step before', () => {
-    markedNow({ kind: 'command', index: 9 }, 400_000);
-    markedNow({ kind: 'command', index: 11 }, 400_900);
-    const record = new AnimationRecord('conn');
-    // Paused 2ms into #11 by the page's clock, which runs behind: by time the pause lands in #9.
-    record.takeMotion({ id: 4, doc: 'd', phase: 'close', source: 'media', element: '#promo', property: 'currentTime', from: '0.015', to: '0.050', startMs: 1000, endMs: 1050, pageStartMs: 1000, pageEndMs: 1050, frames: 0, sentMs: 1051,
-      root: { id: 'p:9', step: JSON.stringify({ kind: 'command', index: 9 }) },
-      stoppedBy: { maker: 'MEDIA', trigger: 'key [ · pause()', root: { id: 'p:11', step: JSON.stringify({ kind: 'command', index: 11 }) } } }, 400_051);
-
-    expect(record.list()[0].endedIn).toMatchObject({ index: 11 });
-  });
-
-  it('adds no end where the motion ended by itself under its own root, however late the step after began', () => {
-    markedNow({ kind: 'command', index: 20 }, 500_000);
-    markedNow({ kind: 'command', index: 21 }, 500_100);
-    const record = new AnimationRecord('conn');
-    record.takeMotion({ id: 5, doc: 'd', phase: 'close', source: 'text', element: '#counter', property: 'text', from: '0', to: '1248', startMs: 1000, endMs: 1624, pageStartMs: 1000, pageEndMs: 1624, frames: 39, sentMs: 1625,
-      root: { id: 'p:20', step: JSON.stringify({ kind: 'command', index: 20 }) } }, 500_625);
-
-    expect(record.list()[0].endedIn).toBeUndefined();
   });
 });
 

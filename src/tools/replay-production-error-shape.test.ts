@@ -42,6 +42,12 @@ describe('auto-launch failure', () => {
     expect((result as any).error).toContain('Failed to auto-launch Chrome');
   });
 
+  it('answers a name that is not three words as INVALID_REFERENCE, launching nothing', async () => {
+    const executeToolCall = harness({});
+    expect(await autoLaunchChrome(executeToolCall, 'shop')).toMatchObject({ success: false, errorType: 'INVALID_REFERENCE' });
+    expect(executeToolCall).not.toHaveBeenCalled();
+  });
+
   it('succeeds quietly when Chrome launches', async () => {
     const executeToolCall = harness({ 'connection.launch': { content: [{ type: 'text', text: 'Chrome launched' }] } });
     expect(await autoLaunchChrome(executeToolCall, 'device-a-one')).toEqual({ success: true });

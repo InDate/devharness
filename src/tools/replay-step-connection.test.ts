@@ -233,10 +233,10 @@ describe('bug-009: validation machinery follows the per-step connection', () => 
 
   it('validates typed text against the step connection', async () => {
     const { calls, ctx } = makeHarness({
-      'inspect.evaluateExpression': { content: [{ type: 'text', text: '```json\n"hello"\n```' }] },
+      'inspect.evaluateExpression': { content: [{ type: 'text', text: '' }], _meta: { inspect: { value: 'hello' } } },
     });
 
-    await executeSteps({
+    const result = await executeSteps({
       sequence: seq([
         { tool: 'input', params: { action: 'type', selector: '#f', text: 'hello', connection: 'device-b' } },
       ]),
@@ -244,6 +244,7 @@ describe('bug-009: validation machinery follows the per-step connection', () => 
       ctx,
     });
 
+    expect(result.results[0].success).toBe(true);
     const evals = find(calls, 'inspect', 'evaluateExpression');
     expect(evals).toHaveLength(1);
     expect(evals[0].connection).toBe('device-b');

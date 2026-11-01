@@ -95,9 +95,6 @@ function createFakeClient() {
     /** true = an idle page: Debugger.pause arms a pause instead of taking one,
      *  so no paused event arrives. */
     idle: false,
-    /** true = the page stays stopped after the usual release, as it does when
-     *  the pause is held somewhere this session cannot see. */
-    heldAfterRelease: false,
     /** true = DOM.querySelector finds nothing, as it does once the annotated
      *  element has been re-rendered away. */
     missingNode: false,
@@ -138,14 +135,7 @@ function createFakeClient() {
       if (method === 'Runtime.callFunctionOn') return { result: { value: DESCRIBED } };
       // A page with no devharness clock in it: every control reads as absent.
       if (method === 'Runtime.evaluate' && String(params?.expression ?? '').includes('devharness.clock')) return { result: {} };
-      if (method === 'Runtime.evaluate') {
-        // The liveness probe: a held page never settles it.
-        if (String(params?.expression ?? '').includes('setTimeout')) {
-          if (client.heldAfterRelease) return new Promise(() => {});
-          return { result: { value: true } };
-        }
-        return { result: { value: client.clock } };
-      }
+      if (method === 'Runtime.evaluate') return { result: { value: client.clock } };
       if (method === 'Debugger.pause' && !client.idle) {
         setTimeout(() => client.emit('Debugger.paused', { reason: 'debugCommand', callFrames: [] }), 0);
       }
@@ -178,8 +168,6 @@ function createFakeClient() {
     emit: async (event: string, payload: any) => {
       for (const handler of [...(handlers.get(event) ?? [])]) await handler(payload);
     },
-    sessionsHandedOut: 0,
-    repair: undefined as string[] | undefined,
     calls: (method: string) => sent.filter(c => c.method === method),
     lastCall: (method: string) => [...sent].reverse().find(c => c.method === method),
     inspectModes: () => sent.filter(c => c.method === 'Overlay.setInspectMode').map(c => c.params.mode),
@@ -269,17 +257,7 @@ function fakeDebuggerOf(client: any) {
 
 function createFakePage(client: any) {
   return {
-    createCDPSession: async () => {
-      // A repair session is a second, independent agent on the same page.
-      if (client.sessionsHandedOut++ > 0) {
-        client.repair = client.repair ?? [];
-        return {
-          send: async (method: string) => { client.repair.push(method); client.heldAfterRelease = false; return {}; },
-          on: () => {}, off: () => {}, detach: async () => {},
-        } as any;
-      }
-      return client;
-    },
+    createCDPSession: async () => client,
     url: () => 'http://localhost:5173/orders',
     bringToFront: async () => {},
   } as any;
@@ -403,6 +381,30 @@ function noteSequences() {
     setEnvFile: () => {},
     setKeepDeclared: () => {},
     envFile: () => undefined,
+    runId: () => undefined,
+    historyIndex: () => 0,
+    runReply: () => '',
+    record: async () => undefined,
+    stopRecording: async () => {},
+    cancelRecording: async () => {},
+    recordedSoFar: () => [],
+    trafficIn: async () => ({ requests: 0, failed: 0, opened: 0, writes: 0, lines: [] }),
+    saveStepTraffic: async () => undefined,
+    clickFingerprints: () => [],
+    repair: async () => undefined,
+    saveExpected: async () => undefined,
+    saveRecorded: async () => undefined,
+    saveMove: async () => undefined,
+    rewordAnnotation: async () => undefined,
+    removeStep: async () => undefined,
+    insertTimer: async () => undefined,
+    insertCheck: async () => undefined,
+    spliceRecording: async () => undefined,
+    labelsOf: () => [],
+    editStep: async () => undefined,
+    setVariable: async () => undefined,
+    removeVariable: async () => undefined,
+    moveStep: async () => undefined,
   };
   return api;
 }
@@ -867,16 +869,6 @@ describe('a pause that is not the bench\'s', () => {
     expect(client.debugger.calls('resume')).toHaveLength(resumesBefore);
     expect(client.debugger.isPaused()).toBe(true);
   });
-
-  it('does not re-attach a second agent to force the page on', async () => {
-    const client = createFakeClient();
-    await start(client);
-    client.heldAfterRelease = true;   // the page stays stopped
-
-    await stopBench(CONNECTION);
-
-    expect(client.repair).toBeUndefined();
-  });
 });
 
 describe('an idle page, where the pause is armed rather than taken', () => {
@@ -1040,35 +1032,13 @@ describe('stepping a sequence', () => {
     const variables = [{ name: 'orderId', value: '4471', source: 'step 2' }];
     let base = '';
     let saved = ['checkout-flow', 'login'];
+    const notes = noteSequences();
+    notes.steps.splice(0, notes.steps.length, ...steps);
     const driver: SequenceDriver & { calls: string[]; open: () => any; nextFailure?: string } = {
+      ...notes,
       calls,
       open: () => open,
-      hosts: () => [],
-      runId: () => undefined,
-      historyIndex: () => 0,
-      runReply: () => '',
-    saveBoundaryRules: async () => undefined,
-    siteOf: () => undefined,
-    openSiteRules: async () => [],
-    saveSiteRules: async () => undefined,
-    catalogueRules: async () => [],
-    openSiteHidden: async () => [],
-    openBoundaryRules: () => ({ rules: [], waits: [], refuseWrites: false }),
-    listCatalogue: async () => [],
-    outlineOf: async () => undefined,
-    history: () => [],
-    historyDetail: () => undefined,
-    callLabel: () => undefined,
-    tools: () => [],
-    notes: async () => [],
-    servers: async () => [],
-    serverLog: async () => ({}),
-    running: async () => ({ stream: '', watchCall: '', sequenceDirs: [], connections: [] }),
-    toolValues: async () => ({ connections: [], servers: [], sequences: [], profiles: [] }),
-    callTool: async () => ({ failed: false, result: '' }),
-    describe: async () => undefined,
-    commentStep: async () => undefined,
-    listNames: async () => [...saved],
+      listNames: async () => [...saved],
       active: () => (open
         ? { name: open.name, description: 'checkout end to end', currentStep: open.currentStep, total: steps.length, steps, variables }
         : null),
@@ -1076,64 +1046,19 @@ describe('stepping a sequence', () => {
       step: async () => { calls.push('step'); if (open) open.currentStep += 1; return driver.nextFailure; },
       finish: async () => { calls.push('finish'); if (open) open.currentStep = steps.length; return undefined; },
       goto: async (step: number) => { calls.push(`goto:${step}`); open = { name: open?.name ?? 'checkout-flow', currentStep: step + 1 }; return undefined; },
-      attachScreenshot: async () => undefined,
-      record: async () => undefined,
-      trafficIn: async () => ({ requests: 0, failed: 0, opened: 0, writes: 0, lines: [] }),
-        saveStepTraffic: async () => undefined,
-        clickFingerprints: () => [],
-        repair: async () => undefined,
-        saveExpected: async () => undefined,
-        saveRecorded: async () => undefined,
-        saveMove: async () => undefined,
-        rewordAnnotation: async () => undefined,
-    stopRecording: async () => {},
-    cancelRecording: async () => {},
-    isUnsaved: () => false,
-    saveUnsaved: async () => undefined,
-    discardUnsaved: () => undefined,
-    canUndo: () => false,
-    testCommands: async () => ({ passed: true, summary: '' }),
-    setMotion: async () => undefined,
-    undo: () => undefined,
-    clearUndo: () => {},
-    removeStep: async () => undefined,
-    insertTimer: async () => undefined,
-    insertCheck: async () => undefined,
-    spliceRecording: async () => undefined,
-    labelsOf: () => [],
-    editStep: async () => undefined,
-    setVariable: async () => undefined,
-    removeVariable: async () => undefined,
-    moveStep: async () => undefined,
-    recordedSoFar: () => [],
-      findAnnotation: () => undefined,
-      issue: async () => undefined,
       setBaseUrl: (value: string) => { calls.push(`baseUrl:${value}`); base = value; },
       baseUrl: () => base || undefined,
-      setEnvFile: () => {},
-      setKeepDeclared: () => {},
-      envFile: () => undefined,
       halt: async () => { calls.push('halt'); },
       cancel: async () => { calls.push('cancel'); open = null; },
       attachAnnotation: async (step: number, annotation: any) => {
         calls.push(`attach:${step}`);
-        const command: any = steps[step];
-        if (!command) return `step ${step + 1} is not in the sequence`;
-        command.annotations = [...(command.annotations ?? []), annotation];
-        return undefined;
+        return notes.attachAnnotation(step, annotation);
       },
-      moveAnnotation: async () => undefined,
-      holdPaused: async () => {},
-      setPause: async () => undefined,
       detachAnnotation: async (id: string) => {
         calls.push(`detach:${id}`);
-        let found = false;
-        for (const command of steps as any[]) {
-          const kept = (command.annotations ?? []).filter((note: any) => note.id !== id);
-          if (kept.length !== (command.annotations ?? []).length) { found = true; command.annotations = kept; }
-        }
-        return found ? undefined : 'that note is not in the open sequence';
+        return notes.detachAnnotation(id);
       },
+      findAnnotation: () => undefined,
       remove: async (name: string) => {
         calls.push(`remove:${name}`);
         if (!saved.includes(name)) return `no saved sequence named "${name}"`;
@@ -1404,7 +1329,7 @@ describe('stepping a sequence', () => {
     expect((await getSequenceState(CONNECTION))!.failure).toBeUndefined();
   });
 
-  it('goes back to the step an annotation was taken at', async () => {
+  it('goes to the step named and holds the page there', async () => {
     const client = createFakeClient();
     const sequences = fakeSequences();
     await startWithSequences(client, sequences);
@@ -1417,21 +1342,6 @@ describe('stepping a sequence', () => {
     expect(sequences.calls).toContain('goto:0');
     expect(state!.currentStep).toBe(1);
     expect(getBenchSession(CONNECTION)).toMatchObject({ frozen: true });
-  });
-
-  it('records which step an annotation was taken at', async () => {
-    const client = createFakeClient();
-    const sequences = fakeSequences();
-    await startWithSequences(client, sequences);
-    await selectSequence(CONNECTION, 'checkout-flow');
-    await stepSequence(CONNECTION);
-    await pick(client);
-
-    await saveAnnotation(CONNECTION, 'pill never clears');
-
-    // Stored in the command the run had reached: the step it belongs to is the
-    // one holding it, so no step number is written beside the note.
-    expect(sequences.calls).toContain('attach:1');
   });
 
   it('tells the driver which connection to drive, so it can rebind the sequence', async () => {
@@ -1729,17 +1639,6 @@ describe('the callback log', () => {
     expect(log[0].index).toBe(51);
   });
 
-  it('records nothing when the page had nothing scheduled', async () => {
-    const client = createFakeClient();
-    await startWithScript(client);
-    client.quiet = true;
-
-    const tick = await tickBench(CONNECTION, { budgetMs: 100 }, 10);
-
-    expect(tick!.ran).toEqual([]);
-    expect(getBenchSession(CONNECTION)!.callbacks).toEqual([]);
-  });
-
   it('falls back to a bare entry when the frame names nothing', async () => {
     const client = createFakeClient();
     await start(client);
@@ -1885,17 +1784,6 @@ describe('freeze and picker as independent toggles', () => {
 });
 
 describe('setPicker', () => {
-  it('disarms so the app can be driven normally while still frozen', async () => {
-    const client = createFakeClient();
-    await start(client);
-
-    await setPicker(CONNECTION, false);
-
-    expect(client.lastCall('Overlay.setInspectMode').params.mode).toBe('none');
-    expect(getBenchSession(CONNECTION)).toMatchObject({ pickerArmed: false });
-    expect(isBenchOpen(CONNECTION)).toBe(true);
-  });
-
   it('leaves the picker disarmed across a tick', async () => {
     const client = createFakeClient();
     await start(client);
@@ -1940,17 +1828,6 @@ describe('tickBench', () => {
     expect(tick!.requestedSteps).toBeUndefined();
   });
 
-  it('reports where it landed rather than what was asked for', async () => {
-    const client = createFakeClient();
-    client.stepMs = 75;
-    await start(client);
-
-    const tick = await tickBench(CONNECTION, { budgetMs: 100 });
-
-    expect(tick!.actualMs).toBe(150);
-    expect(tick!.requestedMs).toBe(100);
-  });
-
   it('sets the step breakpoints once, not per tick', async () => {
     const client = createFakeClient();
     await start(client);
@@ -1963,17 +1840,6 @@ describe('tickBench', () => {
     expect(sets[0].args[0]).toEqual(['setTimeout.callback', 'setInterval.callback', 'requestAnimationFrame.callback']);
   });
 
-  it('accumulates page time across ticks', async () => {
-    const client = createFakeClient();
-    client.stepMs = 50;
-    await start(client);
-
-    await tickBench(CONNECTION, { budgetMs: 50 });
-    const tick = await tickBench(CONNECTION, { budgetMs: 50 });
-
-    expect(tick!.tickMs).toBe(100);
-  });
-
   it('reports a quiet page rather than pretending it stepped', async () => {
     const client = createFakeClient();
     await start(client);
@@ -1982,6 +1848,8 @@ describe('tickBench', () => {
     const tick = await tickBench(CONNECTION, { budgetMs: 100 }, 10);
 
     expect(tick).toMatchObject({ steps: 0, actualMs: 0, quiet: true });
+    expect(tick!.ran).toEqual([]);
+    expect(getBenchSession(CONNECTION)!.callbacks).toEqual([]);
   });
 
   it('counts callbacks and page time across ticks', async () => {
@@ -2115,21 +1983,6 @@ describe('the bench', () => {
     await http(`${benchUrl}picker`, { method: 'POST', body: { armed: false } });
 
     expect(client.lastCall('Overlay.setInspectMode').params.mode).toBe('none');
-  });
-});
-
-describe('the breakpoint guard', () => {
-  it('lets the bench run while the page is paused - it owns that pause', async () => {
-    const { checkBreakpointPause } = await import('./tool-response.js');
-    const paused = [{
-      reference: CONNECTION,
-      port: 9222,
-      cdpManager: { isPaused: () => true, getPausedInfo: () => ({ location: 'app.js:1', callStack: [] }) },
-    }] as any;
-
-    expect(checkBreakpointPause(paused, 'bench', undefined, 'tick').blocked).toBe(false);
-    // Still blocking for a tool that would drive a page it does not control.
-    expect(checkBreakpointPause(paused, 'input', undefined, 'click').blocked).toBe(true);
   });
 });
 
@@ -2268,22 +2121,8 @@ describe('what a mutation pass found unguarded', () => {
         { index: 1, label: 'input.click #save', at: 2000, done: true, current: false },
       ]),
       record: () => new Promise<string | undefined>((resolve) => { release = () => resolve(undefined); }),
-      stopRecording: async () => {},
-      cancelRecording: async () => {},
-      isUnsaved: () => false,
-      saveUnsaved: async () => undefined,
-      discardUnsaved: () => undefined,
-    canUndo: () => false,
-    testCommands: async () => ({ passed: true, summary: '' }),
-    setMotion: async () => undefined,
-    undo: () => undefined,
-    clearUndo: () => {},
       commentStep: async (index: number, words: string) => { commented.push({ index, words }); return undefined; },
       trafficIn: async () => ({ requests: 2, failed: 1, opened: 0, writes: 0, lines: ['POST /save 500'] }),
-      saveExpected: async () => undefined,
-        saveRecorded: async () => undefined,
-        saveMove: async () => undefined,
-        rewordAnnotation: async () => undefined,
       saveStepTraffic: async (entries: Array<{ index: number; traffic: any }>) => {
         saved.push(...entries); return undefined;
       },

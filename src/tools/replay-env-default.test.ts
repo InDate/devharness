@@ -105,6 +105,7 @@ describe('the project envFile', () => {
     expect(res.isError).toBe(true);
     expect(text(res)).toContain('failed at step 2 of 2');
     expect(text(res)).toContain('add APP_PASSWORD=<value> to .devharness/sequences.env');
+    expect(typed).toEqual([]);
   });
 
   it('keeps the value out of the reply when the field does not take it', async () => {

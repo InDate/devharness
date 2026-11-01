@@ -237,7 +237,7 @@ describe('message send with waitForReplyMs', () => {
     expect(again._meta.message.received).toEqual([]);
   });
 
-  it('says in the response that the waited message will come back once', async () => {
+  it('names in the response that the waited message comes back once', async () => {
     await sendMessage({ from: 'bbbbbbbb', to: 'aaaaaaaa', text: 'earlier-unread' });
 
     const pending = message.handler({
@@ -249,7 +249,7 @@ describe('message send with waitForReplyMs', () => {
     expect(res.content[0].text).toContain('repeats the message');
   });
 
-  it('says nothing about repeats when the mailbox was already caught up', async () => {
+  it('leaves repeats unmentioned when the mailbox was already caught up', async () => {
     const pending = message.handler({
       action: 'send', to: 'bbbbbbbb', text: 'ping', waitForReplyMs: 5000, pollIntervalMs: 25,
     });
@@ -361,18 +361,12 @@ describe('message sessions', () => {
 });
 
 describe('mailbox identity', () => {
-  it('uses the session id from the environment, with no detection needed', async () => {
-    setSessionInfo(null);
-    const res = await message.handler({ action: 'read' });
-    expect(res._meta.message.self).toBe('aaaaaaaa');
-  });
-
-  it('keeps the same id when the child pid changes, which a rebuild does', async () => {
+  it('takes the session id from the environment, so a rebuild that drops the detector result keeps it', async () => {
     const before = (await message.handler({ action: 'read' }))._meta.message.self;
-    setSessionInfo(null);   // the detector's result is lost with the old child
+    setSessionInfo(null);
     const after = (await message.handler({ action: 'read' }))._meta.message.self;
-    expect(after).toBe(before);
-    expect(after).not.toContain(String(process.pid));
+    expect(before).toBe('aaaaaaaa');
+    expect(after).toBe('aaaaaaaa');
   });
 
   it('prefers the environment over a detector result that disagrees', async () => {

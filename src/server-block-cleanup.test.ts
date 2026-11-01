@@ -8,13 +8,14 @@
  * - stop/remove left the server's `block`-level port monitor behind, so a port
  *   nobody owned any more went on gating tools (and survived in servers.json).
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { ServerManager } from './server-manager.js';
 import { ServerClaimsStore } from './server-claims.js';
 import { initializePaths } from './helpers/paths.js';
+import { isProcessAlive } from './helpers/process-liveness.js';
 import { trackedManagers } from './test-support/server-managers.js';
 
 let workDir: string;
@@ -63,7 +64,7 @@ afterEach(async () => {
 describe('acknowledgeStartup', () => {
   it('stays acknowledged for a server that is already dead', async () => {
     const mgr = manager();
-    await mgr.startServer({
+    const { pid } = await mgr.startServer({
       id: 'dead-server',
       command: `node ${diesFast}`,
       cwd: workDir,
@@ -71,7 +72,7 @@ describe('acknowledgeStartup', () => {
     });
 
     // Let it die, then block on it the way the startup detector does.
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await vi.waitFor(() => expect(isProcessAlive(pid)).toBe(false), { timeout: 5000 });
     (mgr as any).pendingStartups.set('dead-server', {
       serverId: 'dead-server',
       startedAt: new Date(),
@@ -81,11 +82,17 @@ describe('acknowledgeStartup', () => {
     });
     expect(mgr.getPendingStartupFailures()).toHaveLength(1);
 
-    expect(await mgr.acknowledgeStartup('dead-server')).toBe(true);
-    expect(mgr.getPendingStartupFailures()).toHaveLength(0);
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    try {
+      expect(await mgr.acknowledgeStartup('dead-server')).toBe(true);
+      expect(mgr.getPendingStartupFailures()).toHaveLength(0);
 
-    // The old health check ran on a 5s tick and re-blocked on the first one.
-    await new Promise((resolve) => setTimeout(resolve, 6500));
+      // A health check armed on the dead server would re-block on its first 5s tick.
+      await vi.advanceTimersByTimeAsync(6500);
+    } finally {
+      vi.useRealTimers();
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
     expect(mgr.getPendingStartupFailures()).toHaveLength(0);
 
     await mgr.stopAll();
@@ -112,9 +119,11 @@ describe('acknowledgeStartup', () => {
     expect(mgr.getPendingStartupFailures()).toHaveLength(0);
 
     process.kill(pid, 'SIGKILL');
-    await new Promise((resolve) => setTimeout(resolve, 6500));
 
-    expect(mgr.getPendingStartupFailures().map((f) => f.serverId)).toEqual(['live-server']);
+    await vi.waitFor(
+      () => expect(mgr.getPendingStartupFailures().map((f) => f.serverId)).toEqual(['live-server']),
+      { timeout: 10000, interval: 100 },
+    );
   }, 20000);
 });
 

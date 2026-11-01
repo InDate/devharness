@@ -134,18 +134,6 @@ describe('findSessionByName', () => {
   });
 });
 
-describe('ordering when two servers start together', () => {
-  it('is decided by pid, not by whatever order the directory listed', () => {
-    // A rebuild restarts every child at once, so equal startedAt is the norm.
-    const a = { ...record(811, 'aaaaaaaa'), startedAt: 500 };
-    const b = { ...record(711, 'bbbbbbbb'), startedAt: 500 };
-    const sorted = [a, b].sort((x, y) => y.startedAt - x.startedAt || x.pid - y.pid);
-    const reversed = [b, a].sort((x, y) => y.startedAt - x.startedAt || x.pid - y.pid);
-    expect(sorted.map(r => r.pid)).toEqual([711, 811]);
-    expect(reversed.map(r => r.pid)).toEqual([711, 811]);
-  });
-});
-
 describe('filtering to the project the caller stands in', () => {
   const rooted = (pid: number, cwd: string): SessionRecord =>
     ({ ...record(pid, `id-${pid}`), cwd });

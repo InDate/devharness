@@ -2,7 +2,7 @@
  * Unit tests for core modal detection logic
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   isBasicVisible,
   isBlockingPosition,
@@ -395,19 +395,17 @@ describe('Modal Detection Core - Visibility Checks', () => {
   });
 });
 
-describe('Modal Detection Core - Classification', () => {
-  beforeEach(() => {
-    setupMockGlobals();
-  });
+/** A detached element built in the happy-dom document, so `matches` and `querySelectorAll` are the browser's own. */
+function domElementFrom(html: string): any {
+  const host = domDocument.createElement('div');
+  host.innerHTML = html;
+  return host.firstElementChild;
+}
 
+describe('Modal Detection Core - Classification', () => {
   describe('classifyModal', () => {
     it('should classify cookie consent banner by class name', () => {
-      const el = new MockElement('div', {
-        className: 'cookie-banner',
-        textContent: 'We use cookies',
-      });
-
-      const result = classifyModal(el, MODAL_PATTERNS);
+      const result = classifyModal(domElementFrom('<div class="cookie-banner">We use cookies</div>'), MODAL_PATTERNS);
 
       expect(result.type).toBe('cookie-consent');
       expect(result.confidence).toBe(90);
@@ -415,71 +413,42 @@ describe('Modal Detection Core - Classification', () => {
     });
 
     it('should classify cookie consent banner by text content', () => {
-      const el = new MockElement('div', {
-        textContent: 'This website uses cookies to improve your experience',
-      });
-
-      const result = classifyModal(el, MODAL_PATTERNS);
+      const result = classifyModal(domElementFrom('<div>This website uses cookies to improve your experience</div>'), MODAL_PATTERNS);
 
       expect(result.type).toBe('cookie-consent');
       expect(result.confidence).toBe(90);
     });
 
     it('should classify newsletter popup', () => {
-      const el = new MockElement('div', {
-        className: 'newsletter-popup',
-        textContent: 'Subscribe to our newsletter',
-      });
-
-      const result = classifyModal(el, MODAL_PATTERNS);
+      const result = classifyModal(domElementFrom('<div class="newsletter-popup">Subscribe to our newsletter</div>'), MODAL_PATTERNS);
 
       expect(result.type).toBe('newsletter-popup');
       expect(result.confidence).toBe(85);
     });
 
     it('should classify age verification', () => {
-      const el = new MockElement('div', {
-        textContent: 'Are you over 18 years old?',
-      });
-
-      const result = classifyModal(el, MODAL_PATTERNS);
+      const result = classifyModal(domElementFrom('<div>Are you over 18 years old?</div>'), MODAL_PATTERNS);
 
       expect(result.type).toBe('age-verification');
       expect(result.confidence).toBe(95);
     });
 
     it('should classify generic dialog by ARIA attributes', () => {
-      const el = new MockElement('div', { className: 'some-modal' });
-      el.getAttribute = (name: string) => {
-        if (name === 'role') return 'dialog';
-        return null;
-      };
-
-      const result = classifyModal(el, MODAL_PATTERNS);
+      const result = classifyModal(domElementFrom('<div class="some-panel" role="dialog"></div>'), MODAL_PATTERNS);
 
       expect(result.type).toBe('generic-dialog');
       expect(result.confidence).toBe(75);
     });
 
     it('should classify blocking overlay', () => {
-      const el = new MockElement('div', {
-        className: 'modal-backdrop',
-        textContent: '',
-      });
-
-      const result = classifyModal(el, MODAL_PATTERNS);
+      const result = classifyModal(domElementFrom('<div class="modal-backdrop"></div>'), MODAL_PATTERNS);
 
       expect(result.type).toBe('blocking-overlay');
       expect(result.confidence).toBe(70);
     });
 
     it('should return unknown for unrecognized elements', () => {
-      const el = new MockElement('div', {
-        className: 'random-element',
-        textContent: 'Some random content',
-      });
-
-      const result = classifyModal(el, MODAL_PATTERNS);
+      const result = classifyModal(domElementFrom('<div class="random-element">Some random content</div>'), MODAL_PATTERNS);
 
       expect(result.type).toBe('unknown');
       expect(result.confidence).toBe(50);
@@ -487,68 +456,32 @@ describe('Modal Detection Core - Classification', () => {
   });
 
   describe('getDismissStrategies', () => {
-    beforeEach(() => {
-      setupMockGlobals();
-    });
-
-    it('should always include remove strategy', () => {
-      const el = new MockElement('div');
-      const strategies = getDismissStrategies(el, 'unknown');
-
-      expect(strategies).toContain('remove');
-    });
-
     it('should detect accept button', () => {
-      const el = new MockElement('div');
-      const acceptBtn = new MockElement('button', {
-        textContent: 'Accept All Cookies',
-        className: 'btn-accept',
-      });
-      el.children.push(acceptBtn);
-
-      const strategies = getDismissStrategies(el, 'cookie-consent');
+      const strategies = getDismissStrategies(domElementFrom('<div><button class="btn">Accept All Cookies</button></div>'), 'unknown');
 
       expect(strategies).toContain('accept');
     });
 
-    // These two cases reach getDismissStrategies' querySelectorAll and matches
-    // calls, which MockElement does not carry. The suite already runs on
-    // happy-dom (vitest.config.ts), so they build a real element and exercise
-    // the selector matching itself rather than a second implementation of it.
-    function domElementFrom(html: string): any {
-      const host = domDocument.createElement('div');
-      host.innerHTML = html;
-      return host;
-    }
-
     it('should detect reject button', () => {
-      const el = domElementFrom('<button class="btn">Decline All Cookies</button>');
-
-      const strategies = getDismissStrategies(el, 'cookie-consent');
+      const strategies = getDismissStrategies(domElementFrom('<div><button class="btn">Decline All Cookies</button></div>'), 'cookie-consent');
 
       expect(strategies).toContain('reject');
     });
 
     it('should detect reject from an id no text or class repeats', () => {
-      const el = domElementFrom('<button id="btn-Reject">continue</button>');
-
-      const strategies = getDismissStrategies(el, 'cookie-consent');
+      const strategies = getDismissStrategies(domElementFrom('<div><button id="btn-Reject">continue</button></div>'), 'cookie-consent');
 
       expect(strategies).toContain('reject');
     });
 
     it('should detect close button', () => {
-      const el = domElementFrom('<button class="btn">×</button>');
-
-      const strategies = getDismissStrategies(el, 'newsletter-popup');
+      const strategies = getDismissStrategies(domElementFrom('<div><button class="btn">×</button></div>'), 'newsletter-popup');
 
       expect(strategies).toContain('close');
     });
 
     it('should add accept as default for cookie consent without explicit button', () => {
-      const el = new MockElement('div');
-
-      const strategies = getDismissStrategies(el, 'cookie-consent');
+      const strategies = getDismissStrategies(domElementFrom('<div></div>'), 'cookie-consent');
 
       expect(strategies).toContain('accept');
       expect(strategies).toContain('remove');
@@ -557,51 +490,37 @@ describe('Modal Detection Core - Classification', () => {
 
   describe('getUniqueSelector', () => {
     beforeEach(() => {
-      setupMockGlobals();
+      (globalThis as any).document = domDocument;
+    });
+
+    afterEach(() => {
+      domDocument.body.innerHTML = '';
     });
 
     it('should use ID selector when available', () => {
-      const el = new MockElement('div', { id: 'cookieBanner' });
+      domDocument.body.innerHTML = '<div id="cookieBanner"></div>';
 
-      const selector = getUniqueSelector(el);
-
-      expect(selector).toBe('#cookieBanner');
+      expect(getUniqueSelector(domDocument.getElementById('cookieBanner'))).toBe('#cookieBanner');
     });
 
     it('should use class selector when unique', () => {
-      const el = new MockElement('div', { className: 'cookie-banner modal-dialog' });
+      domDocument.body.innerHTML = '<div class="cookie-banner modal-dialog"></div><div class="cookie-banner"></div>';
 
-      (globalThis as any).document.querySelectorAll = (sel: string) => {
-        if (sel === '.cookie-banner.modal-dialog') return [el];
-        return [];
-      };
-
-      const selector = getUniqueSelector(el);
-
-      expect(selector).toBe('.cookie-banner.modal-dialog');
+      expect(getUniqueSelector(domDocument.querySelector('.modal-dialog'))).toBe('.cookie-banner.modal-dialog');
     });
 
     it('should build path-based selector when class is not unique', () => {
-      const parent = new MockElement('div', { id: 'modal-container' });
-      const el = new MockElement('div', { className: 'content' });
-      el.parentElement = parent;
+      domDocument.body.innerHTML = '<div id="modal-container"><div class="content"></div></div><div class="content"></div>';
 
-      (globalThis as any).document.querySelectorAll = () => [el, new MockElement('div')];
-      (globalThis as any).document.body = new MockElement('body');
+      const selector = getUniqueSelector(domDocument.querySelector('#modal-container .content'));
 
-      const selector = getUniqueSelector(el);
-
-      expect(selector).toContain('div#modal-container');
-      expect(selector).toContain('div.content');
+      expect(selector).toBe('div#modal-container > div.content');
     });
 
     it('should handle elements without ID or class', () => {
-      const el = new MockElement('span');
-      el.parentElement = (globalThis as any).document.body;
+      domDocument.body.innerHTML = '<span></span>';
 
-      const selector = getUniqueSelector(el);
-
-      expect(selector).toContain('span');
+      expect(getUniqueSelector(domDocument.querySelector('span'))).toBe('span');
     });
   });
 });

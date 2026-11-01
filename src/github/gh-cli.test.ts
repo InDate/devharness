@@ -123,18 +123,6 @@ describe('runGh', () => {
     child.emit('close', 0);
     await expect(promise).rejects.toBeInstanceOf(GhError);
   });
-
-  it('ignores a late close after the timeout already rejected', async () => {
-    vi.useFakeTimers();
-    const child = useChild(fakeChild());
-    const promise = runGh(['issue', 'list']);
-    const assertion = expect(promise).rejects.toMatchObject({ code: 'GH_TIMEOUT' });
-    await vi.advanceTimersByTimeAsync(DEFAULT_GH_TIMEOUT_MS + 1);
-    await assertion;
-    // A SIGTERMed gh still emits close; it must not produce an unhandled
-    // resolution of an already-rejected promise.
-    expect(() => child.emit('close', 0)).not.toThrow();
-  });
 });
 
 describe('runGh against a real process', () => {

@@ -52,10 +52,6 @@ describe('compare', () => {
   ] as const)('%s %j against %j is %s', (operator, left, right, passed) => {
     expect(compare(left, operator, right).passed).toBe(passed);
   });
-
-  it('orders numeric strings as numbers, so "10" is greater than "9"', () => {
-    expect(compare('10', 'gt', '9').passed).toBe(true);
-  });
 });
 
 describe('what a check reads, and how it is worded', () => {

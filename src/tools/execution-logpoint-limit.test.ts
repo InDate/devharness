@@ -1,19 +1,54 @@
 // @vitest-environment node
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+type Handler = (params?: any) => void;
+const fake = vi.hoisted(() => ({
+  handlers: new Map<string, Handler>(),
+  calls: [] as string[],
+}));
+
+vi.mock('chrome-remote-interface', () => {
+  // An object answering every property answers `then` too, and awaiting it
+  // then waits on a promise that never settles.
+  const domain = (name: string) => new Proxy({}, {
+    get: (_target, prop: string) => prop === 'then' ? undefined : (arg?: unknown) => {
+      if (typeof arg === 'function') {
+        fake.handlers.set(`${name}.${prop}`, arg as Handler);
+        return undefined;
+      }
+      fake.calls.push(`${name}.${prop}`);
+      // Chrome answers resume, then sends Debugger.resumed.
+      if (name === 'Debugger' && prop === 'resume') setTimeout(() => fake.handlers.get('Debugger.resumed')?.(), 0);
+      if (name === 'Runtime' && prop === 'evaluate') return Promise.resolve({ result: { type: 'string', value: 'object' } });
+      return Promise.resolve({});
+    },
+  });
+  const client = new Proxy({}, {
+    get: (_target, prop: string) => {
+      if (prop === 'then') return undefined;
+      if (/^[A-Z]/.test(prop)) return domain(prop);
+      return () => Promise.resolve();
+    },
+  });
+  return { default: vi.fn(async () => client) };
+});
+
 import { CDPManager } from '../cdp-manager.js';
 import { createExecutionTools } from './execution-tools.js';
 
 const BREAKPOINT_ID = 'br:1:88:0:http://localhost:5173/src/NoteText.tsx?t=1';
 
-function limitedLogpoint() {
+beforeEach(() => {
+  fake.handlers.clear();
+  fake.calls.length = 0;
+});
+
+const resumes = () => fake.calls.filter(call => call === 'Debugger.resume').length;
+
+async function limitedLogpoint() {
   const cdpManager = new CDPManager();
-  const Debugger = {
-    pause: vi.fn(async () => {}),
-    resume: vi.fn(async () => {}),
-    removeBreakpoint: vi.fn(async () => {}),
-  };
-  (cdpManager as any).client = { Debugger };
-  (cdpManager as any).state.connected = true;
+  await cdpManager.connect('localhost', 9222);
+  fake.calls.length = 0;
 
   const logs = Array.from({ length: 20 }, (_, i) => ({
     id: `console-${i}`,
@@ -31,12 +66,12 @@ function limitedLogpoint() {
     consoleMonitor: null,
     networkMonitor: null,
   }));
-  return { cdpManager, Debugger, execution, logs };
+  return { cdpManager, execution, logs };
 }
 
 describe('execution resume after a logpoint reached its limit', () => {
   it('refuses with the text of the last logs only', async () => {
-    const { cdpManager, execution, logs } = limitedLogpoint();
+    const { cdpManager, execution, logs } = await limitedLogpoint();
     await cdpManager.handleLogpointLimitExceeded({
       breakpointId: BREAKPOINT_ID, url: 'http://localhost:5173/src/NoteText.tsx', lineNumber: 89,
       logMessage: 'press', executionCount: 20, maxExecutions: 20, logs,
@@ -53,23 +88,23 @@ describe('execution resume after a logpoint reached its limit', () => {
   });
 
   it('resumes once the logpoint is removed', async () => {
-    const { cdpManager, Debugger, execution, logs } = limitedLogpoint();
+    const { cdpManager, execution, logs } = await limitedLogpoint();
     await cdpManager.handleLogpointLimitExceeded({
       breakpointId: BREAKPOINT_ID, url: 'http://localhost:5173/src/NoteText.tsx', lineNumber: 89,
       logMessage: 'press', executionCount: 20, maxExecutions: 20, logs,
     });
-    (cdpManager as any).state.paused = true;
-    setTimeout(() => (cdpManager as any).resumeWaiters.forEach((resolve: () => void) => resolve()), 0);
+    fake.handlers.get('Debugger.paused')!({ reason: 'other', callFrames: [{ url: 'http://localhost:5173/src/NoteText.tsx', functionName: '', location: { scriptId: '1', lineNumber: 88 } }] });
 
     await cdpManager.removeBreakpoint(BREAKPOINT_ID);
     const result: any = await execution.handler({ action: 'resume', connection: 'page' });
 
     expect(result.isError).toBeUndefined();
-    expect(Debugger.resume).toHaveBeenCalledTimes(1);
+    expect(resumes()).toBe(1);
+    expect(cdpManager.isPaused()).toBe(false);
   });
 
   it('keeps refusing when a different breakpoint is removed', async () => {
-    const { cdpManager, Debugger, execution, logs } = limitedLogpoint();
+    const { cdpManager, execution, logs } = await limitedLogpoint();
     await cdpManager.handleLogpointLimitExceeded({
       breakpointId: BREAKPOINT_ID, url: 'http://localhost:5173/src/NoteText.tsx', lineNumber: 89,
       logMessage: 'press', executionCount: 20, maxExecutions: 20, logs,
@@ -79,6 +114,6 @@ describe('execution resume after a logpoint reached its limit', () => {
     const result: any = await execution.handler({ action: 'resume', connection: 'page' });
 
     expect(result.isError).toBe(true);
-    expect(Debugger.resume).not.toHaveBeenCalled();
+    expect(resumes()).toBe(0);
   });
 });

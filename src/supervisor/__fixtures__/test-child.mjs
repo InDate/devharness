@@ -6,6 +6,7 @@
  * argv[2] === 'crash': exits non-zero immediately.
  * argv[2] === 'ignore-suspend': ignores SIGUSR2 so suspend() must escalate to kill().
  * Otherwise: behaves normally (dies on SIGTERM, and on the SIGUSR2 suspend signal).
+ * Writes `ready` to stdout once its signal handlers are in place.
  */
 const mode = process.argv[2];
 
@@ -26,6 +27,8 @@ if (mode === 'ignore-suspend') {
 if (mode === 'crash') {
   process.exit(1);
 }
+
+process.stdout.write('ready\n');
 
 // Stay alive until killed.
 setInterval(() => {}, 1000 * 60 * 60);

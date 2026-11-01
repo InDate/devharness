@@ -683,13 +683,14 @@ describe('storage - IndexedDB actions (feature-011)', () => {
     install({ app: { stores: { kv: { records: [['token', { value: 'abc' }]] } } } });
     const { tools } = buildTool();
 
-    const found = await tools.storage.handler({ connection: 'app', action: 'idbGet', db: 'app', store: 'kv', key: 'token' } as any);
+    const found: any = await tools.storage.handler({ connection: 'app', action: 'idbGet', db: 'app', store: 'kv', key: 'token' } as any);
     expect(found.isError).toBeFalsy();
+    expect(found._meta.storage).toEqual({ database: 'app', store: 'kv', found: true });
     expect(textOf(found)).toContain('abc');
 
-    const missing = await tools.storage.handler({ connection: 'app', action: 'idbGet', db: 'app', store: 'kv', key: 'nope' } as any);
+    const missing: any = await tools.storage.handler({ connection: 'app', action: 'idbGet', db: 'app', store: 'kv', key: 'nope' } as any);
     expect(missing.isError).toBeFalsy();
-    expect(textOf(missing)).toContain('No record found');
+    expect(missing._meta.storage).toEqual({ database: 'app', store: 'kv', found: false });
   });
 
   it('returns a non-extractable CryptoKey as a descriptor rather than {}', async () => {
@@ -710,12 +711,12 @@ describe('storage - IndexedDB actions (feature-011)', () => {
     install({ app: { stores: { items: { records } } } });
     const { tools } = buildTool();
 
-    const all = textOf(await tools.storage.handler({ connection: 'app', action: 'idbGetAll', db: 'app', store: 'items' } as any));
-    expect(all).toContain('**Count:** 5');
+    const all: any = await tools.storage.handler({ connection: 'app', action: 'idbGetAll', db: 'app', store: 'items' } as any);
+    expect(all._meta.storage).toMatchObject({ count: 5, total: 5 });
 
-    const limited = textOf(await tools.storage.handler({ connection: 'app', action: 'idbGetAll', db: 'app', store: 'items', limit: 2 } as any));
-    expect(limited).toContain('**Count:** 2');
-    expect(limited).toContain('showing 2 of 5');
+    const limited: any = await tools.storage.handler({ connection: 'app', action: 'idbGetAll', db: 'app', store: 'items', limit: 2 } as any);
+    expect(limited._meta.storage).toMatchObject({ count: 2, total: 5 });
+    expect(textOf(limited)).toContain('showing 2 of 5');
   });
 
   it('writes a record with an out-of-line key', async () => {
@@ -960,6 +961,6 @@ describe('storage on a page that fails or pauses', () => {
     const result: any = await tools.storage.handler({ connection: 'no-such-app', action: 'getCookies' });
 
     expect(result.isError).toBe(true);
-    expect(result._errorId ?? result.content[0].text).toMatch(/CONNECTION_NOT_FOUND|not found/i);
+    expect(result._errorId).toBe('CONNECTION_NOT_FOUND');
   });
 });

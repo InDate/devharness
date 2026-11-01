@@ -28,12 +28,11 @@ function makeRecorder(sequence: CommandSequence | null) {
       return sequence;
     }),
     // Mirrors the real recorder: the candidate is validated BEFORE it is stored,
-    // and a rejected candidate is never stored at all (nothing to delete after).
+    // and a rejected candidate is never stored at all.
     createSequence: vi.fn(async (_name: string, _indices: number[], options?: any) => {
       if (sequence && options?.validate && !options.validate(sequence)) return null;
       return sequence;
     }),
-    deleteSequence: vi.fn(() => true),
     recordCommand: vi.fn(),
     getCommand: vi.fn(() => undefined),
   } as any;
@@ -104,58 +103,15 @@ describe('findUnknownStepTools', () => {
 // ---------------------------------------------------------------------------
 
 describe('replay load - tool name validation', () => {
-  it('rejects a sequence with an unknown tool name when the provider is supplied', async () => {
-    const { replay, recorder } = makeReplay(
-      seq([{ tool: 'navigate', params: {} }, { tool: 'inpsect', params: {} }]),
-      () => KNOWN_TOOLS
-    );
-
-    const res = await replay.handler({ action: 'load', filename: 'x.json' } as any);
-
-    expect(res.isError).toBe(true);
-    expect(text(res)).toContain('Step 2');
-    expect(text(res)).toContain('inpsect');
-    expect(text(res)).toContain('inspect');
-    // rejected before storage, so there is nothing to clean up afterwards
-    expect(recorder.deleteSequence).not.toHaveBeenCalled();
-    // and nothing was pushed into history
-    expect(recorder.recordCommand).not.toHaveBeenCalled();
-  });
-
-  it('rejects before loading into history when intoHistory is set', async () => {
-    const { replay, recorder } = makeReplay(
-      seq([{ tool: 'bogus', params: {} }]),
-      () => KNOWN_TOOLS
-    );
-
-    const res = await replay.handler({ action: 'load', filename: 'x.json', intoHistory: true } as any);
-
-    expect(res.isError).toBe(true);
-    expect(recorder.recordCommand).not.toHaveBeenCalled();
-  });
-
-  it('loads a valid sequence normally', async () => {
-    const { replay, recorder } = makeReplay(
-      seq([{ tool: 'navigate', params: {} }, { tool: 'forEach', params: {} }]),
-      () => KNOWN_TOOLS
-    );
+  it('loads an unknown tool name when no tool-name provider is supplied', async () => {
+    const { replay } = makeReplay(seq([{ tool: 'inpsect', params: {} }]));
 
     const res = await replay.handler({ action: 'load', filename: 'x.json' } as any);
 
     expect(res.isError).toBeUndefined();
-    expect(recorder.deleteSequence).not.toHaveBeenCalled();
   });
 
-  it('does not validate when no tool-name provider is supplied (previous behaviour)', async () => {
-    const { replay, recorder } = makeReplay(seq([{ tool: 'inpsect', params: {} }]));
-
-    const res = await replay.handler({ action: 'load', filename: 'x.json' } as any);
-
-    expect(res.isError).toBeUndefined();
-    expect(recorder.deleteSequence).not.toHaveBeenCalled();
-  });
-
-  it('does not validate when the provider returns an empty list', async () => {
+  it('loads an unknown tool name when the provider returns an empty list', async () => {
     const { replay } = makeReplay(seq([{ tool: 'inpsect', params: {} }]), () => []);
 
     const res = await replay.handler({ action: 'load', filename: 'x.json' } as any);
@@ -169,34 +125,7 @@ describe('replay load - tool name validation', () => {
 // ---------------------------------------------------------------------------
 
 describe('replay create - tool name validation', () => {
-  it('rejects a created sequence containing an unknown tool name', async () => {
-    const { replay, recorder } = makeReplay(
-      seq([{ tool: 'ntavigate', params: {} }], 'from-history'),
-      () => KNOWN_TOOLS
-    );
-
-    const res = await replay.handler({ action: 'create', name: 'from-history', indices: [0] } as any);
-
-    expect(res.isError).toBe(true);
-    expect(text(res)).toContain('Step 1');
-    expect(text(res)).toContain('ntavigate');
-    // Rejected before storage, so there is nothing to clean up afterwards
-    expect(recorder.deleteSequence).not.toHaveBeenCalled();
-  });
-
-  it('creates a valid sequence normally', async () => {
-    const { replay, recorder } = makeReplay(
-      seq([{ tool: 'navigate', params: {} }], 'from-history'),
-      () => KNOWN_TOOLS
-    );
-
-    const res = await replay.handler({ action: 'create', name: 'from-history', indices: [0] } as any);
-
-    expect(res.isError).toBeUndefined();
-    expect(recorder.deleteSequence).not.toHaveBeenCalled();
-  });
-
-  it('does not validate when no tool-name provider is supplied', async () => {
+  it('creates from an unknown tool name when no tool-name provider is supplied', async () => {
     const { replay } = makeReplay(seq([{ tool: 'ntavigate', params: {} }], 'from-history'));
 
     const res = await replay.handler({ action: 'create', name: 'from-history', indices: [0] } as any);

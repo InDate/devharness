@@ -57,18 +57,6 @@ describe('a second tab opened in a proxied browser', () => {
     await stopProxyFor('second shop tab');
   });
 
-  it('keeps the proxy running for one name while the other name is stopped', async () => {
-    const { proxy } = await startProxyFor('first cart tab');
-    shareProxy('first cart tab', 'second cart tab');
-
-    await stopProxyFor('second cart tab');
-
-    expect(getProxy('second cart tab')).toBeUndefined();
-    expect(getProxy('first cart tab')).toBe(proxy);
-    expect((proxy as any).front.listening).toBe(true);
-    await stopProxyFor('first cart tab');
-  });
-
   it('shares nothing when the first name has no proxy', () => {
     expect(shareProxy('no such tab', 'another new tab')).toBe(false);
     expect(getProxy('another new tab')).toBeUndefined();

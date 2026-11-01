@@ -52,3 +52,13 @@ describe('the pause guard and the hold tool', () => {
     }
   });
 });
+
+describe('the pause guard and the bench', () => {
+  it('lets the bench run while the page is paused, since the bench holds that pause', () => {
+    expect(checkBreakpointPause(pausedConnections(), 'bench', undefined, 'tick').blocked).toBe(false);
+  });
+
+  it('blocks input, which drives a page the bench holds', () => {
+    expect(checkBreakpointPause(pausedConnections(), 'input', undefined, 'click').blocked).toBe(true);
+  });
+});

@@ -6,6 +6,10 @@ import { ChildManager } from './child-manager.js';
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const FIXTURE_PATH = path.join(__dirname, '__fixtures__', 'test-child.mjs');
 
+/** Resolves once the fixture's signal handlers are in place: it writes its first output only after them. */
+const ready = ({ stdout }: { stdout: NodeJS.ReadableStream }) =>
+  new Promise<void>(resolve => stdout.once('data', () => resolve()));
+
 describe('ChildManager (real subprocess)', () => {
   it('spawns a child and kill() resolves once it exits on SIGTERM', async () => {
     const manager = new ChildManager({
@@ -32,10 +36,7 @@ describe('ChildManager (real subprocess)', () => {
       killGraceMs: 300, // short for test speed
     });
 
-    manager.spawn();
-    // Give the child a moment to actually register its SIGTERM-ignoring handler
-    // before we send the signal, or we'd race its own startup.
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await ready(manager.spawn());
     const start = Date.now();
     await manager.kill();
     const elapsed = Date.now() - start;
@@ -70,8 +71,7 @@ describe('ChildManager (real subprocess)', () => {
       suspendGraceMs: 3000,
     });
 
-    manager.spawn();
-    await new Promise((resolve) => setTimeout(resolve, 200)); // let its handler register
+    await ready(manager.spawn());
 
     await manager.suspend();
     expect(manager.isRunning()).toBe(false);
@@ -87,8 +87,7 @@ describe('ChildManager (real subprocess)', () => {
       killGraceMs: 300,
     });
 
-    manager.spawn();
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await ready(manager.spawn());
 
     await manager.suspend();
     expect(manager.isRunning()).toBe(false);

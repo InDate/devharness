@@ -4,10 +4,16 @@
  * modified click replayed alike, and touch, HTML5 drag and trackpad pinch
  * recorded nothing or the wrong step. The event orders here are the ones
  * Chrome delivers, read off the gestures test page.
+ *
+ * A trackpad sends a wheel event every 16ms; a step per event pays a step's
+ * own work between every event, so a swipe replayed 3-10 times slower than it
+ * was made. A recording gathers the events that follow one another into one
+ * step, keeping each event's delta and the time before it.
  */
 
 import { describe, it, expect } from 'vitest';
 import { eventsToCommands, type InputEvent, type TouchPoint } from './interaction-recorder.js';
+import { generatePlaywrightCode, generatePuppeteerCode } from './tools/replay-codegen.js';
 
 const target = (selector: string) => ({ tag: 'div', selector });
 
@@ -180,5 +186,68 @@ describe('a recorded touch gesture', () => {
     ];
 
     expect(eventsToCommands(events)[0].params.action).toBe('rotate');
+  });
+});
+
+const trackpadWheel = (at: number, deltaX: number, deltaY = 0): InputEvent => ({
+  type: 'wheel', x: 618, y: 388, deltaX, deltaY, timestamp: 1000 + at, button: 0, buttons: 0,
+} as InputEvent);
+
+const selectedClick = (at: number): InputEvent => ({
+  type: 'click', x: 10, y: 10, timestamp: 1000 + at, button: 0, buttons: 0, clickCount: 1, elementInfo: { selector: 'main' },
+} as InputEvent);
+
+const swipe = [selectedClick(-500), trackpadWheel(0, 1), trackpadWheel(16, 6), trackpadWheel(33, 7, -1), trackpadWheel(50, 12)];
+
+describe('a recorded run of wheel events', () => {
+  for (const simplify of [false, true]) {
+    it(`becomes one scroll step carrying each event and the ms before it (simplify ${simplify})`, () => {
+      const commands = eventsToCommands(swipe, { simplify, includeDelays: true });
+
+      expect(commands).toHaveLength(2);
+      expect(commands[1]).toEqual({
+        tool: 'input',
+        params: {
+          action: 'scroll', x: 618, y: 388,
+          events: [
+            { deltaX: 1, deltaY: 0, afterMs: 0 },
+            { deltaX: 6, deltaY: 0, afterMs: 16 },
+            { deltaX: 7, deltaY: -1, afterMs: 17 },
+            { deltaX: 12, deltaY: 0, afterMs: 17 },
+          ],
+        },
+        delay: 500,
+      });
+    });
+  }
+
+  it('starts a new step after a quiet of more than 150ms, its delay counted from the first event of the step before', () => {
+    const commands = eventsToCommands([trackpadWheel(0, 1), trackpadWheel(16, 2), trackpadWheel(1016, -2), trackpadWheel(1034, -1)], { includeDelays: true });
+
+    expect(commands.map(c => c.params.events.length)).toEqual([2, 2]);
+    expect(commands[1].delay).toBe(1016);
+  });
+
+  it('stays a plain scroll step when a lone event makes it up', () => {
+    const commands = eventsToCommands([trackpadWheel(0, 0, 120)], { includeDelays: true });
+
+    expect(commands).toEqual([{ tool: 'input', params: { action: 'scroll', x: 618, y: 388, deltaX: 0, deltaY: 120 } }]);
+  });
+});
+
+describe('a gesture step in exported test code', () => {
+  const step = {
+    tool: 'input',
+    params: { action: 'scroll', x: 618, y: 388, events: [{ deltaX: 1, afterMs: 0 }, { deltaX: 6, afterMs: 16 }] },
+  };
+
+  it('sends each event with the wait recorded before it, in Puppeteer', () => {
+    const code = generatePuppeteerCode([step]);
+    expect(code).toContain('await page.mouse.wheel({ deltaX: 1, deltaY: 0 });\n  await new Promise(resolve => setTimeout(resolve, 16));\n  await page.mouse.wheel({ deltaX: 6, deltaY: 0 });');
+  });
+
+  it('sends each event with the wait recorded before it, in Playwright', () => {
+    const code = generatePlaywrightCode([step]);
+    expect(code).toContain('await page.mouse.wheel(1, 0);\n  await page.waitForTimeout(16);\n  await page.mouse.wheel(6, 0);');
   });
 });

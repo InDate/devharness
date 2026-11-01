@@ -113,13 +113,13 @@ describe('ServerClaimsStore', () => {
     const live = new Map([[100, 'start-100'], [200, 'start-200']]);
     const mine = makeStore(100, live);
     await mine.claim('web', '/proj', false);
-    await mine.claim('api', '/proj', false);
+    await mine.claim('api', '/proj', true);
     await makeStore(200, live).claim('web', '/proj', false);
 
     mine.releaseAllOwn();
 
-    const remaining = mine.readAll(false);
-    expect(remaining.map((entry) => entry.claim.supervisorPid)).toEqual([200]);
+    expect(mine.readAll(false).map((entry) => entry.claim.supervisorPid)).toEqual([200]);
+    expect(mine.readAll(true)).toEqual([]);
   });
 
   it('collects dead claims and reports servers nobody is coming back for', async () => {

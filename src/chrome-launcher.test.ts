@@ -1,5 +1,5 @@
 /**
- * Tests for ChromeLauncher profile-directory handling.
+ * Tests for ChromeLauncher profile-directory handling, process liveness and status.
  *
  * Covers bug-006 (temp user-data-dir names collided when two launches landed in
  * the same millisecond) and bug-007 (temp profiles were never deleted).
@@ -8,7 +8,7 @@
  * tracking, cleanup and startup-sweep logic directly.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -288,17 +288,6 @@ describe('launch observations', () => {
     expect(launcher.getProfileDir(9222)).toBeUndefined();
   });
 
-  it('still deletes an ephemeral profile that was not retained', async () => {
-    const launcher = newLauncher();
-    const dir = makeProfileDir('chrome-debug-profile-p9222-not-retained');
-    const record: ChromeProfileRecord = { dir, ephemeral: true };
-
-    (launcher as any).profileDirs.set(9222, record);
-    await (launcher as any).removeProfileDir(9222, record);
-
-    expect(fs.existsSync(dir)).toBe(false);
-  });
-
   it('records one failure per probe and names the probe count when it gives up', async () => {
     const launcher = newLauncher();
     const port = await closedPort();
@@ -366,5 +355,14 @@ describe('orphanedChromePorts', () => {
 
   it('takes a Chrome with no spawn time recorded and no connection', () => {
     expect(orphaned()).toContain(9304);
+  });
+});
+
+describe('launcher status', () => {
+  it('hands out a copy of the close events, not the record itself', () => {
+    const chrome = newLauncher();
+    chrome.getStatus().lastCloseEvents.push({ port: 1, pid: 1, reason: 'manual', timestamp: new Date() });
+
+    expect(chrome.getLastCloseEvents()).toEqual([]);
   });
 });

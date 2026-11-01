@@ -131,20 +131,7 @@ describe('create preserves a two-connection recording', () => {
     expect(text(res)).toContain('connections');
   });
 
-  it('does not rewrite the history entries it built the sequence from', async () => {
-    const { replay, run, recorder } = makeHarness();
-    await recorder.recordCommand('dom', { action: 'querySelector', selector: '#a', connection: OWNER });
-    await recorder.recordCommand('dom', { action: 'querySelector', selector: '#b', connection: OWNER });
-
-    // uniform -> hoisted off the sequence steps...
-    await replay.handler({ action: 'create', name: 'solo-seq', indices: [0, 1] } as any);
-    expect(commandsOf(recorder, 'solo-seq').map(c => c.params.connection)).toEqual([undefined, undefined]);
-
-    // ...but history still knows what each call was driven against
-    expect(recorder.getCommand(0)!.params.connection).toBe(OWNER);
-  });
-
-  it('hoists a uniform connection so the sequence stays portable', async () => {
+  it('hoists a uniform connection off the steps, and leaves the history entries it built them from as recorded', async () => {
     const { replay, run, recorder } = makeHarness();
     await recorder.recordCommand('dom', { action: 'querySelector', selector: '#a', connection: OWNER });
     await recorder.recordCommand('dom', { action: 'querySelector', selector: '#b', connection: OWNER });
@@ -153,6 +140,7 @@ describe('create preserves a two-connection recording', () => {
 
     expect(commandsOf(recorder, 'solo-seq').every(c => !('connection' in c.params))).toBe(true);
     expect(text(res)).toContain('hoisted');
+    expect(recorder.getCommand(0)!.params.connection).toBe(OWNER);
   });
 
   it('leaves an ambiguous (partly bare) recording per-step and says so', async () => {

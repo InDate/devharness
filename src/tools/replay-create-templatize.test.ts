@@ -4,9 +4,14 @@
  * capture, so a sequence built from a live/hands-on session is portable
  * (see references/sequences.md) instead of pinned to that session's data.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { promises as fs } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { setWorkingDirOverride } from '../helpers/paths.js';
 import { CommandRecorder } from '../command-recorder.js';
 import { createReplayTools } from './replay-tools.js';
+import { productionShaped } from '../test-support/fake-execute-tool-call.js';
 
 const KNOWN_TOOLS = ['navigate', 'inspect', 'input', 'request', 'connection'];
 
@@ -139,28 +144,46 @@ describe('replay create - templatizes literals against earlier saveAs captures',
   });
 });
 
-describe('replay insert - shares create\'s templatization (buildCommandsFromHistory)', () => {
-  // handleInsert builds its inserted steps via recorder.buildCommandsFromHistory
-  // (replay-edit.ts), the exact method createSequence uses above - exercised
-  // directly here since driving a real pause/insert cycle needs a live
-  // background run. Wiring is a 3-line delegation, verified by inspection.
-  it('rewrites a literal against an earlier saveAs capture within the given indices', async () => {
+describe('replay insert - templatizes the steps it puts in', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(join(tmpdir(), 'cdp-insert-templatize-'));
+    setWorkingDirOverride(dir);
+  });
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it('rewrites an inserted literal against a saveAs capture inserted with it', async () => {
     const recorder = new CommandRecorder();
+    const executeToolCall = vi.fn(productionShaped(async () => ({ content: [{ type: 'text', text: '' }] })));
+    const { replay, run } = createReplayTools(recorder, executeToolCall as any, async () => null, async () => null, () => [...KNOWN_TOOLS, 'dom']);
+    await recorder.recordCommand('dom', { action: 'querySelector', selector: '#a', connection: 'walk-tab' });
+    await recorder.recordCommand('dom', { action: 'querySelector', selector: '#b', connection: 'walk-tab' });
+    await replay.handler({ action: 'create', name: 'walk', indices: [0, 1] } as any);
+    await run.handler({ action: 'sequence', wait: true, name: 'walk', stepTo: 1 } as any);
 
     await recorder.recordCommand(
       'request',
       { url: 'https://app.test/api/links', saveAs: 'mint' },
       { result: requestResult({ url: 'https://app.test/l/abc123def' }) }
     );
+    const captureIndex = recorder.getCurrentHistoryIndex();
     await recorder.recordCommand('navigate', { action: 'goto', url: 'https://app.test/l/abc123def' });
+    const visitIndex = recorder.getCurrentHistoryIndex();
+    await replay.handler({ action: 'history' } as any);
 
-    const commands = recorder.buildCommandsFromHistory([0, 1]);
-    expect(commands).not.toBeNull();
-    expect(commands![1].params.url).toBe('{{var:mint.body.url}}');
-    // delay/comment are preserved too (insert's old inline map dropped them)
+    const res = await replay.handler({ action: 'insert', name: 'walk', insertIndices: [captureIndex, visitIndex] } as any);
+    await run.handler({ action: 'cancel' } as any);
+
+    expect(res.isError).toBeFalsy();
+    const copy = recorder.listSequences().find(s => s.name === 'walk-modified')!;
+    expect(copy.commands.find(c => c.tool === 'navigate')!.params.url).toBe('{{var:mint.body.url}}');
   });
+});
 
-  it('preserves delay and comment, which the old inline map in handleInsert dropped', async () => {
+describe('buildCommandsFromHistory', () => {
+  it('keeps a step\'s delay and comment', async () => {
     const recorder = new CommandRecorder();
     await recorder.recordCommand('navigate', { action: 'goto', url: 'https://app.test/' }, { delay: 500, comment: 'wait for load' });
 

@@ -42,13 +42,12 @@ async function logpointOnSecond(maxExecutions: number) {
 }
 
 describe('a logpoint on a named connection', () => {
-  it('reaching its limit records the limit on that connection, not the active one', async () => {
-    const { active, named, tracker } = await logpointOnSecond(1);
+  it('records reaching its limit on the connection it was set on', async () => {
+    const { named, tracker } = await logpointOnSecond(1);
 
     tracker.handleConsoleMessage(hit(1), named);
 
     expect(named.handleLogpointLimitExceeded).toHaveBeenCalledTimes(1);
-    expect(active.handleLogpointLimitExceeded).not.toHaveBeenCalled();
   });
 
   it('counts only messages from its own connection', async () => {

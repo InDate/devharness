@@ -10,6 +10,7 @@ import * as net from 'net';
 import * as fs from 'fs';
 import { randomBytes } from 'crypto';
 import { getGlobalBase } from './helpers/paths.js';
+import { isProcessAlive } from './helpers/process-liveness.js';
 import { getErrorMessage } from './messages.js';
 import type { PortReserver } from './port-reserver.js';
 import { debugLog } from './debug-logger.js';
@@ -994,22 +995,6 @@ export class ChromeLauncher {
   }
 
   /**
-   * Check if a process with the given PID is actually running
-   * This handles the case where Chrome is killed externally (e.g., Activity Monitor, kill command)
-   */
-  private isProcessAlive(pid: number): boolean {
-    try {
-      // Signal 0 delivers nothing; it only reports whether the process exists.
-      process.kill(pid, 0);
-      return true;
-    } catch (error: any) {
-      // ESRCH: no such process. EPERM: it exists and this user may not signal
-      // it, so a Chrome another user runs on a shared profile reads as alive.
-      return error?.code === 'EPERM';
-    }
-  }
-
-  /**
    * Check if Chrome is running on a specific port, or if any Chrome instance is running
    * This verifies the process is actually alive, not just tracked
    */
@@ -1021,7 +1006,7 @@ export class ChromeLauncher {
       }
       // Verify the process is actually alive (handles external kills)
       const pid = chromeProcess.pid;
-      if (!pid || !this.isProcessAlive(pid)) {
+      if (!pid || !isProcessAlive(pid)) {
         // Process is dead but we didn't know - clean up tracking
         this.chromeProcesses.delete(port);
         this.recordCloseEvent(port, pid || -1, 'external', null, null);
@@ -1032,7 +1017,7 @@ export class ChromeLauncher {
     // Check if any Chrome instance is running - verify each one
     for (const [p, chromeProcess] of this.chromeProcesses.entries()) {
       const pid = chromeProcess.pid;
-      if (pid && this.isProcessAlive(pid)) {
+      if (pid && isProcessAlive(pid)) {
         return true;
       } else {
         // Clean up dead process
@@ -1114,7 +1099,7 @@ export class ChromeLauncher {
     // Wait 500ms for graceful shutdown, then force kill if needed
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => {
-        if (this.isProcessAlive(pid)) {
+        if (isProcessAlive(pid)) {
           debugLog('ChromeLauncher', `Chrome on port ${port} didn't exit gracefully, sending SIGKILL (PID: ${pid})`);
           try {
             chromeProcess.kill('SIGKILL');
@@ -1405,7 +1390,7 @@ export class ChromeLauncher {
     try {
       const target = await fs.promises.readlink(path.join(dir, 'SingletonLock'));
       const pid = Number(target.split('-').pop());
-      return Number.isInteger(pid) && pid > 0 && this.isProcessAlive(pid) ? pid : undefined;
+      return Number.isInteger(pid) && pid > 0 && isProcessAlive(pid) ? pid : undefined;
     } catch {
       return undefined;
     }
@@ -1469,7 +1454,7 @@ export class ChromeLauncher {
 
     for (const [port, chromeProcess] of this.chromeProcesses.entries()) {
       const pid = chromeProcess.pid || -1;
-      const alive = pid > 0 && this.isProcessAlive(pid);
+      const alive = pid > 0 && isProcessAlive(pid);
 
       if (!alive) {
         deadPorts.push(port);

@@ -3,7 +3,6 @@ import { executeSteps, executeSequenceWithPause } from './replay-executor.js';
 import type { ExecutionContext } from './replay-executor.js';
 import type { CommandSequence, RecordedCommand } from '../command-recorder.js';
 import { configManager } from '../config.js';
-import { getMessage } from '../messages.js';
 import { productionShaped } from '../test-support/fake-execute-tool-call.js';
 
 // ---------------------------------------------------------------------------
@@ -231,22 +230,6 @@ describe('stepTimeout and pause interaction', () => {
 });
 
 // ---------------------------------------------------------------------------
-// message template exists
-// ---------------------------------------------------------------------------
-
-describe('REPLAY_STEP_TIMEOUT template', () => {
-  it('renders with step, tool and timeout substituted', () => {
-    const msg = getMessage('REPLAY_STEP_TIMEOUT', {
-      step: 3, tool: 'input', timeoutMs: 30000, limitSource: 'stepTimeout',
-    });
-    expect(msg).not.toContain('Message not found');
-    expect(msg).toContain('3');
-    expect(msg).toContain('input');
-    expect(msg).toContain('30000');
-  });
-});
-
-// ---------------------------------------------------------------------------
 // Recorded delays
 // ---------------------------------------------------------------------------
 
@@ -261,7 +244,9 @@ describe('a recorded step delay', () => {
         return { content: [{ type: 'text', text: '' }] };
       },
     });
-    const result = await executeSteps({
+    vi.useFakeTimers();
+    let done = false;
+    const run = executeSteps({
       sequence: seq([
         { tool: 'dom', params: { action: 'querySelector', selector: '#first' } },
         { tool: 'dom', params: { action: 'querySelector', selector: '#second' }, delay },
@@ -270,7 +255,10 @@ describe('a recorded step delay', () => {
       ctx,
       stepTimeout: 5000,
       totalTimeout: 300000,
-    });
+    }).finally(() => { done = true; });
+    while (!done) await vi.advanceTimersByTimeAsync(1);
+    vi.useRealTimers();
+    const result = await run;
     expect(result.results.every(r => r.success)).toBe(true);
     return startedAt[1] - startedAt[0];
   }
@@ -280,13 +268,11 @@ describe('a recorded step delay', () => {
   // replayed 45-216ms apart.
   it('runs from the start of the step before it, so that step\'s own time is inside it', async () => {
     const gap = await gapAfterSlowStep(150);
-    expect(gap).toBeGreaterThanOrEqual(145);
-    expect(gap).toBeLessThan(195);
+    expect(gap).toBe(150);
   });
 
   it('adds no wait when the step before it took longer than the delay', async () => {
     const gap = await gapAfterSlowStep(50);
-    expect(gap).toBeGreaterThanOrEqual(55);
-    expect(gap).toBeLessThan(95);
+    expect(gap).toBe(60);
   });
 });

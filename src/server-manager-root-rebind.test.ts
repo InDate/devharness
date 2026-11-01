@@ -61,7 +61,7 @@ async function serverIds(manager: ServerManager): Promise<string[]> {
 beforeEach(() => {
   rootA = mkdtempSync(join(tmpdir(), 'devharness-sm-rebind-a-'));
   rootB = mkdtempSync(join(tmpdir(), 'devharness-sm-rebind-b-'));
-  // Isolate the global store the way server-manager-relocation.test.ts does -
+  // Isolate the global store from the real ~/.devharness -
   // saveState() writes the global file unconditionally.
   originalGlobalDir = process.env.CDP_TOOLS_DIR;
   process.env.CDP_TOOLS_DIR = join(rootA, '__global__');
@@ -186,5 +186,34 @@ describe('relocateRoot: a running server recorded under the new root', () => {
     await manager.stopServer('b-live');
     await relocateRoot(rootA);
     expect(await serverIds(manager)).toEqual(['a-only']);
+  }, 20000);
+});
+
+describe('relocateRoot: a server this manager started', () => {
+  function stayAlive(): string {
+    const script = join(rootA, 'stay-alive.mjs');
+    writeFileSync(script, 'setInterval(() => {}, 60000);\n');
+    return script;
+  }
+
+  it('refuses relocation while the server runs, naming it, and leaves the root where it was', async () => {
+    const manager = new ServerManager();
+    await manager.startServer({ id: 'fitness-demo', command: `node ${stayAlive()}`, cwd: rootA, autoRun: false });
+
+    try {
+      await expect(relocateRoot(rootB)).rejects.toThrow(/fitness-demo/);
+      expect(getOutputPath().startsWith(rootA)).toBe(true);
+    } finally {
+      await manager.stopAll();
+    }
+  }, 20000);
+
+  it('allows relocation once the server has been stopped', async () => {
+    const manager = new ServerManager();
+    await manager.startServer({ id: 'fitness-demo', command: `node ${stayAlive()}`, cwd: rootA, autoRun: false });
+    await manager.stopServer('fitness-demo');
+
+    await expect(relocateRoot(rootB)).resolves.toBeUndefined();
+    expect(getOutputPath().startsWith(rootB)).toBe(true);
   }, 20000);
 });

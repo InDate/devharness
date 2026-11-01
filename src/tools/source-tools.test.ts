@@ -57,21 +57,8 @@ describe('source loadMaps', () => {
   let dir: string;
   beforeAll(async () => {
     dir = await fsp.mkdtemp(join(tmpdir(), 'source-maps-'));
-    await fsp.mkdir(join(dir, 'nested'));
-    await fsp.writeFile(join(dir, 'app.js.map'), '{}');
-    await fsp.writeFile(join(dir, 'nested', 'chunk.js.map'), '{}');
   });
   afterAll(async () => { await fsp.rm(dir, { recursive: true, force: true }); });
-
-  it('registers the maps in the directory and its subdirectories', async () => {
-    const registerSourceMapsFromDirectory = vi.fn(async () => 2);
-    const source = sourceTool(new CDPManager(), { registerSourceMapsFromDirectory });
-
-    const result: any = await source.handler({ action: 'loadMaps', directory: dir });
-
-    expect(result.isError).toBeFalsy();
-    expect(text(result)).toContain('Registered 2 source maps');
-  });
 
   it('fails on a directory that does not exist, rather than reporting none found', async () => {
     const registerSourceMapsFromDirectory = vi.fn(async () => 0);

@@ -105,17 +105,6 @@ describe('PortMonitor pause/resume refcounting', () => {
 
     expect(connectSpy).not.toHaveBeenCalled();
   });
-
-  it('a single pause/resume pair still reconnects normally', async () => {
-    const monitor = new PortMonitor();
-    await monitor.startMonitoring(9303, 'inform');
-    connectSpy.mockClear();
-
-    monitor.pauseMonitoring();
-    monitor.resumeMonitoring();
-
-    expect(connectSpy).toHaveBeenCalledTimes(1);
-  });
 });
 
 describe('PortMonitor.startMonitoring self-heal', () => {

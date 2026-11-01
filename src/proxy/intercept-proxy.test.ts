@@ -165,29 +165,6 @@ describe('an id no protocol has named', () => {
 });
 
 describe('how much a stamp claims', () => {
-  it('claims only position for a request, which names no cause', async () => {
-    const { proxy, port } = await freshProxy();
-    proxy.mark({ kind: 'command', index: 1 });
-    await through(port, '/paired');
-    // The pairing observed is request to response. Nothing measures what made
-    // the command issue it, so a timer-driven poll reads the same as a click.
-    expect(levelOf(proxy.eventsIn()[0])).toBe('positional');
-  });
-
-  it('names a frame arriving with nothing sent as unprompted, and the socket as push', async () => {
-    const { proxy, port } = await freshProxy();
-    const socket = new WebSocket(`ws://127.0.0.1:${port}/greets`, {
-      headers: { Host: `127.0.0.1:${originPort}` },
-    });
-    const greeted = new Promise<void>(resolve => socket.on('message', () => resolve()));
-    await greeted;
-    socket.close();
-
-    const arrived = proxy.eventsIn().find(e => e.kind === 'frame' && e.direction === 'in');
-    expect(levelOf(arrived!)).toBe('unprompted');
-    expect(proxy.socketShapes()[0].shape).toBe('push');
-  });
-
   it('names a frame following a send on an answer-only socket as likely, and the socket as reply', async () => {
     const { proxy, port } = await freshProxy();
     const socket = new WebSocket(`ws://127.0.0.1:${port}/live`, {
@@ -409,7 +386,7 @@ describe('the evidence a frame carries', () => {
     expect(arrived!.evidence?.shape).toMatch(/^text:/);
   });
 
-  it('records the socket counts standing when it crossed', async () => {
+  it('names a frame arriving with nothing sent as unprompted, with the socket counts standing when it crossed and the socket as push', async () => {
     const { proxy, port } = await freshProxy();
     const socket = new WebSocket(`ws://127.0.0.1:${port}/greets`, {
       headers: { Host: `127.0.0.1:${originPort}` },
@@ -421,9 +398,10 @@ describe('the evidence a frame carries', () => {
     const arrived = proxy.eventsIn().find(e => e.kind === 'frame' && e.direction === 'in');
     expect(arrived!.evidence?.socket).toMatchObject({ sent: 0, received: 1, unprompted: 1 });
     expect(levelOf(arrived!)).toBe('unprompted');
+    expect(proxy.socketShapes()[0].shape).toBe('push');
   });
 
-  it('says of a request only that the protocol paired it', async () => {
+  it('claims only position for a request, the protocol pairing alone backing it', async () => {
     const { proxy, port } = await freshProxy();
     proxy.mark({ kind: 'command', index: 3 });
     await through(port, '/paired');

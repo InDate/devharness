@@ -23,15 +23,15 @@ function monitor(): PortMonitor {
   return m;
 }
 
-async function listening(): Promise<number> {
+async function listeningOn(port: number): Promise<number> {
   const server = net.createServer(socket => socket.on('error', () => {}));
   servers.push(server);
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  await new Promise<void>(resolve => server.listen(port, '127.0.0.1', resolve));
   return (server.address() as net.AddressInfo).port;
 }
 
 async function closedPort(): Promise<number> {
-  const port = await listening();
+  const port = await listeningOn(0);
   await new Promise(resolve => servers.pop()!.close(resolve));
   return port;
 }
@@ -49,13 +49,15 @@ describe('acknowledging a monitored port', () => {
 
   it('answers a port that is up again as up', async () => {
     const m = monitor();
-    const port = await listening();
+    const port = await closedPort();
     await m.startMonitoring(port, 'block');
-    // The monitor's probe has reached the listening port by now.
-    await new Promise(resolve => setTimeout(resolve, 300));
+    await vi.waitFor(() => expect(m.getFailedPorts().map(p => p.port)).toContain(port), { timeout: 8000 });
+
+    await listeningOn(port);
+    await vi.waitFor(() => expect(m.getStatus(port)[0].status).toBe('up'), { timeout: 8000 });
 
     expect(await m.acknowledgeFailure(port)).toBe('up');
-  }, 10000);
+  }, 20000);
 
   it('answers a port nothing monitors as unmonitored', async () => {
     expect(await monitor().acknowledgeFailure(65000)).toBe('unmonitored');

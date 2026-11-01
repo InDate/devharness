@@ -14,26 +14,19 @@ import { formatPageContextForResponse } from './tools/page-tools.js';
 const textOf = (response: any): string => response.content[0].text;
 
 describe('a template with a once-per-session part', () => {
-  it('carries the orientation the first time and drops it after', () => {
+  it('carries the orientation the first time, and the connection and URL on every call', () => {
     const first = textOf(createSuccessResponse('BENCH_STARTED', {
       connection: 'app', benchUrl: 'http://127.0.0.1:1/t/', eventStreamPath: '/tmp/e.jsonl',
     }));
     const second = textOf(createSuccessResponse('BENCH_STARTED', {
-      connection: 'app', benchUrl: 'http://127.0.0.1:1/t/', eventStreamPath: '/tmp/e.jsonl',
+      connection: 'second-app', benchUrl: 'http://127.0.0.1:2/u/', eventStreamPath: '/tmp/e.jsonl',
     }));
 
     expect(first).toContain('HOLD stops page time');
     expect(second).not.toContain('HOLD stops page time');
     expect(second.length).toBeLessThan(first.length / 2);
-  });
-
-  it('still says what changed on every call', () => {
-    const later = textOf(createSuccessResponse('BENCH_STARTED', {
-      connection: 'second-app', benchUrl: 'http://127.0.0.1:2/u/', eventStreamPath: '/tmp/e.jsonl',
-    }));
-
-    expect(later).toContain('second-app');
-    expect(later).toContain('http://127.0.0.1:2/u/');
+    expect(second).toContain('second-app');
+    expect(second).toContain('http://127.0.0.1:2/u/');
   });
 
   it('carries the watch call on every start that finds no watch, once part or not', () => {

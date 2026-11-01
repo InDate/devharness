@@ -25,6 +25,19 @@ function makeInput(page: Record<string, any>) {
 
 const on = { connection: 'shop-web-app', detectChanges: false };
 
+/** Runs `work` on fake timers, moving the clock 1ms at a time until it settles, so waits are measured exactly. */
+async function underFakeTime<T>(work: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers();
+  try {
+    let settled = false;
+    const running = work().finally(() => { settled = true; });
+    while (!settled) await vi.advanceTimersByTimeAsync(1);
+    return await running;
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 describe('a type into a select', () => {
   function selectPage() {
     const document = (globalThis as any).document;
@@ -55,8 +68,10 @@ describe('a type into a select', () => {
   it('starts the second of two quick types past the type-ahead window, so Chrome begins a fresh search', async () => {
     const { input, typed } = selectPage();
 
-    await input.handler({ ...on, action: 'type', selector: '#person', text: 'Al Fenwick' });
-    await input.handler({ ...on, action: 'type', selector: '#person', text: 'Bo gbybh' });
+    await underFakeTime(async () => {
+      await input.handler({ ...on, action: 'type', selector: '#person', text: 'Al Fenwick' });
+      await input.handler({ ...on, action: 'type', selector: '#person', text: 'Bo gbybh' });
+    });
 
     expect(typed[1].startedAt - typed[0].endedAt).toBeGreaterThanOrEqual(1000);
   });
@@ -64,10 +79,12 @@ describe('a type into a select', () => {
   it('sends a second type into a text field without that wait', async () => {
     const { input, typed } = selectPage();
 
-    await input.handler({ ...on, action: 'type', selector: '#name', text: 'Al', append: true });
-    await input.handler({ ...on, action: 'type', selector: '#name', text: 'Bo', append: true });
+    await underFakeTime(async () => {
+      await input.handler({ ...on, action: 'type', selector: '#name', text: 'Al', append: true });
+      await input.handler({ ...on, action: 'type', selector: '#name', text: 'Bo', append: true });
+    });
 
-    expect(typed[1].startedAt - typed[0].endedAt).toBeLessThan(500);
+    expect(typed[1].startedAt - typed[0].endedAt).toBe(0);
   });
 });
 
@@ -236,17 +253,15 @@ describe('a scroll as a run of wheel events', () => {
     const sentAt: number[] = [];
     page.mouse.wheel.mockImplementation(async () => { sentAt.push(Date.now()); });
 
-    const result: any = await input.handler({
+    const result: any = await underFakeTime(() => input.handler({
       ...on, action: 'scroll', x: 200, y: 200,
       events: [{ deltaX: 1, afterMs: 0 }, { deltaX: 6, afterMs: 40 }, { deltaX: -2, deltaY: 3, afterMs: 40 }],
-    });
+    }));
 
     expect(page.mouse.wheel.mock.calls.map((call: any[]) => call[0])).toEqual([
       { deltaX: 1, deltaY: 0 }, { deltaX: 6, deltaY: 0 }, { deltaX: -2, deltaY: 3 },
     ]);
-    expect(sentAt[1] - sentAt[0]).toBeGreaterThanOrEqual(35);
-    expect(sentAt[2] - sentAt[0]).toBeGreaterThanOrEqual(75);
-    expect(sentAt[2] - sentAt[0]).toBeLessThan(120);
+    expect(sentAt.map(at => at - sentAt[0])).toEqual([0, 40, 80]);
     expect(result.content[0].text).toContain('Scrolled down 3px and right 5px');
     expect(result.content[0].text).toContain('in 3 wheel events');
     expect(result._meta.wheel).toMatchObject({ events: 3, askedMs: 80 });

@@ -10,7 +10,7 @@ import {
 } from './issue-actions.js';
 import {
   __resetForTests, addIssue, getIssue, addIssueComment, updateIssueFields,
-  getIssueSequencesDir,
+  getIssueSequencesDir, findIssueByGithub,
 } from '../issue-tracker.js';
 import { emitSequenceBlock } from './issue-body.js';
 import { bodyHash } from './gh-issues.js';
@@ -224,8 +224,8 @@ describe('import', () => {
 
     const response = await handleImport({ github: 110 });
 
-    const id = response._meta.github.number === 110 ? 1 : 1;
-    const issue = await getIssue(id);
+    expect(response._meta.github).toMatchObject({ action: 'import', number: 110 });
+    const issue = await findIssueByGithub(110);
     // pending would block every other tool via checkBugBlocking.
     expect(issue!.status).toBe('acknowledged');
     expect(issue!.type).toBe('bug');

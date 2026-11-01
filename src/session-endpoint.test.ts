@@ -230,6 +230,20 @@ describe('presence records', () => {
     expect(existsSync(join(getEndpointsDir(), '4242.json'))).toBe(true);
   });
 
+  posixOnly('orders sessions started in the same ms by pid, whatever order the files are read in', async () => {
+    const pids = [process.pid, process.ppid].sort((a, b) => a - b);
+    // Each arrangement puts the pids under the other file name, so one of the two lists against readdir's order.
+    for (const names of [['a', 'b'], ['b', 'a']]) {
+      rmSync(getEndpointsDir(), { recursive: true, force: true });
+      mkdirSync(getEndpointsDir(), { recursive: true });
+      pids.forEach((pid, i) => writeFileSync(join(getEndpointsDir(), `${names[i]}.json`), JSON.stringify({
+        pid, ppid: 1, cwd: '/repo', address: join(getEndpointsDir(), `${pid}.sock`), startedAt: 5,
+      })));
+
+      expect(listSessionRecords().map(record => record.pid)).toEqual(pids);
+    }
+  });
+
   posixOnly('removes the record and the socket on close', async () => {
     endpoint = await startSessionEndpoint({ executeToolCall: async () => ({}), identity: IDENTITY });
     const { address, presencePath } = endpoint!;

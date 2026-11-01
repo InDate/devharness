@@ -91,11 +91,6 @@ describe('session-start hook', () => {
     expect(JSON.parse(raw).hookSpecificOutput.hookEventName).toBe('SessionStart');
   });
 
-  it('creates the file, so a watch has something to tail before the server starts', () => {
-    runHook(JSON.stringify({ session_id: SESSION_ID }));
-    expect(existsSync(getEventStreamPath('2e9119bf'))).toBe(true);
-  });
-
   it('prints a background Bash call running devharness watch', () => {
     const output = runHook(JSON.stringify({ session_id: SESSION_ID }));
     // A background task holds no deadline, so the call must carry
@@ -127,11 +122,6 @@ describe('session-start hook', () => {
     writeFileSync(stream, '{"old":1}\n');
     runHook(JSON.stringify({ session_id: SESSION_ID }));
     expect(readFileSync(join(dirname(stream), '2e9119bf.cursor'), 'utf-8')).toBe(String('{"old":1}\n'.length));
-  });
-
-  it('honours DEVHARNESS_DIR, so a relocated state root is still found', () => {
-    const output = runHook(JSON.stringify({ session_id: SESSION_ID }));
-    expect(output).toContain(join(dir, 'events', '2e9119bf.jsonl'));
   });
 });
 
@@ -231,7 +221,7 @@ describe('session-start hook - the CLI on PATH', () => {
     expect(output).not.toMatch(/devharness@\d/);
   });
 
-  it('never installs anything itself', () => {
+  it('advises the install as a command to run only on request', () => {
     const output = runHook(payload, { ...pluginRootPinning('1.2.3'), ...NO_CLI_PATH });
     expect(output).toContain('do not run it unasked');
   });

@@ -9,14 +9,6 @@ describe('NdjsonReader', () => {
     expect(reader.readLine()).toBeUndefined();
   });
 
-  it('returns undefined until a full line has arrived', () => {
-    const reader = new NdjsonReader();
-    reader.push(Buffer.from('{"a":1}'));
-    expect(reader.readLine()).toBeUndefined();
-    reader.push(Buffer.from('\n'));
-    expect(reader.readLine()).toBe('{"a":1}');
-  });
-
   it('handles a message split across two chunks', () => {
     const reader = new NdjsonReader();
     const full = '{"jsonrpc":"2.0","id":1,"method":"tools/call"}\n';

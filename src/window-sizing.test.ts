@@ -94,20 +94,14 @@ describe('sizeWindowToViewport', () => {
     expect(bounds[1].params.bounds.width).toBeDefined();
   });
 
-  it('asks for the target plus the measured frame, and never emulates', async () => {
+  it('asks once for the target plus the measured frame when that size lands, and never emulates', async () => {
     const fake = makeFake({ chrome: { width: 12, height: 88 } });
     const result = await sizeWindowToViewport(fake.page, { width: 1280, height: 720 }, false);
 
+    expect(fake.sizedBounds()).toHaveLength(1);
     expect(fake.sizedBounds()[0].params.bounds).toEqual({ width: 1292, height: 808 });
     expect(fake.setViewport).not.toHaveBeenCalled();
     expect(result).toEqual({ viewport: { width: 1280, height: 720 }, mode: 'window', clampedTo: undefined });
-  });
-
-  it('does not correct when the first size lands', async () => {
-    const fake = makeFake({ chrome: { width: 12, height: 88 } });
-    await sizeWindowToViewport(fake.page, { width: 1280, height: 720 }, false);
-
-    expect(fake.sizedBounds()).toHaveLength(1);
   });
 
   it('corrects once, re-measuring the frame that changed under it', async () => {

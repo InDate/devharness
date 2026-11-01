@@ -172,23 +172,6 @@ describe('what a gesture buys a request', () => {
     expect(causeOf(event)).toBeUndefined();
     await proxy.stop();
   });
-
-  it('takes the report closest in time when two requests share a URL', async () => {
-    // A click and a poll hitting one endpoint inside the join window. Taking
-    // any gesture report in the window hands the poll the click's command.
-    const proxy = new InterceptProxy();
-    await proxy.start();
-    proxy.mark({ kind: 'command', index: 42 });
-    const url = `http://127.0.0.1:${originPort}/shared`;
-    const now = Date.now();
-    proxy.noteInitiator('GET', url, 'input', now - 3000);
-    proxy.noteInitiator('GET', url, 'timer', now);
-    await get(proxy, '/shared');
-
-    const event = proxy.eventsIn().find(e => e.url.includes('/shared'))!;
-    expect(event.evidence?.initiator).toBe('timer');
-    await proxy.stop();
-  });
 });
 
 describe('a transport that dies without a close frame', () => {

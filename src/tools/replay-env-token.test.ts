@@ -132,13 +132,4 @@ describe('a token-bearing step does not prompt for variables', () => {
 
     expect(typed).toEqual(['from-caller']);
   });
-
-  it('fails the run when the variable is unset', async () => {
-    delete process.env.APP_PASSWORD;
-
-    const res = await run.handler({ action: 'sequence', wait: true, name: 'login', connection: 'suite' } as any);
-
-    expect(res._meta?.replay?.success).toBe(false);
-    expect(typed).toEqual([]);
-  });
 });

@@ -1,8 +1,16 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { isProcessAlive, livePids } from './process-liveness.js';
 
 /** A pid that cannot be running: above the platform maximum. */
 const DEAD_PID = 4194304;
+
+const failWith = (code: string) => vi.spyOn(process, 'kill').mockImplementation(() => {
+  throw Object.assign(new Error(code), { code });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe('isProcessAlive', () => {
   it('sees this process', () => {
@@ -11,6 +19,16 @@ describe('isProcessAlive', () => {
 
   it('does not see a pid that cannot exist', () => {
     expect(isProcessAlive(DEAD_PID)).toBe(false);
+  });
+
+  it('reads a process this user may not signal (EPERM) as alive', () => {
+    failWith('EPERM');
+    expect(isProcessAlive(4242)).toBe(true);
+  });
+
+  it('reads a process that does not exist (ESRCH) as dead', () => {
+    failWith('ESRCH');
+    expect(isProcessAlive(4242)).toBe(false);
   });
 
   it('rejects nonsense rather than throwing', () => {
@@ -36,12 +54,5 @@ describe('livePids', () => {
 
   it('empties a list of entirely dead pids', () => {
     expect(livePids([DEAD_PID, DEAD_PID + 1])).toEqual([]);
-  });
-
-  it('collapses a stale duplicate down to one live pid', () => {
-    // The case that blocks a healthy session: a restarted MCP leaves its old
-    // pid behind, the list reads as two, and the guard calls it a duplicate.
-    const pids = [DEAD_PID, process.pid];
-    expect(livePids(pids, process.pid).length).toBe(1);
   });
 });

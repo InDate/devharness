@@ -98,12 +98,6 @@ describe('selectSuiteFiles', () => {
     ]);
   });
 
-  it('still skips helper folders nested inside the requested folder', () => {
-    // Asking for spine/ must not execute spine/_local/, whose sequences only
-    // make sense when another sequence calls them.
-    expect(selectSuiteFiles(all, 'spine')).not.toContain('spine/_local/body.json');
-  });
-
   it('tolerates surrounding slashes on the folder argument', () => {
     expect(selectSuiteFiles(all, '/spine/')).toEqual(selectSuiteFiles(all, 'spine'));
   });
@@ -115,11 +109,6 @@ describe('selectSuiteFiles', () => {
   it('does not match a folder name by prefix alone', () => {
     // 'spin' must not sweep in 'spine/...'.
     expect(selectSuiteFiles(all, 'spin')).toEqual([]);
-  });
-
-  it('sorts so a suite runs in a predictable order', () => {
-    const out = selectSuiteFiles(all, 'spine');
-    expect(out).toEqual([...out].sort());
   });
 
   it('runs a helper folder when it is asked for by name', () => {

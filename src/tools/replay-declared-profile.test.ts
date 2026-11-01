@@ -154,7 +154,7 @@ describe('declarations that cannot mean what they say', () => {
 
     await runSequence(run, { connections: { 'plain-b': 'my-second-browser' } });
 
-    // Rebound onto a browser the caller supplied: nothing to launch for it.
-    expect(launches(calls).some(p => p.name === 'plain-b')).toBe(false);
+    expect(launches(calls).some(p => p.connection === 'plain-b')).toBe(false);
+    expect(calls.filter(c => c.tool === 'dom').map(c => c.params.connection)).toEqual(['my-second-browser']);
   });
 });

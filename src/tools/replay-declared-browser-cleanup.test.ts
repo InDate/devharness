@@ -10,6 +10,7 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import { createReplayTools } from './replay-tools.js';
+import { runRegistry } from './replay-run-registry.js';
 import type { CommandSequence, RecordedCommand } from '../command-recorder.js';
 import { productionShaped } from '../test-support/fake-execute-tool-call.js';
 
@@ -135,11 +136,10 @@ describe('declared browsers', () => {
     const started: any = await run.handler({
       action: 'sequence', sequenceId: 'seq-declared', connection: 'run-device',
     } as any);
-    const runId = started._meta?.replay?.runId ?? started.content[0].text.match(/run-\d+-\w+/)?.[0];
+    const runId = started._meta.replay.runId as string;
 
-    await vi.waitFor(async () => {
-      const status: any = await run.handler({ action: 'status', runId } as any);
-      expect(status.content[0].text).toMatch(/completed|failed/i);
+    await vi.waitFor(() => {
+      expect(runRegistry.get(runId)!.status).toBe('completed');
     }, { timeout: 5000 });
 
     expect(killedPorts(calls)).toContain(PORTS['declared-b']);

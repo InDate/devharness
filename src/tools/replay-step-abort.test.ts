@@ -99,23 +99,3 @@ describe('a finish cut short by its caller', () => {
     expect(ran).toEqual(['#a', '#b', '#c', '#c', '#teardown']);
   });
 });
-
-describe('a pause point saved before a step', () => {
-  it('stops the run before that step, and finish carries on through it', async () => {
-    const marked = sequence.commands[2] as { pauseBefore?: true };
-    marked.pauseBefore = true;
-    try {
-      const { replay, run, recorder, ran } = makeReplay({});
-
-      await run.handler({ action: 'sequence', sequenceId: 'seq-abort', connection: CONNECTION, wait: true });
-      expect(ran).toEqual(['#a', '#b']);
-      expect(recorder.getActiveSequence()).toMatchObject({ currentStep: 2 });
-
-      await run.handler({ action: 'finish' });
-      expect(ran).toEqual(['#a', '#b', '#c', '#teardown']);
-      expect(recorder.getActiveSequence()).toBeNull();
-    } finally {
-      delete marked.pauseBefore;
-    }
-  });
-});

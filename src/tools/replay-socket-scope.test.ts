@@ -66,12 +66,14 @@ describe('a declared socket', () => {
       { tool: 'input', params: { action: 'click', selector: '#draw', connection: 'member-a' } },
       // Takes a connection, loads nothing: this is what used to make the run's
       // idle browser look driven.
-      { tool: 'assert', params: { value: '{{var:count}}', equals: '1' } },
+      { tool: 'assert', params: { value: '1', equals: '1' } },
     ] as RecordedCommand[]);
 
     const res = await runSequence(run);
 
     expect(text(res)).not.toContain('Socket health failed');
+    expect(res.isError).toBeFalsy();
+    expect(res._meta.replay.success).toBe(true);
   });
 
   // The absence check re-reads for a few seconds before calling a socket

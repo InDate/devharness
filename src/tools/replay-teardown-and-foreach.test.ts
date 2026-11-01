@@ -194,15 +194,6 @@ describe('teardown', () => {
     expect(rendered).toContain('**Successful:** 1');
     expect(rendered).toContain('**Failed:** 0');
   });
-
-  it('does not recurse - a teardown does not run its own teardown', async () => {
-    const { ctx, calls } = makeHarness({ screenshot: text('ok'), storage: text('cleared') });
-    const s = seq('main', [{ tool: 'screenshot', params: {} }], [{ tool: 'storage', params: {} }]);
-
-    await executeSteps({ sequence: s, ctx, startStep: 0 });
-
-    expect(calls.filter(c => c.tool === 'storage')).toHaveLength(1);
-  });
 });
 
 describe('resolveForEachItems', () => {

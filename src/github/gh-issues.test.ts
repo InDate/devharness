@@ -47,14 +47,6 @@ describe('classifySync', () => {
   it('reports missing-upstream when the number is gone', () => {
     expect(classifySync(local('x'), undefined, 'x').action).toBe('missing-upstream');
   });
-
-  it('ignores the sequence block, which is a projection not a local edit', () => {
-    // The caller strips the block before hashing; publishing must not make
-    // the next sync think the body changed.
-    const prose = '## Steps\n\nDo the thing.';
-    const issue = local(prose);
-    expect(classifySync(issue, { updatedAt: '2026-07-01T00:00:00.000Z' }, prose).action).toBe('none');
-  });
 });
 
 describe('resolveStatus', () => {

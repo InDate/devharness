@@ -4,7 +4,7 @@
  * and a field matched by value holds only when it carries the same value.
  */
 import { describe, it, expect } from 'vitest';
-import { compareExpected, compareKinds, countKinds, sentDiffers, verdictOf } from './kinds.js';
+import { compareExpected, compareKinds, countKinds, frameMatch, sentDiffers, verdictOf } from './kinds.js';
 
 const recorded = { n: 1, statuses: [200], body: '{"token":"s-old","ok":true}' };
 const observed = { n: 1, statuses: [200] };
@@ -97,5 +97,39 @@ describe('a motion paced by a clock outside the step', () => {
     const replayed = countKinds([motion('animation:transform #hero-bg', 'scroll · wheel'), motion('animation:transform #hero-bg', 'scroll · browser')]);
     expect(compareKinds({ 'animation transform #hero-bg': { n: 1 } }, replayed)).toEqual([]);
     expect(verdictOf({ n: 1 }, replayed['animation transform #hero-bg'], undefined)?.verdict).toBe('match');
+  });
+});
+
+/**
+ * A frame carries no path, so a frame rule is keyed on what the payload said,
+ * and a payload usually carries a value that moves between runs. Kept whole,
+ * `{"tag":"ready","at":179014...}` matches the frame that produced it and no
+ * later one, so the rule reads `never fired` on every run after the first.
+ */
+describe('the part of a frame payload that names it', () => {
+  it('drops a clock that moves between runs', () => {
+    const first = frameMatch('{"tag":"ready","at":1790148730882}');
+    const later = '{"tag":"ready","at":1790148999111}';
+
+    expect(first).toBe('"tag":"ready"');
+    expect(later.includes(first)).toBe(true);
+  });
+
+  it('keeps the name and not the counter', () => {
+    const match = frameMatch('{"tag":"push","i":3,"of":5}');
+    expect(match).toBe('"tag":"push"');
+    expect('{"tag":"push","i":5,"of":5}'.includes(match)).toBe(true);
+  });
+
+  it('takes the event name out of a Socket.IO style array', () => {
+    expect(frameMatch('["order:saved",{"id":42}]')).toBe('"order:saved"');
+  });
+
+  it('returns the first key of an object holding no string value', () => {
+    expect(frameMatch('{"i":1,"n":5}')).toBe('"i"');
+  });
+
+  it('returns the payload itself where it is not JSON', () => {
+    expect(frameMatch('not json at all')).toBe('not json at all');
   });
 });

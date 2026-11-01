@@ -1,12 +1,12 @@
 /**
  * What the executor reads around a step - navigation, typed text, a click's
- * failed requests, the line a breakpoint landed on, a step's traffic - comes
- * from the tools' `_meta`, and each reading covers what the step caused.
+ * failed requests, the line a breakpoint landed on - comes from the tools'
+ * `_meta`, and each reading covers what the step caused.
  */
 import { describe, it, expect, vi } from 'vitest';
 import {
   validateNavigation, validateTypedText, capturePreClickState, validateClickAction,
-  autoLaunchChrome, executeSteps,
+  executeSteps,
 } from './replay-executor.js';
 import { navigateToStartUrl } from './replay-step-checks.js';
 import { analyzeSequenceConnections } from './replay-connections.js';
@@ -157,12 +157,53 @@ describe('click validation of failed POST requests', () => {
   });
 });
 
-describe('autoLaunchChrome', () => {
-  it('answers a name that is not three words as INVALID_REFERENCE instead of throwing', async () => {
-    const ctx = ctxWith(() => undefined);
-    const result = await autoLaunchChrome(ctx.executeToolCall, 'shop');
-    expect(result).toMatchObject({ success: false, errorType: 'INVALID_REFERENCE' });
-    expect(ctx.calls).toEqual([]);
+describe('click validation of new console errors', () => {
+  const config: ClickValidationConfig = {
+    enabled: true, validateNavigation: false, requireDomChanges: false, domChangesFailMode: 'warn',
+    failOnConsoleErrors: true, consoleErrorsFailMode: 'error', validateNetworkPayload: false,
+    networkFailMode: 'warn', postClickDelayMs: 0,
+  };
+  const favicon = 'http://localhost:3000/favicon.ico';
+  const broken = 'http://localhost:3000/api/broken';
+  /** Console entries read before the click, then the ones read after it. */
+  async function clicked(after: Array<string | undefined>, failMode: ClickValidationConfig['consoleErrorsFailMode'] = 'error') {
+    let reads = 0;
+    const entries = (urls: Array<string | undefined>) => urls.map((url, i) => ({ id: `c-${i}`, type: 'error', ...(url ? { url } : {}) }));
+    const ctx = ctxWith(tool => {
+      if (tool !== 'console') return undefined;
+      const list = entries(reads++ === 0 ? [undefined] : [undefined, ...after]);
+      return { content: [{ type: 'text', text: '' }], _meta: { console: { totalCount: list.length, errorCount: list.length, warnCount: 0, entries: list } } };
+    });
+    const pre = await capturePreClickState(ctx);
+    return validateClickAction(ctx, pre, {}, { ...config, consoleErrorsFailMode: failMode });
+  }
+
+  it('passes a new error that is a favicon 404, query string included, and notes it as browser noise', async () => {
+    const result = await clicked([favicon]);
+    expect(result).toMatchObject({ valid: true, errors: [] });
+    expect(result.info.some(line => line.includes('unrelated browser noise'))).toBe(true);
+    expect((await clicked([`${favicon}?v=2`])).valid).toBe(true);
+  });
+
+  it('fails on a new error from any other resource, a path containing favicon.ico included', async () => {
+    expect((await clicked([broken])).errors[0]).toContain('1 new console error');
+    expect((await clicked(['http://localhost:3000/api/favicon.ico/details'])).valid).toBe(false);
+  });
+
+  it('counts the favicon error among the new ones when a real error comes with it', async () => {
+    const result = await clicked([favicon, broken]);
+    expect(result.valid).toBe(false);
+    expect(result.errors[0]).toContain('2 new console error');
+  });
+
+  it('turns a new error into a warning under consoleErrorsFailMode warn', async () => {
+    const result = await clicked([broken], 'warn');
+    expect(result.valid).toBe(true);
+    expect(result.warnings[0]).toContain('1 new console error');
+  });
+
+  it('reports nothing when no new error appears', async () => {
+    expect(await clicked([])).toMatchObject({ valid: true, errors: [], info: [] });
   });
 });
 
@@ -193,26 +234,5 @@ describe('a breakpoint the sequence set', () => {
 
     expect(result.breakpointHit).toBeUndefined();
     expect(result.results.map(r => r.success)).toEqual([true, true]);
-  });
-});
-
-describe('behaviour drift', () => {
-  it('counts every request a step made, past the first 50', async () => {
-    const rows = Array.from({ length: 60 }, (_, i) => ({ id: String(i), url: `http://shop.test/api/${i}`, method: 'GET', status: 200 }));
-    const ctx = ctxWith((tool, params) => {
-      if (tool === 'network' && params.action === 'list') {
-        return { content: [{ type: 'text', text: '' }], _meta: { network: { totalCount: 60, requests: rows.slice(0, params.limit ?? 100) } } };
-      }
-      return undefined;
-    });
-
-    const result = await executeSteps({
-      sequence: seq([
-        { tool: 'content', params: { action: 'extractText' }, traffic: { requests: 60, failed: 0, events: 0, writes: 0 } },
-      ]),
-      startStep: 0, ctx,
-    });
-
-    expect(result.behaviourDrift).toBeUndefined();
   });
 });

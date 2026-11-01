@@ -735,6 +735,23 @@ export type LoadSequenceResult = {
 };
 
 /**
+ * Up to five names sharing the most words with the name asked for, its folder
+ * and `.json` left off. A full listing of a large library costs thousands of
+ * tokens on every miss.
+ */
+function nearestNames(asked: string, names: string[]): string[] {
+  const wordsOf = (text: string) => new Set(text.toLowerCase().split(/[^a-z0-9]+/).filter(word => word.length > 2));
+  const base = asked.split(/[\\/]/).pop()!.replace(/\.json$/i, '');
+  const wanted = wordsOf(base);
+  return [...new Set(names)]
+    .map(name => ({ name, shared: [...wordsOf(name)].filter(word => wanted.has(word)).length }))
+    .filter(entry => entry.shared > 0)
+    .sort((a, b) => b.shared - a.shared)
+    .slice(0, 5)
+    .map(entry => entry.name);
+}
+
+/**
  * Load a sequence from memory (by sequenceId) or disk (by name)
  */
 export async function loadSequence(
@@ -770,13 +787,10 @@ export async function loadSequence(
 
     if (!sequence) {
       const savedSequences = await recorder.listSavedSequencesOnDisk();
-      const availableNames = [
-        ...memorySequences.map(s => s.name),
-        ...savedSequences.map(s => s.name)
-      ].join(', ');
+      const near = nearestNames(args.name, [...memorySequences.map(s => s.name), ...savedSequences.map(s => s.name)]);
       return {
         success: false,
-        error: `No sequence found matching "${args.name}". Available: ${availableNames || 'none'}`,
+        error: `No sequence found matching "${args.name}".${near.length ? ` Nearest: ${near.join(', ')}.` : ''} A path names a file relative to the project directory, or an absolute one; \`replay({ action: 'listSaved' })\` lists the saved sequences.`,
         errorCode: 'SEQUENCE_NOT_FOUND'
       };
     }

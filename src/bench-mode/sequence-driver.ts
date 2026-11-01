@@ -11,7 +11,7 @@ import { sweepCaptures } from './capture-sweep.js';
 import { assertAsCheck, formOf, subjectOf as subjectOfCheck } from '../tools/check-engine.js';
 import { checkSpecOf } from '../tools/check-tools.js';
 import { promises as fs } from 'fs';
-import { dirname, isAbsolute, join } from 'path';
+import { dirname, join } from 'path';
 import { getIssuesBySequenceFile } from '../issue-tracker.js';
 import { getProxy } from '../proxy/registry.js';
 import { configManager } from '../config.js';
@@ -888,12 +888,12 @@ export function createSequenceDriver(
       followed = undefined; ended = null;
       failedStep = null;
       variableStore = {};
-      // A sequence named by its file (`foo.json`, `spine/foo.json`, an absolute
-      // path) loads from that file, and every later lookup goes by the name the
-      // file holds, which is the name the recorder registers it under.
-      const path = isAbsolute(name)
-        ? name
-        : (await commandRecorder.findMatchingFilename(name).catch(() => null))?.fullPath;
+      // A sequence named by its file (`foo.json`, `spine/foo.json`, a path
+      // relative to the project, an absolute path) loads from that file, and
+      // every later lookup goes by the name the file holds, which is the name
+      // the recorder registers it under.
+      const path = commandRecorder.sequenceFileAt(name)
+        ?? (await commandRecorder.findMatchingFilename(name).catch(() => null))?.fullPath;
       const failure = await replay({ action: 'load', filename: path ?? `${name}.json` });
       if (failure) return failure;
       if (path) {

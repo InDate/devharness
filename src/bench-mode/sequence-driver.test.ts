@@ -20,6 +20,7 @@ function driverHolding(commands: Array<{ tool: string; params: Record<string, an
   const recorder = {
     getActiveSequence: () => null,
     findMatchingFilename: async () => null,
+    sequenceFileAt: () => null,
     getSequence: (id: string) => (id === 's' ? sequence : undefined),
     listSequences: () => [sequence, ...children],
     listSavedSequencesOnDisk: async () => [],
@@ -163,6 +164,7 @@ function recorderWith(runningName: string | null) {
   return {
     getActiveSequence: () => running,
     findMatchingFilename: async () => null,
+    sequenceFileAt: () => null,
     getSequence: (id: string) => sequences.find(s => s.id === id),
     listSequences: () => sequences,
     listSavedSequencesOnDisk: async () => [],
@@ -215,6 +217,7 @@ describe('a run the bench follows', () => {
       recorder: {
         getActiveSequence: () => running,
         findMatchingFilename: async () => null,
+        sequenceFileAt: () => null,
         getSequence: () => sequence,
         listSequences: () => [sequence],
         listSavedSequencesOnDisk: async () => [],
@@ -293,6 +296,7 @@ function recorderHolding() {
   const recorder = {
     getActiveSequence: () => ({ sequenceId: 'notes', sequenceName: 'noted', currentStep: 0, totalSteps: 2 }),
     findMatchingFilename: async () => null,
+    sequenceFileAt: () => null,
     getSequence: () => sequence,
     listSequences: () => [sequence],
     listSavedSequencesOnDisk: async () => [],

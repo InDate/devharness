@@ -5,13 +5,13 @@
  * by selecting specific command indices from the history.
  */
 
-import { promises as fs, existsSync } from 'fs';
+import { promises as fs, existsSync, statSync } from 'fs';
 import { walkSequenceFiles } from './helpers/sequence-tree.js';
 import { ServerFileWatcher } from './server-watcher.js';
-import { join, dirname } from 'path';
+import { join, dirname, isAbsolute, resolve } from 'path';
 import { debugLog, isHistoryLogEnabled, logToHistoryFile } from './debug-logger.js';
 import { sanitizeReference } from './reference-validator.js';
-import { getOutputPath, registerRootBound } from './helpers/paths.js';
+import { getOutputPath, getProjectDir, registerRootBound } from './helpers/paths.js';
 import { atomicWriteFile } from './atomic-write.js';
 import type { ExpectedValue, MotionSetting } from './bench/kinds.js';
 import { activityPathFor, mergeActivity, readActivity, splitActivity, writeActivity } from './sequence-activity.js';
@@ -1153,6 +1153,22 @@ export class CommandRecorder {
   }
 
   /**
+   * The existing file a name holding a path points at: an absolute path as it
+   * is, a relative one against the project directory holding .devharness.
+   * A bare name returns null, so `foo.json` matches the saved sequences rather
+   * than a stray file of that name at the project root.
+   */
+  sequenceFileAt(name: string): string | null {
+    if (!isAbsolute(name) && !/[\\/]/.test(name)) return null;
+    const path = isAbsolute(name) ? name : resolve(getProjectDir(), name);
+    try {
+      return statSync(path).isFile() ? path : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Load a sequence from disk (supports fuzzy filename matching)
    *
    * @param options.validate - Called with the parsed candidate BEFORE it replaces any
@@ -1164,15 +1180,15 @@ export class CommandRecorder {
     options?: { validate?: (candidate: CommandSequence) => boolean }
   ): Promise<CommandSequence | null> {
     try {
-      // Support absolute paths directly
-      if (filename.startsWith('/') || filename.includes(':\\')) {
-        const sequence = await this.parseSequenceFile(filename);
+      const file = this.sequenceFileAt(filename);
+      if (file) {
+        const sequence = await this.parseSequenceFile(file);
         if (!this.registerLoadedSequence(sequence, options?.validate)) {
-          await debugLog('command-recorder', `Rejected sequence "${sequence.name}" from ${filename} (validation failed) - existing sequence left intact`);
+          await debugLog('command-recorder', `Rejected sequence "${sequence.name}" from ${file} (validation failed) - existing sequence left intact`);
           return null;
         }
-        await this.trackSequenceSource(sequence, filename);
-        await debugLog('command-recorder', `Loaded sequence "${sequence.name}" from ${filename}`);
+        await this.trackSequenceSource(sequence, file);
+        await debugLog('command-recorder', `Loaded sequence "${sequence.name}" from ${file}`);
         return sequence;
       }
 

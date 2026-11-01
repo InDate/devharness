@@ -107,7 +107,12 @@ async function runInBench(args: ReplayArgs, recorder: CommandRecorder) {
   bench.setSequenceKeepDeclared(connection, args.keepDeclared === true);
   const name = String(args.name ?? '');
   const since = recorder.getCurrentHistoryIndex();
-  await bench.selectSequence(connection, name);
+  const selected = await bench.selectSequence(connection, name);
+  if (selected?.failure) {
+    const loaded = await loadSequence({ name }, recorder);
+    if (!loaded.success) return handleLoadSequenceError(loaded, 'run');
+    return createErrorResponse('SEQUENCE_NOT_FOUND', { action: 'run', message: selected.failure });
+  }
   const play = bench.playSequence(connection, { announce: false, fromStart: true });
   const benchUrl = bench.getBenchSession(connection)?.benchUrl ?? '';
   if (!args.wait) {

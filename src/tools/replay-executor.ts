@@ -42,6 +42,7 @@ import { asStep, atRunStep, atRunStepEnv, atRunStepWritten, originChannel, withi
 import { showingPickers } from '../dialog-monitor.js';
 import { addressedConnection, addressesConnection, createsConnection, createdName, isLaunchStep } from './connection-steps.js';
 import { joinRunGroup, runGroupName } from '../groups.js';
+import { ensureDeclaredConnections } from './replay-run-owned.js';
 
 // Re-export replay cursor functions
 export * from './replay-types.js';
@@ -191,16 +192,44 @@ async function prepareNestedSequence(
   ctx: ExecutionContext,
   label: string,
   logPrefix: string
-): Promise<{ runSequence: CommandSequence; filteredCommands: RecordedCommand[]; skipped: Set<number>; nestedConnection?: string }> {
+): Promise<{ runSequence: CommandSequence; filteredCommands: RecordedCommand[]; skipped: Set<number>; nestedConnection?: string; error?: string }> {
   // The parent run's retarget reaches here first: a nested sequence loads from
   // the recorder in its recorded form, so its absolute URLs still carry the
   // recorded origin until this runs.
   const sequence = ctx.rebaseOrigin
     ? rebaseSequence(rawSequence, { baseUrl: ctx.rebaseOrigin })
     : rawSequence;
-  const liveRefs = sequence.commands.some(createsConnection)
+  const declares = (sequence.requiredConnections?.length ?? 0) > 0;
+  const liveRefs = declares || sequence.commands.some(createsConnection)
     ? await probeLiveConnectionReferences(ctx.executeToolCall)
     : null;
+
+  // A child that declares its browsers gets them here as a top-level run of it
+  // would: its steps name those connections, and a step naming a connection
+  // that is not live fails the child at its first step. Each browser launched
+  // here joins the root run's declared browsers, which close when the root
+  // finishes, so the parent's later steps still reach the browsers the child
+  // set up.
+  if (declares && liveRefs) {
+    const absent = sequence.requiredConnections!.filter(decl => {
+      const wanted = sanitizeReference(decl.connection);
+      return wanted && !liveRefs.has(ctx.connectionMap?.[wanted] ?? wanted);
+    });
+    if (absent.length > 0) {
+      const declared = await ensureDeclaredConnections(
+        { ...sequence, requiredConnections: absent }, ctx.executeToolCall, async () => true, ctx.connectionMap);
+      const group = runGroupName(ctx.rootSequence ?? label);
+      const root = ctx.rootConnection ?? ctx.connection;
+      for (const ref of declared.launched) {
+        ctx.declaredLaunches?.push(ref);
+        joinRunGroup(ref, root ? sanitizeReference(root) : undefined, group);
+        liveRefs.add(ref);
+      }
+      if (declared.error) {
+        return { runSequence: sequence, filteredCommands: [], skipped: new Set(), error: declared.error };
+      }
+    }
+  }
   const keptLaunches: string[] = [];
   // A dropped step is skipped where it stands, so every step of the child
   // keeps its saved index: its History row, its pause point and a resume
@@ -331,8 +360,9 @@ export async function runBranch(
     return { success: false, executed: false, sequenceName, error: `Sequence "${sequenceName}" not found: ${loadResult.error}` };
   }
 
-  const { runSequence, nestedConnection, filteredCommands, skipped } =
+  const { runSequence, nestedConnection, filteredCommands, skipped, error: declaredError } =
     await prepareNestedSequence(loadResult.sequence, ctx, sequenceName, logPrefix);
+  if (declaredError) return { success: false, executed: false, sequenceName, error: declaredError };
   const ranCommands = runSequence.commands;
   const range = nestedRange(skipped, ranCommands.length, resume);
 
@@ -626,8 +656,9 @@ export async function executeForEachFlow(
       error: `Sequence "${sequenceName}" not found: ${loadResult.error}`,
     };
   }
-  const { runSequence, nestedConnection, skipped } =
+  const { runSequence, nestedConnection, skipped, error: declaredError } =
     await prepareNestedSequence(loadResult.sequence, ctx, sequenceName, logPrefix);
+  if (declaredError) return { success: false, sequenceName, itemsFound, iterations: 0, error: declaredError };
   const total = runSequence.commands.length;
   // A launch or attach the body kept creates its connection on the first
   // iteration; after that the name is live, and an attach again fails on it.

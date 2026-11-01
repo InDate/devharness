@@ -53,6 +53,14 @@ export interface ExecutionContext {
    */
   launchedConnections?: Set<string>;
   /**
+   * References this run launched from a sequence's `requiredConnections`: the
+   * top-level sequence's and every nested one's. Shared by reference with
+   * nested sequences, so a browser a nested setup declares is closed with the
+   * top-level run's own declared browsers when the run ends, and kept with
+   * them under `keepDeclared`.
+   */
+  declaredLaunches?: string[];
+  /**
    * The origin every absolute URL in this run takes, from `run`/`runAll`'s
    * `baseUrl`. Inherited by nested sequences (a check's `{ run }`, a
    * `forEach`'s `do`), which load from the recorder in their recorded form:

@@ -1306,6 +1306,10 @@ The sequence `{ run }` names is loaded and run inline, and it shares the parent
 run's captured variables, remaining time and cancel. A launch step
 inside it is skipped when that reference is already connected, and run when it
 isn't - so a setup sequence spanning two browsers can create the second one.
+The browsers it declares in `requiredConnections` open before its first step
+the same way: each one not yet connected is launched, and joins the top-level
+run's declared browsers, which close when that run ends (`keepDeclared` keeps
+them).
 
 Which browser the nested sequence's *bare* steps run in follows from that:
 

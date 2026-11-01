@@ -72,6 +72,8 @@ interface PerformRunDeps {
   connectionMap?: Record<string, string>;
   /** Filled in by the executor: references the run's own steps launched. */
   launchedConnections: Set<string>;
+  /** References launched from declarations, the top-level sequence's first; nested sequences append theirs. */
+  declaredLaunches: string[];
   /** Values read from args.envFile, resolved before process.env by {{env:NAME}}. */
   runEnv?: Record<string, string>;
   /** The file runEnv was read from, as the run's output names it. */
@@ -187,7 +189,7 @@ function childrenOf(commands: RecordedCommand[]): string[] {
   }).filter((child): child is string => typeof child === 'string' && child.length > 0);
 }
 
-/** The browsers the sequences these steps run launch, through every depth of nesting. */
+/** The browsers the sequences these steps run launch or declare, through every depth of nesting. */
 async function childLaunches(commands: RecordedCommand[], recorder: CommandRecorder, seen = new Set<string>()): Promise<Set<string>> {
   const launched = new Set<string>();
   for (const name of childrenOf(commands)) {
@@ -199,6 +201,7 @@ async function childLaunches(commands: RecordedCommand[], recorder: CommandRecor
       const created = isLaunchStep(command) ? createdName(command) : undefined;
       if (created) launched.add(sanitizeReference(created));
     }
+    for (const decl of loaded.sequence.requiredConnections ?? []) launched.add(sanitizeReference(decl.connection));
     for (const inner of await childLaunches(loaded.sequence.commands, recorder, seen)) launched.add(inner);
   }
   return launched;
@@ -511,6 +514,7 @@ export async function handleRun(
     args, recorder, executeToolCall, getPageForConnection, getConnectionPort,
     sequence, analysis, connection, needsConnection,
     launchedConnections: new Set<string>(),
+    declaredLaunches: declaredConns.launched,
     ...(connectionMap && { connectionMap }),
     ...(runEnv && { runEnv, runEnvFile }),
   };
@@ -787,7 +791,7 @@ export async function performRun(
 ): Promise<{ response: any; outcome: RunOutcome; results?: any[] }> {
   const { args, recorder, executeToolCall, getPageForConnection,
     sequence, analysis, needsConnection, connectionMap,
-    launchedConnections, runEnv, runEnvFile } = deps;
+    launchedConnections, declaredLaunches, runEnv, runEnvFile } = deps;
   let connection = deps.connection;
   // The run's steps are recorded after this; its reply is read off them.
   const since = recorder.getCurrentHistoryIndex();
@@ -800,6 +804,7 @@ export async function performRun(
     logPrefix: 'run',
     variableStore: {},
     launchedConnections,
+    declaredLaunches,
     ...(connectionMap && { connectionMap }),
     // Carried on the context so nested sequences inherit the retarget; the
     // top-level sequence was already rebased in handleRun.

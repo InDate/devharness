@@ -576,7 +576,9 @@ The sequence a check runs shares the parent run's captured variables (`saveAs` v
 flow both ways) and inherits its remaining timeout budget. A launch step
 inside it is skipped when that reference is already connected and run when it
 isn't, so a setup sequence spanning two browsers can create the second one
-itself.
+itself. The browsers it declares in `requiredConnections` open the same way
+before its first step: each one not yet connected is launched, and joins the
+top-level run's declared browsers, which close when that run ends.
 
 **Which browser its bare steps run in** follows from that: if the nested launch
 actually ran, they run in the browser it created (a setup sequence is a launch

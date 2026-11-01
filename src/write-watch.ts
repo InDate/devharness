@@ -22,7 +22,7 @@
  * and a replay compares it with the recording as it compares a write.
  */
 
-import { onRootNamed, rootCursor, setSettleGate, type PageRoot } from './root-credit.js';
+import { noteRoot, onRootNamed, rootCursor, setSettleGate, stepToken, type PageRoot } from './root-credit.js';
 import type { CDPSession, Page, Target, WebWorker } from 'puppeteer-core';
 import { currentCursor, onCursorEnd } from './proxy/registry.js';
 import { animationRecordOf } from './animation-record.js';
@@ -290,6 +290,7 @@ export class WriteWatch {
     this.client.on('Page.frameNavigated' as any, (e: any) => {
       if (!e?.frame?.parentId) void this.trackStorageKey();
     });
+    if (this.connection) this.holdThroughLoads(this.connection);
 
     this.client.on('Network.webSocketCreated' as any, (e: any) => this.sockets.set(e.requestId, e.url));
     this.client.on('Network.webSocketClosed' as any, (e: any) => {
@@ -402,6 +403,36 @@ export class WriteWatch {
       this.timedRead(() => this.readCookies(at, ending), true);
       this.timedRead(() => this.readFiles(at, ending), true);
     }));
+  }
+
+  /**
+   * Hold the step standing when the page starts loading a new document open
+   * until that load stops. The new document's page load opens no root, so a
+   * press whose handler set location.href settled with its own root on the
+   * old document, and the run compared it before the new page's view
+   * transition rows had landed: four kinds read as missing in one play of
+   * three (rule-check-catalog, step 42, 1 Nov).
+   */
+  private holdThroughLoads(connection: string): void {
+    let mainFrame: string | undefined;
+    let loading: PageRoot | undefined;
+    let held = 0;
+    const end = () => {
+      if (!loading) return;
+      noteRoot(connection, loading, false);
+      loading = undefined;
+    };
+    void call(this.client, 'Page.getFrameTree').then((tree: any) => { mainFrame ??= tree?.frameTree?.frame?.id; }).catch(() => {});
+    this.client.on('Page.frameNavigated' as any, (e: any) => { if (!e?.frame?.parentId) mainFrame = e.frame.id; });
+    this.client.on('Page.frameStartedLoading' as any, (e: any) => {
+      const step = stepToken(currentCursor());
+      if (e?.frameId !== mainFrame || !step) return;
+      end();
+      loading = { id: `load:${connection}:${++held}`, step };
+      noteRoot(connection, loading, true);
+    });
+    this.client.on('Page.frameStoppedLoading' as any, (e: any) => { if (e?.frameId === mainFrame) end(); });
+    this.detach.push(end);
   }
 
   /** Queue a timed read; a timer's read is dropped while others wait, a step's never is. */

@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { logpointLine, WriteWatch } from './write-watch.js';
 import { animationRecordOf } from './animation-record.js';
+import { entrySettled } from './root-credit.js';
+import { forgetCursor, markNextCommand } from './proxy/registry.js';
 import type { PageAnimation } from './page-animations.js';
 
 describe('a console call read as a logpoint row', () => {
@@ -40,5 +42,29 @@ describe('a motion row once its property comes to rest', () => {
     const rows = watch.between(0, Number.MAX_SAFE_INTEGER).filter(write => write.store === 'animation');
     expect(rows).toHaveLength(1);
     expect(rows[0].motion).toMatchObject({ to: '0.5', settled: '0.5' });
+  });
+});
+
+describe('a step whose input loads a new document', () => {
+  it('stays open until the main frame stops loading, and a frame inside it holds nothing', async () => {
+    const handlers = new Map<string, (event: any) => void>();
+    const client: any = {
+      on: (type: string, fn: (event: any) => void) => { handlers.set(type, fn); },
+      send: async (method: string) => (method === 'Page.getFrameTree' ? { frameTree: { frame: { id: 'main' } } } : {}),
+    };
+    const page: any = { on: () => undefined, off: () => undefined, url: () => 'about:blank', browser: () => ({ on: () => undefined, off: () => undefined }) };
+    const watch = new WriteWatch(client, page, 'load-hold-browser');
+    await watch.start();
+    await markNextCommand({ kind: 'command', index: 942 });
+
+    handlers.get('Page.frameStartedLoading')!({ frameId: 'outbox' });
+    expect(entrySettled(942)).toBe(true);
+    handlers.get('Page.frameStartedLoading')!({ frameId: 'main' });
+    expect(entrySettled(942)).toBe(false);
+    handlers.get('Page.frameStoppedLoading')!({ frameId: 'main' });
+    expect(entrySettled(942)).toBe(true);
+
+    watch.stop();
+    forgetCursor();
   });
 });

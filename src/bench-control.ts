@@ -237,6 +237,8 @@ export interface BenchHandlers {
   /** Save a payload by name, re-arming the replacements that serve it; answers the failure, if any. */
   savePayload: (name: string, content: string) => Promise<string | undefined>;
   notifyAnnotation: (id: string) => Promise<void>;
+  /** Put the person's words on the session event stream with the bench as it stands; answers what was sent. */
+  notifySession: (words: string, view: Record<string, string>) => Promise<string>;
   captureScreenshot: (ask: {
     kind: CaptureKind; selector?: string; widen?: number; annotationId?: string; viewportMark?: boolean;
   }) => Promise<void>;
@@ -564,6 +566,14 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
         if (req.method === 'POST' && route === '/proxy/enable') {
           const { name } = await readJson(req);
           return send(res, 200, JSON.stringify(await handlers.enableProxy(String(name ?? ''))), 'application/json');
+        }
+        if (req.method === 'POST' && route === '/notify') {
+          const { words, view } = await readJson(req);
+          const shown: Record<string, string> = {};
+          for (const [key, value] of Object.entries(view && typeof view === 'object' ? view : {})) {
+            if (typeof value === 'string' && value) shown[key] = value.slice(0, 500);
+          }
+          return send(res, 200, await handlers.notifySession(String(words ?? '').slice(0, 4000), shown), 'text/plain; charset=utf-8');
         }
         if (req.method === 'POST' && route.startsWith('/proxy/investigate')) {
           const params = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams;

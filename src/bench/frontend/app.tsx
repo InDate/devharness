@@ -21,6 +21,7 @@ import { onRevealResponse, setShowHidden, useShowHidden } from './focus.js';
 import { CaptureDialog } from './capture.js';
 import { BurstSheet } from './burst.js';
 import { SaveDialog } from './save.js';
+import { NotifyDialog } from './notify.js';
 import { HoldPanel } from './hold-panel.js';
 import { askSection, goToSection } from './goto.js';
 import { SavedHidden, SavedPayloads, SavedResponses, choicesIn, rearmRule } from './crossing.js';
@@ -103,6 +104,7 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
   const holdSettledAt = useRef(0);
   const [shooting, setShooting] = useState(false);
   const [naming, setNaming] = useState(false);
+  const [notifying, setNotifying] = useState(false);
   const [discarding, setDiscarding] = useState(false);
   /** Which reading is open over whatever tab is showing. */
   const [showing, setShowing] = useState<'about' | 'proxy' | 'hold' | null>(null);
@@ -343,6 +345,19 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
       {naming && sequence?.unsaved && (
         <SaveDialog name={sequence.name ?? ''} description={sequence.description} expectedOutcome={sequence.expectedOutcome}
           failure={sequence.failure} post={post} onClose={() => setNaming(false)} />
+      )}
+      {notifying && (
+        <NotifyDialog base={base} onClose={() => setNotifying(false)}
+          view={() => {
+            const place = placeOf();
+            const view: Record<string, string> = { tab: TAB_WORDS[place.tab] };
+            if (place.issue !== null) view.issue = String(place.issue);
+            if (place.tool) view.tool = place.tool;
+            if (place.action) view.action = place.action;
+            if (place.entry !== null) view.entry = String(place.entry);
+            if (choice) view.browser = choice;
+            return view;
+          }} />
       )}
       {state.burst && <BurstSheet burst={state.burst} base={base} post={post} />}
       {state.shotArmed && (
@@ -686,6 +701,11 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
           aria-label="RECORD MY INPUT"
           onClick={() => void post('/input/person', { on: !state.personInput })}
         ><Glyph of="history" /></button>
+        <button class="chip-toggle"
+          title="send the session a note, with the bench as it stands when you send it"
+          aria-label="NOTIFY"
+          onClick={() => setNotifying(true)}
+        ><Glyph of="notify" /></button>
         <span class="rule" />
         {/* A browser is launched through a proxy or it is not, and a running
             one cannot gain one - so this states which, and asking is the only
@@ -750,11 +770,17 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
             holdSettledAt.current = Date.now();
           }}
         ><Glyph of="hold" /></button>
-        <button class={showHidden ? 'chip-toggle showhidden on' : 'chip-toggle showhidden'}
-          title={showHidden ? 'leave ignored traffic out of the list again' : 'show the ignored traffic, dimmed'}
-          aria-label={showHidden ? 'HIDE IGNORED' : 'SHOW IGNORED'} aria-pressed={showHidden}
-          onClick={() => setShowHidden(!showHidden)}
-        ><Glyph of={showHidden ? 'eye' : 'eyeoff'} /></button>
+        {/* Ignored traffic exists only where a proxy records traffic. */}
+        {boundary?.running && (
+          <>
+            <span class="rule" />
+            <button class={showHidden ? 'chip-toggle showhidden on' : 'chip-toggle showhidden'}
+              title={showHidden ? 'leave ignored traffic out of the list again' : 'show the ignored traffic, dimmed'}
+              aria-label={showHidden ? 'HIDE IGNORED' : 'SHOW IGNORED'} aria-pressed={showHidden}
+              onClick={() => setShowHidden(!showHidden)}
+            ><Glyph of={showHidden ? 'eye' : 'eyeoff'} /></button>
+          </>
+        )}
       </div>
     </div>
 

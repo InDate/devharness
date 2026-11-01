@@ -34,6 +34,9 @@ import { openSequence, openSteps, recordedStepOf, sumTotals, summariseBoundary, 
 import { openerEntryOf } from '../activity-index.js';
 import { groupOf, membersOf } from '../groups.js';
 
+/** The event streams a notify event has carried its reading instructions on; later ones go without, which keeps each note short. */
+const notifyExplained = new Set<string>();
+
 /** What the bench server calls, for one connection's session and page. */
 /**
  * The states the disc draws for one connection, read where every connection
@@ -553,6 +556,43 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
     savePayload: (name: string, content: string) => savePayloadFor(connection, name, content),
     removeAnnotation: async (id: string) => { await removeAnnotation(connection, id); },
     notifyAnnotation: async (id: string) => { await notifyAnnotation(connection, id); },
+    notifySession: async (words: string, view: Record<string, string>) => {
+      const sequence = await getSequenceState(connection);
+      const clip = (text: string, most: number) => (text.length > most ? `${text.slice(0, most)}…` : text);
+      let at: string | undefined;
+      if (sequence?.name) {
+        const step = sequence.steps[sequence.currentStep];
+        const state = sequence.recording ? 'recording' : sequence.playing ? 'playing' : sequence.paused ? 'paused'
+          : sequence.failure ? 'failed' : undefined;
+        const passed = sequence.steps.filter(each => each.done && !each.failed).length;
+        const failed = sequence.steps.filter(each => each.failed).map(each => `${each.index + 1} ${clip(each.label, 60)}`);
+        at = [
+          `${sequence.name} step ${Math.min(sequence.currentStep + 1, sequence.total)}/${sequence.total}`
+            + (step ? ` "${clip(step.label, 60)}"` : '') + (state ? ` ${state}` : ''),
+          sequence.inside ? `inside ${sequence.inside}` : '',
+          sequence.failure ? `failure: ${clip(sequence.failure, 240)}` : '',
+          passed || failed.length ? `last run: ${passed} passed${failed.length ? `, failed ${failed.join('; ')}` : ''}` : '',
+        ].filter(Boolean).join(' · ');
+      }
+      const held = heldView(connection).map(layer => `${layer.layer} by ${layer.source}`);
+      const on = [
+        getProxy(connection) ? 'proxy' : '',
+        isWatchingPersonInput(connection) ? 'input recording' : '',
+      ].filter(Boolean);
+      const how = notifyExplained.has(session.session) ? '' : getMessage('BENCH_NOTIFY_SESSION').trim();
+      notifyExplained.add(session.session);
+      await appendEvent(session.session, 'notify', {
+        connection,
+        words,
+        view: Object.entries(view).map(([key, value]) => (key === 'tab' ? value : `${key} ${value}`)).join(' · '),
+        page: page.url(),
+        ...(at ? { sequence: at } : {}),
+        ...(held.length ? { held: held.join(', ') } : {}),
+        ...(on.length ? { on: on.join(', ') } : {}),
+        ...(how ? { how } : {}),
+      });
+      return 'sent';
+    },
     captureScreenshot: async (ask) => {
       const held = sessions.get(connection);
       if (!held) return;

@@ -4605,6 +4605,14 @@ The person is pointing at this note now. Look at the element it names and act on
 
 ---
 
+## BENCH_NOTIFY_SESSION
+
+**Type:** info
+
+A `notify` event holds words the person sent from the bench's Notify button, with the bench as it stood at Send: `view` the tab and what is open on it, `page` the app's URL, `sequence` the step it rests on with its failure and last run, `held` the layers stopped, `on` what records. Answer the words against that state before carrying on.
+
+---
+
 ## RECORDING_BRIEF
 
 **Type:** info

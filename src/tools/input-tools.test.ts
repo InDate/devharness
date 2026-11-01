@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 import { describe, it, expect, vi } from 'vitest';
 import { createInputTools } from './input-tools.js';
 import { domChangeMonitor } from '../dom-change-monitor.js';

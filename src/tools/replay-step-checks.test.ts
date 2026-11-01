@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * What the executor reads around a step - navigation, typed text, a click's
  * failed requests, the line a breakpoint landed on - comes from the tools'

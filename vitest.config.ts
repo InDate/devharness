@@ -3,7 +3,7 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     globals: true,
-    environment: 'happy-dom',
+    environment: 'node',
     include: ['src/**/*.test.ts'],
     // A windowed launch waits for the Terminal's macOS desktop before Chrome
     // starts; under test that wait reads the real desktop, so a run made while

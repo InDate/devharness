@@ -6,7 +6,7 @@
  * exits before its output drains loses lines its cursor has already passed.
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
+import { describe, it, beforeAll, afterAll, onTestFinished } from 'vitest';
 import { spawn, type ChildProcess } from 'child_process';
 import { mkdtempSync, mkdirSync, rmSync, appendFileSync, readFileSync, writeFileSync, statSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
@@ -17,7 +17,6 @@ const SESSION = 'aaaa1111';
 
 let bundleDir: string;
 let cli: string;
-let dir: string;
 
 beforeAll(async () => {
   bundleDir = mkdtempSync(join(tmpdir(), 'devharness-watch-bundle-'));
@@ -38,27 +37,28 @@ beforeAll(async () => {
 
 afterAll(() => rmSync(bundleDir, { recursive: true, force: true }));
 
-beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'devharness-watch-'));
+function setup() {
+  const dir = mkdtempSync(join(tmpdir(), 'devharness-watch-'));
   mkdirSync(join(dir, 'events'), { recursive: true });
-});
+  onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
 
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+  const stream = () => join(dir, 'events', `${SESSION}.jsonl`);
+  const cursor = () => Number(readFileSync(join(dir, 'events', `${SESSION}.cursor`), 'utf-8'));
+  const append = (text: string) => appendFileSync(stream(), text);
 
-const stream = () => join(dir, 'events', `${SESSION}.jsonl`);
-const cursor = () => Number(readFileSync(join(dir, 'events', `${SESSION}.cursor`), 'utf-8'));
-const append = (text: string) => appendFileSync(stream(), text);
+  function start(args: string[], env: Record<string, string | undefined> = {}): { child: ChildProcess; output: () => string; exited: Promise<number | null> } {
+    const childEnv: Record<string, string | undefined> = { ...process.env, DEVHARNESS_DIR: dir };
+    delete childEnv.CLAUDE_CODE_SESSION_ID;
+    delete childEnv.CLAUDE_CODE_MESSAGING_SOCKET;
+    Object.assign(childEnv, env);
+    const child = spawn(process.execPath, [cli, 'watch', ...args], { env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    child.stdout!.on('data', chunk => { out += chunk; });
+    const exited = new Promise<number | null>(resolve => child.on('exit', code => resolve(code)));
+    return { child, output: () => out, exited };
+  }
 
-function start(args: string[], env: Record<string, string | undefined> = {}): { child: ChildProcess; output: () => string; exited: Promise<number | null> } {
-  const childEnv: Record<string, string | undefined> = { ...process.env, DEVHARNESS_DIR: dir };
-  delete childEnv.CLAUDE_CODE_SESSION_ID;
-  delete childEnv.CLAUDE_CODE_MESSAGING_SOCKET;
-  Object.assign(childEnv, env);
-  const child = spawn(process.execPath, [cli, 'watch', ...args], { env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
-  let out = '';
-  child.stdout!.on('data', chunk => { out += chunk; });
-  const exited = new Promise<number | null>(resolve => child.on('exit', code => resolve(code)));
-  return { child, output: () => out, exited };
+  return { dir, stream, cursor, append, start };
 }
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -67,8 +67,9 @@ const eventLines = (text: string) => text.split('\n').filter(line => line.starts
 /** Long enough for the child to start and read its starting offset. */
 const running = () => sleep(800);
 
-describe('devharness watch', () => {
-  it('reads a line appended while no watch ran, and none twice', async () => {
+describe.concurrent('devharness watch', () => {
+  it('reads a line appended while no watch ran, and none twice', async ({ expect }) => {
+    const { dir, stream, cursor, append, start } = setup();
     writeFileSync(stream(), '');
     writeFileSync(join(dir, 'events', `${SESSION}.cursor`), '0');
 
@@ -85,7 +86,8 @@ describe('devharness watch', () => {
     expect(cursor()).toBe(statSync(stream()).size);
   }, 15000);
 
-  it('prints the rules for the next watch on the stream\'s first exit and the short form after', async () => {
+  it('prints the rules for the next watch on the stream\'s first exit and the short form after', async ({ expect }) => {
+    const { dir, stream, append, start } = setup();
     writeFileSync(stream(), '');
     writeFileSync(join(dir, 'events', `${SESSION}.cursor`), '0');
 
@@ -101,7 +103,8 @@ describe('devharness watch', () => {
     expect(second.output()).not.toContain('more coming');
   }, 15000);
 
-  it('delivers a backlog whole through a pipe before moving the cursor past it', async () => {
+  it('delivers a backlog whole through a pipe before moving the cursor past it', async ({ expect }) => {
+    const { dir, stream, cursor, start } = setup();
     const backlog = Array.from({ length: 3000 }, (_, i) => `{"n":${i},"pad":"${'x'.repeat(100)}"}\n`).join('');
     writeFileSync(stream(), backlog);
     writeFileSync(join(dir, 'events', `${SESSION}.cursor`), '0');
@@ -112,7 +115,8 @@ describe('devharness watch', () => {
     expect(cursor()).toBe(statSync(stream()).size);
   }, 15000);
 
-  it('holds a line caught mid-write for the next watch', async () => {
+  it('holds a line caught mid-write for the next watch', async ({ expect }) => {
+    const { dir, stream, cursor, append, start } = setup();
     writeFileSync(stream(), '');
     writeFileSync(join(dir, 'events', `${SESSION}.cursor`), '0');
     append('{"n":1}\n{"n":');
@@ -123,7 +127,8 @@ describe('devharness watch', () => {
     expect(cursor()).toBe('{"n":1}\n'.length);
   }, 15000);
 
-  it('--follow moves the cursor, so a one-off after it repeats nothing', async () => {
+  it('--follow moves the cursor, so a one-off after it repeats nothing', async ({ expect }) => {
+    const { dir, stream, append, start } = setup();
     writeFileSync(stream(), '');
     writeFileSync(join(dir, 'events', `${SESSION}.cursor`), '0');
 
@@ -141,18 +146,21 @@ describe('devharness watch', () => {
     expect(eventLines(once.output())).toEqual(['{"n":2}']);
   }, 15000);
 
-  it('refuses a session name that leaves the events directory', async () => {
+  it('refuses a session name that leaves the events directory', async ({ expect }) => {
+    const { dir, start } = setup();
     const watch = start(['--session=../escape']);
     expect(await watch.exited).toBe(1);
     expect(existsSync(join(dir, 'escape.jsonl'))).toBe(false);
   });
 
-  it('refuses to run with no session named and none in the environment', async () => {
+  it('refuses to run with no session named and none in the environment', async ({ expect }) => {
+    const { start } = setup();
     const watch = start([]);
     expect(await watch.exited).toBe(1);
   });
 
-  it('exits on start while a watch from the same Claude process reads the stream', async () => {
+  it('exits on start while a watch from the same Claude process reads the stream', async ({ expect }) => {
+    const { stream, append, start } = setup();
     writeFileSync(stream(), '');
     const client = { CLAUDE_CODE_MESSAGING_SOCKET: `/claude/${process.pid}.sock` };
 
@@ -168,7 +176,8 @@ describe('devharness watch', () => {
     expect(eventLines(second.output())).toEqual([]);
   }, 15000);
 
-  it('runs beside a watch from another Claude process', async () => {
+  it('runs beside a watch from another Claude process', async ({ expect }) => {
+    const { stream, append, start } = setup();
     writeFileSync(stream(), '');
 
     const first = start([`--session=${SESSION}`], { CLAUDE_CODE_MESSAGING_SOCKET: `/claude/${process.pid}.sock` });
@@ -181,7 +190,8 @@ describe('devharness watch', () => {
     expect(eventLines(second.output())).toEqual(['{"n":1}']);
   }, 15000);
 
-  it('runs when the recorded pid does not hold the stream open', async () => {
+  it('runs when the recorded pid does not hold the stream open', async ({ expect }) => {
+    const { dir, stream, append, start } = setup();
     writeFileSync(stream(), '');
     writeFileSync(join(dir, 'events', `${SESSION}.cursor`), '0');
     writeFileSync(join(dir, 'events', `${SESSION}.${process.pid}.watch`), JSON.stringify({ pid: process.pid }));
@@ -193,7 +203,8 @@ describe('devharness watch', () => {
     expect(eventLines(watch.output())).toEqual(['{"n":1}']);
   }, 15000);
 
-  it('reads a full session id as its short form', async () => {
+  it('reads a full session id as its short form', async ({ expect }) => {
+    const { dir, stream, start } = setup();
     writeFileSync(stream(), '{"n":1}\n');
     writeFileSync(join(dir, 'events', `${SESSION}.cursor`), '0');
     const watch = start([`--session=${SESSION}-2222-3333-4444-555555555555`]);

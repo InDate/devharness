@@ -25,6 +25,52 @@ function makeInput(page: Record<string, any>) {
 
 const on = { connection: 'shop-web-app', detectChanges: false };
 
+describe('a type into a select', () => {
+  function selectPage() {
+    const document = (globalThis as any).document;
+    document.body.innerHTML = '<select id="person"><option value="r-1a90">Al Fenwick</option><option value="r-6de2" selected>Bo gbybh</option></select><input id="name">';
+    const typed: Array<{ text: string; startedAt: number; endedAt: number }> = [];
+    const { input } = makeInput({
+      evaluate: vi.fn(async () => ({ blocked: false })),
+      $eval: vi.fn(async (selector: string, read: (el: unknown) => unknown) => read(document.querySelector(selector)!)),
+      $: vi.fn(async () => ({
+        scrollIntoView: async () => {}, clickablePoint: async () => ({ x: 1, y: 1 }), dispose: async () => {},
+      })),
+      keyboard: {
+        press: vi.fn(async () => {}), down: vi.fn(async () => {}), up: vi.fn(async () => {}),
+        type: vi.fn(async (text: string) => { const startedAt = Date.now(); typed.push({ text, startedAt, endedAt: Date.now() }); }),
+      },
+    });
+    return { input, typed };
+  }
+
+  it('types over a standing selection, which no clear empties', async () => {
+    const { input } = selectPage();
+
+    const result: any = await input.handler({ ...on, action: 'type', selector: '#person', text: 'Al Fenwick' });
+
+    expect(result.isError).toBeFalsy();
+  });
+
+  it('starts the second of two quick types past the type-ahead window, so Chrome begins a fresh search', async () => {
+    const { input, typed } = selectPage();
+
+    await input.handler({ ...on, action: 'type', selector: '#person', text: 'Al Fenwick' });
+    await input.handler({ ...on, action: 'type', selector: '#person', text: 'Bo gbybh' });
+
+    expect(typed[1].startedAt - typed[0].endedAt).toBeGreaterThanOrEqual(1000);
+  });
+
+  it('sends a second type into a text field without that wait', async () => {
+    const { input, typed } = selectPage();
+
+    await input.handler({ ...on, action: 'type', selector: '#name', text: 'Al', append: true });
+    await input.handler({ ...on, action: 'type', selector: '#name', text: 'Bo', append: true });
+
+    expect(typed[1].startedAt - typed[0].endedAt).toBeLessThan(500);
+  });
+});
+
 describe('an input action whose dispatch throws', () => {
   it('reports a press of a key the page refuses as failed', async () => {
     const { input } = makeInput({ keyboard: { press: vi.fn(async () => { throw new Error('Unknown key: "Nope"'); }) } });
@@ -49,6 +95,7 @@ describe('an input action whose dispatch throws', () => {
   it('reports a type whose typing throws as failed', async () => {
     const { input } = makeInput({
       evaluate: vi.fn(async () => ({ blocked: false })),
+      $eval: vi.fn(async () => ({ isSelect: false, sinceTyped: null })),
       $: vi.fn(async () => ({
         scrollIntoView: async () => {}, clickablePoint: async () => ({ x: 1, y: 1 }), dispose: async () => {},
       })),

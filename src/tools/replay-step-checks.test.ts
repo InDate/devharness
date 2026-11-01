@@ -102,6 +102,18 @@ describe('validateTypedText', () => {
     await expect(validateTypedText(ctx, '#password', 'hunter2', false, true)).rejects.not.toThrow(/hunter/);
   });
 
+  it('reads a select by the label of its chosen option, not the value it submits', async () => {
+    const document = (globalThis as any).document;
+    // happy-dom has no HTMLOptionElement.label; Chrome's returns the label attribute, else the option's text
+    Object.defineProperty((globalThis as any).HTMLOptionElement.prototype, 'label', {
+      configurable: true, get() { return this.getAttribute('label') ?? this.text; },
+    });
+    document.body.innerHTML = '<select id="person"><option value="r-1a90">Al Fenwick</option><option value="r-6de2" selected>Bo gbybh</option></select>';
+    const ctx = ctxWith((tool, params) => tool === 'inspect' ? evaluated((0, eval)(params.expression)) : undefined);
+    await expect(validateTypedText(ctx, '#person', 'Bo gbybh')).resolves.toBeUndefined();
+    await expect(validateTypedText(ctx, '#person', 'r-6de2')).rejects.toThrow('got "Bo gbybh"');
+  });
+
   it('passes a selector with quotes and backslashes into the page intact', async () => {
     const ctx = ctxWith(tool => tool === 'inspect' ? evaluated('x') : undefined);
     const selector = `input[name='a\\'b']`;

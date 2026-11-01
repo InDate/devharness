@@ -373,6 +373,8 @@ export async function validateTypedText(
       expression: `(() => {
         const el = document.querySelector(${JSON.stringify(selector)});
         if (!el) return '';
+        // A select's type-ahead matches keys against option labels; its value is a hidden key that never equals the typed text
+        if (el.tagName === 'SELECT') return el.selectedOptions[0]?.label ?? '';
         // For input/textarea, use .value
         if (el.value !== undefined && el.value !== '') return el.value;
         // For contenteditable (ProseMirror, etc.), use innerText

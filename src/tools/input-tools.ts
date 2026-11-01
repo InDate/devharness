@@ -417,12 +417,38 @@ async function pressChord(page: any, combo: string): Promise<void> {
 const SELECT_ALL = process.platform === 'darwin' ? 'Meta+a' : 'Control+a';
 const TO_END = process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End';
 
-/** What a field holds: an input's value, or an editable element's text. */
+/** What a field holds: a select's chosen label, an input's value, or an editable element's text. */
 function fieldText(page: any, selector: string): Promise<string> {
   return page.$eval(selector, (el: unknown) => {
-    const element = el as { value?: string; innerText?: string; textContent?: string | null };
+    const element = el as { tagName?: string; selectedOptions?: ArrayLike<{ label: string }>; value?: string; innerText?: string; textContent?: string | null };
+    if (element.tagName === 'SELECT') return element.selectedOptions?.[0]?.label ?? '';
     if ('value' in element && element.value !== undefined) return element.value;
     return (element.innerText ?? element.textContent ?? '').trim();
+  });
+}
+
+/**
+ * Chrome's select type-ahead appends a key arriving within 1s of the select's
+ * previous key to the same search, so a second type step sent sooner searches
+ * for both texts joined, matches no label, and leaves the selection as it was.
+ */
+const TYPE_AHEAD_WINDOW_MS = 1100;
+
+/** Whether the field is a select, and the ms since the last type into it ended; null when none has. */
+function selectTypeAhead(page: any, selector: string): Promise<{ isSelect: boolean; sinceTyped: number | null }> {
+  return page.$eval(selector, (el: { tagName: string }) => {
+    const ended: WeakMap<object, number> | undefined = (globalThis as any)[Symbol.for('devharness.typeAheadEnded')];
+    const at = ended?.get(el);
+    return { isSelect: el.tagName === 'SELECT', sinceTyped: at === undefined ? null : Date.now() - at };
+  });
+}
+
+function markTypeAheadEnded(page: any, selector: string): Promise<void> {
+  return page.$eval(selector, (el: object) => {
+    const key = Symbol.for('devharness.typeAheadEnded');
+    const scope = globalThis as any;
+    scope[key] ??= new WeakMap();
+    scope[key].set(el, Date.now());
   });
 }
 
@@ -1157,11 +1183,18 @@ export function createInputTools(
                   // Abortable between clear and retype: the clear that went out
                   // stays out, but the new text is not dispatched.
                   await checkAborted();
+                  const { isSelect, sinceTyped } = await selectTypeAhead(page, selector);
                   if (!append) {
-                    const left = await fieldText(page, selector);
+                    // A select holds one option at all times, so its label stays after the clear; its type-ahead replaces the selection
+                    const left = isSelect ? '' : await fieldText(page, selector);
                     if (left !== '') return { selector, uncleared: left, fingerprint };
                   }
+                  if (isSelect && sinceTyped !== null && sinceTyped < TYPE_AHEAD_WINDOW_MS) {
+                    await new Promise(resolve => setTimeout(resolve, TYPE_AHEAD_WINDOW_MS - sinceTyped));
+                    await checkAborted();
+                  }
                   await withReplayBypass(page, () => typeText(page, text, delay, insert));
+                  if (isSelect) await markTypeAheadEnded(page, selector);
 
                   const currentValue = await fieldText(page, selector);
 

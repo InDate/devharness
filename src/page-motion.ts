@@ -204,7 +204,12 @@ function installPageMotion(g: any): void {
   // shows, at once: a row collapsed under `transition: none` reports nothing
   // else. A transition or keyframe animation it starts is created at the next
   // style recalc and its run event dispatched in the frame after, so the
-  // change is judged two frames on, against the run events since.
+  // change is judged two frames on, against the run events since and against
+  // the animations the element and its subtree list. The run events can come
+  // later than that: Compose opened right after a tab's view transition read
+  // as changed with no motion, its fade and zoom keyframes reported 6ms on
+  // (rule-check-catalog, 1 Nov). An animation listed as pending, or started on
+  // the document timeline at or after the change, is one the change began.
   const runEvents: Array<{ target: any; at: number }> = [];
   const onRunEvent = (event: any) => {
     if (!on) return;
@@ -218,12 +223,15 @@ function installPageMotion(g: any): void {
     if (diff.length === 0) return;
     const t = now();
     const pageT = pageNow();
+    const timelineAt = g.document?.timeline?.currentTime;
     const trigger = tracker()?.current?.();
     const root = tracker()?.rootNow?.();
     const maker = tracker()?.runningMaker?.() ?? {};
     tracker()?.hold?.(root);
     const judge = () => {
-      const animated = runEvents.some(one => one.at >= t && (one.target === element || element.contains?.(one.target)));
+      const listed: any[] = typeof element.getAnimations === 'function' ? element.getAnimations({ subtree: true }) : [];
+      const begun = listed.some(one => one.startTime === null || (typeof timelineAt === 'number' && typeof one.startTime === 'number' && one.startTime >= timelineAt));
+      const animated = begun || runEvents.some(one => one.at >= t && (one.target === element || element.contains?.(one.target)));
       if (on && !animated) {
         const run: Run = { id: nextRun++, source: 'class', element: nameOf(element), property: 'class', from: before.join(' '), to: diff.join(' '), startMs: t, endMs: t, pageStartMs: pageT, pageEndMs: pageT, frames: 1, ...(trigger ? { trigger } : {}), ...maker, ...(root ? { root } : {}) };
         report(run, 'open');

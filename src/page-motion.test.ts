@@ -145,6 +145,32 @@ describe('a class change that starts no animation', () => {
   });
 });
 
+describe('a class change whose animations report no run event inside two frames', () => {
+  const modal = (animations: object[]) => ({ id: 'modal', attrs: { class: '' } as Record<string, string>, getAttribute(name: string) { return this.attrs[name] ?? null; }, contains: () => false, getAnimations: () => animations });
+
+  it('reads as nothing where the element lists an animation still pending, or started since the change', () => {
+    const { page, motion, writeClass, advance, reports } = pageWithMotion();
+    page.document.timeline = { currentTime: 1000 };
+    motion.start();
+    writeClass(modal([{ startTime: null }]), 'open');
+    writeClass(modal([{ startTime: 1016 }]), 'open');
+    advance(0);
+
+    expect(reports).toHaveLength(0);
+  });
+
+  it('reads as changed with no motion where the only animation it lists began before the change', () => {
+    const { page, motion, writeClass, advance, reports } = pageWithMotion();
+    page.document.timeline = { currentTime: 1000 };
+    motion.start();
+    writeClass(modal([{ startTime: 400 }]), 'open');
+    advance(0);
+
+    expect(reports.map(r => r.phase)).toEqual(['open', 'close']);
+    expect(reports[1]).toMatchObject({ source: 'class', element: '#modal', to: '+open' });
+  });
+});
+
 describe('a motion on a page slowed by rate', () => {
   it('counts its frames on wall time and gives its length in page time', () => {
     const { motion, writeStyle, advance, setRate, reports } = pageWithMotion();

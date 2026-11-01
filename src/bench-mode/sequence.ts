@@ -606,6 +606,9 @@ export async function playSequence(connection: string, options: { throughHolds?:
     session.playStepStarts[0] = startedAt;
     await gotoSequenceStep(connection, 0);
   }
+  // The next drive clears the failure line and finds no run standing, so it
+  // would start step 1 again from a fresh run.
+  const failedInStepOne = options.fromStart && session.sequenceFailure !== undefined;
 
   session.sequenceHalt = false;
   session.sequencePaused = false;
@@ -631,7 +634,7 @@ export async function playSequence(connection: string, options: { throughHolds?:
     await withAppInFront(session, async () => {
       // Bounded by the step count: a step that fails ends the run, and one that
       // does not advance would otherwise loop forever.
-      for (let guard = 0; !stoodInStepOne && guard <= total + MAX_INSIDE_STEPS; guard++) {
+      for (let guard = 0; !stoodInStepOne && !failedInStepOne && guard <= total + MAX_INSIDE_STEPS; guard++) {
         const before = state?.currentStep ?? 0;
         const beforeInside = state?.inside;
         (session.playStepStarts ??= [])[before] = Date.now();

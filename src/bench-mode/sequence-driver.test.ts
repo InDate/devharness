@@ -19,6 +19,7 @@ function driverHolding(commands: Array<{ tool: string; params: Record<string, an
   const navigations: Array<Record<string, any>> = [];
   const recorder = {
     getActiveSequence: () => null,
+    findMatchingFilename: async () => null,
     getSequence: (id: string) => (id === 's' ? sequence : undefined),
     listSequences: () => [sequence],
     listSavedSequencesOnDisk: async () => [],
@@ -145,6 +146,7 @@ function recorderWith(runningName: string | null) {
     : null;
   return {
     getActiveSequence: () => running,
+    findMatchingFilename: async () => null,
     getSequence: (id: string) => sequences.find(s => s.id === id),
     listSequences: () => sequences,
     listSavedSequencesOnDisk: async () => [],
@@ -196,6 +198,7 @@ describe('a run the bench follows', () => {
       end: () => { running = null; },
       recorder: {
         getActiveSequence: () => running,
+        findMatchingFilename: async () => null,
         getSequence: () => sequence,
         listSequences: () => [sequence],
         listSavedSequencesOnDisk: async () => [],
@@ -273,6 +276,7 @@ function recorderHolding() {
   const saveSequenceToDisk = vi.fn(async () => ({ success: false, error: 'disk refused the write' }));
   const recorder = {
     getActiveSequence: () => ({ sequenceId: 'notes', sequenceName: 'noted', currentStep: 0, totalSteps: 2 }),
+    findMatchingFilename: async () => null,
     getSequence: () => sequence,
     listSequences: () => [sequence],
     listSavedSequencesOnDisk: async () => [],

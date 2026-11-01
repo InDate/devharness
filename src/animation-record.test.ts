@@ -18,7 +18,7 @@ describe('the animation record', () => {
   it('credits a held step\'s sweep to that step', () => {
     const record = new AnimationRecord('page');
 
-    record.takeSweep({ doc: 'd1', created: [read(1, 'opacity', '#toast')], gone: [] }, step(3));
+    record.takeSweep({ doc: 'd1', created: [read(1, 'opacity', '#toast')], gone: [], settled: [] }, step(3));
 
     expect(record.list()).toEqual([expect.objectContaining({ key: 'd1:1', kind: 'opacity #toast', createdIn: step(3), via: 'sweep' })]);
   });
@@ -37,7 +37,7 @@ describe('the animation record', () => {
     const added: string[] = [];
     record.watch((entry, change) => added.push(`${change} ${entry.key}`));
 
-    record.takeSweep({ doc: 'd1', created: [read(1, 'opacity', '#toast')], gone: [] }, step(3));
+    record.takeSweep({ doc: 'd1', created: [read(1, 'opacity', '#toast')], gone: [], settled: [] }, step(3));
     record.chromeCreated('c1', step(4));
     record.chromeStarted('c1', read(1, 'opacity', '#toast'));
 
@@ -56,21 +56,33 @@ describe('the animation record', () => {
 
   it('marks an animation gone, finished from a sweep or cancelled from Chrome', () => {
     const record = new AnimationRecord('page');
-    record.takeSweep({ doc: 'd1', created: [read(1, 'opacity'), read(2, 'width')], gone: [] }, step(1));
+    record.takeSweep({ doc: 'd1', created: [read(1, 'opacity'), read(2, 'width')], gone: [], settled: [] }, step(1));
     record.chromeCreated('c2', step(1));
     record.chromeStarted('c2', read(2, 'width'));
 
-    record.takeSweep({ doc: 'd1', created: [], gone: [{ id: 1, how: 'finished' }] }, step(2));
+    record.takeSweep({ doc: 'd1', created: [], gone: [{ id: 1, how: 'finished' }], settled: [] }, step(2));
     record.chromeCanceled('c2');
 
     expect(record.list().map(entry => entry.gone)).toEqual(['finished', 'canceled']);
   });
 
+  it('puts the value a sweep read at rest on its animation, and tells the listeners', () => {
+    const record = new AnimationRecord('page');
+    const heard: string[] = [];
+    record.takeSweep({ doc: 'd1', created: [read(4, 'opacity', '#refreshed')], gone: [], settled: [] }, step(1));
+    record.watch((entry, change) => heard.push(`${change} ${entry.key}`));
+
+    record.takeSweep({ doc: 'd1', created: [], gone: [], settled: [{ id: 4, value: '1' }] }, step(1));
+
+    expect(heard).toEqual(['settled d1:4']);
+    expect(record.get('d1:4')?.settled).toBe('1');
+  });
+
   it('keeps two documents\' animations apart, though their page ids repeat', () => {
     const record = new AnimationRecord('page');
 
-    record.takeSweep({ doc: 'd1', created: [read(1, 'opacity', undefined, 'd1')], gone: [] }, step(1));
-    record.takeSweep({ doc: 'd2', created: [read(1, 'opacity', undefined, 'd2')], gone: [] }, step(2));
+    record.takeSweep({ doc: 'd1', created: [read(1, 'opacity', undefined, 'd1')], gone: [], settled: [] }, step(1));
+    record.takeSweep({ doc: 'd2', created: [read(1, 'opacity', undefined, 'd2')], gone: [], settled: [] }, step(2));
 
     expect(record.list().map(entry => entry.key)).toEqual(['d1:1', 'd2:1']);
   });

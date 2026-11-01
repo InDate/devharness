@@ -2482,7 +2482,7 @@ describe('readGroup - the animations an input started, read at the frame stop', 
     });
     for (const one of animations) {
       vi.setSystemTime(one.createdAt);
-      record.takeSweep({ doc: 'd1', created: [read(one) as any], gone: [] }, undefined);
+      record.takeSweep({ doc: 'd1', created: [read(one) as any], gone: [], settled: [] }, undefined);
     }
     vi.setSystemTime(2000);
     const send = vi.fn(async (method: string, params?: any) => {

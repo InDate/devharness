@@ -95,6 +95,8 @@ export interface WriteMotion {
   chain?: MotionLink[];
   /** On a stopped row: the id of the motion it ended. */
   ends?: number;
+  /** The computed value its property came to rest at, on the newest transition of that property. */
+  settled?: string;
   /** A function maker's first line of source, as Chrome describes it: `() => { masthead.style.height…`. */
   makerSource?: string;
   /** Its frames are still coming: how it runs is read when its close report arrives. */
@@ -189,6 +191,7 @@ export class WriteWatch {
   private animationKeys = new Map<string, string>();
   /** Each motion's start row, by its record key, for its close to fill in; and the motions whose stop row is written. */
   private motionRows = new Map<string, PageWrite>();
+  private startRows = new Map<string, PageWrite>();
   private motionStopped = new Set<string>();
   private scriptUrlOf?: (scriptId: string) => string | undefined;
   /** Each function maker's place in the source, by its record key, kept across its motion's close. */
@@ -238,6 +241,7 @@ export class WriteWatch {
     if (this.connection) {
       const connection = this.connection;
       this.detach.push(setSettleGate(connection, async () => {
+        await animationRecordOf(connection).rest(this.client);
         await animationRecordOf(connection).settle(this.client, SETTLE_SWEEP_MS);
         await this.drained();
       }));
@@ -335,12 +339,22 @@ export class WriteWatch {
           const motion = { ...motionOf(entry.read), ...(rooted ? { byRoot: true as const } : {}) };
           const row = this.push({ store: 'animation', operation: 'started', key: entry.kind, value: animationValue(entry.read), motion }, entry.createdAt, rooted ?? entry.createdIn);
           void this.locateMaker(entry.key, row);
+          this.startRows.set(entry.key, row);
+          if (this.startRows.size > MAX_WRITES) this.startRows.delete(this.startRows.keys().next().value as string);
           if (entry.via === 'motion' && !entry.gone) {
             this.motionRows.set(entry.key, row);
             // A motion the page navigated away from mid-run never closes.
             if (this.motionRows.size > MAX_WRITES) this.motionRows.delete(this.motionRows.keys().next().value as string);
           }
           stopRow();
+          return;
+        }
+        if (change === 'settled') {
+          const row = this.startRows.get(entry.key);
+          if (row?.motion && entry.settled !== undefined) {
+            row.motion = { ...row.motion, settled: entry.settled };
+            observeWrite(row, this.connection);
+          }
           return;
         }
         // A motion closing: its start row takes how it ran, and the log files

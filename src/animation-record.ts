@@ -63,10 +63,12 @@ export interface RecordedAnimation {
   endedIn?: ProxyCursor;
   /** What ended it, where the page read one: a pause call, or the media's own end. */
   stoppedBy?: MotionStop;
+  /** The computed value its property came to rest at, read at a sweep once no transition ran on it. */
+  settled?: string;
 }
 
-/** What a listener hears: an animation added, a motion's reading updated as it closes, an animation ended. */
-export type AnimationChange = 'added' | 'updated' | 'gone';
+/** What a listener hears: an animation added, a motion's reading updated as it closes, an animation ended, its property at rest. */
+export type AnimationChange = 'added' | 'updated' | 'gone' | 'settled';
 
 /** An animation kind as rows and comparisons name it: `opacity #toast`. */
 export function animationKind(read: Pick<PageAnimation, 'name' | 'element'>): string {
@@ -98,6 +100,24 @@ export class AnimationRecord {
   /** Resolves once every read queued so far has landed. */
   async idle(): Promise<void> {
     await this.reads;
+  }
+
+  /**
+   * Wait for the page's running transitions to finish or be replaced,
+   * reading Chrome's reports of each replacement before asking
+   * again. Their rows' resting value is read at the sweep after; a page whose
+   * time stands still never finishes them, so the wait ends at `boundMs`.
+   */
+  async rest(client: CDPSession, boundMs = SETTLE_MS): Promise<void> {
+    const until = Date.now() + boundMs;
+    for (let left = boundMs; left > 0; left = until - Date.now()) {
+      const waited = client.send('Runtime.evaluate', {
+        expression: ownScript('animation-rest', `globalThis[Symbol.for('${ANIMATIONS_KEY}')]?.rest() ?? 0`), awaitPromise: true, returnByValue: true,
+      }).then((answer: any) => Number(answer?.result?.value) || 0).catch(() => 0);
+      const count = await Promise.race([waited, new Promise<number>(resolve => setTimeout(() => resolve(0), left))]);
+      if (!count) return;
+      await Promise.race([this.idle(), new Promise(resolve => setTimeout(resolve, Math.max(0, until - Date.now())))]);
+    }
   }
 
   /**
@@ -141,6 +161,12 @@ export class AnimationRecord {
     const at = Date.now();
     for (const read of reading.created) this.add({ read, at, cursor, via: 'sweep' });
     for (const gone of reading.gone) this.end(`${reading.doc}:${gone.id}`, gone.how);
+    for (const rest of reading.settled) {
+      const entry = this.entries.get(`${reading.doc}:${rest.id}`);
+      if (!entry) continue;
+      entry.settled = rest.value;
+      this.emit(entry, 'settled');
+    }
   }
 
   /**

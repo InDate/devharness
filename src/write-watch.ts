@@ -241,7 +241,7 @@ export class WriteWatch {
     if (this.connection) {
       const connection = this.connection;
       this.detach.push(setSettleGate(connection, async () => {
-        await animationRecordOf(connection).rest(this.client);
+        await animationRecordOf(connection).rest(this.client, SETTLE_SWEEP_MS);
         await animationRecordOf(connection).settle(this.client, SETTLE_SWEEP_MS);
         await this.drained();
       }));

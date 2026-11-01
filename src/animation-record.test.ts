@@ -78,6 +78,19 @@ describe('the animation record', () => {
     expect(record.get('d1:4')?.settled).toBe('1');
   });
 
+  it('waits only the count\'s bound on a page whose code is stopped, which answers no evaluate', async () => {
+    const record = new AnimationRecord('page');
+    const asked: string[] = [];
+    const client: any = { send: (_method: string, params: { expression: string }) => { asked.push(params.expression); return new Promise(() => undefined); } };
+
+    const began = Date.now();
+    await record.rest(client, 30, 5000);
+
+    expect(Date.now() - began).toBeLessThan(1000);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toContain('running()');
+  });
+
   it('keeps two documents\' animations apart, though their page ids repeat', () => {
     const record = new AnimationRecord('page');
 

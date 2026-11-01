@@ -105,10 +105,16 @@ export class AnimationRecord {
   /**
    * Wait for the page's running transitions to finish or be replaced,
    * reading Chrome's reports of each replacement before asking
-   * again. Their rows' resting value is read at the sweep after; a page whose
-   * time stands still never finishes them, so the wait ends at `boundMs`.
+   * again. Their rows' resting value is read at the sweep after. A page whose
+   * code is stopped answers no evaluate, so the count of running ones is
+   * asked first and given up on after `askMs`; a page whose time stands still
+   * never finishes them, so the wait ends at `boundMs`.
    */
-  async rest(client: CDPSession, boundMs = SETTLE_MS): Promise<void> {
+  async rest(client: CDPSession, askMs: number, boundMs = SETTLE_MS): Promise<void> {
+    const counted = client.send('Runtime.evaluate', {
+      expression: ownScript('animation-running', `globalThis[Symbol.for('${ANIMATIONS_KEY}')]?.running() ?? 0`), returnByValue: true,
+    }).then((answer: any) => Number(answer?.result?.value) || 0).catch(() => 0);
+    if (!await Promise.race([counted, new Promise<number>(resolve => setTimeout(() => resolve(0), askMs))])) return;
     const until = Date.now() + boundMs;
     for (let left = boundMs; left > 0; left = until - Date.now()) {
       const waited = client.send('Runtime.evaluate', {
@@ -161,10 +167,10 @@ export class AnimationRecord {
     const at = Date.now();
     for (const read of reading.created) this.add({ read, at, cursor, via: 'sweep' });
     for (const gone of reading.gone) this.end(`${reading.doc}:${gone.id}`, gone.how);
-    for (const rest of reading.settled) {
-      const entry = this.entries.get(`${reading.doc}:${rest.id}`);
+    for (const one of reading.settled) {
+      const entry = this.entries.get(`${reading.doc}:${one.id}`);
       if (!entry) continue;
-      entry.settled = rest.value;
+      entry.settled = one.value;
       this.emit(entry, 'settled');
     }
   }

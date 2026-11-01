@@ -163,6 +163,21 @@ describe('a transition the page lists nowhere', () => {
     expect(reopening.cuts).toEqual({ trigger: 'key 9', root: { id: 'r1' }, motion: id });
   });
 
+  it('carries the one it replaced though a settle read that one at rest before the replacement was reported', () => {
+    const { page, animations } = pageWithAnimations();
+    page[Symbol.for('devharness.trigger')] = { ofAnimation: () => 'key 9' };
+    page.getComputedStyle = () => ({ getPropertyValue: () => '17px' });
+    const faq = { ...element('details', { id: 'faq' }), isConnected: true };
+    const closing = detailsTransition(faq, 'auto', '0px');
+    const { id } = animations.describe(closing);
+    closing.playState = 'idle';
+    animations.sweep();
+
+    const reopening = animations.describe(detailsTransition(faq, 'calc-size(auto, 0px + (0.83 * size))', 'auto'));
+
+    expect(reopening.cuts).toMatchObject({ trigger: 'key 9', motion: id });
+  });
+
   it('carries none where it starts from an end of the idle one, as a start from rest does', () => {
     const { page, animations } = pageWithAnimations();
     page[Symbol.for('devharness.trigger')] = { ofAnimation: () => 'key 9' };

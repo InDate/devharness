@@ -129,10 +129,11 @@ function installPageAnimations(g: any): void {
   // Chrome fires no transition event a page listener receives for a
   // ::details-content transition, so the tracker's cut map never holds it. A
   // transition replaced on its element, pseudo-element and property is left
-  // idle, and stays listed here until the sweep that finds it gone. The sweep
-  // runs at a step's settle, so an idle one can outlast its moment; the new
-  // one starting between the idle one's ends marks it as started from where
-  // that one stood.
+  // idle, and stays listed here by its id. A settle can read the idle one at
+  // rest before Chrome's report of its replacement arrives: the first of two
+  // presses 50ms apart settles in between them. An idle one can also outlast
+  // its moment; the new one starting between the idle one's ends marks it as
+  // started from where that one stood.
   const replacedOn = (animation: any, tracker: any): { words: string; root?: { id: string; step?: string }; motion: number } | undefined => {
     const effect = animation.effect;
     const property = animation.transitionProperty;
@@ -214,8 +215,7 @@ function installPageAnimations(g: any): void {
   const sweep = (): SweepReading => {
     const now = new Set<number>();
     const created: PageAnimation[] = [];
-    const all = listed();
-    for (const animation of all) {
+    for (const animation of listed()) {
       const known = ids.has(animation);
       const id = idOf(animation);
       now.add(id);
@@ -229,7 +229,7 @@ function installPageAnimations(g: any): void {
       byId.delete(id);
     }
     live = now;
-    return { doc, created, gone, settled: settledSince(all) };
+    return { doc, created, gone, settled: settledSince() };
   };
 
   /** False while an animation still runs or stands paused; undefined once the page let it go. */
@@ -254,8 +254,9 @@ function installPageAnimations(g: any): void {
     const running = stillRunning();
     return Promise.all(running.map(one => one.finished.then(() => undefined, () => undefined))).then(() => running.length);
   };
+  const running = (): number => stillRunning().length;
 
-  const settledSince = (all: any[]): SweepReading['settled'] => {
+  const settledSince = (): SweepReading['settled'] => {
     const byTarget = new Map<any, Map<string, number[]>>();
     for (const [id, at] of moved) {
       const on = byTarget.get(at.target) ?? new Map<string, number[]>();
@@ -266,14 +267,13 @@ function installPageAnimations(g: any): void {
     const settled: SweepReading['settled'] = [];
     for (const [target, on] of byTarget) {
       for (const held of on.values()) {
-        const { pseudo, property } = moved.get(held[held.length - 1])!;
-        const moving = held.some(id => resting(byId.get(id)?.deref()) === false) || all.some(one => one.playState !== 'finished' && one.transitionProperty === property
-          && one.effect?.target === target && (one.effect?.pseudoElement || undefined) === pseudo);
-        if (moving) continue;
+        if (held.some(id => resting(byId.get(id)?.deref()) === false)) continue;
+        const newest = Math.max(...held);
+        const { pseudo, property } = moved.get(newest)!;
         for (const id of held) moved.delete(id);
         if (!target.isConnected || typeof g.getComputedStyle !== 'function') continue;
         const value = g.getComputedStyle(target, pseudo ?? null).getPropertyValue(property);
-        if (value) settled.push({ id: Math.max(...held), value });
+        if (value) settled.push({ id: newest, value });
       }
     }
     return settled;
@@ -287,6 +287,7 @@ function installPageAnimations(g: any): void {
     /** An element's name as every reading of the page gives it: `#id`, else its tag and first two classes. */
     name: elementName,
     sweep,
+    running,
     rest,
     /** The animation the id names, read now; null once the page has let it go. */
     read(id: number) { const animation = animationOf(id); return animation ? describe(animation) : null; },

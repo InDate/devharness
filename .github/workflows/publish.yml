@@ -38,4 +38,4 @@ jobs:
         run: npm run build:verify
 
       - name: Publish
-        run: npm publish --provenance
+        run: npm publish --provenance --ignore-scripts

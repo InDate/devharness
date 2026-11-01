@@ -648,6 +648,8 @@ two forms, and the choice between them is yours:
 
 - `replay({ action: 'copy', name, throughStep, newName })` - the new sequence
   owns a copy of steps 1 to N. An edit to either reaches only that one.
+  `replay({ action: 'clone', name, newName })` copies every step, with the
+  teardown, for a sequence that starts as the whole of another.
 - `replay({ action: 'split', name, throughStep, sharedName, newName? })` -
   steps 1 to N move into `sharedName`; the original runs it in their place,
   and so does `newName`. An edit to the path goes to the shared sequence and

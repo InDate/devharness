@@ -111,6 +111,7 @@ export function shareProxy(holder: string, reference: string): boolean {
   const proxy = proxies.get(holder);
   if (!proxy) return false;
   proxies.set(reference, proxy);
+  proxy.sharers.add(reference);
   launchArgs.set(reference, launchArgs.get(holder) ?? []);
   networkDetach.set(reference, attachLayer(reference, 'network', proxy.queue.mechanism()));
   return true;

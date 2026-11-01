@@ -20,6 +20,7 @@ import { stopRecording, cancelRecording, eventsToCommands } from '../interaction
 import { translateSequence } from '../tools/legacy-steps.js';
 import type { CommandRecorder, CommandSequence } from '../command-recorder.js';
 import { runRegistry } from '../tools/replay-run-registry.js';
+import { insidePath } from '../tools/inside-position.js';
 import { debugLog } from '../debug-logger.js';
 import { resolveSessionName } from '../session-identity.js';
 import { getSessionInfo } from '../tools/dashboard-tools.js';
@@ -427,11 +428,43 @@ export function createSequenceDriver(
    * rebound reference is never launched, so rebinding one onto this tab drives
    * the tab with whatever cookies it holds.
    */
-  const rebindOnto = (name: string, connection: string): Record<string, string> | undefined => {
+  /** The sequences a step runs inside itself: a check's `run`, a forEach's `do`. */
+  const childrenOf = (sequence: CommandSequence): string[] => (sequence.commands ?? []).flatMap(command => {
+    const params = (command.params ?? {}) as Record<string, any>;
+    if (command.tool === 'check') return [params.holds?.run, params.fails?.run];
+    if (command.tool === 'forEach') return [params.do];
+    return [];
+  }).filter((child): child is string => typeof child === 'string' && child.length > 0);
+
+  /**
+   * The browsers a sequence names, with those of every sequence its steps run.
+   * A child inherits the run's rebinding, so a browser a child launches counts
+   * as declared: it brings its own instance, and rebound onto this tab its
+   * launch finds the tab live and is skipped.
+   */
+  const referencesThrough = async (sequence: CommandSequence, seen = new Set<string>()): Promise<{ references: Set<string>; declared: Set<string> }> => {
+    seen.add(sequence.name);
+    const found = referencesOf(sequence);
+    for (const name of childrenOf(sequence)) {
+      if (seen.has(name)) continue;
+      const child = loadedByName(name) ?? await commandRecorder.loadSequenceFromDisk(name).catch(() => null);
+      if (!child) continue;
+      const inner = await referencesThrough(child, seen);
+      for (const reference of inner.references) found.references.add(reference);
+      for (const reference of inner.declared) found.declared.add(reference);
+      for (const command of child.commands ?? []) {
+        const launched = isLaunchStep(command) ? createdName(command) : undefined;
+        if (launched) found.declared.add(launched);
+      }
+    }
+    return found;
+  };
+
+  const rebindOnto = async (name: string, connection: string): Promise<Record<string, string> | undefined> => {
     const sequence = loadedByName(name);
     if (!sequence) return undefined;
 
-    const { references, declared } = referencesOf(sequence);
+    const { references, declared } = await referencesThrough(sequence);
     if (references.size > 1) {
       debugLog('bench', `sequence ${name} uses ${references.size} connections; left unbound`);
       return undefined;
@@ -442,13 +475,19 @@ export function createSequenceDriver(
     return Object.fromEntries([...references].map(reference => [reference, connection]));
   };
 
+  /** The `connections` field a run on this tab takes, empty where nothing is rebound. */
+  const reboundOnto = async (name: string, connection: string): Promise<{ connections?: Record<string, string> }> => {
+    const connections = await rebindOnto(name, connection);
+    return connections ? { connections } : {};
+  };
+
   /** The steps run on this tab: they name no browser, only this one, or one rebound onto it. */
-  const runsOnTab = (name: string, connection: string): boolean => {
+  const runsOnTab = async (name: string, connection: string): Promise<boolean> => {
     const sequence = loadedByName(name);
     if (!sequence) return false;
-    const { references } = referencesOf(sequence);
+    const { references } = await referencesThrough(sequence);
     references.delete(connection);
-    return references.size === 0 || rebindOnto(name, connection) !== undefined;
+    return references.size === 0 || await rebindOnto(name, connection) !== undefined;
   };
 
   /**
@@ -793,6 +832,8 @@ export function createSequenceDriver(
         failedStep: ended === 'failed' ? failedStep ?? undefined : undefined,
         ...(state ? { live: true } : {}),
         ...(state?.breakpointHit ? { heldAt: `${state.breakpointHit.url}:${state.breakpointHit.lineNumber}` } : {}),
+        ...(state?.inside ? { inside: insidePath(state.inside) } : {}),
+        ...(state?.insidePause ? { insidePause: state.insidePause.holds ? { holds: state.insidePause.holds } : {} } : {}),
         ...(state?.repair ? { repair: {
           step: state.currentStep,
           ...(commands[state.currentStep]?.fingerprint ? { recorded: describeFingerprint(commands[state.currentStep].fingerprint!) } : {}),
@@ -864,7 +905,7 @@ export function createSequenceDriver(
       // not been told about is refused the moment the run moves.
       scopeProxyTo(name, connection);
       // A step on another browser starts where that browser was declared or launched.
-      if (runsOnTab(name, connection)) await goToStart(name, connection);
+      if (await runsOnTab(name, connection)) await goToStart(name, connection);
       return undefined;
     },
 
@@ -947,7 +988,7 @@ export function createSequenceDriver(
         return replay({
           action: 'run', name: selected, stepTo: 1, wait: true, connection: selectedConnection, variables: recordedText(),
           ...(holdNothing ? { playing: true } : {}),
-          ...(rebindOnto(selected, selectedConnection) ? { connections: rebindOnto(selected, selectedConnection) } : {}),
+          ...await reboundOnto(selected, selectedConnection),
           ...(baseUrl ? { baseUrl } : {}),
           ...(envFile ? { envFile } : {}),
           ...(keepDeclared ? { keepDeclared } : {}),
@@ -965,7 +1006,7 @@ export function createSequenceDriver(
       if (selected) {
         const failure = await replay({
           action: 'run', name: selected, wait: true, connection: selectedConnection, variables: recordedText(),
-          ...(rebindOnto(selected, selectedConnection) ? { connections: rebindOnto(selected, selectedConnection) } : {}),
+          ...await reboundOnto(selected, selectedConnection),
           ...(baseUrl ? { baseUrl } : {}),
           ...(envFile ? { envFile } : {}),
           ...(keepDeclared ? { keepDeclared } : {}),
@@ -998,7 +1039,7 @@ export function createSequenceDriver(
       return replay({
         action: 'run', name, stepTo: step + 1, wait: true, connection: selectedConnection, variables: recordedText(),
         ...(holds ? { hold: holds } : {}),
-        ...(rebindOnto(name, selectedConnection) ? { connections: rebindOnto(name, selectedConnection) } : {}),
+        ...await reboundOnto(name, selectedConnection),
         ...(baseUrl ? { baseUrl } : {}),
         ...(envFile ? { envFile } : {}),
         ...(keepDeclared ? { keepDeclared } : {}),

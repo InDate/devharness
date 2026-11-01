@@ -147,6 +147,14 @@ describe('two browsers in one log', () => {
     expect(text).not.toMatch(/POST \/send 200 .*on /);
   });
 
+  it('names the shared Chrome for a line from a proxy two tabs share, read from either tab', () => {
+    observeEvent(event({ id: 'ev-shared', method: 'GET', url: 'http://h/page', status: 200, commandIndex: 90 }), 'shared-holder-tab', ['shared-holder-tab', 'shared-second-tab']);
+
+    const shared = 'the Chrome shared by shared-holder-tab and shared-second-tab';
+    expect(activityOf(90, 'shared-holder-tab').map(line => line.on)).toEqual([shared]);
+    expect(activityOf(90, 'shared-second-tab').map(line => line.on)).toEqual([shared]);
+  });
+
   it('records the connection of a page write', () => {
     expect(observeWrite(write({ key: 'draft', cursor: { kind: 'command', index: 81 } }), 'socket-live-lifecycle').connection).toBe('socket-live-lifecycle');
   });

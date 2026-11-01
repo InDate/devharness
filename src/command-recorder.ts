@@ -23,6 +23,7 @@ import type { Annotation, StepTraffic } from './annotation.js';
 import { substituteCapturedValues, type CaptureEntry } from './tools/interpolation-reverse.js';
 import type { CallChannel, StepEnv } from './call-origin.js';
 import type { HoldLayer } from './hold.js';
+import type { InsideMark, InsidePosition } from './tools/replay-types.js';
 import type { ElementFingerprint, ElementRepair } from './element-fingerprint.js';
 
 /** JSON round-trip clone, tolerant of a result that isn't JSON-safe (drops it rather than throwing). */
@@ -373,6 +374,10 @@ export interface ActiveSequenceState {
   runSince?: number;
   /** The layers a pause held the page on; step, finish and cancel release them. */
   pauseHeld?: HoldLayer[];
+  /** The position inside `currentStep` where that step runs a child sequence standing part-done; step and finish carry the child on from it. */
+  inside?: InsidePosition;
+  /** The run stands at a pause point inside that child: what it holds. A play stops here as at a pause point of its own. */
+  insidePause?: InsideMark;
   /** What a later pause of this run holds, as the run asked; every layer when absent. */
   holdWhilePaused?: HoldLayer[];
 }

@@ -9,7 +9,7 @@ import { runRegistry, type RunRecord } from './replay-run-registry.js';
 import { appendRun } from '../run-log.js';
 import type { StepResult } from './replay-executor.js';
 import type { StepCheck } from '../bench/wire.js';
-import { executeSteps, type ExecutionContext } from './replay-executor.js';
+import { executeSteps, insideNote, insidePath, type ExecutionContext } from './replay-executor.js';
 import { formatActiveStatus, formatClickValidationFailure, failuresOf, formatPauseNote } from './replay-formatters.js';
 import { formatRunReply } from './run-table.js';
 import { pausesIn, rulesForRun } from './run-rules.js';
@@ -331,6 +331,14 @@ function holdAtClickPause(
   };
 }
 
+/** The position inside the step a paused run stands on, kept for the next step or finish to carry the child on. */
+function storeInside(activeSeq: ActiveSequenceState, execResult: ExecutionResult): void {
+  if (execResult.resumeAt?.inside) activeSeq.inside = execResult.resumeAt.inside;
+  else delete activeSeq.inside;
+  if (execResult.resumeAt?.inside && execResult.insideMark) activeSeq.insidePause = execResult.insideMark;
+  else delete activeSeq.insidePause;
+}
+
 export async function handleStep(
   args: ReplayArgs,
   recorder: CommandRecorder,
@@ -396,6 +404,7 @@ export async function handleStep(
     ...(openStep ? { openStep } : {}),
     ...(heldStep ? { heldStep } : {}),
     resumesSession: true,
+    ...(activeSeq.inside ? { resumeInside: activeSeq.inside, insideSteps: stepCount } : {}),
     ...(args.playing ? { standsPaused: false } : {}),
     ...(args.hold ?? activeSeq.holdWhilePaused ? { holdWhilePaused: args.hold ?? activeSeq.holdWhilePaused } : {}),
   });
@@ -408,6 +417,7 @@ export async function handleStep(
 
   const lastExecuted = execResult.results.length > 0 ? execResult.results[execResult.results.length - 1].step : startStep;
   const failed = execResult.results.some(r => !r.success);
+  storeInside(activeSeq, execResult);
   if (execResult.pauseHeld) activeSeq.pauseHeld = execResult.pauseHeld;
   if (execResult.heldStep) activeSeq.heldStep = execResult.heldStep;
 
@@ -453,7 +463,7 @@ export async function handleStep(
       name: sequence.name, total: commands.length, since: activeSeq.runSince ?? since, paused: !failed && lastExecuted < commands.length,
       ...(args.steps ? { steps: args.steps } : {}), failures: failuresOf(execResult.results),
         rules, pauses, ...(execResult.personInput ? { person: execResult.personInput } : {}),
-    }) + closedNote }],
+    }) + closedNote + insideNote(recorder.getActiveSequence()?.currentStep ?? 0, recorder.getActiveSequence()?.inside) }],
     ...(!failed && lastExecuted < commands.length ? { _meta: pausedMeta('step', recorder) } : {}),
     ...(failed ? { isError: true } : {}),
   };
@@ -518,7 +528,9 @@ export async function handleFinish(
     ...(openStep ? { openStep } : {}),
     ...(heldStep ? { heldStep } : {}),
     resumesSession: true,
+    ...(activeSeq.inside ? { resumeInside: activeSeq.inside } : {}),
   });
+  storeInside(activeSeq, execResult);
   const rules = rulesForRun(activeSeq.connection);
   const pauses = pausesIn(activeSeq.connection);
 
@@ -550,7 +562,7 @@ export async function handleFinish(
       content: [{ type: 'text', text: formatRunReply(recorder, {
         name: sequence.name, total: commands.length, since: activeSeq.runSince ?? since, paused: true,
         ...(args.steps ? { steps: args.steps } : {}), failures: failuresOf(execResult.results), rules, pauses,
-      }) + `\n\n**Paused at the pause point before step ${execResult.pausedAtMark + 1}**${execResult.pauseHeld?.length ? `, holding the page's ${execResult.pauseHeld.join(', ')}` : ''}. \`run step\` or \`finish\` carries on.`
+      }) + `\n\n**Paused at the pause point before ${activeSeq.inside ? insidePath(activeSeq.inside) : `step ${execResult.pausedAtMark + 1}`}**${execResult.pauseHeld?.length ? `, holding the page's ${execResult.pauseHeld.join(', ')}` : ''}. \`run step\` or \`finish\` carries on.`
         + formatPauseNote(execResult.pausedAtMark + 1, execResult.pauseNote, execResult.pauseNotify) }],
       _meta: pausedMeta('finish', recorder, { pausePoint: true }),
     };

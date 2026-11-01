@@ -471,6 +471,7 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
                   : failed ? 'failed · '
                   : ''}
                 step <b>{Math.min(sequence.currentStep + 1, sequence.total)}</b> of {sequence.total}
+                {sequence.inside && <> · in {sequence.inside}</>}
               </span>
               </>
             );

@@ -935,7 +935,17 @@ export interface FramePin {
 
 export class InterceptProxy {
   /** The connection that launched the browser this proxy carries, written on every observation it makes. */
-  constructor(readonly reference?: string) {}
+  constructor(readonly reference?: string) {
+    if (reference) this.sharers.add(reference);
+  }
+
+  /** Every connection whose tab runs in this proxy's browser; a request carries no tab, so each of them may have sent it. */
+  readonly sharers = new Set<string>();
+
+  /** The sharers as an observation lists them. */
+  private sharedBy(): string[] {
+    return [...this.sharers];
+  }
 
   private certificate: ProxyCertificate | null = null;
   private front = createHttpServer();
@@ -1222,7 +1232,7 @@ export class InterceptProxy {
       if (document) evidence.initiatedBy = document;
       if (evaluatedUnder) evidence.evaluatedUnder = evaluatedUnder;
       this.attributeFromPage(event);
-      if (evaluatedUnder) observeEvent(event, this.reference);
+      if (evaluatedUnder) observeEvent(event, this.reference, this.sharedBy());
       return;
     }
     this.reportedInitiators.push({ key, root, at, document, ...(evaluatedUnder ? { evaluatedUnder } : {}) });
@@ -1432,7 +1442,7 @@ export class InterceptProxy {
       if (began < window.from || (window.to !== undefined && began >= window.to)) continue;
       if (causeOf(event) !== undefined || event.evidence?.initiator === 'timer') continue;
       stampWith(event, window.cursor);
-      observeEvent(event, this.reference);
+      observeEvent(event, this.reference, this.sharedBy());
     }
   }
 
@@ -1555,7 +1565,7 @@ export class InterceptProxy {
       if (late) stampWith(stored, late);
     }
     this.events.push(stored);
-    observeEvent(stored, this.reference);
+    observeEvent(stored, this.reference, this.sharedBy());
     if (body !== undefined) this.bodies.set(stored.id, body);
     if (this.events.length > MAX_EVENTS) {
       for (const gone of this.events.splice(0, this.events.length - MAX_EVENTS)) {

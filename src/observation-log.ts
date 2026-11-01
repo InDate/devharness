@@ -59,6 +59,11 @@ export interface Observation {
   motion?: WriteMotion;
   /** The connection whose browser made it: the proxy's launching reference, or the write watch's page. */
   connection?: string;
+  /**
+   * The connections whose tabs share the browser, and so the proxy, that saw
+   * it, where more than one does: a proxy reads no tab, so any of them made it.
+   */
+  sharedBy?: string[];
   /** The proxy event or page write behind it, for its payload. */
   ref: { source: 'proxy' | 'write'; id: string };
 }
@@ -206,11 +211,12 @@ const openedBy = new Map<string, { entry: number; opener: ProxyEvent }>();
 
 /** The connection an observation came from, where it differs from the reading call's: the label its line takes. */
 export function foreignTo(one: Observation, reading: string | undefined): string | undefined {
+  if (reading !== undefined && one.sharedBy && one.sharedBy.length > 1) return `the Chrome shared by ${one.sharedBy.join(' and ')}`;
   return reading !== undefined && one.connection !== undefined && one.connection !== reading ? one.connection : undefined;
 }
 
 /** A proxy event as the proxy stores or restamps it. */
-export function observeEvent(event: ProxyEvent, connection?: string): Observation {
+export function observeEvent(event: ProxyEvent, connection?: string, sharedBy?: string[]): Observation {
   const stamp = entryOf(event);
   if (event.kind === 'request' && (event.open || event.status === 101) && stamp !== undefined) openedBy.set(`${connection ?? ''} ${event.url}`, { entry: stamp, opener: event });
   // Only while what opened it is open: a stream the page closed and opened
@@ -218,7 +224,7 @@ export function observeEvent(event: ProxyEvent, connection?: string): Observatio
   const opened = stamp === undefined && event.kind === 'frame' && event.direction === 'in' ? openedBy.get(`${connection ?? ''} ${event.url}`) : undefined;
   const opener = opened && (opened.opener.open || opened.opener.status === 101) ? opened.entry : undefined;
   const input = fromEvent(event, stamp ?? entryOfCursor(causeBefore(event.at, namesEntry)));
-  return observe({ ...input, ...(stamp !== undefined ? { stamped: true as const } : {}), ...(opener !== undefined ? { opener } : {}), ...(connection ? { connection } : {}) }, event);
+  return observe({ ...input, ...(stamp !== undefined ? { stamped: true as const } : {}), ...(opener !== undefined ? { opener } : {}), ...(connection ? { connection } : {}), ...(sharedBy && sharedBy.length > 1 ? { sharedBy } : {}) }, event);
 }
 
 /** A page write as the write watch stores or restamps it. */

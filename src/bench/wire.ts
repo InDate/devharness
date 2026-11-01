@@ -507,6 +507,10 @@ export interface SequenceState {
   paused?: boolean;
   /** Where a breakpoint the sequence did not set stopped the page, holding the run at `currentStep`. */
   heldAt?: string;
+  /** Where the run stands inside `currentStep`'s child sequence, as `login step 3`. */
+  inside?: string;
+  /** The run stands at a pause point inside that child, holding these layers; every layer when absent. */
+  insidePause?: { holds?: Array<'code' | 'ui' | 'network'> };
   /** The run stands on a step that reached another element than the one recorded: what was found, and what repairs it. */
   repair?: SequenceRepair;
   /** What the sequence describes itself as doing. */

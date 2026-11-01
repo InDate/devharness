@@ -64,6 +64,10 @@ export interface SequenceDriver {
     failedStep?: number;
     /** Where a breakpoint the sequence did not set stopped the page, holding the run. */
     heldAt?: string;
+    /** Where the run stands inside the current step's child sequence, as `login step 3`. */
+    inside?: string;
+    /** The run stands at a pause point inside that child, holding these layers; every layer when absent. */
+    insidePause?: { holds?: Array<'code' | 'ui' | 'network'> };
     /** Where the run stands on a step that reached another element than the one recorded, and what repairs it. */
     repair?: SequenceRepair;
     /** A replay session stands for this sequence, so a pause in it can be carried on. */

@@ -137,6 +137,8 @@ export async function getSequenceState(connection: string): Promise<SequenceStat
       return held.length ? { runHeld: held } : {};
     })(),
     ...(active.heldAt ? { heldAt: active.heldAt } : {}),
+    ...(active.inside ? { inside: active.inside } : {}),
+    ...(active.insidePause ? { insidePause: active.insidePause } : {}),
     ...(active.repair ? { repair: active.repair } : {}),
     ...(session.baselineFilling ? { baseline: { filling: session.baselineFilling.steps, retakes: session.baselineFilling.retakes } } : {}),
     ...(session.recordingSequence ? { recording: true } : {}),
@@ -589,6 +591,9 @@ function holdRecordingNote(session: BenchSession, index: number, comment: string
  * `compare: false` leaves each step's match out of the announced reply, for
  * the play that takes a baseline.
  */
+/** Steps a play takes inside child sequences, beyond the parent's own, before it stops. */
+const MAX_INSIDE_STEPS = 10000;
+
 export async function playSequence(connection: string, options: { throughHolds?: boolean; announce?: boolean; fromStart?: boolean; compare?: boolean } = {}): Promise<SequenceState | undefined> {
   const session = sessions.get(connection);
   if (!session?.sequences) return undefined;
@@ -608,6 +613,16 @@ export async function playSequence(connection: string, options: { throughHolds?:
   session.sequencePlaying = true;
   let state = await getSequenceState(connection);
   const total = state?.total ?? 0;
+  // Step 1, run above as a stop of its own, can stand at a pause point inside
+  // the child it runs: the play stops there before stepping on. A play that
+  // carries on from that pause starts past it, so only a play from the start
+  // stops here.
+  const stoodInStepOne = options.fromStart && !options.throughHolds && state?.insidePause;
+  if (stoodInStepOne) {
+    session.sequencePaused = true;
+    await session.sequences!.holdPaused(stoodInStepOne.holds);
+    state = await getSequenceState(connection);
+  }
 
   // The app stays in front for the whole run, so the tabs switch once. The
   // play flag holds `busy` across the gaps between steps, so it clears in a
@@ -616,8 +631,9 @@ export async function playSequence(connection: string, options: { throughHolds?:
     await withAppInFront(session, async () => {
       // Bounded by the step count: a step that fails ends the run, and one that
       // does not advance would otherwise loop forever.
-      for (let guard = 0; guard <= total; guard++) {
+      for (let guard = 0; !stoodInStepOne && guard <= total + MAX_INSIDE_STEPS; guard++) {
         const before = state?.currentStep ?? 0;
+        const beforeInside = state?.inside;
         (session.playStepStarts ??= [])[before] = Date.now();
         state = await stepSequence(connection, true);
         // Asked for part-way through: the step in flight is allowed to finish, so
@@ -638,7 +654,7 @@ export async function playSequence(connection: string, options: { throughHolds?:
           break;
         }
         if (state.currentStep >= state.total) break;
-        if (state.currentStep === before) break;
+        if (state.currentStep === before && state.inside === beforeInside) break;
         // A step that held the screen in its own input, or froze an animation
         // through its motion, stops the play there, frozen part-way through
         // the motion it started, for a seek or a scrub to read. A next step
@@ -654,8 +670,15 @@ export async function playSequence(connection: string, options: { throughHolds?:
           state = await getSequenceState(connection);
           break;
         }
+        // A pause point inside the child the current step runs: the play stops and holds there.
+        if (!options.throughHolds && state.insidePause) {
+          session.sequencePaused = true;
+          await session.sequences!.holdPaused(state.insidePause.holds);
+          state = await getSequenceState(connection);
+          break;
+        }
         // A pause point saved before the next step: the play stops and holds there.
-        if (!options.throughHolds && state.steps[state.currentStep]?.pauseBefore) {
+        if (!options.throughHolds && !state.inside && state.steps[state.currentStep]?.pauseBefore) {
           session.sequencePaused = true;
           await session.sequences!.holdPaused(state.steps[state.currentStep].pauseHolds);
           state = await getSequenceState(connection);

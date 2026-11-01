@@ -41,13 +41,16 @@ import type { CheckOutcome as CheckOutcomeRecord, RanStep } from '../proxy/regis
 import { asStep, atRunStep, atRunStepEnv, atRunStepWritten, originChannel, withinRun } from '../call-origin.js';
 import { showingPickers } from '../dialog-monitor.js';
 import { addressedConnection, addressesConnection, createsConnection, createdName, isLaunchStep } from './connection-steps.js';
+import { joinRunGroup, runGroupName } from '../groups.js';
 
 // Re-export replay cursor functions
 export * from './replay-types.js';
 export * from './replay-connections.js';
 export * from './replay-conditions.js';
 export * from './replay-step-checks.js';
-import type { ExecutionContext, StepResult, BreakpointHitInfo, ExecutionResult } from './replay-types.js';
+import type { ExecutionContext, StepResult, BreakpointHitInfo, ExecutionResult, InsidePosition, InsideMark } from './replay-types.js';
+import { insidePath } from './inside-position.js';
+export { insidePath } from './inside-position.js';
 import { countStepTraffic } from '../step-traffic.js';
 import { resolvePressHold } from '../press-hold.js';
 import {
@@ -164,6 +167,10 @@ export interface NestedRunResult {
   durationMs?: number;
   /** Where the nested sequence's steps differed from their own recording, labelled by path. */
   behaviourDrift?: ExecutionResult['behaviourDrift'];
+  /** The child stands paused: its next saved step, and the position inside it. */
+  resumeAt?: { step: number; inside?: InsidePosition };
+  /** The pause point inside the child that stopped it. */
+  insideMark?: InsideMark;
 }
 
 /**
@@ -184,7 +191,7 @@ async function prepareNestedSequence(
   ctx: ExecutionContext,
   label: string,
   logPrefix: string
-): Promise<{ filteredSequence: CommandSequence; filteredCommands: RecordedCommand[]; nestedConnection?: string }> {
+): Promise<{ runSequence: CommandSequence; filteredCommands: RecordedCommand[]; skipped: Set<number>; nestedConnection?: string }> {
   // The parent run's retarget reaches here first: a nested sequence loads from
   // the recorder in its recorded form, so its absolute URLs still carry the
   // recorded origin until this runs.
@@ -195,7 +202,16 @@ async function prepareNestedSequence(
     ? await probeLiveConnectionReferences(ctx.executeToolCall)
     : null;
   const keptLaunches: string[] = [];
-  const filteredCommands = sequence.commands.filter(cmd => {
+  // A dropped step is skipped where it stands, so every step of the child
+  // keeps its saved index: its History row, its pause point and a resume
+  // position all count the way the saved sequence does.
+  const skipped = new Set<number>();
+  const filteredCommands = sequence.commands.filter((cmd, index) => {
+    const keeps = keepsNestedStep(cmd);
+    if (!keeps) skipped.add(index);
+    return keeps;
+  });
+  function keepsNestedStep(cmd: RecordedCommand): boolean {
     if (!createsConnection(cmd)) return true;
 
     const name = createdName(cmd);
@@ -210,7 +226,7 @@ async function prepareNestedSequence(
     debugLog(logPrefix, `Keeping the ${cmd.params?.action} of "${resolved}" in nested sequence "${label}": no such connection in this session`);
     keptLaunches.push(resolved);
     return true;
-  });
+  }
 
   // A launch or attach we KEPT created a connection that only this
   // sub-sequence knows about, and `create` hoists a uniform connection OFF the
@@ -232,7 +248,54 @@ async function prepareNestedSequence(
     await debugLog(logPrefix, `Nested sequence "${label}" runs against the connection it created ("${nestedConnection}"), not the caller's "${ctx.connection}"`);
   }
 
-  return { filteredSequence: { ...sequence, commands: filteredCommands }, filteredCommands, nestedConnection };
+  return { runSequence: sequence, filteredCommands, skipped, ...(nestedConnection ? { nestedConnection } : {}) };
+}
+
+/** The reply line for a run standing inside step `at`: where the child stands, and what carries it on. */
+export function insideNote(at: number, inside: InsidePosition | undefined): string {
+  return inside ? `\n\n**Inside step ${at + 1}:** the run stands before ${insidePath(inside)}; \`run step\` runs that step, \`finish\` carries the run on from there.` : '';
+}
+
+/** The first step at or after `from` that runs: a skipped step is passed over, and the end of the steps ends it. */
+function nextRunStep(skip: ReadonlySet<number>, total: number, from: number): number {
+  let at = from;
+  while (at < total && skip.has(at)) at++;
+  return at;
+}
+
+/**
+ * A run carried on inside a child: the child's next step in its saved
+ * commands, the position inside that step, and how many of the innermost
+ * child's steps run before the run stands paused again; all of them when absent.
+ */
+export interface NestedResume {
+  step: number;
+  inside?: InsidePosition;
+  steps?: number;
+}
+
+/**
+ * The child's start and end for a resume: `steps` counts the steps that run,
+ * so a skipped launch takes no part of a `run step`.
+ */
+function nestedRange(skip: ReadonlySet<number>, total: number, resume?: NestedResume): { startStep: number; endStep?: number; pausesAtStart?: true; skipSteps?: ReadonlySet<number> } {
+  const skipping = skip.size ? { skipSteps: skip } : {};
+  if (!resume) return { startStep: 0, pausesAtStart: true, ...skipping };
+  const startStep = nextRunStep(skip, total, resume.step);
+  const count = resume.inside ? 1 : resume.steps;
+  if (count === undefined) return { startStep, ...skipping };
+  let endStep = startStep;
+  for (let ran = 0; ran < count && endStep < total; ran++) endStep = nextRunStep(skip, total, endStep + 1);
+  return { startStep, endStep: Math.min(endStep, total), ...skipping };
+}
+
+/** A child's stop, for the parent to store. */
+function nestedStop(result: ExecutionResult): Pick<NestedRunResult, 'resumeAt' | 'insideMark'> {
+  if (!result.resumeAt) return {};
+  return {
+    resumeAt: { step: result.resumeAt.step, ...(result.resumeAt.inside ? { inside: result.resumeAt.inside } : {}) },
+    ...(result.insideMark ? { insideMark: result.insideMark } : {}),
+  };
 }
 
 /**
@@ -245,7 +308,8 @@ export async function runBranch(
   ctx: ExecutionContext,
   recorder: CommandRecorder,
   budget?: { stepTimeout?: number; totalTimeout?: number },
-  abortSignal?: AbortSignal
+  abortSignal?: AbortSignal,
+  resume?: NestedResume
 ): Promise<NestedRunResult> {
   const { logPrefix = 'executor' } = ctx;
   const replayConfig = configManager.getReplayConfig();
@@ -267,18 +331,23 @@ export async function runBranch(
     return { success: false, executed: false, sequenceName, error: `Sequence "${sequenceName}" not found: ${loadResult.error}` };
   }
 
-  const { filteredSequence, nestedConnection, filteredCommands } =
+  const { runSequence, nestedConnection, filteredCommands, skipped } =
     await prepareNestedSequence(loadResult.sequence, ctx, sequenceName, logPrefix);
+  const ranCommands = runSequence.commands;
+  const range = nestedRange(skipped, ranCommands.length, resume);
 
-  await debugLog(logPrefix, `Executing nested sequence "${filteredSequence.name}" with ${filteredCommands.length} commands (depth: ${currentDepth + 1})`);
+  await debugLog(logPrefix, `Executing nested sequence "${runSequence.name}" with ${filteredCommands.length} commands (depth: ${currentDepth + 1})${resume ? ` from its step ${resume.step + 1}` : ''}`);
 
   // Execute the sequence with updated call stack and depth
   const execResult = await executeSteps({
-    sequence: filteredSequence,
-    startStep: 0,
+    sequence: runSequence,
+    ...range,
+    ...(resume?.inside ? { resumeInside: resume.inside } : {}),
+    ...(resume?.steps !== undefined ? { insideSteps: resume.steps } : {}),
     ctx: {
       ...ctx,
       ...(nestedConnection ? { connection: nestedConnection } : {}),
+      ...(ctx.rootConnection ?? ctx.connection ? { rootConnection: ctx.rootConnection ?? ctx.connection } : {}),
       nestingDepth: currentDepth + 1,
       nestingCallStack: [...callStack, sequenceName]
     },
@@ -288,6 +357,16 @@ export async function runBranch(
     ...(budget?.totalTimeout !== undefined ? { totalTimeout: budget.totalTimeout } : {}),
     abortSignal,
   });
+
+  const stop = nestedStop(execResult);
+  if (stop.resumeAt) {
+    return {
+      success: true, executed: true, sequenceName,
+      substeps: execResult.results, ranCommands, durationMs: execResult.durationMs,
+      ...(execResult.behaviourDrift ? { behaviourDrift: execResult.behaviourDrift } : {}),
+      ...stop,
+    };
+  }
 
   // Check for failures
   const failedStep = execResult.results.find(r => !r.success);
@@ -306,7 +385,7 @@ export async function runBranch(
       executed: true,
       sequenceName,
       substeps: execResult.results,
-      ranCommands: filteredCommands,
+      ranCommands,
       error,
       durationMs: execResult.durationMs,
       ...(execResult.behaviourDrift ? { behaviourDrift: execResult.behaviourDrift } : {}),
@@ -319,7 +398,7 @@ export async function runBranch(
     executed: true,
     sequenceName,
     substeps: execResult.results,
-    ranCommands: filteredCommands,
+    ranCommands,
     durationMs: execResult.durationMs,
     ...(execResult.behaviourDrift ? { behaviourDrift: execResult.behaviourDrift } : {}),
   };
@@ -371,6 +450,10 @@ export interface ForEachFlowResult {
   substeps?: StepResult[];
   error?: string;
   durationMs?: number;
+  /** The body stands paused: the item, the body's next saved step, and the position inside it. */
+  resumeAt?: { item: number; step: number; inside?: InsidePosition };
+  /** The pause point inside the body that stopped it. */
+  insideMark?: InsideMark;
 }
 
 /**
@@ -507,7 +590,9 @@ export async function executeForEachFlow(
   recorder: CommandRecorder,
   /** The parent's REMAINING budget - a loop must not extend the total. */
   budget?: { stepTimeout?: number; totalTimeout?: number },
-  abortSignal?: AbortSignal
+  abortSignal?: AbortSignal,
+  /** The item the body stood paused on, and where inside the body it carries on. */
+  resume?: NestedResume & { item: number }
 ): Promise<ForEachFlowResult> {
   const { logPrefix = 'executor' } = ctx;
   const replayConfig = configManager.getReplayConfig();
@@ -541,19 +626,19 @@ export async function executeForEachFlow(
       error: `Sequence "${sequenceName}" not found: ${loadResult.error}`,
     };
   }
-  const { filteredSequence, nestedConnection } =
+  const { runSequence, nestedConnection, skipped } =
     await prepareNestedSequence(loadResult.sequence, ctx, sequenceName, logPrefix);
+  const total = runSequence.commands.length;
   // A launch or attach the body kept creates its connection on the first
   // iteration; after that the name is live, and an attach again fails on it.
-  const laterSequence = {
-    ...filteredSequence,
-    commands: filteredSequence.commands.filter(cmd => !createsConnection(cmd)),
-  };
+  const laterSkipped = new Set(skipped);
+  runSequence.commands.forEach((cmd, index) => { if (createsConnection(cmd)) laterSkipped.add(index); });
 
   const substeps: StepResult[] = [];
   let iterations = 0;
 
-  for (let index = 0; index < itemsFound; index++) {
+  for (let index = resume?.item ?? 0; index < itemsFound; index++) {
+    const resumed = resume && index === resume.item ? resume : undefined;
     if (abortSignal?.aborted) {
       return {
         success: false, sequenceName, itemsFound, iterations, substeps,
@@ -567,7 +652,7 @@ export async function executeForEachFlow(
 
     const item = resolved.items[index];
 
-    if (params.where) {
+    if (params.where && !resumed) {
       const filtered = await evaluateForEachFilter(params.where, item, index, ctx);
       if (!filtered.ok) {
         return {
@@ -585,11 +670,14 @@ export async function executeForEachFlow(
 
     const elapsed = Date.now() - startedAt;
     const execResult = await executeSteps({
-      sequence: iterations === 1 ? filteredSequence : laterSequence,
-      startStep: 0,
+      sequence: runSequence,
+      ...nestedRange(iterations === 1 ? skipped : laterSkipped, total, resumed),
+      ...(resumed?.inside ? { resumeInside: resumed.inside } : {}),
+      ...(resumed?.steps !== undefined ? { insideSteps: resumed.steps } : {}),
       ctx: {
         ...ctx,
         ...(nestedConnection ? { connection: nestedConnection } : {}),
+        ...(ctx.rootConnection ?? ctx.connection ? { rootConnection: ctx.rootConnection ?? ctx.connection } : {}),
         nestingDepth: currentDepth + 1,
         nestingCallStack: [...callStack, sequenceName],
         trafficUncompared: true,
@@ -602,6 +690,15 @@ export async function executeForEachFlow(
     });
 
     substeps.push(...execResult.results);
+
+    const stop = nestedStop(execResult);
+    if (stop.resumeAt) {
+      return {
+        success: true, sequenceName, itemsFound, iterations, substeps, durationMs: Date.now() - startedAt,
+        resumeAt: { item: index, ...stop.resumeAt },
+        ...(stop.insideMark ? { insideMark: stop.insideMark } : {}),
+      };
+    }
 
     const failedStep = execResult.results.find(r => !r.success);
     if (failedStep) {
@@ -875,6 +972,18 @@ export interface ExecuteStepsOptions {
   heldStep?: { step: number; markedAt: number };
   /** Carries on a paused session (`step`, `finish`), whose abort leaves it paused rather than ended. */
   resumesSession?: boolean;
+  /** `startStep` runs a child sequence standing part-done: the child carries on from this position. */
+  resumeInside?: InsidePosition;
+  /** The innermost child's steps a resume inside a child runs before the run stands paused again; all when absent. */
+  insideSteps?: number;
+  /**
+   * A pause point on `startStep` stops the run there. A child started fresh
+   * stands paused inside its parent's step, which a resume carries on from;
+   * a run resumed at `startStep` has already stopped there once.
+   */
+  pausesAtStart?: boolean;
+  /** Steps of a child that stand in its saved numbering and do not run: a launch whose browser is live. */
+  skipSteps?: ReadonlySet<number>;
   /** What a pause at `endStep` holds on the page: every layer when absent, nothing for []. */
   holdWhilePaused?: HoldLayer[];
   /**
@@ -927,6 +1036,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
   // launch steps - that would point every launch at one reference and
   // collapse the very interleaving the sequence exists to reproduce (bug-018).
   const recordedConnections = analyzeRecordedStepConnections(commands);
+  const launchedNames = new Set(commands.filter(isLaunchStep).map(cmd => sanitizeReference(createdName(cmd) ?? '')));
 
   /** Recorded reference -> this session's reference. */
   const mapConnection = (ref: string): string =>
@@ -1127,6 +1237,29 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
   // A pause point saved before a step: the run stops there as at stepTo. The
   // step it resumes at is the one it stopped before, so it does not stop again.
   let pausedAtMark: number | undefined;
+  // A step that runs a child which stood paused part-way: the step stays
+  // unfinished, and the run carries the child on from `inside`.
+  const stoodInside: { stop?: { at: number; inside: InsidePosition; mark?: InsideMark } } = {};
+  const standInside = (i: number, tool: string, inside: InsidePosition, mark?: InsideMark, substeps?: StepResult[]) => {
+    stoodInside.stop = { at: i, inside, ...(mark ? { mark } : {}) };
+    if (abortSignal?.aborted) {
+      results.push({ step: i + 1, tool, success: false, sequenceName: inside.sequence, ...(substeps ? { substeps } : {}), error: 'Replay aborted by user' });
+    }
+  };
+  const resumeInside = options.resumeInside;
+  const nestedResume = (inside: InsidePosition): NestedResume => ({
+    step: inside.step,
+    ...(inside.inside ? { inside: inside.inside } : {}),
+    ...(options.insideSteps !== undefined ? { steps: options.insideSteps } : {}),
+  });
+  // A check's resumeAt moves the run forward only: at or before the check, it runs the check again, forever.
+  const checkJump = (resumeAt: unknown, i: number): { to: number } | { error: string } => {
+    const resume = Number(resumeAt);
+    if (!Number.isInteger(resume) || resume <= i || resume > targetEnd) {
+      return { error: `Check at step ${i + 1} cannot resume at ${resume}: resumeAt counts from 0 and must be after the check, ${i + 1} to ${targetEnd}, where ${targetEnd} ends the run.` };
+    }
+    return { to: resume };
+  };
   // A recorded delay is the time from one input to the next, start to start.
   // Waited in full after a step's own work, it adds that work to every gap:
   // a swipe recorded 16ms apart replayed 45-216ms apart. The wait is what
@@ -1135,10 +1268,11 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
 
   for (let i = startStep; i < targetEnd; i++) {
     const cmd = commands[i];
-    if (i > startStep && (cmd as { pauseBefore?: boolean }).pauseBefore && !ctx.stampUnder) {
+    if ((i > startStep || options.pausesAtStart) && (cmd as { pauseBefore?: boolean }).pauseBefore) {
       pausedAtMark = i;
       break;
     }
+    if (options.skipSteps?.has(i)) continue;
     if (i > startStep && ctx.connection && !ctx.stampUnder) {
       const moved = personInputSince(sanitizeReference(ctx.connection), personSince);
       personSince = Date.now();
@@ -1390,8 +1524,8 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
       // instruction and must win - otherwise the map renames the launch and this
       // silently renames it back, with the two writers disagreeing and no signal.
       if (isLaunchStep(cmd) && overrideConnectionReason) {
-        if (recordedConnections.multiConnection) {
-          debugLog(logPrefix, `Not overriding launched name "${params.connection}" with "${overrideConnectionReason}": sequence spans ${recordedConnections.references.length} connections`);
+        if (recordedConnections.multiConnection || launchedNames.size > 1) {
+          debugLog(logPrefix, `Not overriding launched name "${params.connection}" with "${overrideConnectionReason}": sequence spans ${Math.max(recordedConnections.references.length, launchedNames.size)} connections`);
         } else if (launchRenamedByMap) {
           debugLog(logPrefix, `Not overriding launched name "${params.connection}" with "${overrideConnectionReason}": connections mapping already rebound this launch`);
         } else {
@@ -1434,6 +1568,35 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
       // A check reads through the check tool; what it does on the answer is
       // the executor's, because stopping, carrying on and running another
       // sequence are all moves through the run.
+      const resuming = i === startStep ? resumeInside : undefined;
+      if (cmd.tool === 'check' && resuming?.branch) {
+        const action = (params as Record<string, unknown>)[resuming.branch] as Extract<CheckAction, { run: string }>;
+        const branch = await runBranch(
+          action.run, { ...stepCtx, variableStore, stampUnder: nestedUnder(i), rootSequence: ctx.rootSequence ?? sequence.name }, commandRecorder,
+          { stepTimeout, totalTimeout: Math.max(0, totalTimeout - (Date.now() - startTime)) }, abortSignal, nestedResume(resuming));
+        await markNextCommand(cursorAt(boundaryStep ?? i));
+        if (branch.behaviourDrift) nestedDrift.push(...branch.behaviourDrift);
+        if (branch.resumeAt) {
+          standInside(i, cmd.tool, { sequence: action.run, branch: resuming.branch, ...branch.resumeAt }, branch.insideMark, branch.substeps);
+          break;
+        }
+        results.push({
+          step: i + 1, tool: cmd.tool, success: branch.success,
+          sequenceName: action.run, substeps: branch.substeps, ranCommands: branch.ranCommands,
+          ...(branch.error ? { error: branch.error } : {}),
+        });
+        if (!branch.success) break;
+        if (action.resumeAt !== undefined) {
+          const jump = checkJump(action.resumeAt, i);
+          if ('error' in jump) {
+            results.push({ step: i + 1, tool: cmd.tool, success: false, error: jump.error });
+            break;
+          }
+          i = jump.to - 1;
+        }
+        continue;
+      }
+
       if (cmd.tool === 'check') {
         const { holds, fails } = params as { holds?: CheckAction; fails?: CheckAction };
         // Exempt from stepTimeout, as a wait is: its own withinMs bounds it,
@@ -1487,7 +1650,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
           return pausedAt({ results, totalCommands: commands.length, durationMs: Date.now() - startTime, breakpointHit: pausedHere }, i + 1, true);
         }
         const branch = await runBranch(
-          action.run, { ...stepCtx, variableStore, stampUnder: nestedUnder(i) }, commandRecorder,
+          action.run, { ...stepCtx, variableStore, stampUnder: nestedUnder(i), rootSequence: ctx.rootSequence ?? sequence.name }, commandRecorder,
           { stepTimeout, totalTimeout: Math.max(0, totalTimeout - (Date.now() - startTime)) }, abortSignal);
         await markNextCommand(cursorAt(boundaryStep ?? i));
         if (branch.behaviourDrift) nestedDrift.push(...branch.behaviourDrift);
@@ -1496,6 +1659,10 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
           ranSteps: ranStepsOf(branch.substeps ?? [], branch.ranCommands),
           ...(branch.error ? { error: branch.error } : {}),
         });
+        if (branch.resumeAt) {
+          standInside(i, cmd.tool, { sequence: action.run, branch: held ? 'holds' : 'fails', ...branch.resumeAt }, branch.insideMark, branch.substeps);
+          break;
+        }
         results.push({
           step: i + 1, tool: cmd.tool, success: branch.success, check,
           sequenceName: action.run, substeps: branch.substeps, ranCommands: branch.ranCommands,
@@ -1503,16 +1670,12 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
         });
         if (!branch.success) break;
         if (action.resumeAt !== undefined) {
-          const resume = Number(action.resumeAt);
-          // Forward only: resuming at or before this step runs it again, forever.
-          if (!Number.isInteger(resume) || resume <= i || resume > targetEnd) {
-            results.push({
-              step: i + 1, tool: cmd.tool, success: false,
-              error: `Check at step ${i + 1} cannot resume at ${resume}: resumeAt counts from 0 and must be after the check, ${i + 1} to ${targetEnd}, where ${targetEnd} ends the run.`,
-            });
+          const jump = checkJump(action.resumeAt, i);
+          if ('error' in jump) {
+            results.push({ step: i + 1, tool: cmd.tool, success: false, error: jump.error });
             break;
           }
-          i = resume - 1;
+          i = jump.to - 1;
         }
         continue;
       }
@@ -1536,12 +1699,19 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
 
         const loopResult = await executeForEachFlow(
           { in: params.in, as: params.as, do: params.do, where: params.where, maxItems: params.maxItems },
-          { ...stepCtx, variableStore, stampUnder: nestedUnder(i) },
+          { ...stepCtx, variableStore, stampUnder: nestedUnder(i), rootSequence: ctx.rootSequence ?? sequence.name },
           commandRecorder,
           // Remaining, not the original: looping must not extend the total.
           { stepTimeout, totalTimeout: Math.max(0, totalTimeout - (Date.now() - startTime)) },
-          abortSignal
+          abortSignal,
+          resuming?.item !== undefined ? { item: resuming.item, ...nestedResume(resuming) } : undefined
         );
+
+        if (loopResult.resumeAt) {
+          if (loopResult.iterations > 0) await markNextCommand(cursorAt(i));
+          standInside(i, cmd.tool, { sequence: String(params.do), ...loopResult.resumeAt }, loopResult.insideMark, loopResult.substeps);
+          break;
+        }
 
         results.push({
           step: i + 1,
@@ -1732,6 +1902,13 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
         if (launchMeta?.name && launchMeta.reused === false) {
           ctx.launchedConnections.add(launchMeta.name);
         }
+      }
+
+      // A browser this sequence launches joins the run's group, so a pause
+      // holding the group freezes every browser the steps drive.
+      if (isLaunchStep(cmd) && params.group === undefined) {
+        const launched = execResult.result?._meta?.launch?.name;
+        if (typeof launched === 'string') joinRunGroup(launched, (ctx.rootConnection ?? connection) ? sanitizeReference(ctx.rootConnection ?? connection) : undefined, runGroupName(ctx.rootSequence ?? sequence.name));
       }
 
       // Track breakpoints set by this sequence
@@ -1931,9 +2108,16 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
   // A paused session carried on by `step` or `finish` and cut short is a pause
   // wherever it stops: the session stays open on the step it cut short, where
   // a fresh run cancelled is over and runs its teardown.
+  const pausedInside = stoodInside.stop;
+  // A child cut short by an abort stands paused at the step it was cut on, for
+  // the parent to carry on from there; the parent's own abort decides whether
+  // the run is over.
   const isPaused = (stoppedShortOfEnd && (!anyFailed || abortSignal?.aborted === true))
     || (options.resumesSession === true && abortSignal?.aborted === true)
-    || pausedForPerson !== undefined || pausedAtMark !== undefined;
+    || (ctx.stampUnder !== undefined && abortSignal?.aborted === true)
+    || pausedForPerson !== undefined || pausedAtMark !== undefined || pausedInside !== undefined;
+  const next = pausedForPerson ?? pausedAtMark ?? pausedInside?.at
+    ?? (abortSignal?.aborted ? (results.at(-1)?.step ?? startStep + 1) - 1 : targetEnd);
 
   const teardownOutcome = isPaused
     ? undefined
@@ -1962,8 +2146,6 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
     await releaseWithGroup(sanitizeReference(ctx.connection), { by: { kind: 'run', run: proxyRun } }).catch(() => undefined);
   }
   if (stands && !ctx.stampUnder) {
-    const next = pausedForPerson ?? pausedAtMark
-      ?? (abortSignal?.aborted ? (results.at(-1)?.step ?? startStep + 1) - 1 : targetEnd);
     await standPausedRun({ ...cursorAt(next), paused: true });
   }
 
@@ -1973,21 +2155,30 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
   // by default. A refused click and an abort hold nothing: the repair reads
   // the live page, and an abort hands the page back to whoever stopped it.
   let pauseHeld: HoldLayer[] | undefined;
-  const stoppedAtEnd = (stoppedShortOfEnd || pausedAtMark !== undefined) && !anyFailed && pausedForPerson === undefined && !abortSignal?.aborted;
-  const markHolds = pausedAtMark !== undefined ? (commands[pausedAtMark] as { pauseHolds?: HoldLayer[] }).pauseHolds : undefined;
+  const stoppedAtEnd = (stoppedShortOfEnd || pausedAtMark !== undefined || pausedInside !== undefined) && !anyFailed && pausedForPerson === undefined && !abortSignal?.aborted;
+  const markOf = (at: number): InsideMark => {
+    const command = commands[at] as { pauseHolds?: HoldLayer[]; pauseNote?: string; pauseNotify?: true };
+    return {
+      ...(command.pauseHolds ? { holds: command.pauseHolds } : {}),
+      ...(command.pauseNote ? { note: command.pauseNote } : {}),
+      ...(command.pauseNotify ? { notify: true as const } : {}),
+    };
+  };
+  const mark = pausedAtMark !== undefined ? markOf(pausedAtMark) : pausedInside?.mark;
+  const markHolds = mark?.holds;
   const layers = pausedForPerson !== undefined ? undefined : stoppedAtEnd ? markHolds ?? options.holdWhilePaused : [];
   if (stands && (pausedForPerson !== undefined || stoppedAtEnd) && layers?.length !== 0 && ctx.connection && !ctx.stampUnder) {
     const reading = await holdWithGroup(sanitizeReference(ctx.connection), { owner: { kind: 'run-pause', run: proxyRun }, ...(layers ? { layers } : {}) }).catch(() => undefined);
     pauseHeld = reading?.held.filter(held => held.owners.some(owner => isRunOwn(owner, proxyRun, 'run-pause'))).map(held => held.layer);
   }
 
-  const marked = pausedAtMark !== undefined ? (commands[pausedAtMark] as { pauseNote?: string; pauseNotify?: true }) : undefined;
-  const pauseNote = marked?.pauseNote;
-  const pauseNotify = Boolean(marked?.pauseNotify || pauseNote);
+  const pauseNote = mark?.note;
+  const pauseNotify = Boolean(mark?.notify || pauseNote);
   if (pauseNotify && !ctx.stampUnder) {
     await appendEvent(resolveSessionName(), 'instruction', {
       sequence: sequence.name,
-      step: pausedAtMark! + 1,
+      step: next + 1,
+      ...(pausedInside ? { inside: insidePath(pausedInside.inside) } : {}),
       ...(pauseNote ? { note: pauseNote } : {}),
       resolve: "run({ action: 'finish' })",
     });
@@ -2010,6 +2201,9 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
     ...(pauseHeld?.length ? { pauseHeld } : {}),
     ...(heldStep ? { heldStep } : {}),
     ...(pausedAtMark !== undefined ? { pausedAtMark } : {}),
+    ...(pausedInside && !abortSignal?.aborted ? { pausedAtMark: pausedInside.at } : {}),
+    ...(isPaused ? { resumeAt: { step: next, ...(pausedInside ? { inside: pausedInside.inside } : {}) } } : {}),
+    ...(mark && (pausedAtMark !== undefined || pausedInside?.mark) ? { insideMark: mark } : {}),
     ...(pauseNotify ? { pauseNotify: true as const } : {}),
     ...(pauseNote ? { pauseNote } : {}),
     ...(personLanded.length ? {
@@ -2267,6 +2461,8 @@ export async function executeSequenceWithPause(
       ...(ctx.connectionMap && { connectionMap: ctx.connectionMap }),
       ...(ctx.runEnv && { runEnv: ctx.runEnv, runEnvFile: ctx.runEnvFile }),
       ...(ctx.runOrigin && { runOrigin: ctx.runOrigin }),
+      ...(result.resumeAt?.inside ? { inside: result.resumeAt.inside } : {}),
+      ...(result.resumeAt?.inside && result.insideMark ? { insidePause: result.insideMark } : {}),
     };
     return result;
   }

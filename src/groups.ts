@@ -38,6 +38,30 @@ export function joinGroup(group: string, connection: string): void {
   ensure(group).add(connection);
 }
 
+/**
+ * The group a sequence's launches join when its run connection has none: the
+ * sequence name up to 20 characters, its initials past that, so the name fits
+ * the bench's group column.
+ */
+export function runGroupName(sequence: string): string {
+  if (sequence.length <= 20) return sequence;
+  const words = sequence.split(/[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])/).filter(Boolean);
+  return words.map(word => word[0]!.toLowerCase()).join('') || sequence.slice(0, 20);
+}
+
+/**
+ * Puts a browser a sequence launched in the group of the run's own connection,
+ * so a pause holding that group reaches it. With the run's connection in no
+ * group, both join a group named `fallback`. A launched browser already in a
+ * group stays there: it came from a launch that named one, or a reused browser.
+ */
+export function joinRunGroup(launched: string, runConnection: string | undefined, fallback: string): void {
+  if (groupOf(launched) !== undefined) return;
+  const target = (runConnection && groupOf(runConnection)) || fallback;
+  if (runConnection && groupOf(runConnection) === undefined) ensure(target).add(runConnection);
+  ensure(target).add(launched);
+}
+
 export function leaveGroup(connection: string): void {
   for (const members of groups.values()) members.delete(connection);
 }

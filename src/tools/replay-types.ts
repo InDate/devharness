@@ -35,6 +35,15 @@ export interface ExecutionContext {
    */
   connectionMap?: Record<string, string>;
   /**
+   * The top-level run's own connection, carried into every sequence it runs.
+   * A child's steps move to a browser the child launched, and the browsers
+   * that child launches join this one's group, so a pause holding the run's
+   * group reaches them.
+   */
+  rootConnection?: string;
+  /** The top-level sequence's name: the group a run's launches join is named after it. */
+  rootSequence?: string;
+  /**
    * References this run CAUSED to be launched, filled in as `connection launch`
    * steps succeed with `reused: false`. Shared by reference with per-step ctx
    * clones and nested sequences, so ownership survives every early return the
@@ -134,7 +143,40 @@ export interface ClickValidationFailure {
   repair?: ElementRepair;
 }
 
+/**
+ * Where a run stands inside the step that runs another sequence: a check's
+ * `run` or a forEach's `do`. Steps count from 0 in the child's saved
+ * commands, so a launch the child drops once its browser is live shifts no
+ * position.
+ */
+export interface InsidePosition {
+  /** The child sequence that step runs. */
+  sequence: string;
+  /** The child's next step. */
+  step: number;
+  /** A check: the action whose `run` started the child, so a resume runs it without reading the check again. */
+  branch?: 'holds' | 'fails';
+  /** A forEach: the item the body stood on. */
+  item?: number;
+  /** The child's step `step` itself runs a sequence and stands part-done. */
+  inside?: InsidePosition;
+}
+
+/** The pause point inside a child that stopped the run: what it holds and tells the session. */
+export interface InsideMark {
+  holds?: HoldLayer[];
+  note?: string;
+  notify?: true;
+}
+
 export interface ExecutionResult {
+  /**
+   * Where a paused run carries on: its next step, and the position inside
+   * that step when the step runs a child that stands part-done.
+   */
+  resumeAt?: { step: number; inside?: InsidePosition };
+  /** The pause point inside a child that stopped the run there. */
+  insideMark?: InsideMark;
   results: StepResult[];
   totalCommands: number;
   durationMs: number;

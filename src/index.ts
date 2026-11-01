@@ -98,7 +98,7 @@ import { observes } from './observing-tools.js';
  */
 const RECORDED_REPLAY_ACTIONS = new Set([
   'run', 'runAll', 'step', 'finish', 'cancel', 'recordInteraction', 'runFromLog',
-  'create', 'insert', 'addCheck', 'declare', 'repair', 'copy', 'split', 'adopt',
+  'create', 'insert', 'addCheck', 'declare', 'repair', 'copy', 'clone', 'split', 'adopt',
   'export', 'load', 'delete', 'deleteSaved',
 ]);
 

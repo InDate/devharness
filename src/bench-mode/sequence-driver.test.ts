@@ -13,7 +13,7 @@ import { ToolError } from '../tool-error.js';
  * browser's steps - its logins, its cookies - to the wrong page (#105).
  */
 
-function driverHolding(commands: Array<{ tool: string; params: Record<string, any> }>, extra: Record<string, any> = {}) {
+function driverHolding(commands: Array<{ tool: string; params: Record<string, any> }>, extra: Record<string, any> = {}, children: Array<Record<string, any>> = []) {
   const sequence = { id: 's', name: 'walk', commands, ...extra };
   const runs: Array<Record<string, any>> = [];
   const navigations: Array<Record<string, any>> = [];
@@ -21,7 +21,7 @@ function driverHolding(commands: Array<{ tool: string; params: Record<string, an
     getActiveSequence: () => null,
     findMatchingFilename: async () => null,
     getSequence: (id: string) => (id === 's' ? sequence : undefined),
-    listSequences: () => [sequence],
+    listSequences: () => [sequence, ...children],
     listSavedSequencesOnDisk: async () => [],
   } as any;
   const driver = createSequenceDriver(recorder, async (tool: string, params: Record<string, any>) => {
@@ -83,6 +83,22 @@ describe('the connections a bench play binds', () => {
     await driver.start('walk', 'chat-person-one');
 
     expect(navigations).toEqual([]);
+  });
+
+  it('leaves a browser bound to itself where a child the sequence runs launches it', async () => {
+    const { driver, runs } = driverHolding(
+      [
+        { tool: 'check', params: { afterMs: 0, holds: { run: 'opens-second-browser' } } },
+        { tool: 'input', params: { action: 'click', selector: '#there', connection: 'second-test-browser' } },
+      ],
+      {},
+      [{ id: 'c', name: 'opens-second-browser', commands: [{ tool: 'connection', params: { action: 'launch', connection: 'second-test-browser', forceNewInstance: true } }] }],
+    );
+
+    await driver.start('walk', 'bench-tab');
+    await driver.finish();
+
+    expect(runs[0].connections).toBeUndefined();
   });
 
   it('rebinds a one-browser sequence recorded elsewhere onto the bench tab', async () => {

@@ -2,7 +2,7 @@
  * Running a sequence: `run` in the background or blocking, `runAll` over a
  * folder or tag, and the run itself from connection setup to its result.
  */
-import type { CommandRecorder, ActiveSequenceState, CommandSequence } from '../command-recorder.js';
+import type { CommandRecorder, ActiveSequenceState, CommandSequence, RecordedCommand } from '../command-recorder.js';
 import type { ExecuteToolCall } from '../types.js';
 import { createSuccessResponse, createErrorResponse, withOnce, getMessage } from '../messages.js';
 import { showReplayOverlay } from '../interaction-recorder.js';
@@ -22,8 +22,8 @@ import {
   checkIfPaused,
   analyzeRecordedStepConnections,
   sanitizeConnectionMap,
-  type ExecutionContext, connectionsOf } from './replay-executor.js';
-import { addressedConnection, createdName } from './connection-steps.js';
+  type ExecutionContext, connectionsOf, insideNote } from './replay-executor.js';
+import { addressedConnection, createdName, isLaunchStep } from './connection-steps.js';
 import { openReplayCursor, type ReplayCursor } from '../replay-cursor.js';
 import { sequenceNeedsProxy } from './replay-connections.js';
 import { getProxy } from '../proxy/registry.js';
@@ -170,6 +170,33 @@ function inlineRefusal(args: ReplayArgs): any | undefined {
     });
   }
   return undefined;
+}
+
+/** The sequences a step runs inside itself: a check's `run`, a forEach's `do`. */
+function childrenOf(commands: RecordedCommand[]): string[] {
+  return commands.flatMap(command => {
+    const params = (command.params ?? {}) as Record<string, any>;
+    if (command.tool === 'check') return [params.holds?.run, params.fails?.run];
+    if (command.tool === 'forEach') return [params.do];
+    return [];
+  }).filter((child): child is string => typeof child === 'string' && child.length > 0);
+}
+
+/** The browsers the sequences these steps run launch, through every depth of nesting. */
+async function childLaunches(commands: RecordedCommand[], recorder: CommandRecorder, seen = new Set<string>()): Promise<Set<string>> {
+  const launched = new Set<string>();
+  for (const name of childrenOf(commands)) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    const loaded = await loadSequence({ name }, recorder);
+    if (!loaded.success) continue;
+    for (const command of loaded.sequence.commands) {
+      const created = isLaunchStep(command) ? createdName(command) : undefined;
+      if (created) launched.add(sanitizeReference(created));
+    }
+    for (const inner of await childLaunches(loaded.sequence.commands, recorder, seen)) launched.add(inner);
+  }
+  return launched;
 }
 
 export async function handleRun(
@@ -378,13 +405,17 @@ export async function handleRun(
   if (args.connection) {
     const runRef = sanitizeReference(args.connection);
     const recorded = analyzeRecordedStepConnections(commands);
-    const unreached = recorded.uniform !== undefined &&
+    const candidate = recorded.uniform !== undefined &&
       !recorded.mixed &&
       !hasTemplateToken(recorded.uniform) &&
       recorded.uniform !== runRef &&
       !connectionMap?.[recorded.uniform]
       ? recorded.uniform
       : undefined;
+    // A browser a child sequence launches is the run's own: the steps naming
+    // it drive the browser the run opened, and the child's bare steps take the
+    // run-level connection.
+    const unreached = candidate && !(await childLaunches(commands, recorder)).has(candidate) ? candidate : undefined;
     if (unreached) {
       const steps = commands
         .map((c, i) => sanitizeReference(addressedConnection(c) ?? '') === unreached ? i + 1 : 0)
@@ -1050,7 +1081,7 @@ export async function performRun(
   }
 
   // Handle paused state (stepTo, or a person's input)
-  if (execResult.pausedAtStep && execResult.activeSequenceState) {
+  if (execResult.pausedAtStep !== undefined && execResult.activeSequenceState) {
     recorder.setActiveSequence({
       ...execResult.activeSequenceState, runId, runSince: since,
       ...(execResult.pauseHeld ? { pauseHeld: execResult.pauseHeld } : {}),
@@ -1067,7 +1098,8 @@ export async function performRun(
       })
       : formatPausedResponse(sequence, execResult.results, execResult.pausedAtStep, execResult.durationMs)
         + (execResult.pauseHeld?.length ? `\n\n**Held while paused:** the page's ${execResult.pauseHeld.join(', ')}; \`step\`, \`finish\` or \`cancel\` releases it.` : '')
-        + formatPauseNote(execResult.pausedAtStep + 1, execResult.pauseNote, execResult.pauseNotify);
+        + formatPauseNote(execResult.pausedAtStep + 1, execResult.pauseNote, execResult.pauseNotify)
+        + insideNote(execResult.pausedAtStep, execResult.activeSequenceState.inside);
     return { outcome: 'paused', results: execResult.results, response: { content: [{ type: 'text', text }],
       _meta: pausedMeta('run', recorder, { failedSteps: execResult.results.filter(r => !r.success).length })
     } };

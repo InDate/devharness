@@ -162,7 +162,7 @@ const connectionSchema = z.object({
   proxy: z.boolean().optional().describe('launch: route this browser through an intercepting proxy, so a response or socket frame can be held and served in its place (default: false)'),
   chromeArgs: z.array(z.string()).optional().describe('launch: extra Chrome command-line flags, merged after the managed defaults'),
   watchInput: z.boolean().optional().describe('launch: record a person\'s clicks and typing in this browser into History and onto the next reply, as the bench\'s RECORD MY INPUT does (default: replay.watchPersonInput)'),
-  group: z.string().min(1).optional().describe('launch: the group this browser joins, created if absent'),
+  group: z.union([z.string().min(1), z.literal(false)]).optional().describe('launch: the group this browser joins, created if absent; inside a sequence, absent joins the run\'s group and false joins none'),
 }).strict();
 
 type ConnectionArgs = z.infer<typeof connectionSchema>;
@@ -258,7 +258,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
     try {
       const response = await launchHolding(args, held);
       const name = response?._meta?.launch?.name;
-      if (args.group && !response?.isError && typeof name === 'string') joinGroup(args.group, name);
+      if (typeof args.group === 'string' && !response?.isError && typeof name === 'string') joinGroup(args.group, name);
       return response;
     } finally {
       for (const port of held) launchingPorts.delete(port);

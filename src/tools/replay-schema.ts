@@ -9,7 +9,7 @@ const replayArgsSchema = z.object({
   action: z.enum([
     'history', 'create', 'list', 'get', 'delete',
     'export', 'load', 'listSaved', 'deleteSaved',
-    'run', 'runAll', 'step', 'finish', 'insert', 'addCheck', 'declare', 'pause', 'repair', 'copy', 'split', 'adopt', 'search', 'status', 'cancel',
+    'run', 'runAll', 'step', 'finish', 'insert', 'addCheck', 'declare', 'pause', 'repair', 'copy', 'clone', 'split', 'adopt', 'search', 'status', 'cancel',
     'repeat', 'runFromLog',
     'recordInteraction'
   ]),
@@ -179,7 +179,7 @@ const RUN_ONLY_FIELDS = {
 export const replaySchema = replayArgsSchema.omit(RUN_ONLY_FIELDS).extend({
   action: z.enum([
     'history', 'create', 'list', 'get', 'delete', 'export', 'load', 'listSaved', 'deleteSaved',
-    'insert', 'addCheck', 'declare', 'pause', 'repair', 'copy', 'split', 'adopt', 'search', 'recordInteraction',
+    'insert', 'addCheck', 'declare', 'pause', 'repair', 'copy', 'clone', 'split', 'adopt', 'search', 'recordInteraction',
   ]),
 }).strict();
 

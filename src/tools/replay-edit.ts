@@ -444,6 +444,52 @@ export async function handleCopy(args: ReplayArgs, recorder: CommandRecorder) {
 }
 
 /**
+ * A new sequence owning a copy of every step of `name`, with their stored
+ * traffic, fingerprints and pause points, its declarations and its teardown.
+ * It stands on its own afterwards: an edit to either reaches only that one.
+ */
+export async function handleClone(args: ReplayArgs, recorder: CommandRecorder) {
+  const loadResult = await loadSequence({ name: args.name, sequenceId: args.sequenceId }, recorder);
+  if (!loadResult.success) return handleLoadSequenceError(loadResult, 'clone');
+  const sequence = loadResult.sequence;
+  if (!args.newName) {
+    return createErrorResponse('MISSING_PARAMETER', { action: 'clone', missing: 'newName', message: 'The "clone" action needs "newName", the name of the new sequence.' });
+  }
+  if (args.newName === sequence.name) {
+    return createErrorResponse('INVALID_PARAMETER', { parameter: 'newName', value: args.newName, message: 'A clone takes a name of its own: under the same name it replaces the sequence it copies.' });
+  }
+  if (!args.overwrite && await nameTaken(recorder, args.newName)) {
+    return createErrorResponse('INVALID_PARAMETER', {
+      parameter: 'newName', value: args.newName, message: `A sequence named "${args.newName}" exists. Pass overwrite: true to replace it, or choose another name.`,
+    });
+  }
+
+  const steps: RecordedCommand[] = JSON.parse(JSON.stringify(sequence.commands));
+  const clone = await recorder.createSequenceFromCommands(args.newName, steps, {
+    ...(sequence.description ? { description: sequence.description } : {}),
+    startUrl: sequence.startUrl,
+  });
+  Object.assign(clone, declarationsOf(sequence), stepFieldsOf(sequence, old => old));
+  const source = sequence as any;
+  if (source.expectedOutcome !== undefined) (clone as any).expectedOutcome = source.expectedOutcome;
+  if (source.shapesUnmeasured !== undefined) (clone as any).shapesUnmeasured = [...source.shapesUnmeasured];
+  if (sequence.teardown?.length) clone.teardown = JSON.parse(JSON.stringify(sequence.teardown));
+
+  const written = await saveBeside(recorder, clone.id, sequence.name);
+  if (typeof written === 'object') {
+    return { content: [{ type: 'text', text: `## Error\n\n"${clone.name}" was made in memory, but writing the file failed: ${written.error}` }], isError: true };
+  }
+  return {
+    content: [{
+      type: 'text',
+      text: `**Cloned** "${sequence.name}" into "${clone.name}" (${steps.length} steps${sequence.teardown?.length ? `, ${sequence.teardown.length} teardown` : ''}).\n`
+        + (written ? `Written to \`${written}\`.\n` : `In memory; \`export\` writes it to a file.\n`)
+        + `\nThe two stand apart: an edit to one reaches only that one.`,
+    }],
+  };
+}
+
+/**
  * The refusal for a cut whose first `through` steps cannot run inside another
  * sequence, or undefined. A launch inside a nested sequence is skipped where
  * its browser exists and run where it does not, which splits the run across

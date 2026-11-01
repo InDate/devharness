@@ -19,6 +19,7 @@ import { foreignTo, linesOf, observationsOf, type Observation, type ObservationL
 import { CARRIER } from '../write-watch.js';
 import { describeCall, readingConnection } from './history-activity.js';
 import { whenSettled } from '../root-credit.js';
+import { insidePath } from './inside-position.js';
 
 export interface RunReplyInput {
   name: string;
@@ -40,6 +41,13 @@ export interface RunReplyInput {
   person?: ExecutionResult['personInput'];
   /** false for a play that takes the baseline: compared with the one it replaces, every change would read as a mismatch. */
   compare?: boolean;
+  /**
+   * The run stands inside a step that runs a child sequence: the 0-based step,
+   * and where in the child it carries on. That step's row reads its check, and
+   * the step itself has not finished. Absent, a paused run of `name` the
+   * recorder holds supplies it.
+   */
+  inside?: { step: number; path: string };
 }
 
 /**
@@ -277,13 +285,16 @@ export async function settleArriving(recorder: CommandRecorder, name: string, si
 export function formatRunReply(recorder: CommandRecorder, input: RunReplyInput): string {
   const rows = rowsOf(recorder, input.name, input.since)
     .map(row => (input.compare === false ? { ...row, match: undefined } : row));
-  const own =rows.filter(row => !row.label.includes('.'));
-  const reached = own.reduce((most, row) => Math.max(most, row.step), 0);
+  const own = rows.filter(row => !row.label.includes('.'));
+  const active = input.paused ? recorder.getActiveSequence?.() : undefined;
+  const inside = input.inside
+    ?? (active?.sequenceName === input.name && active.inside ? { step: active.currentStep, path: insidePath(active.inside) } : undefined);
+  const reached = inside ? inside.step : own.reduce((most, row) => Math.max(most, row.step), 0);
   const failedRow = rows.find(row => row.outcome === 'failed');
   // A step that failed before its call was recorded has no row; its reason comes from the executor alone.
   const unrecorded = [...(input.failures ?? [])].filter(([step]) => !own.some(row => row.step === step));
   const failedAt = failedRow?.step ?? unrecorded[0]?.[0];
-  const passed = own.filter(row => row.outcome === 'passed').length;
+  const passed = own.filter(row => row.outcome === 'passed' && row.step !== (inside ? inside.step + 1 : undefined)).length;
   const continued = own.filter(row => row.outcome === 'continued').length;
   const mismatches = rows.filter(mismatched).length;
   const arrivingSteps = rows.filter(stillArriving).length;
@@ -293,6 +304,7 @@ export function formatRunReply(recorder: CommandRecorder, input: RunReplyInput):
   const head = failedAt !== undefined
     ? `${input.name} failed at step ${failedAt} of ${input.total}`
     : left === 0 ? `${input.name} completed ${reached} of ${input.total}`
+    : input.paused && inside ? `${input.name} paused inside step ${reached + 1} of ${input.total} · ${inside.path} runs next`
     : input.paused ? `${input.name} paused · step ${reached + 1} of ${input.total} runs next`
     : `${input.name} stopped at step ${reached} of ${input.total}`;
   const tally = [

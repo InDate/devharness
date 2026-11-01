@@ -168,6 +168,16 @@ are kept in that step's traffic on the file. IndexedDB names the database and
 store, not the value; cookies are compared twice a second, so one set and
 cleared inside that window is not seen.
 
+A MOTION row a recording took from an Animation object is compared on where
+its property came to rest and on which runs it made, each by target and, from
+rest, by length: `ends at 0.5, recorded 1`, `no run to auto over 300ms`. How
+many runs there are, which cut which short and the stop rows that leaves all
+follow the gap between inputs, so they are shown and not compared. A run cut
+short is matched by its target alone, and a run the play lacks where the
+property already stood at its target is not missing. A recording taken before
+this, and motion measured from frames, compare by count; recording the
+sequence again moves it onto the new comparison.
+
 A sequence's actions are in `sequences/<name>.json`; what the app did under
 each step, the saved responses and the traffic names are in
 `activity/<name>.json`, read and written with it. A site's responses are in

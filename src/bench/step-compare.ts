@@ -8,7 +8,7 @@
  */
 import type { BoundaryEvent, HiddenKind } from './wire.js';
 import {
-  countKinds, ignoreCoversKind, ignoreMatches, kindOf, sizeBand, verdictOf,
+  countKinds, ignoreCoversKind, ignoreMatches, kindOf, sizeBand, stopFollowsTiming, verdictOf,
   type Crossed, type ExpectedValue, type KindCount, type Verdict,
 } from './kinds.js';
 
@@ -152,7 +152,7 @@ export function compareStep<T extends Crossing>(input: {
   }
   const kinds = [...newest].map(([kind, event]) => {
     const recorded = input.recorded[kind];
-    const read = verdictOf(recorded, observed[kind] ?? { n: 0 }, input.bodyOf(event), input.expected?.[kind], event.kind === 'write', crossedOf(event));
+    const read = stopFollowsTiming(kind, input.recorded) ? { verdict: 'match' as const, reasons: [] } : verdictOf(recorded, observed[kind] ?? { n: 0 }, input.bodyOf(event), input.expected?.[kind], event.kind === 'write', crossedOf(event));
     return {
       kind, event, reasons: read?.reasons ?? [],
       ...(recorded ? { recorded } : {}),
@@ -160,7 +160,8 @@ export function compareStep<T extends Crossing>(input: {
     };
   });
   const missing = Object.entries(input.recorded)
-    .filter(([kind]) => !observed[kind] && !input.unwatched?.(kind) && !input.ignores.some(rule => ignoreCoversKind(rule, kind, input.step)))
+    .filter(([kind]) => !observed[kind] && !input.unwatched?.(kind) && !stopFollowsTiming(kind, input.recorded)
+      && !input.ignores.some(rule => ignoreCoversKind(rule, kind, input.step)))
     .map(([kind, recorded]) => ({ kind, recorded }));
   return { kinds, missing };
 }

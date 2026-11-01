@@ -204,10 +204,24 @@ export interface KindCount {
   band?: string;
   /** A motion of this kind started over one still running on its element and property, from where that one stood. */
   cuts?: true;
+  /**
+   * A motion kind's runs, each by where it was headed and, for one that
+   * started from rest, how long it ran; and where the kind's property came to
+   * rest. A play of a kind recorded with these is judged on them and not on
+   * its count: how many runs there are, which cut which short and where a cut
+   * one starts all follow the gap between inputs. Keys c then v 50ms apart
+   * cut c's dim and turned it back over 174ms; 600ms apart, the dim ran out
+   * and the turn-back ran 200ms, both ending at opacity 1.
+   */
+  runs?: MotionRun[];
+  settled?: string;
 }
 
+/** One run of a motion kind: its target value, and its length where it started from rest, absent where it cut another short. */
+export interface MotionRun { to?: string; ms?: number }
+
 type Countable = Pick<BoundaryEvent, 'kind' | 'url' | 'direction'>
-  & Partial<Pick<BoundaryEvent, 'method' | 'preview' | 'status' | 'answeredAs' | 'trigger' | 'cuts'>>;
+  & Partial<Pick<BoundaryEvent, 'method' | 'preview' | 'status' | 'answeredAs' | 'trigger' | 'cuts' | 'motionTo' | 'motionMs' | 'settled'>>;
 
 /** Causes on a clock of their own, as a motion's trigger names them: what they start runs as many times as that clock ticks. */
 const PACED_CAUSE = /^(after )?(reply|push|timer) |^browser$/;
@@ -231,6 +245,12 @@ export function countKinds(events: Countable[]): Record<string, KindCount> {
     if (event.kind === 'frame' && event.direction === 'in') held.presence = true;
     if (event.kind === 'write' && pacedBy(event.trigger)) held.presence = true;
     if (event.kind === 'write' && event.cuts) held.cuts = true;
+    if (event.kind === 'write' && event.motionMs !== undefined && !kind.endsWith(STOPPED)) {
+      const run: MotionRun = { ...(event.motionTo !== undefined ? { to: event.motionTo } : {}), ...(event.cuts ? {} : { ms: event.motionMs }) };
+      const runs = held.runs ??= [];
+      if (!runs.some(one => one.to === run.to && one.ms === run.ms)) runs.push(run);
+      if (event.settled !== undefined) held.settled = event.settled;
+    }
     if (event.kind === 'request' && event.status !== undefined && event.answeredAs !== 'replaced') {
       const statuses = held.statuses ??= [];
       if (!statuses.includes(event.status)) statuses.push(event.status);
@@ -273,6 +293,44 @@ export function compareKinds(recorded: Record<string, KindCount>, observed: Reco
 /** The motion a kind is a row of: a stop row's motion, else the kind itself. */
 const motionKind = (kind: string) => (kind.endsWith(STOPPED) ? kind.slice(0, -STOPPED.length) : kind);
 
+/** Whether `kind` is the stop row of a motion kind the recording holds by its runs: which runs stop follows timing, so its rows are shown and not judged. */
+export function stopFollowsTiming(kind: string, recorded: Record<string, KindCount>): boolean {
+  return kind.endsWith(STOPPED) && recorded[motionKind(kind)]?.runs !== undefined;
+}
+
+const runWords = (run: MotionRun) => [run.to !== undefined ? `to ${run.to}` : undefined, run.ms !== undefined ? `over ${run.ms}ms` : undefined].filter(Boolean).join(' ');
+
+/**
+ * A motion kind recorded by its runs, against a play's: where the property
+ * came to rest, and each run that started from rest found on the other side
+ * by target and length. A run cut short on either side is found by its
+ * target alone, its length set by where the cut found it. A recorded run the play lacks is
+ * missing only where the property did not already stand at its target: a
+ * FAQ closed and opened again 50ms later starts no content-visibility run
+ * back to visible, standing there already. Both sides' rest values are read
+ * at the step's settle; a play whose value is not read yet is judged on its
+ * runs.
+ */
+function runsVerdict(recorded: KindCount, observed: KindCount): { verdict: Verdict; reasons: string[] } {
+  const was = recorded.runs ?? [];
+  const now = observed.runs ?? [];
+  const reasons: string[] = [];
+  if (recorded.settled !== undefined && observed.settled !== undefined && observed.settled !== recorded.settled) {
+    reasons.push(`ends at ${observed.settled}, recorded ${recorded.settled}`);
+  }
+  for (const run of was) {
+    if (run.ms === undefined) continue;
+    if (now.some(one => one.to === run.to && (one.ms === run.ms || one.ms === undefined))) continue;
+    if (run.to !== undefined && observed.settled === run.to) continue;
+    reasons.push(`no run ${runWords(run)}`);
+  }
+  for (const run of now) {
+    if (was.some(one => one.to === run.to && (run.ms === undefined || one.ms === undefined || one.ms === run.ms))) continue;
+    reasons.push(`runs ${runWords(run)}, not recorded`);
+  }
+  return { verdict: reasons.length ? 'mismatch' : 'match', reasons };
+}
+
 /** A motion one side of a pass cut short and the other did not: the 0-based step that cut it, and the side. */
 export interface Race { step: number; side: 'recording' | 'play' }
 
@@ -294,8 +352,12 @@ export function racesOf(recorded: Array<Record<string, KindCount> | undefined>, 
     });
     return cut;
   };
+  // A kind the recording holds by its runs is judged on where it came to
+  // rest, and a cut on one side alone changes no verdict of it.
+  const byRuns = new Set(recorded.flatMap(kinds => Object.entries(kinds ?? {}).filter(([, count]) => count.runs).map(([kind]) => kind)));
   const was = cutIn(recorded);
   const now = cutIn(ran.map(events => (events ? countKinds(events) : undefined)));
+  for (const kind of byRuns) { was.delete(kind); now.delete(kind); }
   const races = new Map<string, Race>();
   for (const [kind, step] of was) if (!now.has(kind)) races.set(kind, { step, side: 'recording' });
   for (const [kind, step] of now) if (!was.has(kind)) races.set(kind, { step, side: 'play' });
@@ -478,6 +540,7 @@ export function verdictOf(
   crossed: Crossed = {},
 ): { verdict: Verdict; reasons: string[] } | undefined {
   if (!recorded) return { verdict: 'unexpected', reasons: [] };
+  if (recorded.runs) return runsVerdict(recorded, observed);
   // A pushed kind arrives on the server's schedule, so its count and status
   // say nothing; it is judged on arriving, and on ticked fields where some are.
   if (recorded.presence && !marksFields(mark)) return { verdict: 'match', reasons: [] };

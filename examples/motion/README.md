@@ -20,6 +20,10 @@ Keys 1 to 4 press the four controls, so a sequence drives them with `input press
 | 3 | Folders | The panel animates `width` along with `transform`, which lays the page out on every frame. Of the five folder items, the third eases in where the others ease out, and the fifth starts at 260ms where the stagger puts it at 160ms. | Group timeline of the 13 animations the press starts. |
 | 4 | Remove | `.row.removing` sets `transition: none`, so the row's height, margin and opacity change with no animation and the row snaps out. | The step changes styles and starts no animation. |
 
+## Broken catalog
+
+`catalog-broken.html` is `catalog.html` with four faults a comparison against a clean recording has to find: the Notifications switch comes to rest at 12px where it stood at 20px (`w`), the FAQ opens over 900ms where it took 300ms (`9`), Settings opens and closes with no transition (`7`), and Premium's shine plays three times over (`0`). The last one ends where a single shine ends, which a comparison on where motion comes to rest does not catch.
+
 ## Catalog page
 
 `catalog.html` holds the range of motion a real site carries, so a model of motion is tested against more than CSS transitions started by a press. Each row pairs a driver with a mechanism. Rows marked clean carry no fault, so a detector that flags them has a false positive.

@@ -108,6 +108,12 @@ function saved(all: Taken[], startedAt: number, cap: number): SavedObservation[]
   }));
 }
 
+// A motion's length and target are its own where an Animation object
+// declares them. One measured from frames is still moving while its frames
+// arrive, and its length counts frames, which vary from run to run.
+const DECLARED = new Set(['CSSTransition', 'CSSAnimation', 'WebAnimation']);
+const declared = (write: PageWrite): boolean => !!write.motion && write.operation !== 'stopped' && DECLARED.has(write.motion.type);
+
 /** A page write as a row and a comparison read it, stamped with the step its cursor names. */
 export function writeCrossing(write: PageWrite): BoundaryEvent {
   const row = {
@@ -118,6 +124,8 @@ export function writeCrossing(write: PageWrite): BoundaryEvent {
     ...(write.motion?.id !== undefined && write.operation !== 'stopped' ? { motionId: write.motion.id } : {}),
     ...(write.motion?.cuts?.motion !== undefined ? { cutsMotion: write.motion.cuts.motion } : {}),
     ...(write.motion?.ends !== undefined ? { endsMotion: write.motion.ends } : {}),
+    ...(declared(write) ? { motionMs: write.motion!.durationMs, ...(write.motion!.to !== undefined ? { motionTo: write.motion!.to } : {}) } : {}),
+    ...(write.motion?.settled !== undefined ? { settled: write.motion.settled } : {}),
     ...(write.motion?.chain ? { chain: write.motion.chain } : {}),
     ...(write.motion?.maker ? { maker: write.motion.maker } : {}),
     ...(write.motion?.makerRef !== undefined ? { makerRef: write.motion.makerRef } : {}),

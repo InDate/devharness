@@ -3,8 +3,8 @@
  * steps, or nowhere once the pass has crossed its finish line.
  */
 import { describe, it, expect } from 'vitest';
-import { passOf, pausesOf, placementOf, type Crossing } from './step-compare.js';
-import { kindOf } from './kinds.js';
+import { compareStep, passOf, pausesOf, placementOf, type Crossing } from './step-compare.js';
+import { countKinds, kindOf } from './kinds.js';
 
 let seq = 0;
 function crossing(fields: Partial<Crossing>): Crossing {
@@ -60,5 +60,27 @@ describe('the pauses of the newest pass', () => {
       crossing({ runId: 'run-b', step: 1 }),
     ];
     expect(pausesOf(events).size).toBe(0);
+  });
+});
+
+describe('the stop rows of a motion kind recorded by its runs', () => {
+  const dimmed = (fields: Partial<Crossing> & { motionMs?: number; motionTo?: string; settled?: string; cuts?: string }) =>
+    crossing({ kind: 'write', direction: 'out', url: 'animation:opacity #refreshed', ...fields });
+  const stopped = () => crossing({ kind: 'write', direction: 'out', url: 'animation:opacity #refreshed stopped' });
+
+  it('is neither missing from a play nor new in one, which runs stop following the gap between inputs', () => {
+    const cutInRecording = countKinds([dimmed({ motionTo: '0.5', motionMs: 200 }), stopped(), dimmed({ motionTo: '1', motionMs: 174, cuts: 'key c', settled: '1' })]);
+    const ranOut = [dimmed({ motionTo: '0.5', motionMs: 200 }), dimmed({ motionTo: '1', motionMs: 200, settled: '1' })];
+    const fromRest = countKinds(ranOut);
+    const cutInPlay = [dimmed({ motionTo: '0.5', motionMs: 200 }), stopped(), dimmed({ motionTo: '1', motionMs: 174, cuts: 'key c', settled: '1' })];
+    const compare = (recorded: typeof fromRest, ran: Crossing[]) =>
+      compareStep({ recorded, ran, step: 1, ignores: [], bodyOf: () => undefined });
+
+    const played = compare(cutInRecording, ranOut);
+    expect(played.missing).toEqual([]);
+    expect(played.kinds.map(one => [one.kind, one.verdict])).toEqual([['animation opacity #refreshed', 'match']]);
+
+    expect(compare(fromRest, cutInPlay).kinds.map(one => [one.kind, one.verdict]))
+      .toEqual([['animation opacity #refreshed', 'match'], ['animation opacity #refreshed stopped', 'match']]);
   });
 });

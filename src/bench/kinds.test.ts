@@ -4,7 +4,7 @@
  * and a field matched by value holds only when it carries the same value.
  */
 import { describe, it, expect } from 'vitest';
-import { compareExpected, compareKinds, countKinds, frameMatch, sentDiffers, verdictOf } from './kinds.js';
+import { compareExpected, compareKinds, countKinds, frameMatch, racesOf, sentDiffers, verdictOf } from './kinds.js';
 
 const recorded = { n: 1, statuses: [200], body: '{"token":"s-old","ok":true}' };
 const observed = { n: 1, statuses: [200] };
@@ -131,5 +131,61 @@ describe('the part of a frame payload that names it', () => {
 
   it('returns the payload itself where it is not JSON', () => {
     expect(frameMatch('not json at all')).toBe('not json at all');
+  });
+});
+
+describe('a motion kind recorded by its runs', () => {
+  const run = (url: string, motionTo: string | undefined, motionMs: number, extra: { cuts?: string; settled?: string } = {}) =>
+    ({ kind: 'write' as const, direction: 'out' as const, url, ...(motionTo !== undefined ? { motionTo } : {}), motionMs, ...extra });
+  const dim = 'animation:opacity #refreshed';
+  // Keys c then v 600ms apart: c's dim runs out and the reply turns it back from rest.
+  const apart = countKinds([run(dim, '0.5', 200), run(dim, '1', 200, { settled: '1' })]);
+
+  it('records each run by its target and length, and where the property came to rest', () => {
+    expect(apart['animation opacity #refreshed']).toMatchObject({ runs: [{ to: '0.5', ms: 200 }, { to: '1', ms: 200 }], settled: '1' });
+  });
+
+  it('matches a play whose turn-back cut the dim short, ending where the recording ended', () => {
+    const close = countKinds([
+      run(dim, '0.5', 200), run('animation:opacity #refreshed stopped', undefined, 0),
+      run(dim, '1', 174, { cuts: 'key c', settled: '1' }),
+    ]);
+    expect(close['animation opacity #refreshed'].runs).toEqual([{ to: '0.5', ms: 200 }, { to: '1' }]);
+    expect(verdictOf(apart['animation opacity #refreshed'], close['animation opacity #refreshed'], undefined))
+      .toEqual({ verdict: 'match', reasons: [] });
+  });
+
+  it('fails a play whose property comes to rest elsewhere', () => {
+    const kept = countKinds([run(dim, '0.5', 200, { settled: '0.5' })]);
+    expect(verdictOf(apart['animation opacity #refreshed'], kept['animation opacity #refreshed'], undefined))
+      .toEqual({ verdict: 'mismatch', reasons: ['ends at 0.5, recorded 1', 'no run to 1 over 200ms'] });
+  });
+
+  it('fails a run from rest of another length, though it ends in the same place', () => {
+    const faq = 'animation:height #faq › #details-content';
+    const recordedOpen = countKinds([run(faq, 'auto', 300, { settled: '21px' })]);
+    const slowOpen = countKinds([run(faq, 'auto', 900, { settled: '21px' })]);
+    expect(verdictOf(recordedOpen['animation height #faq › #details-content'], slowOpen['animation height #faq › #details-content'], undefined))
+      .toEqual({ verdict: 'mismatch', reasons: ['no run to auto over 300ms', 'runs to auto over 900ms, not recorded'] });
+  });
+
+  it('passes a run the play lacks where the property already stood at its target', () => {
+    const shown = 'animation:content-visibility #faq › #details-content';
+    const closedThenOpened = countKinds([run(shown, 'hidden', 300), run(shown, 'visible', 300, { settled: 'visible' })]);
+    const reopenedMidClose = countKinds([run(shown, 'hidden', 300, { settled: 'visible' })]);
+    expect(verdictOf(closedThenOpened['animation content-visibility #faq › #details-content'], reopenedMidClose['animation content-visibility #faq › #details-content'], undefined))
+      .toEqual({ verdict: 'match', reasons: [] });
+  });
+
+  it('names no race on it, a cut on one side alone changing none of its verdicts', () => {
+    const cutInRecording = countKinds([run(dim, '0.5', 200), run(dim, '1', 174, { cuts: 'key c', settled: '1' })]);
+    const ranOut = [run(dim, '0.5', 200), run(dim, '1', 200, { settled: '1' })];
+    expect(racesOf([cutInRecording], [ranOut]).size).toBe(0);
+    expect(racesOf([{ 'animation opacity #refreshed': { n: 2, cuts: true } }], [ranOut]).get('animation opacity #refreshed')).toEqual({ step: 0, side: 'recording' });
+  });
+
+  it('leaves a kind recorded before runs were kept to its count', () => {
+    const twice = countKinds([run(dim, '0.5', 200), run(dim, '1', 200)]);
+    expect(verdictOf({ n: 1 }, twice['animation opacity #refreshed'], undefined)).toEqual({ verdict: 'mismatch', reasons: ['×2, recorded ×1'] });
   });
 });

@@ -871,6 +871,10 @@ export interface BoundaryEvent {
   motionId?: number;
   cutsMotion?: number;
   endsMotion?: number;
+  /** A motion row's target value, its length in page ms, and the value its property came to rest at once no transition ran on it. */
+  motionTo?: string;
+  motionMs?: number;
+  settled?: string;
   /** A motion row's chain from its cause back to its root, newest first. */
   chain?: MotionLink[];
   /** A motion row's maker - CSS, JS, SVG, MEDIA, ME, BROWSER - and what its go-to reveals. */

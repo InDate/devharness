@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * Tests for feature-011 (IndexedDB read/write actions) and feature-012
  * (sessionStorage get/set + single-key delete) in the `storage` tool.

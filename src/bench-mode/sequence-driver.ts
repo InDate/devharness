@@ -11,7 +11,7 @@ import { sweepCaptures } from './capture-sweep.js';
 import { assertAsCheck, formOf, subjectOf as subjectOfCheck } from '../tools/check-engine.js';
 import { checkSpecOf } from '../tools/check-tools.js';
 import { promises as fs } from 'fs';
-import { dirname, join } from 'path';
+import { dirname, isAbsolute, join } from 'path';
 import { getIssuesBySequenceFile } from '../issue-tracker.js';
 import { getProxy } from '../proxy/registry.js';
 import { configManager } from '../config.js';
@@ -847,8 +847,18 @@ export function createSequenceDriver(
       followed = undefined; ended = null;
       failedStep = null;
       variableStore = {};
-      const failure = await replay({ action: 'load', filename: `${name}.json` });
+      // A sequence named by its file (`foo.json`, `spine/foo.json`, an absolute
+      // path) loads from that file, and every later lookup goes by the name the
+      // file holds, which is the name the recorder registers it under.
+      const path = isAbsolute(name)
+        ? name
+        : (await commandRecorder.findMatchingFilename(name).catch(() => null))?.fullPath;
+      const failure = await replay({ action: 'load', filename: path ?? `${name}.json` });
       if (failure) return failure;
+      if (path) {
+        const held = await fs.readFile(path, 'utf-8').then(text => translateSequence(JSON.parse(text)).name).catch(() => undefined);
+        if (held) { selected = held; name = held; }
+      }
       // Scoped between the load and the first navigation: the hosts are
       // readable only once the file is in memory, and a host the proxy has
       // not been told about is refused the moment the run moves.

@@ -1,7 +1,7 @@
 /**
- * Background runs: `replay({ action: 'run' })` returns a run id immediately
+ * Background runs: `run({ action: 'sequence' })` returns a run id immediately
  * and executes in the background; `status`/`cancel` address a run by that id.
- * `wait: true` restores the pre-0.7 blocking behaviour.
+ * `wait: true` blocks the call on the run.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createReplayTools } from './replay-tools.js';
@@ -169,9 +169,9 @@ describe('background run', () => {
     expect(runRegistry.list()).toHaveLength(1);
   });
 
-  it('a nested `replay run` STEP is forced to block (wait injected)', async () => {
+  it('a nested `run sequence` step is sent with wait: true', async () => {
     const outer = seq('seq-nest', 'nest-flow', [
-      { tool: 'replay', params: { action: 'run', name: 'inner-flow' } },
+      { tool: 'run', params: { action: 'sequence', name: 'inner-flow' } },
     ]);
     const { replay, run, calls } = makeReplay([outer]);
 
@@ -179,7 +179,7 @@ describe('background run', () => {
       action: 'sequence', sequenceId: 'seq-nest', wait: true,
     } as any);
 
-    const nested = calls.find(c => c.tool === 'replay' && c.params.action === 'run');
+    const nested = calls.find(c => c.tool === 'run' && c.params.action === 'sequence');
     expect(nested?.params.wait).toBe(true);
     expect(res._meta.replay.paused).toBe(false);
   });

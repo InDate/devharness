@@ -1272,7 +1272,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
       // nested run would register as its own top-level run and the step would
       // "succeed" instantly, fire-and-forget. An explicit wait:false on the
       // step is honoured for callers who genuinely want that.
-      if (cmd.tool === 'replay' && params.action === 'run' && params.wait === undefined) {
+      if (cmd.tool === 'run' && params.action === 'sequence' && params.wait === undefined) {
         params.wait = true;
       }
 

@@ -727,6 +727,8 @@ export interface BenchView {
   /** The page being driven. Not the address the bench itself is served at. */
   pageUrl: string;
   frozen: boolean;
+  /** Each open member of the connection's group with its held and holdable layers; absent for a connection in no group. */
+  groupHolds?: Array<{ browser: string; held: HeldLayerView[]; holdable: Array<HeldLayerView['layer']> }>;
   /** Each layer held - code, ui, network - with what holds it; empty while everything runs. */
   held: HeldLayerView[];
   /** Traffic kept at the proxy while the network is held, oldest first. */

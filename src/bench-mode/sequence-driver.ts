@@ -6,7 +6,7 @@
 import { formatRunReply } from '../tools/run-table.js';
 import { pausesIn, rulesForRun } from '../tools/run-rules.js';
 import { standPausedRun } from '../proxy/registry.js';
-import { hold } from '../hold.js';
+import { holdWithGroup } from '../group-hold.js';
 import { sweepCaptures } from './capture-sweep.js';
 import { assertAsCheck, formOf, subjectOf as subjectOfCheck } from '../tools/check-engine.js';
 import { checkSpecOf } from '../tools/check-tools.js';
@@ -868,7 +868,7 @@ export function createSequenceDriver(
       const chosen = layers ?? active.holdWhilePaused;
       if (chosen?.length === 0) return;
       const run = active.runTimestamp !== undefined ? `run-${active.runTimestamp.toString(36)}` : undefined;
-      const reading = await hold(active.connection, { owner: { kind: 'run-pause', ...(run ? { run } : {}) }, ...(chosen ? { layers: chosen } : {}) }).catch(() => undefined);
+      const reading = await holdWithGroup(active.connection, { owner: { kind: 'run-pause', ...(run ? { run } : {}) }, ...(chosen ? { layers: chosen } : {}) }).catch(() => undefined);
       const held = reading?.held.filter(one => one.owners.some(owner => owner.kind === 'run-pause' && owner.run === run)).map(one => one.layer);
       if (held?.length) active.pauseHeld = held;
     },

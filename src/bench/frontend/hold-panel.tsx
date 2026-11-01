@@ -28,8 +28,11 @@ const LAYERS: Array<{ layer: Layer; name: string; stops: string; needs: string; 
  * `--holdbar`, which pushes the page, the sticky header and the state frame
  * down, so the strip sits outside the frame instead of covering what it frames.
  */
-export function HoldPanel({ state, post, onClose, onGo }: {
+export function HoldPanel({ state, browser, post, onClose, onGo }: {
+  /** The held and holdable layers are the chosen browser's, where one of the group is chosen. */
   state: BenchView;
+  /** The group member the controls act on; absent, the bench's own browser and every browser of its group. */
+  browser?: string;
   post: (path: string, body?: Record<string, unknown>) => Promise<void>;
   onClose: () => void;
   /** Go to where a layer is read in full: the steps, the held panel, the Waiting list, DevTools. */
@@ -48,7 +51,7 @@ export function HoldPanel({ state, post, onClose, onGo }: {
   const anyHeld = state.held.length > 0;
   const holdable = state.holdable.filter(layer => !heldOf(layer));
   const change = (action: 'hold' | 'release' | 'step', layers?: Layer[]) =>
-    void post('/hold', { action, ...(layers ? { layers } : {}) });
+    void post('/hold', { action, ...(layers ? { layers } : {}), ...(browser ? { browser } : {}) });
   const sequence = state.sequence;
   const summary = anyHeld ? heldWords(state.held) : 'the page runs and its traffic crosses as it arrives';
 

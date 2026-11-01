@@ -31,7 +31,8 @@ import { observes } from '../observing-tools.js';
 import { creditingEvaluatesTo } from '../proxy/evaluate-credit.js';
 import { configManager } from '../config.js';
 import { describePersonInput, personInputSince } from '../person-watch.js';
-import { hold, holdReading, isOutside, isRunOwn, release, type HoldLayer } from '../hold.js';
+import { holdReading, isOutside, isRunOwn, type HoldLayer } from '../hold.js';
+import { holdWithGroup, releaseWithGroup } from '../group-hold.js';
 import { interpolateParams } from './interpolation.js';
 import { getMessage, isElementNotFoundFailure } from '../messages.js';
 import type { CheckOutcome as CheckAction } from './check-tools.js';
@@ -1958,7 +1959,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
   // A run that is over can end none of its holds later, so a hold one of its
   // steps took and never released ends with it; other owners keep the page.
   if (!isPaused && ctx.connection && !ctx.stampUnder) {
-    await release(sanitizeReference(ctx.connection), { by: { kind: 'run', run: proxyRun } }).catch(() => undefined);
+    await releaseWithGroup(sanitizeReference(ctx.connection), { by: { kind: 'run', run: proxyRun } }).catch(() => undefined);
   }
   if (stands && !ctx.stampUnder) {
     const next = pausedForPerson ?? pausedAtMark
@@ -1976,7 +1977,7 @@ async function executeStepsWithin(options: ExecuteStepsOptions): Promise<Executi
   const markHolds = pausedAtMark !== undefined ? (commands[pausedAtMark] as { pauseHolds?: HoldLayer[] }).pauseHolds : undefined;
   const layers = pausedForPerson !== undefined ? undefined : stoppedAtEnd ? markHolds ?? options.holdWhilePaused : [];
   if (stands && (pausedForPerson !== undefined || stoppedAtEnd) && layers?.length !== 0 && ctx.connection && !ctx.stampUnder) {
-    const reading = await hold(sanitizeReference(ctx.connection), { owner: { kind: 'run-pause', run: proxyRun }, ...(layers ? { layers } : {}) }).catch(() => undefined);
+    const reading = await holdWithGroup(sanitizeReference(ctx.connection), { owner: { kind: 'run-pause', run: proxyRun }, ...(layers ? { layers } : {}) }).catch(() => undefined);
     pauseHeld = reading?.held.filter(held => held.owners.some(owner => isRunOwn(owner, proxyRun, 'run-pause'))).map(held => held.layer);
   }
 

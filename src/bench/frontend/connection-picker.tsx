@@ -124,7 +124,7 @@ export function ConnectionPicker({ base }: { base: string }) {
   // One structure from the first render, keyed: the footing finds the disc's
   // slot once, on mount, and draws into that element for good.
   return (
-    <span class={['connpick', failure ? 'bad' : '', chosenMember && chosenMember !== own ? 'memberface' : ''].filter(Boolean).join(' ')}>
+    <span class={failure ? 'connpick bad' : 'connpick'}>
       <span key="mark" class="tabmark connmark" title={`${count} connection${count === 1 ? '' : 's'} open`}>
         <ToolGlyph tool="connection" />
         {count > 0 && (

@@ -731,13 +731,11 @@ nav button:hover .tabbadge, nav button.on .tabbadge { background: var(--fg); }
 nav button.on .tabbadge { box-shadow: 0 0 0 1.5px var(--panel); }
 /* A browser launched without a proxy: nothing reaches the Traffic tab. */
 nav button.unproxied { color: var(--alert); }
-/* Six tabs with words, marks and badges, beside the title, the connection
-   picker and the state disc, take about 880px; below 900px the words go, the
-   marks and badges stay, and the picker narrows. */
-@media (max-width: 899px) {
-  .tabword { display: none; }
-  .connpick select, .connpick select::picker(select) { width: 16ch; }
-}
+/* The header gives way to the connection's name in steps, set by
+   useHeaderFit from the space left: the tab words go to their marks, then the
+   title goes; past both, the name is cut short. */
+header.compact .tabword { display: none; }
+header.bare h1 { display: none; }
 
 /* One managed dev server. Running and stopped read by the words at the right
    end and the weight of the row, not a hue: every hue already names a kind. */
@@ -1036,33 +1034,34 @@ nav button.unproxied { color: var(--alert); }
 .actionfield { font-weight: 600; }
 /* The connection the bench works on: the connection mark with the open count
    badged on it as the tabs' counts are, then the face - the chosen name, with
-   the disc over its right end. The name opens the list, which grows out of the
-   face: opened under it and pulled up by its 26px height, at its 24ch width,
-   with no top edge, the chosen row first on the face's line, and every row's
-   dot where the disc stands. */
-.connpick { display: inline-flex; align-items: center; gap: 6px; align-self: center; margin-right: 10px; color: var(--muted); }
+   the disc over its right end. The face is as wide as the chosen name, up to
+   40ch, and gives width back to the header before anything overflows it: the
+   name is cut short, and the disc keeps its place inside the right end. The
+   name opens the list, which grows out of the face: opened under it and pulled
+   up by its 26px height, at least as wide as the face, with no top edge, the
+   chosen row first on the face's line, and every row's dot where the disc stands. */
+.connpick { display: inline-flex; flex: 0 1 auto; min-width: 0; align-items: center; gap: 6px; align-self: center; margin-right: 10px; color: var(--muted); }
 .connpick:hover .tabbadge { background: var(--fg); }
 /* Group and browser rows carry their mark before the name; while the group is
-   chosen its browsers' rows are lit. A browser of the group chosen puts its
-   own dot on the face in place of the bench's disc. */
+   chosen its browsers' rows are lit. The face keeps the bench's disc for every
+   choice, coloured by the hold of the browsers chosen. */
 .connpick select svg { flex: 0 0 auto; margin-right: 6px; color: var(--muted); }
-.connpick.memberface selectedcontent .conndot { display: block; position: absolute; right: 9px; top: 50%; transform: translateY(-50%); }
-.connpick.memberface .statedisc-slot { display: none; }
 .tag.browsertag { color: var(--muted); }
-.connface { position: relative; display: inline-flex; align-items: center; }
+.connface { position: relative; display: inline-flex; min-width: 0; align-items: center; }
 .connface .statedisc-slot { position: absolute; right: 9px; top: 50%; transform: translateY(-50%); margin: 0; z-index: 1; }
 .connpick select, .connpick select::picker(select) { appearance: base-select; }
 .connpick select {
-  display: flex; align-items: center; width: 24ch; min-width: 0; padding: 3px 30px 3px 9px;
+  display: flex; align-items: center; field-sizing: content; min-width: 10ch; max-width: 40ch; padding: 3px 30px 3px 9px;
   border: 1px solid transparent; border-radius: 8px; background: none; color: var(--fg); font: 12px/18px inherit; cursor: pointer;
 }
 .connpick select:hover, .connpick select:focus-visible { outline: none; border-color: var(--line); }
 .connpick select > button { display: flex; min-width: 0; padding: 0; border: 0; background: none; font: inherit; color: inherit; }
 .connpick selectedcontent { display: flex; align-items: center; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .connpick selectedcontent .conndot { display: none; }
+.connpick selectedcontent .connname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .connpick select::picker-icon { display: none; }
 .connpick select::picker(select) {
-  margin: -26px 0 0; width: 24ch; font-size: 12px; padding: 1px 0 4px;
+  margin: -26px 0 0; width: max-content; min-width: anchor-size(width); max-width: 48ch; font-size: 12px; padding: 1px 0 4px;
   border: 1px solid var(--line); border-top: 0; border-radius: 0 0 8px 8px; background: var(--bg); color: var(--fg);
 }
 .connpick option { display: flex; align-items: center; gap: 12px; padding: 3px 8px 3px 8px; font: 12px/18px inherit; }

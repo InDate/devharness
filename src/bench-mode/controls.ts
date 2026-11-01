@@ -7,6 +7,7 @@ import { announceHold, releaseHolds } from './page-hold.js';
 import { getSequenceState, playSequence } from './sequence.js';
 import { type BenchReport, type BenchSession, getBenchSession, sessions } from './session.js';
 import { openSession } from '../utils/own-session.js';
+import { groupPeers } from '../group-hold.js';
 import { ownScript } from '../utils/own-script.js';
 
 /**
@@ -224,7 +225,11 @@ export async function haltSequence(connection: string): Promise<SequenceState | 
   session.driving?.abort();
   await session.sequences.halt().catch(() => {});
   const run = session.sequences.runId();
-  await setHeld(connection, true, { kind: 'run-pause', ...(run ? { run } : {}) });
+  const owner: HoldOwner = { kind: 'run-pause', ...(run ? { run } : {}) };
+  await Promise.all([
+    setHeld(connection, true, owner),
+    ...groupPeers(connection).map(peer => hold(peer, { owner }).catch(() => undefined)),
+  ]);
   session.sequenceFailure = undefined;
   return getSequenceState(connection);
 }

@@ -79,7 +79,7 @@ export interface BenchHandlers {
   openDevtools: () => Promise<string>;
   /** Open DevTools at what made a motion, by the page's ref to it. */
   revealMaker: (ref: number) => Promise<string>;
-  changeHold: (action: 'hold' | 'release' | 'step', layers?: Array<'code' | 'ui' | 'network'>) => Promise<void>;
+  changeHold: (action: 'hold' | 'release' | 'step', layers?: Array<'code' | 'ui' | 'network'>, browser?: string) => Promise<void>;
   setPicker: (armed: boolean) => Promise<void>;
   /** End a view transition the hold stopped in flight at its last frame. */
   skipViewTransition: () => Promise<void>;
@@ -93,7 +93,7 @@ export interface BenchHandlers {
   replayMotionStep: (step: number) => Promise<void>;
   seekOne: (id: string, currentMs: number) => Promise<void>;
   setPersonInput: (on: boolean) => Promise<void>;
-  setHeld: (held: boolean, resume?: boolean) => Promise<void>;
+  setHeld: (held: boolean, resume?: boolean, browser?: string) => Promise<void>;
   selectSequence: (name: string) => Promise<void>;
   describeSequence: (description: string, expectedOutcome: string) => Promise<void>;
   commentSequenceStep: (index: number, words: string) => Promise<void>;
@@ -617,7 +617,7 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
               const layers = Array.isArray(body.layers)
                 ? body.layers.filter((layer: unknown): layer is 'code' | 'ui' | 'network' => layer === 'code' || layer === 'ui' || layer === 'network')
                 : undefined;
-              if (action) await handlers.changeHold(action, layers);
+              if (action) await handlers.changeHold(action, layers, browserIn(body));
               break;
             }
             case '/tick':
@@ -671,7 +671,7 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
               break;
             }
             case '/input/person': await handlers.setPersonInput(!!body.on); break;
-            case '/hold/page': await handlers.setHeld(!!body.held, body.resume === true); break;
+            case '/hold/page': await handlers.setHeld(!!body.held, body.resume === true, browserIn(body)); break;
             case '/sequence/select': await handlers.selectSequence(String(body.name ?? '')); break;
             case '/sequence/describe':
               await handlers.describeSequence(

@@ -18,6 +18,7 @@ import type { ExecutionResult } from './replay-types.js';
 import { drainDeclaredCleanup } from './replay-run-owned.js';
 import { type ReplayArgs } from './replay-schema.js';
 import { holdReading, release } from '../hold.js';
+import { releaseWithGroup } from '../group-hold.js';
 import { standPausedRun } from '../proxy/registry.js';
 
 /** The `_meta` of a reply that leaves the run paused: `nextStep` is the 1-based step `run step` runs next. */
@@ -287,14 +288,14 @@ async function releasePauseHold(activeSeq: ActiveSequenceState): Promise<void> {
   if (!layers) return;
   delete activeSeq.pauseHeld;
   const run = runOf(activeSeq);
-  if (run) await release(activeSeq.connection, { by: { kind: 'run', run, pauseOnly: true }, layers });
+  if (run) await releaseWithGroup(activeSeq.connection, { by: { kind: 'run', run, pauseOnly: true }, layers });
 }
 
 /** End every hold a cancelled run took, its steps' and its pause's; other owners keep the page. */
 async function releaseRunHolds(activeSeq: ActiveSequenceState): Promise<void> {
   delete activeSeq.pauseHeld;
   const run = runOf(activeSeq);
-  if (run) await release(activeSeq.connection, { by: { kind: 'run', run } });
+  if (run) await releaseWithGroup(activeSeq.connection, { by: { kind: 'run', run } });
 }
 
 function runOf(activeSeq: ActiveSequenceState): string | undefined {

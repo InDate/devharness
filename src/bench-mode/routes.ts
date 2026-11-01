@@ -3,7 +3,7 @@ import { pauseActionsFor, recordPauseAction } from '../pause-actions.js';
 import { recordBenchCall } from '../person-watch.js';
 import { isWatchingPersonInput } from '../person-watch.js';
 import { appendEvent } from '../session-events.js';
-import { holdableLayers, holderWord, holdReading } from '../hold.js';
+import { hold, holdableLayers, holderWord, holdReading, isHeld, release, step } from '../hold.js';
 import type { BenchHandlers } from '../bench-control.js';
 import { getProxy, checkOutcomesFor } from '../proxy/registry.js';
 import { getMessage } from '../messages.js';
@@ -22,7 +22,7 @@ import { setPersonInput } from './person-input.js';
 import { dismissBurst, motionOf, seekBench, seekOne, setBenchRate } from './motion.js';
 import { skipViewTransition, viewTransitionOf } from './view-transition.js';
 import { setMotionDetect } from './motion-detect.js';
-import { stepTraffic, tickBench } from './page-hold.js';
+import { releaseHolds, stepTraffic, tickBench } from './page-hold.js';
 import { addRecordingTimer, addRecordingVariable, cancelRecordingSequence, keepRecordingPaused, pauseRecording, testRecording, chooseStepSelector, dropRecordedStep, editRecordingVariable, flagRecordedStep, keepRecordedStep, recordSequence, stopRecordingSequence } from './recording.js';
 import { clearBoundaryRule, hiddenOf, hideKind, nameTarget, namesOf, persistRules, ruleFrom, rulesOf, savePayloadFor, setBoundaryName, setBoundaryRule, setHiddenMode, setHiddenUse, setResponseMode, setResponseUse, unhideKind, useFrom } from './rules.js';
 import { baselineSequence, playHere, playToStep, renameFromHome, runFromHome, runsView, stopRun } from './runs.js';
@@ -88,6 +88,20 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
     const group = groupOf(connection);
     return group ? membersOf(group) : [connection];
   };
+
+  /**
+   * The browsers the hold button acts on: the chosen member, or with every
+   * browser chosen each member with a layer to hold. A closed member has none,
+   * and a hold on it would engage nothing.
+   */
+  const holdTargets = (browser?: string): string[] => {
+    const members = membersHere();
+    if (browser && members.includes(browser)) return [browser];
+    return members.filter(member => member === connection || holdableLayers(member).length > 0);
+  };
+
+  const heldView = (member: string) => holdReading(member).held
+    .map(({ owners, ...layer }) => ({ ...layer, source: [...new Set(owners.map(holderWord))].join(' and ') }));
 
   /**
    * The browser an event or pin id came from, and the proxy's own id. Every
@@ -181,7 +195,8 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
         connection,
         pageUrl: page.url(),
         frozen: session.frozen,
-        held: holdReading(connection).held.map(({ owners, ...layer }) => ({ ...layer, source: [...new Set(owners.map(holderWord))].join(' and ') })),
+        ...(groupOf(connection) ? { groupHolds: holdTargets().map(member => ({ browser: member, held: heldView(member), holdable: holdableLayers(member) })) } : {}),
+        held: heldView(connection),
         queued: getProxy(connection)?.queue.list() ?? [],
         holdable: holdableLayers(connection),
         pickerArmed: session.pickerArmed,
@@ -238,18 +253,39 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
     releaseWaiting: async (id: number, browser?: string) => { getProxy(shownBrowser(browser))?.queue.releaseOne(id); },
     openDevtools: async () => openDevtools(connection),
     revealMaker: async (ref: number) => revealMaker(connection, ref),
-    changeHold: async (action, layers) => {
-      await changeHold(connection, action, layers);
+    changeHold: async (action, layers, browser) => {
+      await Promise.all(holdTargets(browser).map(async member => {
+        if (sessions.has(member)) {
+          await changeHold(member, action, layers);
+        } else if (action === 'hold') {
+          await hold(member, { owner: { kind: 'person' }, ...(layers ? { layers } : {}) });
+        } else if (action === 'release') {
+          await release(member, { by: { kind: 'resume' }, ...(layers ? { layers } : {}) });
+        } else {
+          for (const layer of layers ?? []) if (isHeld(member, layer)) await step(member, layer);
+        }
+      }));
       const named = layers?.length ? layers.map(layer => layer === 'ui' ? 'screen' : layer).join(' and ') : 'page';
-      await recordBenchCall(connection, 'hold', { action, ...(layers ? { layers } : {}) },
-        action === 'step' ? `stepped the ${named}` : `${action === 'hold' ? 'held' : 'released'} the ${named}`);
+      const [only, ...rest] = holdTargets(browser);
+      const group = groupOf(connection);
+      const across = rest.length && group ? ` of every browser in group ${group}` : '';
+      await recordBenchCall(rest.length ? connection : only, 'hold', { action, ...(layers ? { layers } : {}) },
+        action === 'step' ? `stepped the ${named}${across}` : `${action === 'hold' ? 'held' : 'released'} the ${named}${across}`);
     },
     setPicker: async (armed: boolean) => { await setPicker(connection, armed); },
     skipViewTransition: async () => { await skipViewTransition(connection); },
     setPersonInput: async (on: boolean) => { await setPersonInput(connection, on); },
-    setHeld: async (held: boolean, resume?: boolean) => {
-      await setHeld(connection, held, { kind: 'person' });
-      if (!held && resume) resumePausedRun(connection);
+    setHeld: async (held: boolean, resume?: boolean, browser?: string) => {
+      await Promise.all(holdTargets(browser).map(async member => {
+        if (sessions.has(member)) {
+          await setHeld(member, held, { kind: 'person' });
+          if (!held && resume) resumePausedRun(member);
+        } else if (held) {
+          await hold(member, { owner: { kind: 'person' } });
+        } else {
+          await releaseHolds(member, { kind: 'person' });
+        }
+      }));
     },
     selectSequence: async (name: string) => { await selectSequence(connection, name); },
     describeSequence: async (description: string, expectedOutcome: string) => {

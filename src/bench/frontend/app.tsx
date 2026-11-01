@@ -99,6 +99,8 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
   useEffect(() => { setSlot(document.getElementById('statedisc-slot')); }, []);
   /** What this button has asked for and not yet seen confirmed. */
   const [asked, setAsked] = useState<boolean | null>(null);
+  // When the hold button's last request finished; Infinity while one is in flight.
+  const holdSettledAt = useRef(0);
   const [shooting, setShooting] = useState(false);
   const [naming, setNaming] = useState(false);
   const [discarding, setDiscarding] = useState(false);
@@ -121,10 +123,14 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
   useEffect(() => {
     let live = true;
     const poll = async () => {
+      const began = Date.now();
       try {
         const res = await fetch(`${base}/state?client=${CLIENT_ID}-hold`);
         if (!res.ok) throw new Error(String(res.status));
-        if (live) { setState(await res.json()); setGone(false); }
+        // A poll begun before the hold button's request finished reports the
+        // hold as it stood before the click; the button keeps its own answer
+        // until a poll begun after it lands.
+        if (live && began >= holdSettledAt.current) { setState(await res.json()); setGone(false); setAsked(null); }
       } catch {
         if (live) setGone(true);
       }
@@ -216,7 +222,17 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
   // What the poll last reported, unless this button has just asked for the
   // other thing. Holding takes a moment and the poll is a second apart, so
   // reading only the poll leaves the button ignoring its own click.
-  const frozen = asked ?? state.frozen;
+  const pageHeld = (browser: { held: BenchView['held'] }) => browser.held.some(layer => layer.layer !== 'network');
+  const chosenHolds = choice ? state.groupHolds?.find(browser => browser.browser === choice) : undefined;
+  // The button's own answer stands for the bench's page only while the bench's
+  // browser is among those it acts on.
+  const frozen = (chosenHolds && chosenHolds.browser !== state.connection ? null : asked) ?? state.frozen;
+  // The hold button reads the browsers it acts on: the chosen member, or with
+  // the group chosen, held while any member is.
+  const shownHeld = asked ?? (!state.groupHolds ? state.frozen
+    : chosenHolds ? pageHeld(chosenHolds)
+    : state.groupHolds.some(pageHeld));
+  const holdWhat = state.groupHolds ? (choice ?? 'every browser in the group') : 'the page';
   const sequence = state.sequence;
   const trafficHeld = state.held.some(layer => layer.layer === 'network');
   const waiting = state.queued.length;
@@ -268,6 +284,9 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
     'aria-disabled': stop ? true : undefined,
     title: stop ?? undefined,
   });
+  // The disc and the frame read the browsers the dropdown shows: the chosen
+  // member's hold, or with the group chosen every member's.
+  const shownHolds = !state.groupHolds ? [state.held] : chosenHolds ? [chosenHolds.held] : state.groupHolds.map(browser => browser.held);
   // What the session is doing, as colours for the disc and the frame, every
   // one that holds, in this order: recording, a held page, a run, a pause.
   // The first is the outer line and the disc's first slice; each after it is
@@ -277,8 +296,8 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
     // The page held - its screen or its code - and the traffic held, each in
     // its own colour: held traffic leaves the page running, so the two are
     // different conditions and the frame says which stands.
-    ['frozen', frozen === true || state.held.some(layer => layer.layer !== 'network')],
-    ['traffic', trafficHeld],
+    ['frozen', shownHeld === true || shownHolds.some(held => held.some(layer => layer.layer !== 'network'))],
+    ['traffic', shownHolds.some(held => held.some(layer => layer.layer === 'network'))],
     // Any run the bench is making counts, not only one started by play: a
     // run to a step drives the page the same way.
     ['playing', state.sequence?.playing === true || (state.sequence?.busy === true && !state.sequence?.recording)],
@@ -287,7 +306,7 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
   ] as const).filter(([, on]) => on).map(([mode]) => mode);
   // A held layer something is waiting on pulses: the traffic while messages
   // wait at the proxy, the page while its code hold is armed for the next JS.
-  const codeArmed = state.held.some(layer => layer.layer === 'code' && layer.standing?.armed === true);
+  const codeArmed = shownHolds.some(held => held.some(layer => layer.layer === 'code' && layer.standing?.armed === true));
   const waitingOn = new Set<string>([
     ...(trafficHeld && waiting > 0 ? ['traffic'] : []),
     ...(codeArmed ? ['frozen'] : []),
@@ -310,7 +329,8 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
           }} />
       ))}
       {showing === 'hold' && createPortal(
-        <HoldPanel state={state} post={post} onClose={() => setShowing(null)} onGo={onGo} />,
+        <HoldPanel state={chosenHolds ? { ...state, held: chosenHolds.held, holdable: chosenHolds.holdable } : state} browser={chosenHolds?.browser}
+          post={post} onClose={() => setShowing(null)} onGo={onGo} />,
         document.body,
       )}
       {slot && createPortal(
@@ -710,19 +730,24 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
           aria-label="MOTION" aria-pressed={state.motionDetect}
           onClick={() => void post('/motion/detect', { on: !state.motionDetect })}><Glyph of="pulse" /></button>
         <button
-          class={frozen ? 'chip-toggle frozen' : 'chip-toggle'}
-          title={frozen
-            ? `held at ${state.tickMs}ms: its code and screen are stopped${trafficHeld ? ', and traffic waits at the proxy' : ''}, so it cannot be driven. Click to let it all run.`
-            : `the page is running and can be driven. Click to hold its code, screen${boundary?.running ? ' and traffic' : ''}.`}
-          aria-label={frozen ? 'HELD' : 'HOLD'}
+          class={shownHeld ? 'chip-toggle frozen' : 'chip-toggle'}
+          title={state.groupHolds
+            ? (shownHeld
+              ? `${holdWhat}: held, its code and screen stopped and its traffic waiting at the proxy. Click to let it all run.`
+              : `${holdWhat}: running. Click to hold its code, screen and traffic.`)
+            : frozen
+              ? `held at ${state.tickMs}ms: its code and screen are stopped${trafficHeld ? ', and traffic waits at the proxy' : ''}, so it cannot be driven. Click to let it all run.`
+              : `the page is running and can be driven. Click to hold its code, screen${boundary?.running ? ' and traffic' : ''}.`}
+          aria-label={shownHeld ? 'HELD' : 'HOLD'}
           onClick={async () => {
-            setAsked(!frozen);
+            setAsked(!shownHeld);
+            holdSettledAt.current = Infinity;
             // Letting the page run carries on a run the hold paused.
-            await post('/hold/page', { held: !frozen, resume: frozen });
-            // Back to whatever the page reports: the request may have been
-            // refused, and a button that keeps its own answer would report a
-            // hold that is not there.
-            setAsked(null);
+            await post('/hold/page', { held: !shownHeld, resume: shownHeld, ...(choice ? { browser: choice } : {}) });
+            // Back to whatever the page reports, from the next poll begun
+            // after the request: the request may have been refused, and a
+            // button that keeps its own answer would report a hold that is not there.
+            holdSettledAt.current = Date.now();
           }}
         ><Glyph of="hold" /></button>
         <button class={showHidden ? 'chip-toggle showhidden on' : 'chip-toggle showhidden'}
@@ -991,7 +1016,54 @@ async function postTo(path: string, body?: Record<string, unknown>): Promise<voi
   }).catch(() => { /* the bench outlives a restart */ });
 }
 
+/**
+ * How much of the header gives way to the connection's name: 0 shows the
+ * title and the tab words, 1 drops the tab words to their marks, 2 drops the
+ * title as well. A level is taken while the header, out of free space, cuts
+ * the chosen name short or overflows, and given back once the free space holds what it hid;
+ * the widths hidden are measured while they show, since a hidden one reads 0.
+ */
+function useHeaderFit(): [preact.RefObject<HTMLElement>, number] {
+  const ref = useRef<HTMLElement>(null);
+  const [level, setLevel] = useState(0);
+  const hidden = useRef({ words: 0, title: 0 });
+  const fit = () => {
+    const header = ref.current;
+    if (!header) return;
+    const words = [...header.querySelectorAll<HTMLElement>('.tabword')];
+    if (words.some(word => word.offsetWidth > 0)) {
+      // Each word stands 6px from its mark, the gap of its button.
+      hidden.current.words = words.reduce((sum, word) => sum + word.offsetWidth + 6, 0);
+    }
+    const title = header.querySelector<HTMLElement>('h1');
+    if (title && title.offsetWidth > 0) hidden.current.title = title.offsetWidth + 18;
+    const name = header.querySelector<HTMLElement>('.connpick selectedcontent .connname');
+    const free = header.querySelector<HTMLElement>('.grow')?.offsetWidth ?? 0;
+    // A name past the face's cap is cut with space to spare; only a cut the
+    // header forces, with no free space left, takes a level.
+    const cut = (!!name && name.scrollWidth > name.clientWidth && free < 1) || header.scrollWidth > header.clientWidth;
+    setLevel(now => {
+      if (cut) return Math.min(now + 1, 2);
+      const back = now === 2 ? hidden.current.title : now === 1 ? hidden.current.words : Infinity;
+      return free >= back + 8 ? now - 1 : now;
+    });
+  };
+  useEffect(() => {
+    const header = ref.current;
+    if (!header) return;
+    const observer = new ResizeObserver(fit);
+    observer.observe(header);
+    const face = header.querySelector('.connpick select');
+    if (face) observer.observe(face);
+    return () => observer.disconnect();
+  }, []);
+  // A level change, a new name or a new count each move what the header holds.
+  useEffect(fit);
+  return [ref, level];
+}
+
 function Bench() {
+  const [headerRef, headerFit] = useHeaderFit();
   const [at, setAt] = useState<Place>(placeOf);
   const tab = at.tab;
   // Asked for from the footing, answered on Sequence: a recording produces steps, so
@@ -1108,7 +1180,7 @@ function Bench() {
 
   return (
     <>
-      <header>
+      <header ref={headerRef} class={headerFit === 2 ? 'compact bare' : headerFit === 1 ? 'compact' : undefined}>
         <h1 class="home" role="link" aria-disabled={busy ? true : undefined}
           title={busy ? 'the run is going - stop it first' : 'the list of sequences'}
           onClick={home}>bench</h1>

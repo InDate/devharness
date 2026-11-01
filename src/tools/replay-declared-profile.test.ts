@@ -19,7 +19,7 @@ function makeReplay(declared: Declaration[], commands?: RecordedCommand[]) {
     id: 'seq-profile',
     name: 'profile-seq',
     createdAt: 1,
-    startUrl: 'http://localhost:5173/',
+    startUrl: 'https://shop.example.test/',
     commands: (commands ?? [{ tool: 'dom', params: { action: 'querySelector', selector: '#a' } }]) as RecordedCommand[],
     requiredConnections: declared,
   } as CommandSequence;

@@ -25,7 +25,16 @@
       "default": {
         "today": "unmeasured"
       },
-      "rule": "Measured on sequence:motion-makers-no-waits, the sequence with its waits taken out, so a pass cannot rest on the gaps between steps. A replay is compared by the weight each credit’s evidence carries, so a timing guess and a measured cause count apart; a repeating source is compared as a track, on its start, period and stop, and ambient motion as background against the recording’s background. Cells measured before the comparison reads weights say so in their note."
+      "rule": "Measured on sequence:motion-makers-no-waits, the sequence with its waits taken out, so a pass cannot rest on the gaps between steps, and on sequence:rule-check-fast, rule-probe-fast's paired presses 50ms apart played against a recording of rule-probe-ref's 600ms apart. A motion recorded from an Animation object is compared on where its property came to rest and on which runs it made, each by target and, from rest, by length; how many runs, which cut which short and the stop rows that leaves follow the gap between inputs and are not compared. Motion measured from frames, and a recording taken before runs were kept, compare by count. A repeating source is compared as a track, on its start, period and stop, and ambient motion as background against the recording’s background. Cells measured by count say so in their note."
+    },
+    {
+      "id": "change",
+      "name": "Change",
+      "question": "Does a replay of a changed motion read as mismatched?",
+      "default": {
+        "today": "unmeasured"
+      },
+      "rule": "Measured on sequence:rule-check-broken: catalog-broken.html, carrying one fault per key, played against a recording of catalog.html. A cell reads works when the step fails on the fault and names it: a resting value, or a run from rest of another target or length, or a run missing where the property did not already stand at its target."
     },
     {
       "id": "source",
@@ -588,6 +597,17 @@
           "today": "works",
           "basis": "sequence:credit-every-catalog-key",
           "note": "#notify background-color and transform transitions, from key w"
+        },
+        "compare": {
+          "today": "works",
+          "basis": "sequence:rule-check-fast",
+          "note": "Pressed once, then twice 50ms apart against a recording 600ms apart: the second press cut the first's runs short, and both steps matched on the resting transform and the runs from rest (1 Nov)"
+        },
+        "change": {
+          "expect": "The thumb rests at 12px where the recording rests at 20px",
+          "today": "works",
+          "basis": "sequence:rule-check-broken",
+          "note": "Steps 2 and 6 fail: ends at matrix(1, 0, 0, 1, 12, 0), recorded matrix(1, 0, 0, 1, 20, 0), and the run to translateX(24px) is not recorded"
         }
       }
     },
@@ -1477,8 +1497,8 @@
         },
         "compare": {
           "today": "works",
-          "basis": "sequence:credit-every-catalog-key",
-          "note": "Matched in 3 of 3 plays against a fresh baseline; before the reversal fix the reversal moved between c and v"
+          "basis": "sequence:rule-check-fast",
+          "note": "c then v 50ms apart against a recording 600ms apart: v's reply cut c's dim at 0.54 and turned it back over 185ms, and the step matched on the resting opacity 1 and the runs to 0.5 and 1 (1 Nov). Matched before by count in 3 of 3 plays against a fresh baseline (credit-every-catalog-key)"
         }
       }
     },
@@ -1874,6 +1894,12 @@
           "today": "works",
           "basis": "sequence:credit-every-catalog-key",
           "note": "Matched in 3 of 3 plays against a fresh baseline; before the reversal fix the backdrop reversal moved to the first press"
+        },
+        "change": {
+          "expect": "Settings opens and closes with no opacity or transform transition",
+          "today": "works",
+          "basis": "sequence:rule-check-broken",
+          "note": "Step 4 fails: animation transform #settings missing; animation opacity #settings missing"
         }
       }
     },
@@ -1952,6 +1978,17 @@
           "today": "works",
           "basis": "sequence:credit-every-catalog-key",
           "note": "#details-content height and content-visibility transitions 300ms, from key 9"
+        },
+        "compare": {
+          "today": "works",
+          "basis": "sequence:rule-check-fast",
+          "note": "Closed and opened 50ms apart against a recording 600ms apart: the reopening starts no content-visibility run, the property already standing at visible, and its height run, cut short at 49ms, is matched by target; both rest at 21px. The ::details-content transitions fire no page event, so the step's settle waits on their Animation objects before reading where they rest (1 Nov)"
+        },
+        "change": {
+          "expect": "The panel opens over 900ms where it took 300ms",
+          "today": "works",
+          "basis": "sequence:rule-check-broken",
+          "note": "Steps 3 and 7 fail: no run to auto over 300ms, runs to auto over 900ms, not recorded"
         }
       }
     },
@@ -1987,6 +2024,12 @@
           "today": "works",
           "basis": "sequence:credit-every-catalog-key",
           "note": "shine #premium keyframes 1200ms, from key 0"
+        },
+        "change": {
+          "expect": "The shine plays three times over where it played once",
+          "today": "gap",
+          "basis": "sequence:rule-check-broken",
+          "note": "Step 5 matches: the triple shine ends where one shine ends and makes the same runs, and how many runs a motion makes is not compared, since that follows the gap between inputs"
         }
       }
     },

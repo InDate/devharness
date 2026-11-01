@@ -881,7 +881,7 @@ export async function performRun(
   };
 
   // Navigate to startUrl if needed
-  const navResult = await navigateToStartUrl(ctx, sequence, analysis);
+  const navResult = await navigateToStartUrl(ctx, sequence, analysis, await childLaunches(sequence.commands, recorder));
   if (!navResult.success) {
     // Close the tab if we auto-launched it
     if (didAutoLaunch && connection) {

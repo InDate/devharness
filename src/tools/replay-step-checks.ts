@@ -210,7 +210,9 @@ export async function checkPortBeforeNavigation(
 export async function navigateToStartUrl(
   ctx: ExecutionContext,
   sequence: CommandSequence,
-  analysis: ConnectionAnalysis
+  analysis: ConnectionAnalysis,
+  /** The browsers a sequence its steps run launches or declares. */
+  openedByChild: ReadonlySet<string> = new Set()
 ): Promise<{ success: true } | { success: false; error: string }> {
   const { executeToolCall, connectionMap, logPrefix = 'executor' } = ctx;
   const firstStep = sequence.commands[analysis.firstConnectionToolIndex];
@@ -227,6 +229,13 @@ export async function navigateToStartUrl(
     .map(decl => sanitizeReference(decl.connection))
     .filter(ref => !connectionMap?.[ref]);
   if (launchedAtUrl.includes(connection)) {
+    return { success: true };
+  }
+
+  // A browser a child sequence brings up does not exist yet: a goto here
+  // would open it under that name as a tab in the running Chrome, and the
+  // child's own launch then finds the name live and keeps that tab.
+  if (named && openedByChild.has(sanitizeReference(named))) {
     return { success: true };
   }
 

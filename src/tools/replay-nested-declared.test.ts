@@ -13,7 +13,7 @@ import { HELD } from '../test-support/check-steps.js';
 
 const PORTS: Record<string, number> = { 'run-device': 9222, 'setup-a': 9333, 'setup-b': 9444 };
 
-function makeReplay() {
+function makeReplay(parentStartUrl?: string) {
   const child = {
     id: 'seq-setup', name: 'setup', createdAt: 1,
     requiredConnections: [{ connection: 'setup-a' }, { connection: 'setup-b' }],
@@ -24,6 +24,7 @@ function makeReplay() {
   } as CommandSequence;
   const parent = {
     id: 'seq-parent', name: 'parent', createdAt: 1,
+    ...(parentStartUrl ? { startUrl: parentStartUrl } : {}),
     commands: [
       { tool: 'check', params: { afterMs: 0, holds: { run: 'setup' } } },
       { tool: 'dom', params: { action: 'querySelector', selector: '#after', connection: 'setup-a' } },
@@ -99,5 +100,17 @@ describe('a nested sequence that declares its browsers', () => {
       .filter(({ i }) => i > ranAfter)
       .map(({ c }) => c.params.connection);
     expect(closed).toEqual(expect.arrayContaining(['setup-a', 'setup-b']));
+  });
+
+  it('is not opened by the start url ahead of its declaration, where the first step that names a browser names one of its', async () => {
+    const { run, calls } = makeReplay('http://localhost:8801/');
+
+    const result: any = await run.handler({
+      action: 'sequence', wait: true, sequenceId: 'seq-parent', connection: 'run-device',
+    } as any);
+
+    expect(result._meta.replay.success).toBe(true);
+    const first = calls.find(c => c.params.connection === 'setup-a');
+    expect(first?.params).toMatchObject({ action: 'launch', forceNewInstance: true });
   });
 });

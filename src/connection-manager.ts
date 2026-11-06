@@ -41,6 +41,13 @@ export interface Connection {
   disposeContext?: () => Promise<void>;
 }
 
+function settlesWithin(ms: number, call: Promise<unknown>): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), ms); });
+  const outcome = call.then(() => true, () => false);
+  return Promise.race([outcome, timeout]).finally(() => clearTimeout(timer));
+}
+
 // Browser instance tracking (multiple connections can share one browser)
 interface BrowserInstance {
   host: string;
@@ -310,25 +317,18 @@ export class ConnectionManager {
         return true;
       }
 
-      // Use a short timeout to avoid hanging on dead/stuck connections
-      const timeoutPromise = new Promise<boolean>((resolve) => {
-        setTimeout(() => resolve(false), 1500);
-      });
+      // Browser.getVersion answers from the browser process after the tab is
+      // closed; Runtime.evaluate is target-level, so a closed tab fails it.
+      if (await settlesWithin(1500, client.Runtime.evaluate({ expression: ownScript('alive', '1'), silent: true }))) {
+        return true;
+      }
 
-      const healthCheckPromise = (async () => {
-        try {
-          // IMPORTANT: Use Runtime.evaluate instead of Browser.getVersion
-          // Browser.getVersion is browser-level and works even when the tab is closed
-          // Runtime.evaluate is target-level and will fail if the tab is closed
-          // This properly detects closed tabs, not just killed Chrome processes
-          await client.Runtime.evaluate({ expression: ownScript('alive', '1'), silent: true });
-          return true;
-        } catch {
-          return false;
-        }
-      })();
-
-      return await Promise.race([healthCheckPromise, timeoutPromise]);
+      // A navigation destroys the execution context the evaluation ran in, and
+      // a loading document can hold the renderer past the timeout; either
+      // fails the evaluation on a live tab. Target.getTargetInfo is answered by
+      // the browser process for the attached target and rejects once that
+      // target is gone.
+      return await settlesWithin(1500, client.Target.getTargetInfo());
     } catch {
       return false;
     }

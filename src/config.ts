@@ -228,7 +228,6 @@ export const TOGGLEABLE_TOOLS = [
   'replay',      // Sequence recording/playback
   'server',      // Dev server management
   'issues',      // Issue tracking
-  'message',     // Text between two devharness sessions on this machine
   'bench',       // Hold the page, read the boundary, record sequences, collect comments
   'dashboard',   // Web dashboard for monitoring sessions
   // Note: 'config' is NOT toggleable - always enabled

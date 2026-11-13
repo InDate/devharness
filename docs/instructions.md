@@ -127,21 +127,22 @@ Past this point, calls are written short and leave `connection` out. Every call 
 
 ## The event stream
 
-Everything devharness pushes - a guard block, a message from another session, an annotation picked in the browser - appends one JSON line to `~/.devharness/events/<sessionId>.jsonl`. One file per session, so one watch covers every kind, including kinds added later.
+Everything devharness pushes - a guard block, an annotation picked in the browser - appends one JSON line to `~/.devharness/events/<sessionId>.jsonl`. One file per session holds every kind, including kinds added later.
 
-Installed as a plugin, a `SessionStart` hook (`plugin/hooks/session-start.mjs`) creates that file and prints the watch call as session context before the first turn. With no watch, each event rides on the next devharness reply at no extra request; a watch costs a request each time it wakes, so in Claude Code arm it when events arrive while no devharness call is made - a person in the bench, a wait on another session's message:
+In Claude Code, devharness sends each burst of new lines to the session's messaging socket as a peer message (`deliverStream` in `src/session-events.ts`), which the session reads at its next tool round, Bash rounds included, at no extra request. The socket and its frame are Claude Code internals, so a change to either stops delivery and leaves the lines in the file. The cursor beside the stream moves past each delivered burst.
+
+A client with no messaging socket reads the file with a watch. Installed as a plugin, a `SessionStart` hook (`plugin/hooks/session-start.mjs`) creates the file and, for such a client, prints the watch call as session context before the first turn. A watch costs a request each time it wakes, so arm it when events arrive while no devharness call is made - a person in the bench:
 
 ```
 Bash({ command: "devharness watch", run_in_background: true, description: "devharness events" })
 ```
 
-A background task holds no deadline, so a quiet stream costs no turns. It exits on the first burst of new lines and prints them with the next call: itself again for a lone event, or a Monitor running `devharness watch --follow` while a person works in the bench. Both forms advance one cursor file beside the stream, so a line appended between one watch and the next is read by the next. A Monitor expires every 30 minutes; an expiry with events in it re-arms the Monitor, one with none returns to the one-off. With no watch, each event reaches the session only on its next devharness call. `bench({ action: 'start' })` counts the processes holding the stream open and prints the call at the head of its response when the count is zero. It also exits, without a next call, when its Claude process exits or `/clear` moves to another session.
+A background task holds no deadline, so a quiet stream costs no turns. It exits on the first burst of new lines and prints them with the next call: itself again for a lone event, or a Monitor running `devharness watch --follow` while a person works in the bench. Both forms advance one cursor file beside the stream, so a line appended between one watch and the next is read by the next. A Monitor expires every 30 minutes; an expiry with events in it re-arms the Monitor, one with none returns to the one-off. With no watch, each event reaches the session only on its next devharness call. `bench({ action: 'start' })` prints the call at the head of its response where the session has no messaging socket and no process holds the stream open. It also exits, without a next call, when its Claude process exits or `/clear` moves to another session.
 
 Line kinds:
 
 ```json
 {"ts":"...","kind":"block","guard":"pendingStartup","tool":"navigate","detail":"died before port detected: \"web\"","resolve":"server({ action: 'acknowledgeStartup', serverId: 'web' })"}
-{"ts":"...","kind":"message","from":"66ba2d65","id":"d94924a8-...","detail":"Message from 66ba2d65: ...","resolve":"message({ action: 'read' })"}
 {"ts":"...","kind":"annotation","annotationId":"...","connection":"my-web-app","url":"http://localhost:5173/","tick":300,"comment":"flashes empty here","selector":"#row-3 > span","component":"StatusRow","detail":"StatusRow #row-3 > span - \"flashes empty here\""}
 ```
 
@@ -204,19 +205,9 @@ Ticking into a transient state, pause-and-resume, notes and captures, cropping,
 the boundary panel, `sweep`, the CLI command:
 [bench.md](bench.md)
 
-## Talking to another devharness session
+## Talking to another session
 
-Two devharness sessions on this machine reach each other by mailbox id - the session hitting a devharness bug and the session working on devharness itself, for example.
-
-`message({ action: 'sessions' })` lists who is reachable and prints this session's own mailbox path.
-
-```
-message({ action: 'send', to: 'a1b2c3d4', text: 'Repro: ...', waitForReplyMs: 120000 })
-```
-
-That holds the call open until something lands in this session's mailbox, then returns it; answer with `message({ action: 'reply', replyTo: '<id>', text: '...' })`. The wait returns on ANY arrival, not only a tagged reply - two sessions blocking at the same moment both release instead of both timing out.
-
-An arriving message announces itself on the event stream, so the watch above covers it and there is no second watch to arm. `message({ action: 'read' })` is what takes them, advancing a cursor so each is returned once; the full history stays in the mailbox file.
+Claude Code sessions on this machine message each other with Claude Code's own `SendMessage`; devharness carries no mailbox of its own.
 
 ## Running a tool from the shell
 
@@ -372,11 +363,6 @@ runs against (see Quick Start).
 - Nothing blocks. `start` returns as soon as the bench is open, and on a bench already open it reports that and changes nothing - `picker` arms or disarms the picker; notes land on the session event stream as they are saved, and in the step of the sequence file they were written against. Keep working while the person writes
 - While frozen, anything waiting on a timer stops - including a navigation's load timers. `stop` before driving the page with other tools
 - Each capture PNG carries its record (page, window size and pixel ratio, element or crop anchor, crop, where the page's JS stood, optional element events/css/html/a11y) and a clean copy. `retake` takes it again at the recorded window size and writes the next version: before, after and difference side by side, plus a `comparison` event. `capture` reads a file's record. Details in the skill's `references/bench.md`
-
-**Messages**: `message` (actions: sessions, send, read, reply)
-- Text between two devharness sessions on this machine - a session hitting a devharness bug talking to the session working on devharness itself. `sessions` lists reachable mailboxes and this session's own mailbox path
-- `send({ to, text, waitForReplyMs })` holds the call open until something lands in this session's mailbox (max 300000ms) and returns it; without `waitForReplyMs` it returns as soon as the line is written. `reply({ replyTo, text })` routes back to the sender of that message. The wait returns on ANY arrival, not only a tagged reply, so two sessions blocking at the same moment both release
-- The mailbox is one append-only JSONL file per session under `~/.devharness/messages/`, holding the conversation and the read cursor; the global directory is what makes it reach across project roots. Nothing watches it. An arrival announces itself on that session's event stream, `~/.devharness/events/<id>.jsonl`, so one watch covers messages and guard blocks alike; without one, messages surface on the next `message({ action: 'read' })`
 
 **Server**: `server` (actions: start, stop, restart, list, logs, stopAll, setAutoRun, clearLogs, remove, monitorPort, unmonitorPort, listMonitored, acknowledgePort, acknowledgeStartup, extendStartup, cancelPendingRestart)
 - Use `global: true` to access servers started from a different working directory

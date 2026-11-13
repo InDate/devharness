@@ -176,6 +176,13 @@ export class WriteWatch {
   /** Each cache's entries at its last reading. */
   private caches: Reading | undefined;
   private files: Reading | undefined;
+  /**
+   * True on a secure top frame. Chrome terminates the renderer of an insecure
+   * page (plain http on a LAN host) that FileSystem.getDirectory reaches, with
+   * "Called Buckets from an insecure context"; such a page holds no
+   * origin-private file system to read.
+   */
+  private fileSystemReadable = false;
   /** Timed reads of cookies and files, one at a time; `timedQueued` counts those waiting. */
   private timed: Promise<void> = Promise.resolve();
   private timedQueued = 0;
@@ -543,6 +550,7 @@ export class WriteWatch {
     try {
       const { frameTree } = await call(this.client, 'Page.getFrameTree');
       const { storageKey } = await call(this.client, 'Storage.getStorageKeyForFrame', { frameId: frameTree.frame.id });
+      this.fileSystemReadable = String(frameTree.frame.secureContextType ?? '').startsWith('Secure');
       if (!storageKey || storageKey === this.trackedKey) return;
       if (this.trackedKey) {
         await call(this.client, 'Storage.untrackIndexedDBForStorageKey', { storageKey: this.trackedKey }).catch(() => {});
@@ -716,7 +724,7 @@ export class WriteWatch {
   }
 
   private async readFiles(at: number, cursor: ProxyCursor | undefined): Promise<void> {
-    if (!this.trackedKey) return;
+    if (!this.trackedKey || !this.fileSystemReadable) return;
     const key = this.trackedKey;
     // A bucket with no file system yet answers with an error; it holds nothing.
     const now = await this.fileEntries().catch(() => new Map() as Reading);

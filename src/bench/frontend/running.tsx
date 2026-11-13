@@ -64,8 +64,9 @@ export function Running({ base }: { base: string }) {
 function Watching({ view, servers }: { view: RunningView; servers: ServerRow[] }) {
   const [open, setOpen] = useState<string | null>(null);
   const toggle = (key: string) => setOpen(open === key ? null : key);
-  const watched = view.readers !== undefined && view.readers > 0;
-  const state = view.readers === undefined ? 'lsof gave no reading'
+  const watched = view.socket !== undefined || (view.readers !== undefined && view.readers > 0);
+  const state = view.socket !== undefined ? 'delivered to the session socket'
+    : view.readers === undefined ? 'lsof gave no reading'
     : watched ? `${view.readers} watch${view.readers === 1 ? '' : 'es'} reading` : 'no watch reading';
   const watchedServers = servers.filter(server => server.watchPaths?.length);
 
@@ -76,7 +77,7 @@ function Watching({ view, servers }: { view: RunningView; servers: ServerRow[] }
         label={<span class="what">event stream</span>}
         title={view.stream}
         reading={<span class="meta">
-          {view.readers === 0 ? <span class="bad">{state}</span> : state}
+          {!watched && view.readers === 0 ? <span class="bad">{state}</span> : state}
           {view.unread ? ` · ${view.unread} unread` : ''}
         </span>}
         slots={{}}
@@ -84,6 +85,7 @@ function Watching({ view, servers }: { view: RunningView; servers: ServerRow[] }
         onOpen={() => toggle('stream')}>
         <div class="body historybody">
           <p class="historyfacts servercmdfull">{view.stream}</p>
+          {view.socket && <p class="historyfacts servercmdfull">{view.socket}</p>}
           <p class="historyfacts">
             {view.unread === undefined
               ? 'No watch has read this stream yet; the first one starts at its end.'

@@ -68,3 +68,31 @@ describe('a step whose input loads a new document', () => {
     forgetCursor();
   });
 });
+
+describe('a page served over plain http', () => {
+  async function fileSystemReads(secureContextType: string): Promise<number> {
+    let reads = 0;
+    const client: any = {
+      on: () => undefined,
+      send: async (method: string) => {
+        if (method === 'FileSystem.getDirectory') reads++;
+        if (method === 'Page.getFrameTree') return { frameTree: { frame: { id: 'main', url: 'http://192.168.1.20:5173/', secureContextType } } };
+        if (method === 'Storage.getStorageKeyForFrame') return { storageKey: 'http://192.168.1.20:5173/' };
+        if (method === 'Network.getCookies') return { cookies: [] };
+        if (method === 'FileSystem.getDirectory') return { directory: { nestedDirectories: [], files: [] } };
+        return {};
+      },
+    };
+    const page: any = { on: () => undefined, off: () => undefined, url: () => 'http://192.168.1.20:5173/', browser: () => ({ on: () => undefined, off: () => undefined }) };
+    const watch = new WriteWatch(client, page);
+    await watch.start();
+    await new Promise(resolve => setTimeout(resolve, 1300));
+    watch.stop();
+    return reads;
+  }
+
+  it('leaves the origin-private file system unread, which Chrome kills an insecure renderer for', async () => {
+    expect(await fileSystemReads('InsecureScheme')).toBe(0);
+    expect(await fileSystemReads('Secure')).toBeGreaterThan(0);
+  });
+});

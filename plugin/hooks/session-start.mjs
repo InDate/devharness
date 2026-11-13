@@ -208,10 +208,14 @@ try {
   process.exit(0);
 }
 
-const lines = [
-  `devharness event stream: ${streamPath}. Guard blocks, messages from other sessions, and bench notes, screenshots and sequence writes land there as they happen; with no watch each reaches you on your next devharness call, at no extra request. A watch costs a request each time it wakes, so arm it when events arrive while no devharness call is made - a person working in the bench, or a wait on another session's message:`,
-  watchCall(shortId, streamPath),
-];
+// A session with a messaging socket receives each event as a peer message
+// (deliverStream in src/session-events.ts), so a watch would deliver it twice.
+const lines = process.env.CLAUDE_CODE_MESSAGING_SOCKET
+  ? [`devharness events (guard blocks, bench notes, screenshots, sequence writes) arrive here as peer messages from devharness, with their record at ${streamPath}. No watch is needed.`]
+  : [
+    `devharness event stream: ${streamPath}. Guard blocks, and bench notes, screenshots and sequence writes land there as they happen; with no watch each reaches you on your next devharness call, at no extra request. A watch costs a request each time it wakes, so arm it when events arrive while no devharness call is made - a person working in the bench:`,
+    watchCall(shortId, streamPath),
+  ];
 
 const cli = cliLine();
 if (cli) lines.push(cli);

@@ -87,7 +87,7 @@ const PURPOSES: Array<[string, string[]]> = [
   ['page', ['navigate', 'input', 'dom', 'content', 'modal', 'screenshot', 'storage', 'download']],
   ['traffic', ['network', 'proxy', 'hold', 'request']],
   ['sequences', ['replay', 'run', 'check', 'assert', 'wait', 'bench']],
-  ['project', ['issues', 'message', 'dashboard', 'config']],
+  ['project', ['issues', 'dashboard', 'config']],
 ];
 
 /** The served tools regrouped into PURPOSES' folds, in that order, with empty folds left out. */

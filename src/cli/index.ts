@@ -26,13 +26,10 @@ import { matchByAncestry, findSessionByName, filterToListedProcesses, filterToPr
 
 const DEFAULT_TIMEOUT_MS = 120000;
 
-/** Commands that are shorthand for one action of the `message` tool. */
-const MESSAGE_VERBS = new Set(['sessions', 'send', 'read', 'reply']);
-
 /** Commands that are shorthand for `issues` create, one per issue type. */
 const ISSUE_VERBS = new Set(['bug', 'feature']);
 
-export const CLI_COMMANDS = ['call', 'which', 'bench', 'watch', ...MESSAGE_VERBS, ...ISSUE_VERBS] as const;
+export const CLI_COMMANDS = ['call', 'which', 'bench', 'watch', ...ISSUE_VERBS] as const;
 
 export function isCliCommand(word: string | undefined): boolean {
   return word !== undefined && (CLI_COMMANDS as readonly string[]).includes(word);
@@ -67,13 +64,7 @@ interface ParsedArgs {
   connection?: string;
   json: boolean;
   timeoutMs: number;
-  waitMs?: number;
 }
-
-/** Slack over the server's own wait, so the socket outlives the work it asked
- *  for. A socket that gives up first aborts a reply the server has already
- *  received and marked read. */
-const WAIT_SOCKET_MARGIN_MS = 15000;
 
 export function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
@@ -81,9 +72,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
   let json = false;
   let connection: string | undefined;
   let explicitTimeoutMs: number | undefined;
-  let waitMs: number | undefined;
-  // Everything after `--` is text, not flags: message bodies contain `--json`
-  // and the like, and stripping them silently rewrote what was sent.
+  // Everything after `--` is text, not flags: an issue body can contain
+  // `--json` and the like, and stripping it would rewrite what was filed.
   let flagsEnded = false;
 
   for (const arg of argv.slice(1)) {
@@ -93,15 +83,13 @@ export function parseArgs(argv: string[]): ParsedArgs {
       if (arg.startsWith('--session=')) { session = arg.slice('--session='.length); continue; }
       if (arg.startsWith('--connection=')) { connection = arg.slice('--connection='.length); continue; }
       if (arg.startsWith('--timeout=')) { explicitTimeoutMs = Number(arg.slice('--timeout='.length)) || undefined; continue; }
-      if (arg.startsWith('--wait=')) { waitMs = Number(arg.slice('--wait='.length)) || undefined; continue; }
     }
     positional.push(arg);
   }
 
-  const timeoutMs = explicitTimeoutMs
-    ?? (waitMs ? waitMs + WAIT_SOCKET_MARGIN_MS : DEFAULT_TIMEOUT_MS);
+  const timeoutMs = explicitTimeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-  return { command: argv[0], positional, session, connection, json, timeoutMs, waitMs };
+  return { command: argv[0], positional, session, connection, json, timeoutMs };
 }
 
 /** The tool call a command stands for. */
@@ -146,24 +134,6 @@ export function buildCall(parsed: ParsedArgs): { tool: string; args: Record<stri
       };
     }
 
-    case 'sessions':
-      return { tool: 'message', args: { action: 'sessions' } };
-
-    case 'read':
-      return { tool: 'message', args: { action: 'read' } };
-
-    case 'send': {
-      if (!first || rest.length === 0) return 'Usage: devharness send <sessionId> <text> [--wait=<ms>]';
-      return {
-        tool: 'message',
-        args: {
-          action: 'send',
-          to: first,
-          text: rest.join(' '),
-          ...(parsed.waitMs ? { waitForReplyMs: parsed.waitMs } : {}),
-        },
-      };
-    }
 
     case 'bug':
     case 'feature': {
@@ -184,18 +154,6 @@ export function buildCall(parsed: ParsedArgs): { tool: string; args: Record<stri
       };
     }
 
-    case 'reply': {
-      if (!first || rest.length === 0) return 'Usage: devharness reply <messageId> <text> [--wait=<ms>]';
-      return {
-        tool: 'message',
-        args: {
-          action: 'reply',
-          replyTo: first,
-          text: rest.join(' '),
-          ...(parsed.waitMs ? { waitForReplyMs: parsed.waitMs } : {}),
-        },
-      };
-    }
 
     default:
       return `Unknown command "${parsed.command}". Commands: ${CLI_COMMANDS.join(', ')}`;
@@ -318,14 +276,10 @@ export async function runCli(argv: string[]): Promise<number> {
       : matchByAncestry(here, process.pid, parents);
     if (result.ambiguous.length > 1) {
       // Several servers can serve one session - a dev build beside the
-      // plugin's. The mailbox and its cursor are per session, not per server,
-      // so any of them answers a message verb identically. `call` reaches a
-      // particular server's browser and dev servers, so there the tie is real.
-      const ids = new Set(result.ambiguous.map(m => m.record.shortId ?? `pid-${m.record.pid}`));
+      // plugin's. `call` reaches a particular server's browser and dev
+      // servers, so there the tie is real.
       const tiedRecords = result.ambiguous.map(m => m.record);
-      if (ids.size === 1 && MESSAGE_VERBS.has(parsed.command)) {
-        target = result.ambiguous[0].record;
-      } else if (ISSUE_VERBS.has(parsed.command) && shareOneRoot(tiedRecords)) {
+      if (ISSUE_VERBS.has(parsed.command) && shareOneRoot(tiedRecords)) {
         // One root means one tracker, so either server files the item in the
         // same place. Roots that differ keep the refusal below.
         target = result.ambiguous[0].record;

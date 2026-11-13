@@ -363,7 +363,9 @@ export interface RunningView {
   readers?: number;
   /** Events written past what a watch has read; absent before any watch has run. */
   unread?: number;
-  /** The call that arms a watch, for when none reads the stream. */
+  /** The messaging socket events are delivered to; absent where the session has none and a watch carries them. */
+  socket?: string;
+  /** The call that arms a watch, for when no socket and no watch carries the stream. */
   watchCall: string;
   sequenceDirs: string[];
   connections: ConnectionRow[];

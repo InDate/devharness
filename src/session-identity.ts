@@ -4,8 +4,8 @@
  * Claude Code exports CLAUDE_CODE_SESSION_ID into the environment it spawns
  * the supervisor with, and the child inherits it. That value is present from
  * the first instruction and unchanged when the supervisor replaces the child,
- * so anything naming this session on disk - a mailbox filename, a presence
- * record - keeps the same name across a rebuild.
+ * so anything naming this session on disk - an event stream filename, a
+ * presence record - keeps the same name across a rebuild.
  *
  * The session detector produces the same id, but only after a tool response
  * carrying a `pid:` footer has been written into the session's .jsonl and
@@ -36,8 +36,8 @@ export function getClaudeShortId(): string | undefined {
 }
 
 /**
- * The name this session is known by on disk - its mailbox filename, its event
- * stream filename, its presence record.
+ * The name this session is known by on disk - its event stream filename, its
+ * presence record.
  *
  * The hook's record comes first: it is the only source that follows the
  * conversation through a `/clear`, which changes the id without restarting this

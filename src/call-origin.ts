@@ -15,12 +15,15 @@
  */
 
 import { AsyncLocalStorage } from 'async_hooks';
+import type { CallerClaim, SessionPart } from './prompt-cache.js';
 
 /** `person` is input a person made in the app while the bench recorded it. */
 export type CallChannel = 'mcp' | 'cli' | 'bench' | 'person';
 
 interface Place {
   from: CallChannel;
+  /** The parts of the session with a request in flight when an MCP call arrived: the caller alone, or the caller among overlapping requests. */
+  callers?: CallerClaim;
   run?: string;
   /** The run's id, `run-<timestamp>`, which a hold its step takes is owned by. */
   runId?: string;
@@ -40,8 +43,13 @@ export interface StepEnv { file: string; names: string[] }
 const place = new AsyncLocalStorage<Place>();
 
 /** Run `work` as arriving on `from`. */
-export function arriveOn<T>(from: CallChannel, work: () => T): T {
-  return place.run({ from }, work);
+export function arriveOn<T>(from: CallChannel, work: () => T, callers?: CallerClaim): T {
+  return place.run({ from, ...(callers ? { callers } : {}) }, work);
+}
+
+/** The parts the outermost MCP call could have come from. */
+export function currentCallers(): SessionPart[] | undefined {
+  return place.getStore()?.callers?.callers;
 }
 
 /** Run `work` as the run of `sequence`, keeping the channel the run was started from. */

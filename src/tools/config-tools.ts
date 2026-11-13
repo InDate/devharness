@@ -8,6 +8,8 @@ import { createTool } from '../validation-helpers.js';
 import { configManager } from '../config.js';
 import { createSuccessResponse, createErrorResponse } from '../messages.js';
 import { requestSelfRestart } from '../self-restart.js';
+import { currentCallers } from '../call-origin.js';
+import { describeCallers } from '../prompt-cache.js';
 import { InvalidProfileNameError, ProfileInUseError } from '../chrome-launcher.js';
 import { enableDebugLogging, disableDebugLogging, isDebugEnabled, getLogFile } from '../debug-logger.js';
 
@@ -67,6 +69,7 @@ export function createConfigTools(profileStore?: ProfileStore, serverIdentity?: 
               buildMtime: serverIdentity?.buildMtime,
               serverPid: String(process.pid),
               supervisorPid: process.ppid ? String(process.ppid) : undefined,
+              caller: describeCallers(currentCallers()),
             });
           }
 

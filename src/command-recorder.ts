@@ -5,6 +5,7 @@
  * by selecting specific command indices from the history.
  */
 
+import type { SessionPart } from './prompt-cache.js';
 import { promises as fs, existsSync, statSync } from 'fs';
 import { walkSequenceFiles } from './helpers/sequence-tree.js';
 import { ServerFileWatcher } from './server-watcher.js';
@@ -297,6 +298,8 @@ export interface HistoryCommand extends RecordedCommand {
   releasedAt?: number;
   /** The channel the call came in on. */
   from: CallChannel;
+  /** The main session or subagent an MCP call came from. */
+  caller?: SessionPart;
   /** The sequence whose run executed this call as a step. */
   run?: string;
   /**
@@ -697,6 +700,11 @@ export class CommandRecorder {
    * happens before the handler runs (so a failed call is still in history for
    * `getHistory`/repeat), so the result can only be filled in afterward.
    */
+  attachCaller(index: number, caller: SessionPart): void {
+    const cmd = this.history.find(c => c.index === index);
+    if (cmd) cmd.caller = caller;
+  }
+
   attachResult(index: number, result: any): void {
     const cmd = this.history.find(c => c.index === index);
     if (cmd) cmd.result = safeClone(result);

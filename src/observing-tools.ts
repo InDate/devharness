@@ -13,7 +13,7 @@
  */
 const OBSERVING_TOOLS = new Set([
   'screenshot', 'content', 'inspect', 'proxy', 'network', 'console',
-  'wait', 'assert', 'check', 'dashboard', 'issues', 'message', 'source', 'config',
+  'wait', 'assert', 'check', 'dashboard', 'issues', 'source', 'config',
 ]);
 /** Actions that read without acting, in tools whose other actions act on a connection or page. */
 const OBSERVING_ACTIONS: Record<string, ReadonlySet<string>> = {

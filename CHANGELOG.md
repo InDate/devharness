@@ -7,7 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Events arrive as peer messages.** In Claude Code, each burst of lines on
+  the event stream goes to the session's messaging socket, which the session
+  reads at its next tool round, Bash rounds included. The stream file stays
+  the record, and `devharness watch` carries it for a client with no socket.
+- **A blocking call stops before the prompt cache runs out.** `wait`, `check`
+  and `modal` end 30s before the earliest cache among the parts of the
+  session that could have made the call, and the reply says to call again.
+  `config status` names the caller.
+
+### Removed
+
+- **The `message` tool and `devharness sessions/send/read/reply`.** Sessions
+  message each other with Claude Code's own `SendMessage`.
+
 ### Fixed
+
+- **A plain-http page keeps its renderer.** The origin-private file system is
+  read only on a secure page; Chrome terminated an insecure one that
+  `FileSystem.getDirectory` reached.
 
 - **A mismatch a timing race made names the race.** Whether a second input
   lands inside the first input's motion is set by the gap between them, so

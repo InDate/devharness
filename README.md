@@ -122,7 +122,7 @@ and Node.js through the Chrome DevTools Protocol. Beyond the above:
   `start({ monitorPort: true })` watches the port and blocks browser tools while
   it is down; `start({ watch: true })` restarts on file changes.
 - **Several agents.** Every tool takes a named connection, so nested agents each
-  drive their own tab in one Chrome, and sessions can message each other.
+  drive their own tab in one Chrome.
 - **Recovery.** A call missing a field returns what is missing and the retry sends
   only that. `config({ action: 'restart' })` respawns a stuck server without the
   client reconnecting.
@@ -147,9 +147,7 @@ to practise on.
 ```sh
 devharness which                                  # which session this shell belongs to
 devharness call config '{"action":"status"}'      # any tool, arguments as one JSON object
-devharness sessions                               # who else is reachable
-devharness watch                                  # wait for this session's next events
-devharness send a1b2c3d4 "check this" --wait=60000
+devharness watch                                  # wait for this session's next events, for a client with no messaging socket
 devharness bug "Title" Body words here            # files an issue; feature does the same
 devharness bench [sequence] [url]                 # opens the bench against this session
 ```

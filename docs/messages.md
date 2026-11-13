@@ -3944,6 +3944,7 @@ Persistent Chrome profiles are not available - the config tool was created witho
 | Global: {{globalPath}} | {{globalExists}} |
 
 **Server:** v{{version}} (pid {{serverPid}}, supervisor {{supervisorPid}})
+**Caller:** {{caller}}
 **Running:** {{entryPath}}
 **Built:** {{buildMtime}}
 
@@ -3952,6 +3953,15 @@ Persistent Chrome profiles are not available - the config tool was created witho
 After a rebuild, a `Built` timestamp older than the build means this server
 never reloaded - the rebuild signalled a supervisor that is not the one serving
 you, and everything you are observing is the previous code.
+
+---
+
+## CACHE_DEADLINE_STOP
+
+**Type:** info
+**Summary:** Stopped before the prompt cache ran out
+
+Stopped after {{waitedS}}s, 30s before the prompt cache of {{party}} runs out. A call still waiting then makes the next request write the whole prefix again. The request this reply produces reads the cache back to a full {{lifetimeMin}} minutes, so call again to keep waiting.
 
 ---
 
@@ -4304,103 +4314,6 @@ Cannot wait for {{condition}}: the debugger on "{{connection}}" is paused at a b
 **Suggestions:**
 - Resume execution first: `execution({ action: 'resume', connection: '{{connection}}' })`
 - Or inspect the paused state instead of waiting: `inspect({ action: 'getCallStack', connection: '{{connection}}' })`
-
----
-
-## MESSAGE_SESSIONS
-
-**Type:** success
-**Summary:** {{count}} session(s) reachable
-
-This session is `{{self}}`. Its mailbox: `{{mailboxPath}}`
-
-{{sessionList}}
-
-**Once per session:**
-
-An arriving message announces itself on this session's event stream, `{{eventStreamPath}}`, which is also where guard blocks land - one watch covers both. The plugin's SessionStart hook prints that path and the watch call at the start of every session. Without a watch, messages surface only when `message({ action: 'read' })` runs. Nothing watches the mailbox file; it holds the conversation and the read cursor.
-
----
-
-## MESSAGE_SENT
-
-**Type:** success
-**Summary:** Sent to {{to}}
-
-Message `{{shortId}}` appended to `{{mailboxPath}}`. The recipient sees it on `message({ action: 'read' })`, or immediately if a watch reads its event stream.{{deliveryNote}}{{#watchCall}}
-
-**A reply lands on this session's event stream, which no watch reads.** To hear it without another devharness call: `{{watchCall}}`{{/watchCall}}
-
-**Once per session:**
-
-To hold the call open until the other session answers: `message({ action: 'send', to: '{{to}}', text: '...', waitForReplyMs: 120000 })`.
-
----
-
-## MESSAGE_REPLY_RECEIVED
-
-**Type:** success
-**Summary:** {{count}} message(s) after {{elapsedMs}}ms
-
-{{messageList}}{{repeatNote}}
-
-**Suggestions:**
-- Answer with `message({ action: 'reply', replyTo: '<id>', text: '...' })`
-
----
-
-## MESSAGE_INBOX
-
-**Type:** success
-**Summary:** {{count}} new of {{total}} in {{self}}
-
-{{messageList}}
-
-**Once per session:**
-
-Read advances a cursor, so the same message is returned once. The full history stays in `{{mailboxPath}}`.
-
----
-
-## MESSAGE_REPLY_TIMEOUT
-
-**Type:** error
-**Code:** MESSAGE_REPLY_TIMEOUT
-
-Message `{{id}}` reached {{to}}, and nothing arrived in `{{self}}`'s mailbox within {{timeoutMs}}ms.
-
-**Suggestions:**
-- The other session is alive but was not calling devharness - it sees the message on its next `message({ action: 'read' })`
-- Check it is running: `message({ action: 'sessions' })`
-- Wait again without resending: `message({ action: 'read' })`, or send a follow-up with a longer `waitForReplyMs` (max 300000)
-
----
-
-## MESSAGE_TARGET_UNKNOWN
-
-**Type:** error
-**Code:** MESSAGE_TARGET_UNKNOWN
-
-Cannot address "{{target}}": {{reason}}. This session is `{{self}}`.
-
-**Suggestions:**
-- List who is reachable: `message({ action: 'sessions' })`
-- A reply needs the id of a message in this session's own mailbox: `message({ action: 'read' })`
-
----
-
-## MESSAGE_INVALID_ARGS
-
-**Type:** error
-**Code:** MESSAGE_INVALID_ARGS
-
-{{message}}
-
-**Suggestions:**
-- `message({ action: 'sessions' })` - who is reachable, and this session's mailbox path
-- `message({ action: 'send', to, text })` - write to another session
-- `message({ action: 'read' })` - take new messages
-- `message({ action: 'reply', replyTo, text })` - answer a message by id
 
 ---
 

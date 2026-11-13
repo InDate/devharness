@@ -105,13 +105,5 @@ describe('fixed text a reply repeats on every call', () => {
     }
   });
 
-  it('names the watch on a send only where no watch reads the stream the reply lands on', () => {
-    const call = 'Bash({ command: "devharness watch --session=a1b2c3d4", run_in_background: true })';
-    const unwatched = textOf(createSuccessResponse('MESSAGE_SENT', { to: 'peer', shortId: 'abcd1234', mailboxPath: '/m/peer.jsonl', deliveryNote: '', watchCall: call }));
-    const watched = textOf(createSuccessResponse('MESSAGE_SENT', { to: 'peer', shortId: 'abcd1234', mailboxPath: '/m/peer.jsonl', deliveryNote: '' }));
-
-    expect(unwatched).toContain(call);
-    expect(watched).not.toContain('which no watch reads');
-  });
 });
 

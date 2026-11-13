@@ -24,7 +24,11 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  type CallToolRequest,
+  type ServerNotification,
+  type ServerRequest,
 } from '@modelcontextprotocol/sdk/types.js';
+import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
 
 import { CDPManager } from './cdp-manager.js';
 import { SourceMapHandler } from './sourcemap-handler.js';
@@ -69,7 +73,6 @@ import { createServerTools } from './tools/server-tools.js';
 import { createConfigTools } from './tools/config-tools.js';
 import { createPluginTools } from './tools/plugin-tools.js';
 import { createIssuesTools } from './tools/issues-tools.js';
-import { createMessageTools } from './tools/message-tools.js';
 import { startSessionEndpoint, type SessionEndpoint } from './session-endpoint.js';
 import { runCli, isCliCommand, isVersionFlag, readPackageVersion } from './cli/index.js';
 import { getClaudeSessionId, resolveSessionName, resolveRestartStableSessionName } from './session-identity.js';
@@ -82,6 +85,8 @@ import { ServerManager } from './server-manager.js';
 import { configManager } from './config.js';
 import { ToolError } from './tool-error.js';
 import type { ServerLog, ServerRow, ToolGroup, ToolValues } from './bench/wire.js';
+import { claimCallers, type CallerClaim } from './prompt-cache.js';
+import { cacheDeadlineFor, cacheDeadlineStopOf } from './cache-deadline.js';
 import { arriveOn, unlisted, historyPlace, entryChannel, asInnerCall, callOwner } from './call-origin.js';
 import { markNextCommand, releaseCommand, noteCallStart, nameNewestCall, newlyIdleProxies, attachEntryToCursor, getProxy } from './proxy/registry.js';
 import { creditingEvaluatesTo, evaluateCredit } from './proxy/evaluate-credit.js';
@@ -691,7 +696,6 @@ const allTools = {
   // Dashboard tools (lazy-initialized in main())
   ...(configManager.isToolEnabled('dashboard') ? toolset('dashboard', createDashboardTools()) : {}),
   // Cross-session message tools
-  ...(configManager.isToolEnabled('message') ? toolset('message', createMessageTools()) : {}),
 };
 
 /** Every served tool, grouped by the toolset that built it, in the order `listTools` gives them. */
@@ -783,7 +787,16 @@ function registerToolHandlers(server: Server) {
   });
 
   // Anything a tool call causes is the agent's own doing, and its events say so.
-  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => runAs('agent', async () => {
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+    const claim = claimCallers();
+    try {
+      return await serveToolCall(request, extra, claim);
+    } finally {
+      claim.release();
+    }
+  });
+
+  const serveToolCall = (request: CallToolRequest, extra: RequestHandlerExtra<ServerRequest, ServerNotification>, claim: CallerClaim) => runAs('agent', async () => {
     const toolName = request.params.name;
     const tool = Object.prototype.hasOwnProperty.call(allTools, toolName)
       ? allTools[toolName as keyof typeof allTools]
@@ -918,15 +931,17 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
       await markNextCommand({ kind: 'command', index: commandIndex! });
     }
 
+    let cacheDeadline: ReturnType<typeof cacheDeadlineFor> | undefined;
     // Pass validated data to handler
     try {
       const params = validation.data as Record<string, unknown>;
       const launching = toolName === 'connection' && params?.action === 'launch' && typeof params.connection === 'string'
         ? sanitizeReference(params.connection) : undefined;
       if (launching !== undefined) launchingConnections.add(launching);
-      const result = await arriveOn('mcp', () => underDialogs(dialogTargetOf(validation.data), toolName, validation.data, extra?.signal, signal => (commandIndex !== null
+      cacheDeadline = cacheDeadlineFor(toolName, extra?.signal, claim);
+      const result = await arriveOn('mcp', () => underDialogs(dialogTargetOf(validation.data), toolName, validation.data, cacheDeadline!.signal, signal => (commandIndex !== null
         ? creditingEvaluatesTo({ kind: 'command', index: commandIndex }, () => unlisted(() => tool.handler(validation.data, signal)))
-        : tool.handler(validation.data, signal))))
+        : tool.handler(validation.data, signal))), claim)
         .finally(() => { if (launching !== undefined) launchingConnections.delete(launching); });
 
       if (commandIndex !== null) {
@@ -1069,7 +1084,14 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
 
       return boundReply(result);
     } catch (error) {
-      const response = error instanceof ToolError || error instanceof InvalidReferenceError
+      const stop = cacheDeadlineStopOf(error);
+      const response = stop
+        ? createSuccessResponse('CACHE_DEADLINE_STOP', {
+            party: stop.party.label,
+            waitedS: Math.round((Date.now() - stop.startedAt) / 1000),
+            lifetimeMin: Math.round(stop.party.lifetimeMs / 60_000),
+          })
+        : error instanceof ToolError || error instanceof InvalidReferenceError
         ? error.response
         : {
             content: [
@@ -1086,6 +1108,8 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
       }
       return response;
     } finally {
+      cacheDeadline?.dispose();
+      if (commandIndex !== null && claim.callers.length === 1) commandRecorder.attachCaller(commandIndex, claim.callers[0]);
       if (marksBoundary) {
         // Scheduled and not awaited: the wait for the boundary to go quiet is
         // paid out of the gap before the next command rather than out of this
@@ -1101,7 +1125,7 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
           .catch(() => { /* a boundary that failed to settle still clears */ });
       }
     }
-  }));
+  });
 }
 
 // Start the server
@@ -1330,8 +1354,8 @@ async function main() {
       sessionStartTime,
       getConnectionsForDashboard,
       // Named before the detector runs. A hub entry keyed on the pid would
-      // list this session a second time, beside the one its mailbox is named
-      // after.
+      // list this session a second time, beside the one its event stream is
+      // named after.
       resolveSessionName(),
       resolveSessionName(),
       handleHubDown
@@ -1352,8 +1376,8 @@ async function main() {
     setSessionInfo(sessionInfo);
 
     // The presence record is what a CLI matches --session against. It takes
-    // the same name the mailbox and the event stream take, or a peer would
-    // address a record whose mailbox this session never reads.
+    // the same name the event stream takes, or a CLI would reach a record
+    // whose stream this session never writes.
     if (sessionEndpoint) {
       await sessionEndpoint.refresh({
         sessionId: getClaudeSessionId() ?? sessionInfo.sessionId,

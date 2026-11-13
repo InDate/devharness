@@ -11,7 +11,6 @@ import { hasPendingBugs, getPendingBugs } from './issue-tracker.js';
 import { createErrorResponse, getMessage, withOnce } from './messages.js';
 import type { BlockEventInfo } from './block-events.js';
 import type { LaunchObservations } from './chrome-launcher.js';
-import type { SessionMessage } from './session-messages.js';
 import type { DialogAnswer, OpenDialog } from './dialog-monitor.js';
 import type { Annotation, BenchReport, TickResult } from './bench-mode.js';
 import type { CaptureRecord, CaptureVersion } from './bench/wire.js';
@@ -345,7 +344,6 @@ export interface ToolResponseMeta {
   storage?: StorageToolMeta;
   replay?: ReplayRunMeta;
   github?: GithubToolMeta;
-  message?: MessageToolMeta;
   bench?: BenchToolMeta;
   /** connection launch: the readings taken during a launch that failed. */
   launchObservations?: LaunchObservationsMeta;
@@ -430,33 +428,6 @@ export interface BenchToolMeta {
     facts?: Record<string, unknown>;
     versions?: CaptureVersion[];
   };
-}
-
-/** Structured result of a cross-session message action. Behaviour reads this,
- *  never the rendered text. */
-export interface MessageToolMeta {
-  action: 'sessions' | 'send' | 'read' | 'reply';
-  /** Mailbox id this session is reachable at. */
-  self: string;
-  /** sessions: every mailbox known, with hub liveness where the hub is up. */
-  sessions?: Array<{
-    id: string;
-    pid?: number;
-    cwd?: string;
-    live: boolean;
-    self: boolean;
-  }>;
-  /** send/reply: the message appended to the recipient's mailbox. */
-  sent?: SessionMessage;
-  /** send: whether a session was listening under that id at the time. False
-   *  for a suspended peer and for a mistyped id alike. */
-  targetListening?: boolean;
-  /** send/reply/read: messages taken from this session's own mailbox. */
-  received?: SessionMessage[];
-  /** send/reply with waitForReplyMs: true when the wait returned nothing. */
-  waitTimedOut?: boolean;
-  /** send/reply with waitForReplyMs: milliseconds spent inside the wait. */
-  waitElapsedMs?: number;
 }
 
 /** Structured result of a GitHub action on the issues tool. Behaviour reads

@@ -27,10 +27,11 @@ let previousDir: string | undefined;
  * anything, which is its response to every input it must not act on.
  */
 function runHook(input: string, env: Record<string, string> = {}): string {
+  const { CLAUDE_CODE_MESSAGING_SOCKET: _socket, ...inherited } = process.env;
   const raw = execFileSync('node', [HOOK], {
     input,
     encoding: 'utf-8',
-    env: { ...process.env, DEVHARNESS_DIR: dir, ...env },
+    env: { ...inherited, DEVHARNESS_DIR: dir, ...env },
   });
   if (!raw.trim()) return '';
   return JSON.parse(raw).hookSpecificOutput.additionalContext;

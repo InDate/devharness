@@ -24,7 +24,7 @@ import { insidePath } from '../tools/inside-position.js';
 import { debugLog } from '../debug-logger.js';
 import { resolveSessionName } from '../session-identity.js';
 import { getSessionInfo } from '../tools/dashboard-tools.js';
-import { appendEvent, currentOrigin, getEventStreamPath, runAs, streamReaders, unreadEvents, watchCall } from '../session-events.js';
+import { appendEvent, currentOrigin, getEventStreamPath, runAs, socketFor, streamReaders, unreadEvents, watchCall } from '../session-events.js';
 import { announceSequenceSaved } from '../sequence-events.js';
 import { activityPathFor, readActivity, readSiteActivity, renumberSteps, siteActivityPath, stepMap, writeSiteActivity } from '../sequence-activity.js';
 import type { ActivityMove, ExpectedValue, KindCount, MotionSetting } from '../bench/kinds.js';
@@ -741,11 +741,13 @@ export function createSequenceDriver(
       const session = resolveSessionName(getSessionInfo()?.shortId);
       const listed: any = await unlisted(() => executeToolCall('connection', { action: 'list' })).catch(() => null);
       const [readers, unread] = await Promise.all([streamReaders(session), unreadEvents(session)]);
+      const socket = socketFor(session);
       const benchUrls = [...sessions.values()].map(open => open.benchUrl).filter(Boolean);
       return {
         stream: getEventStreamPath(session),
         ...(readers !== undefined && { readers }),
         ...(unread !== undefined && { unread }),
+        ...(socket && { socket }),
         watchCall: watchCall(session),
         sequenceDirs: commandRecorder.getWatchedDirs(),
         connections: (listed?._meta?.connections ?? []).map((meta: any) => ({

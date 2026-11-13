@@ -27,7 +27,7 @@ import { createSuccessResponse, createErrorResponse, formatCodeBlock, getMessage
 import { checkBrowserAutomation } from '../error-helpers.js';
 import { resolveSessionName } from '../session-identity.js';
 import { getSessionInfo } from './dashboard-tools.js';
-import { getEventStreamPath, streamReaders, watchCall } from '../session-events.js';
+import { getEventStreamPath, socketFor, streamReaders, watchCall } from '../session-events.js';
 import type { ToolResponseMeta, BenchToolMeta } from '../tool-response.js';
 import { readCapture, versionsOf } from '../capture-file.js';
 import { sweepCaptures } from '../bench-mode/capture-sweep.js';
@@ -427,7 +427,7 @@ export function createBenchTools(
               benchUrl: state.benchUrl,
               page: pageStanding(connection, resolved.cdpManager, state.frozen),
               eventStreamPath: streamPath,
-              ...(await streamReaders(sessionName) === 0
+              ...(!socketFor(sessionName) && await streamReaders(sessionName) === 0
                 ? { watchCall: watchCall(sessionName) }
                 : {}),
             });

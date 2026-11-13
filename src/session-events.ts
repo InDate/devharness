@@ -20,8 +20,10 @@ import { promises as fs } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { getOutputPath } from './helpers/paths.js';
+import { resolveRestartStableSessionName } from './session-identity.js';
+import { sendPeerMessage, sessionByIdPrefix } from './peer-socket.js';
 
-export type EventKind = 'block' | 'message' | 'annotation' | 'pick' | 'sequence' | 'screenshot' | 'comparison' | 'investigate' | 'proxy' | 'hold' | 'instruction' | 'run' | 'film' | 'notify';
+export type EventKind = 'block' | 'annotation' | 'pick' | 'sequence' | 'screenshot' | 'comparison' | 'investigate' | 'proxy' | 'hold' | 'instruction' | 'run' | 'film' | 'notify';
 
 export interface SessionEvent {
   ts: string;
@@ -135,5 +137,78 @@ export async function appendEvent(
     await fs.appendFile(getEventStreamPath(sessionName), JSON.stringify(event) + '\n');
   } catch (error) {
     console.error(`[devharness] Failed to append ${kind} event: ${error}`);
+    return;
+  }
+  scheduleDelivery(sessionName);
+}
+
+/** A burst ends at this much quiet, so its lines arrive as one message; the same bounds `devharness watch` reads by. */
+const SETTLE_MS = 1000;
+/** A stream that never goes quiet still delivers within this. */
+const BURST_CAP_MS = 5000;
+/** A delivery lock older than this belongs to a process that died holding it. */
+const STALE_LOCK_MS = 30000;
+
+const bursts = new Map<string, { timer: NodeJS.Timeout; firstAt: number }>();
+
+function scheduleDelivery(sessionName: string): void {
+  const burst = bursts.get(sessionName);
+  const firstAt = burst?.firstAt ?? Date.now();
+  if (burst) clearTimeout(burst.timer);
+  const wait = Math.max(0, Math.min(SETTLE_MS, firstAt + BURST_CAP_MS - Date.now()));
+  const timer = setTimeout(() => {
+    bursts.delete(sessionName);
+    void deliverStream(sessionName);
+  }, wait);
+  timer.unref();
+  bursts.set(sessionName, { timer, firstAt });
+}
+
+/**
+ * The socket the session reading `sessionName` takes peer messages on: this
+ * process's own client where the stream is its own, else the registry entry
+ * whose session id opens with the stream name.
+ */
+export function socketFor(sessionName: string): string | undefined {
+  const own = process.env.CLAUDE_CODE_MESSAGING_SOCKET;
+  if (own && resolveRestartStableSessionName() === sessionName) return own;
+  return sessionByIdPrefix(sessionName)?.socketPath;
+}
+
+/**
+ * Sends the lines past the stream's cursor to its session's messaging socket
+ * and moves the cursor past them, so a watch or a later delivery starts after
+ * them. A lock directory beside the stream holds one delivery at a time across
+ * processes, since two would each send the same lines. A stream with no socket,
+ * or a send that fails, leaves the cursor where it stood and the lines for
+ * `devharness watch`.
+ */
+export async function deliverStream(sessionName: string): Promise<void> {
+  const socketPath = socketFor(sessionName);
+  if (!socketPath) return;
+  const streamPath = getEventStreamPath(sessionName);
+  const cursorPath = getEventCursorPath(sessionName);
+  const lock = `${streamPath}.delivering`;
+  try {
+    await fs.mkdir(lock);
+  } catch {
+    const held = await fs.stat(lock).catch(() => undefined);
+    if (!held || Date.now() - held.mtimeMs < STALE_LOCK_MS) return;
+    await fs.rm(lock, { recursive: true, force: true });
+    try { await fs.mkdir(lock); } catch { return; }
+  }
+  try {
+    const stream = await fs.readFile(streamPath);
+    const stored = Number((await fs.readFile(cursorPath, 'utf8').catch(() => '')).trim());
+    const from = Number.isInteger(stored) && stored >= 0 && stored <= stream.length ? stored : 0;
+    const end = stream.lastIndexOf(0x0a) + 1;
+    if (end <= from) return;
+    const lines = stream.subarray(from, end).toString('utf8');
+    await sendPeerMessage(socketPath, `devharness events (${streamPath}):\n${lines}`);
+    await fs.writeFile(cursorPath, String(end));
+  } catch (error) {
+    console.error(`[devharness] Event delivery to ${sessionName} failed: ${error}`);
+  } finally {
+    await fs.rm(lock, { recursive: true, force: true });
   }
 }

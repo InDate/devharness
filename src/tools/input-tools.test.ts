@@ -52,7 +52,16 @@ describe('a type into a select', () => {
       })),
       keyboard: {
         press: vi.fn(async () => {}), down: vi.fn(async () => {}), up: vi.fn(async () => {}),
-        type: vi.fn(async (text: string) => { const startedAt = Date.now(); typed.push({ text, startedAt, endedAt: Date.now() }); }),
+        type: vi.fn(async (text: string) => {
+          const startedAt = Date.now();
+          // Chrome's type-ahead: the focused select takes the first option whose label starts with the text.
+          const field = document.activeElement;
+          if (field?.tagName === 'SELECT') {
+            const match = Array.from(field.options as ArrayLike<any>).find((option: any) => String(option.label ?? option.text).toLowerCase().startsWith(text.toLowerCase()));
+            if (match) field.value = match.value;
+          }
+          typed.push({ text, startedAt, endedAt: Date.now() });
+        }),
       },
     });
     return { input, typed };

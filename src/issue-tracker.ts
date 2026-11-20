@@ -73,6 +73,10 @@ export interface TrackedIssue {
    * only issues holding true.
    */
   githubSync?: boolean;
+  /** Issues that have to close before this one can be worked. */
+  blockedBy: number[];
+  /** The issue this one is a piece of; that issue closes when its last open piece closes. */
+  parent?: number;
   /** Frontmatter keys this version doesn't know, re-emitted verbatim so a
    *  newer field (or a hand-edit) survives a rewrite by an older build. */
   extraFrontmatter?: Record<string, string>;
@@ -205,6 +209,7 @@ const KNOWN_FRONTMATTER_KEYS: ReadonlySet<string> = new Set([
   'github', 'id', 'type', 'status', 'title', 'labels', 'sequenceFile', 'startUrl',
   'recordingName', 'githubRepo', 'closedReason', 'reportedAt', 'acknowledgedAt',
   'startedAt', 'resolvedAt', 'githubSyncedAt', 'githubBodyHash', 'githubSync',
+  'blockedBy', 'parent',
 ]);
 
 /** Raw (unparsed) values for keys we don't know, so re-emission is lossless. */
@@ -250,6 +255,8 @@ function parseIssueFile(raw: string, filePath: string): TrackedIssue | null {
     title: typeof fm.title === 'string' ? fm.title : '',
     body,
     labels: Array.isArray(fm.labels) ? fm.labels : [],
+    blockedBy: Array.isArray(fm.blockedBy) ? fm.blockedBy.filter((v: unknown) => Number.isInteger(v)) : [],
+    parent: Number.isInteger(fm.parent) ? fm.parent : undefined,
     comments,
     sequenceFile: typeof fm.sequenceFile === 'string' ? fm.sequenceFile : '',
     startUrl: typeof fm.startUrl === 'string' ? fm.startUrl : '',
@@ -272,6 +279,8 @@ function serializeIssueFile(issue: TrackedIssue): string {
   fm.push(`status: ${issue.status}`);
   fm.push(`title: ${yamlQuote(issue.title)}`);
   if (issue.labels.length > 0) fm.push(`labels: ${yamlStringArray(issue.labels)}`);
+  if (issue.blockedBy.length > 0) fm.push(`blockedBy: [${issue.blockedBy.join(', ')}]`);
+  if (issue.parent !== undefined) fm.push(`parent: ${issue.parent}`);
   if (issue.sequenceFile) fm.push(`sequenceFile: ${yamlQuote(issue.sequenceFile)}`);
   if (issue.startUrl) fm.push(`startUrl: ${yamlQuote(issue.startUrl)}`);
   if (issue.recordingName) fm.push(`recordingName: ${yamlQuote(issue.recordingName)}`);
@@ -431,6 +440,7 @@ async function migrateCsvIfNeeded(): Promise<void> {
       title: row.description,
       body: '',
       labels: [],
+      blockedBy: [],
       comments: [],
       sequenceFile: row.sequenceFile,
       startUrl: row.startUrl,
@@ -593,6 +603,8 @@ export async function addIssue(params: {
   startUrl?: string;
   body?: string;
   labels?: string[];
+  blockedBy?: number[];
+  parent?: number;
 }): Promise<TrackedIssue> {
   await ensureIndexLoaded();
 
@@ -607,6 +619,8 @@ export async function addIssue(params: {
     title: params.title,
     body: params.body ?? '',
     labels: params.labels ?? [],
+    blockedBy: params.blockedBy ?? [],
+    parent: params.parent,
     comments: [],
     sequenceFile: params.sequenceFile ?? '',
     startUrl: params.startUrl ?? '',
@@ -684,7 +698,8 @@ export async function updateIssueStatus(id: number, status: IssueStatus): Promis
  *  timestamp switch cannot express. */
 export type IssueFieldPatch = Partial<Pick<TrackedIssue,
   'status' | 'title' | 'body' | 'labels' | 'closedReason' | 'resolvedAt' |
-  'github' | 'githubRepo' | 'githubSyncedAt' | 'githubBodyHash' | 'githubSync'>>;
+  'github' | 'githubRepo' | 'githubSyncedAt' | 'githubBodyHash' | 'githubSync' |
+  'blockedBy' | 'parent'>>;
 
 export async function updateIssueFields(id: number, patch: IssueFieldPatch): Promise<TrackedIssue | undefined> {
   await ensureIndexLoaded();
@@ -693,6 +708,121 @@ export async function updateIssueFields(id: number, patch: IssueFieldPatch): Pro
 
   Object.assign(issue, patch);
   return writeAndCacheIssue(issue);
+}
+
+/** The open issues among those this one waits on. */
+export function openBlockers(issue: TrackedIssue, all: Map<number, TrackedIssue>): TrackedIssue[] {
+  return issue.blockedBy
+    .map(id => all.get(id))
+    .filter((b): b is TrackedIssue => !!b && !isCompletedStatus(b.status));
+}
+
+export function childrenOf(id: number, all: Map<number, TrackedIssue>): TrackedIssue[] {
+  return Array.from(all.values()).filter(i => i.parent === id).sort((a, b) => a.id - b.id);
+}
+
+export async function getIssueMap(): Promise<Map<number, TrackedIssue>> {
+  await ensureIndexLoaded();
+  return index!;
+}
+
+export type LinkRefusal =
+  | { kind: 'missing'; ids: number[] }
+  | { kind: 'self' }
+  | { kind: 'cycle'; path: number[] };
+
+/**
+ * Checks blockedBy and parent for an issue before they are written. A cycle
+ * leaves every issue on it waiting on another, so none of them ever reaches
+ * `next`; a parent cycle closes nothing.
+ */
+export async function checkLinks(
+  id: number | undefined, blockedBy: number[] | undefined, parent: number | undefined,
+): Promise<LinkRefusal | null> {
+  await ensureIndexLoaded();
+  const all = index!;
+  const named = [...(blockedBy ?? []), ...(parent !== undefined ? [parent] : [])];
+  const missing = named.filter(n => !all.has(n));
+  if (missing.length > 0) return { kind: 'missing', ids: [...new Set(missing)] };
+  if (id !== undefined && named.includes(id)) return { kind: 'self' };
+  if (id === undefined) return null;
+
+  if (blockedBy) {
+    const edges = (n: number) => (n === id ? blockedBy : all.get(n)?.blockedBy ?? []);
+    const path = findPath(edges, blockedBy, id);
+    if (path) return { kind: 'cycle', path: [id, ...path] };
+  }
+  const effectiveParent = parent !== undefined ? parent : all.get(id)?.parent;
+  const effectiveBlockers = blockedBy ?? all.get(id)?.blockedBy ?? [];
+  for (let at = effectiveParent, steps = 0; at !== undefined && steps <= all.size; at = all.get(at)?.parent, steps++) {
+    if (effectiveBlockers.includes(at)) return { kind: 'cycle', path: [id, at, id] };
+  }
+  if (parent !== undefined) {
+    const up: number[] = [];
+    for (let at: number | undefined = parent; at !== undefined; at = all.get(at)?.parent) {
+      up.push(at);
+      if (at === id) return { kind: 'cycle', path: [id, ...up] };
+      if (up.length > all.size) break;
+    }
+  }
+  return null;
+}
+
+function findPath(edges: (n: number) => number[], from: number[], target: number): number[] | null {
+  const seen = new Set<number>();
+  const walk = (n: number): number[] | null => {
+    if (n === target) return [n];
+    if (seen.has(n)) return null;
+    seen.add(n);
+    for (const next of edges(n)) {
+      const rest = walk(next);
+      if (rest) return [n, ...rest];
+    }
+    return null;
+  };
+  for (const start of from) {
+    const path = walk(start);
+    if (path) return path;
+  }
+  return null;
+}
+
+/**
+ * Closes the parent of a just-closed issue once every piece of it is closed,
+ * then that parent's parent the same way. Returns the issues it closed.
+ */
+export async function closeFinishedParents(id: number): Promise<TrackedIssue[]> {
+  await ensureIndexLoaded();
+  const closed: TrackedIssue[] = [];
+  let parentId = index!.get(id)?.parent;
+  while (parentId !== undefined) {
+    const parent = index!.get(parentId);
+    if (!parent || isCompletedStatus(parent.status)) break;
+    const pieces = childrenOf(parentId, index!);
+    if (pieces.some(c => !isCompletedStatus(c.status))) break;
+    await updateIssueStatus(parentId, completedStatusFor(parent.type));
+    await addIssueComment(parentId, `Closed: every piece closed (${pieces.map(c => `#${c.id}`).join(', ')}).`);
+    closed.push(parent);
+    parentId = parent.parent;
+  }
+  return closed;
+}
+
+const NEXT_STATUS_ORDER: Record<string, number> = { in_progress: 0, acknowledged: 1, pending: 2 };
+
+/**
+ * Open issues ready to work: nothing they wait on is open, and no open piece
+ * sits under them (a parent is worked through its pieces). Issues already in
+ * progress come first, then acknowledged, then pending, oldest first within each.
+ */
+export async function getReadyIssues(filter?: Pick<IssueFilter, 'type' | 'labels'>): Promise<TrackedIssue[]> {
+  const open = await getIssues({ type: filter?.type, labels: filter?.labels });
+  const all = index!;
+  return open
+    .filter(i => openBlockers(i, all).length === 0)
+    .filter(i => childrenOf(i.id, all).every(c => isCompletedStatus(c.status)))
+    .sort((a, b) =>
+      (NEXT_STATUS_ORDER[a.status] ?? 3) - (NEXT_STATUS_ORDER[b.status] ?? 3) || a.id - b.id);
 }
 
 /** The local issue linked to an upstream number, if any. */

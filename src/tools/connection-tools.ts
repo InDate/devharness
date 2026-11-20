@@ -422,7 +422,15 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
           await debugLog('index', `Connection with reference "${sanitizedRef}" already exists, reusing`);
 
           activateConnection(existingConnection.id);
-          const page = await pageOf(existingConnection);
+          // A reused tab still shows whatever it was left on; a launch that
+          // names a url has to land there, or the next step acts on the old page.
+          const before = await pageOf(existingConnection);
+          let movedFrom: string | undefined;
+          if (url && before?.url !== url && existingConnection.puppeteerManager?.isConnected()) {
+            await existingConnection.puppeteerManager.getPage().goto(url, { waitUntil: 'load', timeout: 30000 });
+            movedFrom = before?.url;
+          }
+          const page = movedFrom === undefined ? before : await pageOf(existingConnection);
           const title = page?.title ?? 'Unknown';
           const pageUrl = page?.url ?? 'about:blank';
 
@@ -433,7 +441,8 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
             createSuccessResponse('CHROME_CONNECTION_REUSED', {
               reference: sanitizedRef,
               title,
-              url: pageUrl
+              url: pageUrl,
+              movedFrom,
             }),
             sanitizedRef,
             true,
@@ -1264,13 +1273,13 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
     }
     activateConnection(connection.id);
 
-    // Puppeteer holds one selected page per browser; later calls reach the connection's own.
-    if (connection.puppeteerManager?.isConnected() && connection.pageIndex !== undefined) {
-      try {
-        await connection.puppeteerManager.setPage(connection.pageIndex);
-      } catch {
-        // A page that no longer exists leaves the current one selected.
-      }
+    // The connection's tab is found by its target id: a position in the tab
+    // list moves as other tabs open and close, and selected a stranger's tab.
+    const targetId = connection.cdpManager.getTargetId?.();
+    if (connection.puppeteerManager?.isConnected() && targetId) {
+      const own = (await connection.puppeteerManager.getPages())
+        .find(page => (page.target() as any)._targetId === targetId);
+      if (own) connection.puppeteerManager.adopt(own);
     }
     if (args.bringToFront && connection.puppeteerManager?.isConnected()) {
       await connection.puppeteerManager.getPage().bringToFront();

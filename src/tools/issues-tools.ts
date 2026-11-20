@@ -34,6 +34,14 @@ import {
   getIssueSequencesDir,
   generateSequenceFilename,
   completedStatusFor,
+  isCompletedStatus,
+  checkLinks,
+  closeFinishedParents,
+  getIssueMap,
+  getReadyIssues,
+  openBlockers,
+  childrenOf,
+  type LinkRefusal,
   type TrackedIssue,
   type IssueType,
   type IssueStatus,
@@ -56,12 +64,12 @@ function isGithubEnabled(): boolean {
   }
 }
 const issuesSchema = z.object({
-  action: z.enum(['list', 'create', 'edit', 'workOn', 'resolve', 'acknowledge', 'comment',
+  action: z.enum(['list', 'next', 'create', 'edit', 'workOn', 'resolve', 'acknowledge', 'comment',
     'publish', 'sync', 'import', 'link', 'pullSequence']),
   id: z.number().optional()
     .describe('Issue ID. On list, that one issue in full, other filters ignored'),
   type: z.enum(['bug', 'feature']).optional()
-    .describe('create: required. list: filter'),
+    .describe('create: required. list/next: filter'),
   status: z.enum(['pending', 'acknowledged', 'in_progress', 'fixed', 'implemented']).optional()
     .describe('list: filter'),
   title: z.string().optional()
@@ -69,7 +77,11 @@ const issuesSchema = z.object({
   body: z.string().optional()
     .describe('create/edit: Markdown body (repro steps, expected/actual); edit replaces it'),
   labels: z.array(z.string()).optional()
-    .describe('create: labels. edit: the replacement labels. list: issues with ANY of them'),
+    .describe('create: labels. edit: the replacement labels. list/next: issues with ANY of them'),
+  blockedBy: z.array(z.number().int().positive()).optional()
+    .describe('create/edit: IDs that must close first; edit replaces the list'),
+  parent: z.number().int().positive().nullable().optional()
+    .describe('create/edit: issue this is a piece of; it closes when its last piece closes. edit: null clears'),
   text: z.string().optional()
     .describe('comment: Markdown text'),
   newest: z.number().int().positive().optional()
@@ -211,7 +223,28 @@ function verificationRecord(outcome: 'Fixed' | 'Not fixed' | 'Replay failed', se
   return lines.join('\n');
 }
 
-function formatIssuesList(issues: TrackedIssue[]): string {
+function linkRefusal(refusal: LinkRefusal, id: number | undefined) {
+  if (refusal.kind === 'missing') {
+    return createErrorResponse('ISSUES_LINK_NOT_FOUND', { ids: refusal.ids.map(n => `#${n}`).join(', ') });
+  }
+  if (refusal.kind === 'self') {
+    return createErrorResponse('ISSUES_LINK_SELF', { id });
+  }
+  return createErrorResponse('ISSUES_LINK_CYCLE', { path: refusal.path.map(n => `#${n}`).join(' → ') });
+}
+
+/** `waits on #3, #5` / `piece of #7` beside a title in a listing. */
+function linkSuffix(issue: TrackedIssue, all: Map<number, TrackedIssue>): string {
+  const bits: string[] = [];
+  const blockers = openBlockers(issue, all);
+  if (blockers.length > 0) bits.push(`waits on ${blockers.map(b => `#${b.id}`).join(', ')}`);
+  const openPieces = childrenOf(issue.id, all).filter(c => !isCompletedStatus(c.status));
+  if (openPieces.length > 0) bits.push(`${openPieces.length} open piece${openPieces.length === 1 ? '' : 's'}`);
+  if (issue.parent !== undefined) bits.push(`piece of #${issue.parent}`);
+  return bits.length > 0 ? ` (${bits.join('; ')})` : '';
+}
+
+function formatIssuesList(issues: TrackedIssue[], all: Map<number, TrackedIssue>): string {
   if (issues.length === 0) {
     return 'No issues found.';
   }
@@ -237,7 +270,7 @@ function formatIssuesList(issues: TrackedIssue[]): string {
       ? issue.title.substring(0, maxTitleLen - 3) + '...'
       : issue.title;
 
-    lines.push(`${id}  ${status}  ${type}  ${title}${labelSuffix}`);
+    lines.push(`${id}  ${status}  ${type}  ${title}${labelSuffix}${linkSuffix(issue, all)}`);
   }
 
   return lines.join('\n');
@@ -257,7 +290,12 @@ function getStatusIcon(status: IssueStatus): string {
 /** A listing renders bodies when it holds this many issues or fewer; above it, titles only. */
 const DETAIL_RENDER_LIMIT = 1;
 
-function formatIssueDetails(issue: TrackedIssue): string {
+function issueRef(issue: TrackedIssue | undefined, id: number): string {
+  if (!issue) return `#${id} (missing)`;
+  return `#${id} ${getStatusIcon(issue.status)} ${issue.title}`;
+}
+
+function formatIssueDetails(issue: TrackedIssue, all: Map<number, TrackedIssue>): string {
   const typeIcon = issue.type === 'bug' ? '🐛' : '✨';
   const statusIcon = getStatusIcon(issue.status);
 
@@ -269,6 +307,19 @@ function formatIssueDetails(issue: TrackedIssue): string {
 
   if (issue.labels.length > 0) {
     lines.push(`**Labels:** ${issue.labels.join(', ')}`);
+  }
+
+  if (issue.parent !== undefined) {
+    lines.push(`**Piece of:** ${issueRef(all.get(issue.parent), issue.parent)}`);
+  }
+
+  if (issue.blockedBy.length > 0) {
+    lines.push('**Waits on:**', ...issue.blockedBy.map(id => `- ${issueRef(all.get(id), id)}`));
+  }
+
+  const pieces = childrenOf(issue.id, all);
+  if (pieces.length > 0) {
+    lines.push('**Pieces:**', ...pieces.map(c => `- ${issueRef(c, c.id)}`));
   }
 
   if (issue.body) {
@@ -354,8 +405,8 @@ export function createIssuesTools(
                 bugCount: issue.type === 'bug' ? 1 : 0,
                 featureCount: issue.type === 'feature' ? 1 : 0,
                 pendingCount: issue.status === 'pending' ? 1 : 0,
-                issuesList: formatIssuesList([issue]),
-                details: formatIssueDetails(issue),
+                issuesList: formatIssuesList([issue], await getIssueMap()),
+                details: formatIssueDetails(issue, await getIssueMap()),
                 bodiesOmitted: false,
                 search: null,
                 includeCompleted: true,
@@ -389,17 +440,34 @@ export function createIssuesTools(
             const pendingCount = issues.filter(i => i.status === 'pending').length;
 
             const rendersDetails = issues.length > 0 && issues.length <= DETAIL_RENDER_LIMIT;
+            const all = await getIssueMap();
 
             return createSuccessResponse('ISSUES_LIST', {
               count: issues.length,
               bugCount,
               featureCount,
               pendingCount,
-              issuesList: formatIssuesList(issues),
-              details: rendersDetails ? issues.map(formatIssueDetails).join('\n\n---\n\n') : null,
+              issuesList: formatIssuesList(issues, all),
+              details: rendersDetails ? issues.map(i => formatIssueDetails(i, all)).join('\n\n---\n\n') : null,
               bodiesOmitted: !rendersDetails && issues.length > 0,
               search: args.search || null,
               includeCompleted: args.includeCompleted || false,
+            });
+          }
+
+          case 'next': {
+            const ready = await getReadyIssues({ type: args.type, labels: args.labels });
+            const all = await getIssueMap();
+            const waiting = (await getIssues({ type: args.type, labels: args.labels })).length - ready.length;
+            if (ready.length === 0) {
+              return createSuccessResponse('ISSUES_NEXT_NONE', { waiting });
+            }
+            return createSuccessResponse('ISSUES_NEXT', {
+              id: ready[0].id,
+              details: formatIssueDetails(ready[0], all),
+              othersList: ready.length > 1 ? formatIssuesList(ready.slice(1), all) : null,
+              readyCount: ready.length,
+              waiting,
             });
           }
 
@@ -415,6 +483,9 @@ export function createIssuesTools(
                 message: 'Issue title is required',
               });
             }
+
+            const createRefusal = await checkLinks(undefined, args.blockedBy, args.parent ?? undefined);
+            if (createRefusal) return linkRefusal(createRefusal, undefined);
 
             // Check if sequence should be included (default: true)
             const includeSequence = args.includeSequence !== false;
@@ -489,6 +560,8 @@ export function createIssuesTools(
               startUrl: effectiveStartUrl,
               body: args.body,
               labels: args.labels,
+              blockedBy: args.blockedBy,
+              parent: args.parent ?? undefined,
             });
 
             // If we created a sequence file with temp ID, rename it with real ID
@@ -522,7 +595,8 @@ export function createIssuesTools(
                 message: 'Issue ID is required',
               });
             }
-            if (args.title === undefined && args.body === undefined && args.labels === undefined && args.sequenceName === undefined && args.sync === undefined) {
+            if (args.title === undefined && args.body === undefined && args.labels === undefined && args.sequenceName === undefined && args.sync === undefined
+              && args.blockedBy === undefined && args.parent === undefined) {
               return createErrorResponse('ISSUES_NOTHING_TO_EDIT', { id: args.id });
             }
             if (args.title !== undefined && !args.title.trim()) {
@@ -531,7 +605,17 @@ export function createIssuesTools(
               });
             }
 
+            if (args.blockedBy !== undefined || args.parent !== undefined) {
+              if (!(await getIssue(args.id))) {
+                return createErrorResponse('ISSUES_NOT_FOUND', { id: args.id, message: `Issue #${args.id} not found` });
+              }
+              const editRefusal = await checkLinks(args.id, args.blockedBy, args.parent ?? undefined);
+              if (editRefusal) return linkRefusal(editRefusal, args.id);
+            }
+
             const edited = await updateIssueFields(args.id, {
+              ...(args.blockedBy !== undefined && { blockedBy: [...new Set(args.blockedBy)] }),
+              ...(args.parent !== undefined && { parent: args.parent ?? undefined }),
               ...(args.title !== undefined && { title: args.title.trim() }),
               ...(args.body !== undefined && { body: args.body }),
               ...(args.labels !== undefined && { labels: args.labels }),
@@ -577,6 +661,8 @@ export function createIssuesTools(
                 args.title !== undefined && 'title',
                 args.body !== undefined && 'body',
                 args.labels !== undefined && 'labels',
+                args.blockedBy !== undefined && (args.blockedBy.length > 0 ? `waits on ${args.blockedBy.map(n => `#${n}`).join(', ')}` : 'waits on nothing'),
+                args.parent !== undefined && (args.parent === null ? 'no parent' : `piece of #${args.parent}`),
                 args.sequenceName !== undefined && `sequence (${args.sequenceName})`,
                 args.sync !== undefined && (args.sync === true ? 'set to sync' : args.sync === false ? 'left out of sync' : 'sync undecided'),
               ].filter(Boolean).join(', '),
@@ -732,7 +818,7 @@ export function createIssuesTools(
                 type: issue.type,
                 title: issue.title,
                 sequenceFile: issue.sequenceFile || null,
-                details: formatIssueDetails(issue),
+                details: formatIssueDetails(issue, await getIssueMap()),
                 replayStarted: hasSequence,
                 browserLaunched: !hasSequence && !!issue.startUrl,
                 connection: connectionRef,
@@ -1061,6 +1147,13 @@ export function createIssuesTools(
               // User confirmed resolution
               const newStatus: IssueStatus = completedStatusFor(issue.type);
               await updateIssueStatus(args.id, newStatus);
+              const closedParents = await closeFinishedParents(args.id);
+              const all = await getIssueMap();
+              const closedIds = new Set([args.id, ...closedParents.map(p => p.id)]);
+              const unblocked = Array.from(all.values()).filter(i =>
+                !isCompletedStatus(i.status)
+                && i.blockedBy.some(b => closedIds.has(b))
+                && openBlockers(i, all).length === 0);
 
               return createSuccessResponse('ISSUES_RESOLVED', {
                 id: issue.id,
@@ -1069,6 +1162,8 @@ export function createIssuesTools(
                 title: issue.title,
                 userComment: verification.comment || null,
                 replayDetails,
+                closedParents: closedParents.length > 0 ? closedParents.map(p => `#${p.id} ${p.title}`).join(', ') : null,
+                unblocked: unblocked.length > 0 ? unblocked.map(i => `#${i.id} ${i.title}`).join(', ') : null,
               });
             } else {
               // User said not resolved - include replay details so user can see what happened

@@ -420,8 +420,8 @@ const TO_END = process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End';
 /** What a field holds: a select's chosen label, an input's value, or an editable element's text. */
 function fieldText(page: any, selector: string): Promise<string> {
   return page.$eval(selector, (el: unknown) => {
-    const element = el as { tagName?: string; selectedOptions?: ArrayLike<{ label: string }>; value?: string; innerText?: string; textContent?: string | null };
-    if (element.tagName === 'SELECT') return element.selectedOptions?.[0]?.label ?? '';
+    const element = el as { tagName?: string; selectedOptions?: ArrayLike<{ label?: string; text?: string }>; value?: string; innerText?: string; textContent?: string | null };
+    if (element.tagName === 'SELECT') return element.selectedOptions?.[0]?.label ?? element.selectedOptions?.[0]?.text ?? '';
     if ('value' in element && element.value !== undefined) return element.value;
     return (element.innerText ?? element.textContent ?? '').trim();
   });
@@ -441,6 +441,19 @@ function selectTypeAhead(page: any, selector: string): Promise<{ isSelect: boole
     const at = ended?.get(el);
     return { isSelect: el.tagName === 'SELECT', sinceTyped: at === undefined ? null : Date.now() - at };
   });
+}
+
+/** Whether focus sits on the element or inside it, followed through open shadow roots. */
+function holdsFocus(page: any, selector: string): Promise<boolean> {
+  return page.$eval(selector, (el: any) => {
+    let active: any = (globalThis as any).document.activeElement;
+    while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+    return !!active && (active === el || el.contains(active));
+  });
+}
+
+function optionLabels(page: any, selector: string): Promise<string[]> {
+  return page.$eval(selector, (el: any) => Array.from(el.options ?? [], (option: any) => String(option.label ?? option.text)));
 }
 
 function markTypeAheadEnded(page: any, selector: string): Promise<void> {
@@ -1170,8 +1183,14 @@ export function createInputTools(
                   // Setting the value directly reaches the DOM and leaves that
                   // model holding the old text, and focusing by script puts the
                   // caret wherever the field last had it.
-                  await withReplayBypass(page, async () => {
+                  const focused = await withReplayBypass(page, async () => {
                     await clickSelector(page, selector);
+                    // A click in a tab that is not in front leaves focus where it
+                    // was, so the keys below would go to the body.
+                    if (!(await holdsFocus(page, selector))) {
+                      await page.$eval(selector, (el: { focus(): void }) => el.focus());
+                      if (!(await holdsFocus(page, selector))) return false;
+                    }
                     if (!append) {
                       // The whole field, where a triple click reaches one paragraph.
                       await pressChord(page, SELECT_ALL);
@@ -1179,7 +1198,9 @@ export function createInputTools(
                     } else {
                       await pressChord(page, TO_END);
                     }
+                    return true;
                   });
+                  if (!focused) return { selector, unfocused: true, fingerprint };
                   // Abortable between clear and retype: the clear that went out
                   // stays out, but the new text is not dispatched.
                   await checkAborted();
@@ -1197,6 +1218,18 @@ export function createInputTools(
                   if (isSelect) await markTypeAheadEnded(page, selector);
 
                   const currentValue = await fieldText(page, selector);
+                  // Keys that reach no field, or a field the page replaced or reset
+                  // while they went in, leave it empty.
+                  if (!isSelect && !append && currentValue === '') {
+                    return { selector, notHeld: true, fingerprint };
+                  }
+                  // Type-ahead picks the first option whose label starts with the
+                  // text; a label that does not means no option matched.
+                  if (isSelect && !currentValue.toLowerCase().startsWith(text.toLowerCase())) {
+                    const hidden = await page.evaluate(() => (globalThis as any).document.visibilityState === 'hidden');
+                    if (hidden) return { selector, hiddenTab: { chosen: currentValue }, fingerprint };
+                    return { selector, noOption: { chosen: currentValue, labels: await optionLabels(page, selector) }, fingerprint };
+                  }
 
                   return { selector, text, currentValue, fingerprint };
                 },
@@ -1227,6 +1260,25 @@ export function createInputTools(
 
               if (result.result?.refused) {
                 return elementMismatch('type', `\`${rawSelector}\``, result.result.refused, result.result.fingerprint);
+              }
+              if (result.result?.notHeld) {
+                return createErrorResponse('TYPE_NOT_HELD', { selector: rawSelector, text });
+              }
+              if (result.result?.unfocused) {
+                return createErrorResponse('TYPE_NOT_FOCUSED', { selector: rawSelector });
+              }
+              if (result.result?.hiddenTab) {
+                return createErrorResponse('TYPE_SELECT_HIDDEN_TAB', {
+                  selector: rawSelector, text, chosen: result.result.hiddenTab.chosen, connection: args.connection,
+                });
+              }
+              if (result.result?.noOption) {
+                const { chosen, labels } = result.result.noOption as { chosen: string; labels: string[] };
+                return createErrorResponse('TYPE_NO_OPTION', {
+                  selector: rawSelector, text, chosen,
+                  labels: labels.slice(0, 20).map(label => `- ${label}`).join('\n'),
+                  more: labels.length > 20 ? labels.length - 20 : 0,
+                });
               }
               if (result.result?.uncleared !== undefined) {
                 return createErrorResponse('TYPE_NOT_CLEARED', { selector: rawSelector, left: result.result.uncleared });

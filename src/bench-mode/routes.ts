@@ -8,7 +8,7 @@ import type { BenchHandlers } from '../bench-control.js';
 import { getProxy, checkOutcomesFor } from '../proxy/registry.js';
 import { getMessage } from '../messages.js';
 import { levelOf, causeOf } from '../proxy/intercept-proxy.js';
-import { getIssues } from '../issue-tracker.js';
+import { getIssues, getReadyIssues } from '../issue-tracker.js';
 import { addFavourite, readFavourites, removeFavourite } from './favourites.js';
 import { bodyHash, commentGithubId, stripCommentMarker } from '../github/gh-issues.js';
 import { localProse } from '../github/issue-actions.js';
@@ -456,13 +456,18 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
     addFavourite: (call: { tool: string; label: string; args: Record<string, unknown> }) => addFavourite(call),
     removeFavourite: (id: string) => removeFavourite(id),
     sequenceNotes: async () => (await sessions.get(connection)?.sequences?.notes()) ?? [],
-    issues: async (includeCompleted: boolean) => (await getIssues({ includeCompleted })).map(issue => ({
+    issues: async (includeCompleted: boolean) => {
+      const nextPlace = new Map((await getReadyIssues()).map((issue, place) => [issue.id, place]));
+      return (await getIssues({ includeCompleted })).map(issue => ({
       id: issue.id,
       type: issue.type,
       status: issue.status,
       title: issue.title,
       body: issue.body,
       labels: issue.labels,
+      blockedBy: issue.blockedBy,
+      ...(issue.parent !== undefined && { parent: issue.parent }),
+      ...(nextPlace.has(issue.id) && { nextPlace: nextPlace.get(issue.id) }),
       comments: issue.comments.map(comment => ({ at: comment.timestamp.getTime(), text: stripCommentMarker(comment.text) })),
       ...(issue.sequenceFile && { sequenceFile: issue.sequenceFile }),
       reportedAt: issue.reportedAt.getTime(),
@@ -478,7 +483,8 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
           decided: issue.githubSync !== undefined,
         },
       }),
-    })),
+      }));
+    },
     callTool: async (tool: string, args: Record<string, unknown>) => {
       const sequences = sessions.get(connection)?.sequences;
       if (!sequences) throw new Error('This bench holds no replay side to run tools through');

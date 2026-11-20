@@ -72,7 +72,8 @@ interface Row {
   label: string;
   step: number;
   command: HistoryCommand;
-  outcome: 'passed' | 'failed' | 'continued' | 'running';
+  /** `retried`: a failed attempt at a step the run then tried again. */
+  outcome: 'passed' | 'failed' | 'continued' | 'running' | 'retried';
   match?: StepMatch;
 }
 
@@ -226,6 +227,11 @@ function rowsOf(recorder: CommandRecorder, name: string, since: number): Row[] {
       ...(command.stepMatch ? { match: command.stepMatch } : {}),
     });
   }
+  // A step's outcome is its last attempt's: an earlier failure the run went
+  // on to try again stands as a retry, so it does not read as the run's end.
+  rows.forEach((row, at) => {
+    if (row.outcome === 'failed' && rows.slice(at + 1).some(later => later.label === row.label)) row.outcome = 'retried';
+  });
   return rows;
 }
 
@@ -294,8 +300,9 @@ export function formatRunReply(recorder: CommandRecorder, input: RunReplyInput):
   // A step that failed before its call was recorded has no row; its reason comes from the executor alone.
   const unrecorded = [...(input.failures ?? [])].filter(([step]) => !own.some(row => row.step === step));
   const failedAt = failedRow?.step ?? unrecorded[0]?.[0];
-  const passed = own.filter(row => row.outcome === 'passed' && row.step !== (inside ? inside.step + 1 : undefined)).length;
+  const passed = new Set(own.filter(row => row.outcome === 'passed' && row.step !== (inside ? inside.step + 1 : undefined)).map(row => row.step)).size;
   const continued = own.filter(row => row.outcome === 'continued').length;
+  const retried = own.filter(row => row.outcome === 'retried').length;
   const mismatches = rows.filter(mismatched).length;
   const arrivingSteps = rows.filter(stillArriving).length;
   const compared = rows.some(row => row.match?.kinds);
@@ -310,6 +317,7 @@ export function formatRunReply(recorder: CommandRecorder, input: RunReplyInput):
   const tally = [
     `${passed} passed`,
     continued ? `${continued} check${continued === 1 ? '' : 's'} failed and continued` : '',
+    retried ? `${retried} attempt${retried === 1 ? '' : 's'} failed and retried` : '',
     mismatches ? `${mismatches} mismatched` : compared && !arrivingSteps ? 'all matched' : '',
     arrivingSteps ? `${arrivingSteps} still arriving` : '',
     left > 0 ? `${left} ${input.paused && failedAt === undefined ? 'remaining' : 'not run'}` : '',
@@ -323,7 +331,7 @@ export function formatRunReply(recorder: CommandRecorder, input: RunReplyInput):
   // A step that caused something is part of what the run did; one that caused
   // nothing and matched is listed only when every step is asked for.
   const ended = endsBefore(rows);
-  const listed = input.steps === 'all' ? rows : rows.filter(row => row.outcome === 'failed' || row.outcome === 'continued' || mismatched(row) || stillArriving(row) || observationsOf(row.command.index).length > 0 || ended.has(row));
+  const listed = input.steps === 'all' ? rows : rows.filter(row => row.outcome === 'failed' || row.outcome === 'retried' || row.outcome === 'continued' || mismatched(row) || stillArriving(row) || observationsOf(row.command.index).length > 0 || ended.has(row));
   // Every step the run took is accounted for: those left out of the table are named.
   const unlisted = input.steps === 'all' ? [] : rows.filter(row => !listed.includes(row));
   const unlistedLine = unlisted.length
@@ -363,6 +371,10 @@ export function formatRunReply(recorder: CommandRecorder, input: RunReplyInput):
     if (row.outcome === 'failed') {
       const why = (row.label.includes('.') ? undefined : input.failures?.get(row.step)) ?? firstLine(row.command);
       if (why) notes.push(`Step ${row.label}: ${why}`);
+    }
+    if (row.outcome === 'retried') {
+      const why = firstLine(row.command);
+      notes.push(`Step ${row.label}: attempt #${row.command.index} failed and the run tried again${why ? `: ${why}` : ''}`);
     }
     if (row.outcome === 'continued') {
       const check = checkOf(row.command)!;

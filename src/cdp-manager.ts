@@ -104,6 +104,8 @@ function truncateExpression(expression: string, maxLength: number = 200): string
 export class CDPManager {
   /** Where this manager connected; empty until connect() succeeds. */
   private endpoint: { host: string; port: number } | null = null;
+  /** The tab this manager debugs, where connect named one: what finds the tab again after others open or close. */
+  private targetId: string | null = null;
 
   private client: any = null;
   private state: DebuggerState = {
@@ -271,6 +273,10 @@ export class CDPManager {
    * @param port - The debugger port (default: 9222)
    * @param targetId - Optional target ID to connect to a specific page/tab
    */
+  getTargetId(): string | null {
+    return this.targetId;
+  }
+
   async connect(host: string = 'localhost', port: number = 9222, targetId?: string): Promise<void> {
     try {
       // If targetId is provided, connect to that specific target
@@ -280,6 +286,7 @@ export class CDPManager {
         cdpOptions.target = targetId;
       }
       this.client = tagClient(await CDP(cdpOptions));
+      this.targetId = targetId ?? null;
       // Held so a tool can reach sibling targets on the same browser - a worker
       // has its own target and its own websocket, and only host+port locates it.
       this.endpoint = { host, port };

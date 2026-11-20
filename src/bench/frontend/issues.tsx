@@ -1,9 +1,10 @@
 /** @jsxImportSource preact */
-import type { ComponentChildren } from 'preact';
+import { Fragment, type ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { Markdown } from './markdown.js';
 import { Row } from './row.js';
 import { Glyph } from './glyph.js';
+import { useEscape } from './escape.js';
 import type { IssueRow, IssueSync, SequenceNote, ToolRun } from '../wire.js';
 
 /** Each status in words, for the issue page's sidebar. */
@@ -18,6 +19,42 @@ const STATUS_WORDS: Record<IssueRow['status'], string> = {
 /** Closed, in GitHub's sense: the tracker's two finished statuses. */
 function closed(issue: IssueRow): boolean {
   return issue.status === 'fixed' || issue.status === 'implemented';
+}
+
+/** Open issues among those this one waits on. */
+function openBlockers(issue: IssueRow, byId: Map<number, IssueRow>): IssueRow[] {
+  return issue.blockedBy.map(id => byId.get(id)).filter((b): b is IssueRow => !!b && !closed(b));
+}
+
+function piecesOf(id: number, issues: IssueRow[]): IssueRow[] {
+  return issues.filter(issue => issue.parent === id).sort((a, b) => a.id - b.id);
+}
+
+/** `#12` as a button that opens that issue, its title on hover. */
+function IssueRef({ id, byId, onOpen }: { id: number; byId: Map<number, IssueRow>; onOpen: (id: number) => void }) {
+  const target = byId.get(id);
+  return (
+    <button class="issueref" title={target ? target.title : 'no issue carries this number'}
+      onClick={(e: Event) => { e.stopPropagation(); onOpen(id); }}>#{id}</button>
+  );
+}
+
+/** What a line in the list carries about its links: what it is a piece of, what it waits on, how far its pieces are. */
+function LinkFacts({ issue, issues, byId, onOpen }: {
+  issue: IssueRow; issues: IssueRow[]; byId: Map<number, IssueRow>; onOpen: (id: number) => void;
+}) {
+  const blockers = closed(issue) ? [] : openBlockers(issue, byId);
+  const pieces = piecesOf(issue.id, issues);
+  const shut = pieces.filter(closed).length;
+  return (
+    <>
+      {issue.parent !== undefined && <> · piece of <IssueRef id={issue.parent} byId={byId} onOpen={onOpen} /></>}
+      {pieces.length > 0 && <> · <span class={shut === pieces.length ? '' : 'issuepieces'}>{shut} of {pieces.length} pieces closed</span></>}
+      {blockers.length > 0 && <> · <span class="issuewaits">waits on {blockers.map((b, at) => (
+        <Fragment key={b.id}>{at > 0 && ', '}<IssueRef id={b.id} byId={byId} onOpen={onOpen} /></Fragment>
+      ))}</span></>}
+    </>
+  );
 }
 
 /** The issue's type, marked and coloured, and a button that filters the list to that type. */
@@ -38,13 +75,19 @@ function labelTerm(label: string): string {
 /**
  * The filter box read as GitHub reads it: each `label:name` (or
  * `label:"two words"`) term keeps the issues carrying that label exactly,
- * `type:bug` or `type:feature` keeps that type, and the words left over match
- * title, body, a label or `#number`.
+ * `type:bug` or `type:feature` keeps that type, `is:ready` keeps what
+ * `issues next` offers and `is:waiting` the open rest, and the words left
+ * over match title, body, a label or `#number`.
  */
-function parseFilter(filter: string): { labels: string[]; type?: IssueRow['type']; words: string } {
+function parseFilter(filter: string): { labels: string[]; type?: IssueRow['type']; readiness?: 'ready' | 'waiting'; words: string } {
   const labels: string[] = [];
   let type: IssueRow['type'] | undefined;
+  let readiness: 'ready' | 'waiting' | undefined;
   const words = filter
+    .replace(/is:(ready|waiting)\b/gi, (_, named: string) => {
+      readiness = named.toLowerCase() as 'ready' | 'waiting';
+      return ' ';
+    })
     .replace(/label:(?:"([^"]+)"|(\S+))/gi, (_, quoted: string | undefined, bare: string | undefined) => {
       labels.push((quoted ?? bare ?? '').toLowerCase());
       return ' ';
@@ -53,7 +96,7 @@ function parseFilter(filter: string): { labels: string[]; type?: IssueRow['type'
       type = named.toLowerCase() as IssueRow['type'];
       return ' ';
     });
-  return { labels, type, words: words.trim().toLowerCase() };
+  return { labels, type, readiness, words: words.trim().toLowerCase() };
 }
 
 /** How long ago, in the largest whole unit, as GitHub words it. */
@@ -315,15 +358,19 @@ export function Issues({ base, issue: openId, onIssue, onGoToNote }: {
     onIssue(null);
   };
 
-  const opened = openId === null ? undefined : issues.find(issue => issue.id === openId);
+  const byId = new Map(issues.map(issue => [issue.id, issue]));
+  const opened = openId === null ? undefined : byId.get(openId);
   if (opened) {
-    return <IssuePage base={base} issue={opened} onBack={() => onIssue(null)} onChanged={() => setReads(n => n + 1)}
+    return <IssuePage base={base} issue={opened} issues={issues} byId={byId} onOpen={onIssue}
+      onBack={() => onIssue(null)} onChanged={() => setReads(n => n + 1)}
       onGoToNote={onGoToNote} onLabel={filterByLabel} onType={filterByType} />;
   }
 
-  const { labels: wantedLabels, type: wantedType, words: query } = parseFilter(filter);
+  const { labels: wantedLabels, type: wantedType, readiness, words: query } = parseFilter(filter);
   const matching = issues.filter(issue => wantedLabels.every(wanted => issue.labels.some(label => label.toLowerCase() === wanted))
     && (wantedType === undefined || issue.type === wantedType)
+    && (readiness === undefined
+      || (readiness === 'ready' ? issue.nextPlace !== undefined : !closed(issue) && issue.nextPlace === undefined))
     && (!query
       || issue.title.toLowerCase().includes(query)
       || issue.body.toLowerCase().includes(query)
@@ -331,15 +378,37 @@ export function Issues({ base, issue: openId, onIssue, onGoToNote }: {
       || `#${issue.id}` === query || String(issue.id) === query));
   const openCount = matching.filter(issue => !closed(issue)).length;
   const closedCount = matching.length - openCount;
-  // Newest first, as GitHub lists them.
-  const shown = matching.filter(issue => closed(issue) === showClosed).sort((a, b) => b.id - a.id);
+  // Newest first, as GitHub lists them; under is:ready, in the order `issues next` offers them.
+  const shown = matching.filter(issue => closed(issue) === showClosed)
+    .sort(readiness === 'ready' ? (a, b) => (a.nextPlace ?? 0) - (b.nextPlace ?? 0) : (a, b) => b.id - a.id);
+  const next = issues.find(issue => issue.nextPlace === 0);
+  const readyCount = issues.filter(issue => issue.nextPlace !== undefined).length;
+  const waitingCount = issues.filter(issue => !closed(issue) && issue.nextPlace === undefined).length;
 
   return (
     <div class="issues">
-      <input class="issuefilter" type="search" placeholder="Filter issues by title, body, #number, label:name or type:bug"
+      <input class="issuefilter" type="search" placeholder="Filter issues by title, body, #number, label:name, type:bug or is:ready"
         aria-label="Filter issues" value={filter}
         onInput={(e: Event) => setFilter((e.target as HTMLInputElement).value)} />
       <SyncBox base={base} issues={issues} onSynced={() => setReads(n => n + 1)} />
+      {next && (
+        <div class="issuenext">
+          <span class="issuenexthead">Next up</span>
+          <button class="issuetitle" onClick={() => onIssue(next.id)}>{next.title}</button>
+          <span class="quiet">#{next.id}{next.status === 'in_progress' && ' · in progress'}</span>
+          <span class="grow" />
+          <button class="linkbtn" title="list the issues `issues next` offers, in its order" onClick={() => {
+            setShowClosed(false);
+            setFilter(now => (parseFilter(now).readiness === 'ready' ? now : `${now.replace(/is:(ready|waiting)\b/gi, ' ').replace(/\s+/g, ' ').trim()} is:ready`.trim()));
+          }}>{readyCount} ready</button>
+          {waitingCount > 0 && (
+            <button class="linkbtn" title="list the open issues waiting on another issue or on their open pieces" onClick={() => {
+              setShowClosed(false);
+              setFilter(now => `${now.replace(/is:(ready|waiting)\b/gi, ' ').replace(/\s+/g, ' ').trim()} is:waiting`.trim());
+            }}>{waitingCount} waiting</button>
+          )}
+        </div>
+      )}
       <div class="issuebox">
         <div class="issueboxhead">
           <button class={showClosed ? 'issueside' : 'issueside on'} onClick={() => setShowClosed(false)}>
@@ -371,6 +440,7 @@ export function Issues({ base, issue: openId, onIssue, onGoToNote }: {
                       ? `closed ${ago(issue.resolvedAt)}`
                       : `opened ${ago(issue.reportedAt)}`}
                     {!closed(issue) && issue.status !== 'acknowledged' && <> · <span class={`issuestatus issue-${issue.status}`}>{STATUS_WORDS[issue.status]}</span></>}
+                    <LinkFacts issue={issue} issues={issues} byId={byId} onOpen={onIssue} />
                     {issue.github
                       ? <> · GitHub #{issue.github.number}{issue.github.marked
                         ? (outgoing(issue.github).length > 0 ? <> · <span class="issuesyncout">{outgoing(issue.github).join(', ')}</span></> : <> · synced</>)
@@ -405,8 +475,9 @@ async function callIssues(base: string, args: Record<string, unknown>): Promise<
 }
 
 /** One issue's page: its title and state, the body and comments as a timeline, and a sidebar of facts. */
-function IssuePage({ base, issue, onBack, onChanged, onGoToNote, onLabel, onType }: {
-  base: string; issue: IssueRow; onBack: () => void; onChanged: () => void; onGoToNote: (sequence: string, step: number) => void;
+function IssuePage({ base, issue, issues, byId, onOpen, onBack, onChanged, onGoToNote, onLabel, onType }: {
+  base: string; issue: IssueRow; issues: IssueRow[]; byId: Map<number, IssueRow>; onOpen: (id: number) => void;
+  onBack: () => void; onChanged: () => void; onGoToNote: (sequence: string, step: number) => void;
   /** A label pressed: the list, filtered to it. */
   onLabel: (label: string) => void;
   onType: (type: IssueRow['type']) => void;
@@ -461,6 +532,13 @@ function IssuePage({ base, issue, onBack, onChanged, onGoToNote, onLabel, onType
       )}
       {resolveSaid && !resolving && (
         <p class={resolveSaid.failed ? 'issueresolving bad' : 'issueresolving'}>{resolveSaid.result.split('\n')[0]}</p>
+      )}
+      {!closed(issue) && issue.nextPlace === undefined && (
+        <p class="issuewaiting">
+          {openBlockers(issue, byId).length > 0
+            ? <>Waits on {openBlockers(issue, byId).map((b, at) => <Fragment key={b.id}>{at > 0 && ', '}<IssueRef id={b.id} byId={byId} onOpen={onOpen} /> {b.title}</Fragment>)}; it comes up in Next once {openBlockers(issue, byId).length === 1 ? 'that closes' : 'those close'}.</>
+            : <>Worked through its pieces: it closes when the last open one closes.</>}
+        </p>
       )}
       <div class="issuepagesub">
         <span class={closed(issue) ? 'issuestate closed' : 'issuestate open'}>
@@ -517,6 +595,7 @@ function IssuePage({ base, issue, onBack, onChanged, onGoToNote, onLabel, onType
               ))}</p>
               : <p class="quiet">None yet</p>}
           </section>
+          <IssueLinks base={base} issue={issue} issues={issues} byId={byId} onOpen={onOpen} onChanged={onChanged} />
           <section>
             <h3>Sequence</h3>
             {issue.sequenceFile ? <p class="issuemono">{issue.sequenceFile}</p> : <p class="quiet">None linked</p>}
@@ -782,6 +861,249 @@ function Composer({ text, onText, notes, sequenceFile, onGoToNote, placeholder, 
         )}
         <div class="composefoot">{children}</div>
       </div>
+    </>
+  );
+}
+
+/** One row in a link list: the issue's state, its number and title, and a remove button where the link can be removed here. */
+function LinkedIssue({ id, byId, onOpen, onRemove, busy }: {
+  id: number; byId: Map<number, IssueRow>; onOpen: (id: number) => void; onRemove?: () => void; busy?: boolean;
+}) {
+  const target = byId.get(id);
+  return (
+    <li class="issuelinkrow">
+      {target && <StateMark shut={closed(target)} />}
+      <button class="issuereftitle" onClick={() => onOpen(id)} title={target ? `open #${id}` : 'no issue carries this number'}>
+        <span class="quiet">#{id}</span> {target ? target.title : 'missing'}
+      </button>
+      {onRemove && (
+        <button class="issuelinkdrop" disabled={busy} aria-label={`remove the link to #${id}`} title={`remove the link to #${id}`}
+          onClick={onRemove}>×</button>
+      )}
+    </li>
+  );
+}
+
+/** Where a search word was found in an issue, best place first: the field and a stretch of text around it. */
+interface IssueHit { issue: IssueRow; score: number; field: 'title' | 'number' | 'label' | 'body' | 'comment'; snippet?: string }
+
+const FIELD_SCORE = { number: 5, title: 4, label: 3, body: 2, comment: 1 } as const;
+
+/** Up to 60 characters either side of the first word found, on one line. */
+function snippetAround(text: string, word: string): string {
+  const at = text.toLowerCase().indexOf(word);
+  const from = Math.max(0, at - 60);
+  const to = Math.min(text.length, at + word.length + 60);
+  return `${from > 0 ? '…' : ''}${text.slice(from, to).replace(/\s+/g, ' ').trim()}${to < text.length ? '…' : ''}`;
+}
+
+/**
+ * Every word of the query has to appear somewhere in the issue, across its
+ * number, title, labels, body and comments. The hit is scored by the best
+ * field the first word lands in, so a title match ranks above one buried in a
+ * comment; open issues come before closed ones at the same score.
+ */
+function searchIssues(issues: IssueRow[], query: string): IssueHit[] {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length === 0) {
+    return issues.filter(issue => !closed(issue)).sort((a, b) => b.id - a.id)
+      .map(issue => ({ issue, score: 0, field: 'title' as const }));
+  }
+  const hits: IssueHit[] = [];
+  for (const issue of issues) {
+    const fields: Array<[IssueHit['field'], string]> = [
+      ['number', `#${issue.id}`],
+      ['title', issue.title],
+      ...issue.labels.map(label => ['label', label] as [IssueHit['field'], string]),
+      ['body', issue.body],
+      ...issue.comments.map(comment => ['comment', comment.text] as [IssueHit['field'], string]),
+    ];
+    const all = fields.map(([, text]) => text.toLowerCase()).join('\n');
+    if (!words.every(word => all.includes(word))) continue;
+    const first = words[0].replace(/^#/, '');
+    const found = fields.find(([field, text]) => (field === 'number' ? text === `#${first}` : text.toLowerCase().includes(words[0])));
+    const field = found?.[0] ?? 'title';
+    hits.push({
+      issue, field,
+      score: FIELD_SCORE[field],
+      ...(found && (field === 'body' || field === 'comment') && { snippet: snippetAround(found[1], words[0]) }),
+    });
+  }
+  return hits.sort((a, b) => b.score - a.score || Number(closed(a.issue)) - Number(closed(b.issue)) || b.issue.id - a.issue.id);
+}
+
+/** The query's words marked inside a line of text. */
+function Marked({ text, query }: { text: string; query: string }) {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean).map(word => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  if (words.length === 0) return <>{text}</>;
+  const parts = text.split(new RegExp(`(${words.join('|')})`, 'gi'));
+  return <>{parts.map((part, at) => (at % 2 === 1 ? <mark key={at}>{part}</mark> : part))}</>;
+}
+
+/**
+ * A full-page search over every issue, for choosing the one a link points at:
+ * each key searches number, title, labels, body and comments, and a hit in
+ * the body or a comment shows the words around it, so the issue is found by
+ * what it is about rather than by its number. Arrows or a moving pointer
+ * move the highlight, Enter picks the highlighted row, Escape closes. `refusal` is the tool's answer to the last pick, shown in
+ * place, so a pick that closes a loop is read where it was made.
+ */
+function IssueSearchDialog({ title, issues, exclude, busy, refusal, onPick, onClose }: {
+  title: string; issues: IssueRow[]; exclude: Set<number>; busy: boolean; refusal: string | null;
+  onPick: (id: number) => void; onClose: () => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [at, setAt] = useState(0);
+  const box = useRef<HTMLInputElement>(null);
+  const list = useRef<HTMLOListElement>(null);
+  useEscape(true, onClose);
+  useEffect(() => { box.current?.focus(); }, []);
+
+  const hits = searchIssues(issues.filter(issue => !exclude.has(issue.id)), query.trim()).slice(0, 50);
+  const chosen = Math.min(at, Math.max(0, hits.length - 1));
+  useEffect(() => {
+    list.current?.querySelector('.issuehit.on')?.scrollIntoView({ block: 'nearest' });
+  }, [chosen]);
+
+  return (
+    <div class="scrim" onClick={onClose}>
+      <div class="report issuesearch" role="dialog" aria-label={title} onClick={(e: MouseEvent) => e.stopPropagation()}>
+        <div class="issuesearchhead">
+          <h3>{title}</h3>
+          <button class="close" title="close (Esc)" onClick={onClose}>×</button>
+        </div>
+        <input ref={box} class="issuefilter issuesearchbox" type="search" value={query} aria-label={`${title}: search`}
+          placeholder="Search title, description, comments, labels or #number"
+          onInput={(e: Event) => { setQuery((e.target as HTMLInputElement).value); setAt(0); }}
+          onKeyDown={(e: KeyboardEvent) => {
+            if (e.key === 'ArrowDown') { e.preventDefault(); setAt(Math.min(chosen + 1, hits.length - 1)); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); setAt(Math.max(chosen - 1, 0)); }
+            else if (e.key === 'Enter' && hits[chosen] && !busy) { e.preventDefault(); onPick(hits[chosen].issue.id); }
+            else if (e.key === 'Escape') { e.preventDefault(); onClose(); }
+          }} />
+        {refusal && <p class="bad issuesearchrefusal">{refusal}</p>}
+        <p class="quiet issuesearchcount">
+          {query.trim()
+            ? `${hits.length === 50 ? '50+' : hits.length} match${hits.length === 1 ? '' : 'es'}`
+            : 'Open issues, newest first. Type to search every issue, closed ones too.'}
+        </p>
+        {hits.length === 0 ? <p class="issueempty">Nothing matches "{query.trim()}".</p> : (
+          <ol ref={list} class="issuehits">
+            {hits.map((hit, place) => (
+              <li key={hit.issue.id}>
+                <button class={place === chosen ? 'issuehit on' : 'issuehit'} disabled={busy}
+                  onMouseMove={(e: MouseEvent) => {
+                    // A list redrawn under a still pointer fires hover events too; only real movement moves the highlight.
+                    if ((e.movementX !== 0 || e.movementY !== 0) && place !== chosen) setAt(place);
+                  }} onClick={() => onPick(hit.issue.id)}>
+                  <StateMark shut={closed(hit.issue)} />
+                  <span class="issuehitmain">
+                    <span class="issuehittitle"><Marked text={hit.issue.title} query={query} /></span>
+                    <span class="issuehitsub">
+                      #{hit.issue.id} · {hit.issue.type}{!closed(hit.issue) && hit.issue.status !== 'acknowledged' && ` · ${STATUS_WORDS[hit.issue.status]}`}
+                      {closed(hit.issue) && ' · closed'}
+                      {hit.issue.labels.length > 0 && <> · <Marked text={hit.issue.labels.join(', ')} query={query} /></>}
+                    </span>
+                    {hit.snippet && (
+                      <span class="issuehitsnippet">
+                        <span class="quiet">{hit.field === 'comment' ? 'in a comment: ' : 'in the description: '}</span>
+                        <Marked text={hit.snippet} query={query} />
+                      </span>
+                    )}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ol>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The issue's links in the sidebar, each written through `issues edit`: what
+ * it is a piece of, the issues it waits on, and read from the other side, its
+ * pieces and the issues waiting on it. A link the tool refuses (one that
+ * closes a loop) shows the refusal under the section.
+ */
+function IssueLinks({ base, issue, issues, byId, onOpen, onChanged }: {
+  base: string; issue: IssueRow; issues: IssueRow[]; byId: Map<number, IssueRow>;
+  onOpen: (id: number) => void; onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<{ on: 'parent' | 'waits'; text: string } | null>(null);
+  const [searching, setSearching] = useState<'parent' | 'waits' | null>(null);
+
+  const write = async (on: 'parent' | 'waits', change: Record<string, unknown>) => {
+    if (busy) return;
+    setBusy(true);
+    setFailure(null);
+    const run = await callIssues(base, { action: 'edit', id: issue.id, ...change });
+    setBusy(false);
+    if (run.failed) { setFailure({ on, text: run.result.replace(/^Error:\s*/, '').split('\n')[0] }); return; }
+    setSearching(null);
+    onChanged();
+  };
+
+  const pieces = piecesOf(issue.id, issues);
+  const blocking = issues.filter(other => other.blockedBy.includes(issue.id)).sort((a, b) => a.id - b.id);
+  const shut = pieces.filter(closed).length;
+
+  return (
+    <>
+      <section>
+        <h3>Piece of</h3>
+        {issue.parent !== undefined
+          ? <ol class="issuelinks"><LinkedIssue id={issue.parent} byId={byId} onOpen={onOpen} busy={busy}
+              onRemove={() => void write('parent', { parent: null })} /></ol>
+          : <p class="quiet">None</p>}
+        <button class="linkbtn issuelinkadd" onClick={() => { setFailure(null); setSearching('parent'); }}>
+          {issue.parent !== undefined ? 'Move to another issue…' : 'Make this a piece of…'}
+        </button>
+        {failure?.on === 'parent' && searching === null && <p class="bad">{failure.text}</p>}
+      </section>
+      {pieces.length > 0 && (
+        <section>
+          <h3>Pieces <span class="quiet">· {shut} of {pieces.length} closed</span></h3>
+          <progress class="issuepiecebar" max={pieces.length} value={shut} aria-label={`${shut} of ${pieces.length} pieces closed`} />
+          <ol class="issuelinks">
+            {pieces.map(piece => <LinkedIssue key={piece.id} id={piece.id} byId={byId} onOpen={onOpen} />)}
+          </ol>
+          {!closed(issue) && <p class="quiet">Closes when the last piece closes.</p>}
+        </section>
+      )}
+      <section>
+        <h3>Waits on</h3>
+        {issue.blockedBy.length > 0 ? (
+          <ol class="issuelinks">
+            {issue.blockedBy.map(id => (
+              <LinkedIssue key={id} id={id} byId={byId} onOpen={onOpen} busy={busy}
+                onRemove={() => void write('waits', { blockedBy: issue.blockedBy.filter(other => other !== id) })} />
+            ))}
+          </ol>
+        ) : <p class="quiet">Nothing</p>}
+        <button class="linkbtn issuelinkadd" onClick={() => { setFailure(null); setSearching('waits'); }}>Wait on another issue…</button>
+        {failure?.on === 'waits' && searching === null && <p class="bad">{failure.text}</p>}
+      </section>
+      {searching !== null && (
+        <IssueSearchDialog
+          title={searching === 'waits' ? `#${issue.id} waits on…` : `#${issue.id} is a piece of…`}
+          issues={issues}
+          exclude={new Set(searching === 'waits' ? [issue.id, ...issue.blockedBy] : [issue.id, ...(issue.parent !== undefined ? [issue.parent] : [])])}
+          busy={busy}
+          refusal={failure?.on === searching ? failure.text : null}
+          onClose={() => { setSearching(null); setFailure(null); }}
+          onPick={id => void write(searching, searching === 'waits' ? { blockedBy: [...issue.blockedBy, id] } : { parent: id })} />
+      )}
+      {blocking.length > 0 && (
+        <section>
+          <h3>Waiting on this</h3>
+          <ol class="issuelinks">
+            {blocking.map(other => <LinkedIssue key={other.id} id={other.id} byId={byId} onOpen={onOpen} />)}
+          </ol>
+        </section>
+      )}
     </>
   );
 }

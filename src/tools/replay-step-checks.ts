@@ -383,7 +383,7 @@ export async function validateTypedText(
         const el = document.querySelector(${JSON.stringify(selector)});
         if (!el) return '';
         // A select's type-ahead matches keys against option labels; its value is a hidden key that never equals the typed text
-        if (el.tagName === 'SELECT') return el.selectedOptions[0]?.label ?? '';
+        if (el.tagName === 'SELECT') return { select: true, text: el.selectedOptions[0]?.label ?? '' };
         // For input/textarea, use .value
         if (el.value !== undefined && el.value !== '') return el.value;
         // For contenteditable (ProseMirror, etc.), use innerText
@@ -394,12 +394,18 @@ export async function validateTypedText(
     });
 
     const evaluated = evalResult?._meta?.inspect?.value;
-    const actualValue = typeof evaluated === 'string' ? evaluated : '';
+    const actualValue = typeof evaluated === 'string' ? evaluated : typeof evaluated?.text === 'string' ? evaluated.text : '';
 
     // In append mode, check if the field ends with the expected text
     // In replace mode, check for exact match
     const shown = (text: string) => concealed ? `${text.length} characters, not shown` : `"${text}"`;
-    if (append) {
+    if (evaluated?.select === true) {
+      // Type-ahead chooses the first option whose label starts with the keys, case aside.
+      if (!actualValue.toLowerCase().startsWith(expectedText.toLowerCase())) {
+        debugLog(logPrefix, `Text validation failed (select): expected a label starting with ${shown(expectedText)}, got ${shown(actualValue)}`);
+        throw new Error(`Text validation failed for ${selector}: expected an option whose label starts with ${shown(expectedText)}, got ${shown(actualValue)}`);
+      }
+    } else if (append) {
       if (!actualValue.endsWith(expectedText)) {
         debugLog(logPrefix, `Text validation failed (append): expected to end with ${shown(expectedText)}, got ${shown(actualValue)}`);
         throw new Error(`Text validation failed for ${selector}: expected to end with ${shown(expectedText)}, got ${shown(actualValue)}`);

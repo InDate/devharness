@@ -52,6 +52,8 @@ function makePage(opts: { onDispatch?: (d: Dispatch) => void; elementExists?: bo
       evaluate: vi.fn(async () => true),
       dispose: vi.fn(async () => {}),
     })),
+    // Read-only element reads, such as whether the field holds focus.
+    $eval: vi.fn(async () => true),
     click: vi.fn(async (...a: any[]) => record('page.click', ...a)),
     type: vi.fn(async (...a: any[]) => record('page.type', ...a)),
     hover: vi.fn(async (...a: any[]) => record('page.hover', ...a)),

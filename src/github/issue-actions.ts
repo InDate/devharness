@@ -26,7 +26,7 @@ import {
   getIssue, getIssues, addIssue, addIssueComment, updateIssueFields, findIssueByGithub,
   updateIssueCommentText,
   getIssueSequencesDir, generateSequenceFilename, updateIssueSequenceFile,
-  isCompletedStatus, completedStatusFor,
+  isCompletedStatus, completedStatusFor, closeFinishedParents,
   type TrackedIssue, type IssueType,
 } from '../issue-tracker.js';
 import { getProjectDir } from '../helpers/paths.js';
@@ -367,7 +367,11 @@ async function applyStatus(
       resolvedAt: status.reopened ? undefined : (status.resolvedAt ?? issue.resolvedAt),
     });
     if (status.reopened) return { detail: 'reopened' };
-    if (status.status) return { detail: `status ${status.status}` };
+    if (status.status) {
+      const parents = isCompletedStatus(status.status) ? await closeFinishedParents(issue.id) : [];
+      const closedParents = parents.length > 0 ? `, closed parent ${parents.map(p => `#${p.id}`).join(', ')}` : '';
+      return { detail: `status ${status.status}${closedParents}` };
+    }
   }
 
   return {};

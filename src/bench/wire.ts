@@ -267,6 +267,15 @@ export interface IssueRow {
   body: string;
   labels: string[];
   comments: Array<{ at: number; text: string }>;
+  /** Issues that have to close before this one can be worked. */
+  blockedBy: number[];
+  /** The issue this one is a piece of. */
+  parent?: number;
+  /**
+   * Its place in what `issues next` offers, 0 first: open, nothing it waits
+   * on is open, and no open piece sits under it. Absent while it waits.
+   */
+  nextPlace?: number;
   /** The repro sequence's file in the issues folder, where one is linked. */
   sequenceFile?: string;
   reportedAt: number;

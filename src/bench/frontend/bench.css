@@ -2822,3 +2822,45 @@ dialog.varmodal::backdrop { background: rgba(0, 0, 0, 0.45); }
 .filmat { position: absolute; top: 4px; width: 2px; height: 14px; margin-left: -1px; background: var(--fg); pointer-events: none; }
 .filmhandle { position: absolute; top: 2px; width: 8px; height: 18px; margin-left: -4px; border-radius: 2px; background: var(--store); cursor: ew-resize; }
 .filmshare { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 4px; }
+
+.issuenext {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 10px 14px; margin-top: 8px;
+  border: 1px solid var(--line); border-radius: 6px; font-size: 12px; color: var(--muted);
+}
+.issuenexthead { font-weight: 600; color: var(--fg); }
+.issueref { padding: 0; border: 0; background: none; font: inherit; color: inherit; cursor: pointer; }
+.issueref:hover { color: var(--accent); text-decoration: underline; }
+.issueref:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.issuewaits, .issuepieces { color: var(--fg); }
+.issuewaiting { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
+.issuelinks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.issuelinkrow { display: flex; align-items: center; gap: 6px; font-size: 12px; min-width: 0; }
+.issuelinkrow .issuemark { flex: none; }
+.issuereftitle {
+  flex: 1; min-width: 0; padding: 0; border: 0; background: none; font: inherit; color: var(--fg); text-align: left;
+  cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.issuereftitle:hover { color: var(--accent); }
+.issuelinkdrop { flex: none; padding: 0 4px; border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; }
+.issuelinkdrop:hover { color: var(--alert); }
+.issuelinkadd { margin-top: 6px; font-size: 12px; }
+.issuepiecebar { width: 100%; height: 6px; margin: 0 0 6px; accent-color: var(--accent); }
+.issueside-facts section > .bad { margin-top: 6px; }
+.issuesearch { width: min(760px, 100%); height: min(720px, 86vh); display: flex; flex-direction: column; }
+.issuesearchhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.issuesearchhead h3 { margin: 0; font-size: 14px; font-weight: 600; color: var(--fg); }
+.issuesearchbox { font-size: 14px; padding: 8px 10px; }
+.issuesearchcount { margin: 8px 0 6px; font-size: 12px; }
+.issuesearchrefusal { margin: 8px 0 0; font-size: 12px; }
+.issuehits { list-style: none; margin: 0; padding: 0; overflow: auto; flex: 1; border-top: 1px solid var(--line); }
+.issuehit {
+  display: flex; gap: 10px; align-items: flex-start; width: 100%; padding: 9px 8px; border: 0;
+  border-bottom: 1px solid var(--line); background: none; font: inherit; color: var(--fg); text-align: left; cursor: pointer;
+}
+.issuehit.on { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.issuehit .issuemark { flex: none; margin-top: 2px; }
+.issuehitmain { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.issuehittitle { font-size: 13px; font-weight: 600; }
+.issuehitsub { font-size: 12px; color: var(--muted); }
+.issuehitsnippet { font-size: 12px; color: var(--fg); overflow-wrap: anywhere; }
+.issuehit mark { background: color-mix(in srgb, var(--accent) 28%, transparent); color: inherit; border-radius: 2px; }

@@ -225,7 +225,9 @@ Console: {{consoleStats}}{{/consoleStats}}
 **Type:** success
 **Summary:** Chrome connection reused (already exists)
 
-Title: {{title}}, URL: {{url}}
+Title: {{title}}, URL: {{url}}{{#movedFrom}}
+
+The tab under this name was on `{{movedFrom}}`; it was navigated to the url this launch named.{{/movedFrom}}
 
 Ready to use! Use connection: "{{reference}}" in tool calls.
 
@@ -1028,6 +1030,60 @@ Element not found: `{{selector}}`
 
 ---
 
+## TYPE_NOT_FOCUSED
+
+**Type:** error
+**Code:** TYPE_NOT_FOCUSED
+
+`{{selector}}` took neither the click nor a focus call, so nothing was typed: the keys would have gone to whatever held focus instead.
+
+**Suggestions:**
+- The element may be disabled or inert; read it with `inspect({ action: 'evaluateExpression' })`
+- A wrapper may take focus in its place; type into the inner field's selector
+
+---
+
+## TYPE_NOT_HELD
+
+**Type:** error
+**Code:** TYPE_NOT_HELD
+
+`{{selector}}` is empty after "{{text}}" was typed into it: the keys reached another element, or the page replaced or reset the field while they went in.
+
+**Suggestions:**
+- Read the field with `inspect({ action: 'evaluateExpression' })`; a page still loading can redraw its form, so wait for it and type again
+- A selector matching several elements may have reached one that is redrawn; narrow it
+
+---
+
+## TYPE_SELECT_HIDDEN_TAB
+
+**Type:** error
+**Code:** TYPE_SELECT_HIDDEN_TAB
+
+`{{selector}}` still shows `{{chosen}}`: Chrome runs a select's type-ahead only in a tab on screen, and this tab is behind another, so "{{text}}" chose nothing.
+
+**Suggestions:**
+- `connection({ action: 'switch', connection: '{{connection}}', bringToFront: true })`, then the same `type`
+
+---
+
+## TYPE_NO_OPTION
+
+**Type:** error
+**Code:** TYPE_NO_OPTION
+
+No option of `{{selector}}` has a label starting with "{{text}}", so Chrome's type-ahead left `{{chosen}}` chosen.
+
+Options:
+{{labels}}{{#more}}
+- … {{more}} more{{/more}}
+
+**Suggestions:**
+- Type the start of one of these labels; type-ahead matches the label's start, not its value
+
+---
+
 ## TYPE_NOT_CLEARED
 
 **Type:** error
@@ -1665,7 +1721,9 @@ Logs are being written to: `{{logFile}}`
 File downloaded successfully from `{{url}}`
 
 Saved to: `{{filepath}}`
-Size: {{size}}
+Size: {{size}}{{#parts}}
+In parts: {{parts}}{{/parts}}{{#retries}}
+Retries: {{retries}}{{/retries}}
 
 ---
 
@@ -1677,7 +1735,9 @@ Size: {{size}}
 File downloaded and **overwrote existing file** at `{{filepath}}`
 
 Downloaded from: `{{url}}`
-Size: {{size}}
+Size: {{size}}{{#parts}}
+In parts: {{parts}}{{/parts}}{{#retries}}
+Retries: {{retries}}{{/retries}}
 
 ---
 
@@ -1708,7 +1768,9 @@ Please choose a different, more descriptive filename or set `overwriteIfExists: 
 Failed to download file from `{{url}}`
 
 {{#status}}HTTP {{status}}: {{statusText}}{{/status}}
-{{#error}}Error: {{error}}{{/error}}
+{{#error}}Error: {{error}}{{/error}}{{#attempts}}
+Failed after the retries: a refused connection, a 429 or a 5xx is tried 3 times, 1s then 2s apart; any other answer ends the download at once.{{/attempts}}{{#keptParts}}
+Finished parts are kept in `{{keptParts}}`; the same call again fetches only the rest.{{/keptParts}}
 
 **Suggestions:**
 - Verify the URL is correct and accessible
@@ -2743,6 +2805,58 @@ A listing this wide omits bodies. Narrow the filters, or read one issue in full 
 
 ---
 
+## ISSUES_NEXT
+
+**Type:** success
+**Summary:** Next: issue #{{id}}
+
+{{details}}
+{{#othersList}}
+
+**Also ready:**
+{{othersList}}
+{{/othersList}}
+
+{{readyCount}} ready{{#waiting}}, {{waiting}} waiting on another issue or on their open pieces{{/waiting}}. Start it with `issues({ action: 'workOn', id: {{id}} })`.
+
+---
+
+## ISSUES_NEXT_NONE
+
+**Type:** success
+**Summary:** No issue ready
+
+No open issue is ready.{{#waiting}} {{waiting}} wait on another issue or on their open pieces; `issues({ action: 'list' })` shows what each waits on.{{/waiting}}
+
+---
+
+## ISSUES_LINK_NOT_FOUND
+
+**Type:** error
+**Code:** ISSUES_LINK_NOT_FOUND
+
+No issue carries {{ids}}: `blockedBy` and `parent` name existing issue IDs.
+
+---
+
+## ISSUES_LINK_SELF
+
+**Type:** error
+**Code:** ISSUES_LINK_SELF
+
+Issue #{{id}} cannot wait on itself or be a piece of itself.
+
+---
+
+## ISSUES_LINK_CYCLE
+
+**Type:** error
+**Code:** ISSUES_LINK_CYCLE
+
+That link closes a loop: {{path}}. Every issue on it would wait on another, so none would ever come up in `next`. Drop one link of the loop.
+
+---
+
 ## ISSUES_CREATED
 
 **Type:** success
@@ -2893,6 +3007,14 @@ Verification cancelled for {{type}} #{{id}}.
 **Replay execution details:**
 {{replayDetails}}
 {{/replayDetails}}
+{{#closedParents}}
+
+**Closed with it** (every piece now closed): {{closedParents}}
+{{/closedParents}}
+{{#unblocked}}
+
+**Now ready** (nothing left to wait on): {{unblocked}}
+{{/unblocked}}
 
 ---
 
@@ -3079,7 +3201,7 @@ Linked to GitHub {{linked}}: the next `issues({ action: 'sync' })` pushes this c
 **Type:** error
 **Code:** ISSUES_NOTHING_TO_EDIT
 
-Nothing to change on issue #{{id}}: pass `title`, `body`, `labels`, `sequenceName` or `sync`.
+Nothing to change on issue #{{id}}: pass `title`, `body`, `labels`, `blockedBy`, `parent`, `sequenceName` or `sync`.
 
 ---
 

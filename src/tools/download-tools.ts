@@ -9,6 +9,7 @@ import { createSuccessResponse, createErrorResponse } from '../messages.js';
 import { promises as fs } from 'fs';
 import { join, basename, normalize } from 'path';
 import { getOutputPath } from '../helpers/paths.js';
+import { probe, fetchInParts, fetchWhole, attemptStatus, nameFor, type Probe } from './download-parts.js';
 
 // Computed fresh on each call (not cached) so they follow a later
 // setWorkingDirOverride() / config useLocal(path) switch.
@@ -17,6 +18,9 @@ function getDownloadsDir(): string {
 }
 function getQuarantineDir(): string {
   return join(getDownloadsDir(), 'quarantine');
+}
+function getPartsDir(filename: string): string {
+  return join(getDownloadsDir(), '.parts', filename);
 }
 
 // Security limits
@@ -176,13 +180,15 @@ export async function readLimited(
 export function createDownloadTools() {
   return {
     download: createTool(
-      'Download a file from a URL into the downloads directory; a suspicious file goes to quarantine instead',
+      'Download a file from a URL into the downloads directory, in byte-range parts where the server takes them, retrying failures; a suspicious file goes to quarantine instead',
       z.object({
         url: z.string().url().describe('URL to download'),
-        filename: z.string().describe('Filename to save as'),
+        filename: z.string().optional().describe('Filename to save as (default: from Content-Disposition, else the URL path)'),
         overwriteIfExists: z.boolean().optional().describe('Overwrite if exists (default: false)'),
       }).strict(),
-      async (args) => {
+      async (rawArgs, abortSignal?: AbortSignal) => {
+        const info: Probe | null = await probe(rawArgs.url, abortSignal);
+        const args = { ...rawArgs, filename: rawArgs.filename ?? nameFor(rawArgs.url, info?.disposition ?? null) };
         try {
           // Validate filename
           const filenameValidation = validateFilename(args.filename);
@@ -210,18 +216,7 @@ export function createDownloadTools() {
           // If file exists and overwrite not allowed, return error BEFORE downloading
           if (existingFileStats && !args.overwriteIfExists) {
             // Do a HEAD request to get new file size without downloading
-            let newFileSize = 'Unknown';
-            try {
-              const headResponse = await fetch(args.url, { method: 'HEAD' });
-              if (headResponse.ok) {
-                const contentLength = headResponse.headers.get('content-length');
-                if (contentLength) {
-                  newFileSize = `${(parseInt(contentLength) / 1024).toFixed(2)} KB`;
-                }
-              }
-            } catch {
-              // Ignore HEAD request failures, just show unknown size
-            }
+            const newFileSize = info?.size != null ? `${(info.size / 1024).toFixed(2)} KB` : 'Unknown';
 
             const existingFileSizeKB = (existingFileStats.size / 1024).toFixed(2);
             return createErrorResponse('FILE_ALREADY_EXISTS', {
@@ -234,42 +229,62 @@ export function createDownloadTools() {
             });
           }
 
-          // Fetch the URL
-          const response = await fetch(args.url);
-
-          if (!response.ok) {
-            return createErrorResponse('FILE_DOWNLOAD_FAILED', {
-              url: args.url,
-              status: response.status.toString(),
-              statusText: response.statusText
-            });
-          }
-
-          // Check content-length header for size limits
-          const contentLength = response.headers.get('content-length');
-          const contentType = response.headers.get('content-type');
-
-          if (contentLength) {
-            const sizeBytes = parseInt(contentLength);
-            if (sizeBytes > MAX_FILE_SIZE) {
-              return createErrorResponse('FILE_TOO_LARGE', {
-                url: args.url,
-                size: `${(sizeBytes / 1024 / 1024).toFixed(2)} MB`,
-                maxSize: `${(MAX_FILE_SIZE / 1024 / 1024).toFixed(2)} MB`
-              });
-            }
-          }
-
-          const read = await readLimited(response, MAX_FILE_SIZE);
-          if (read.tooLarge) {
+          if (info?.size != null && info.size > MAX_FILE_SIZE) {
             return createErrorResponse('FILE_TOO_LARGE', {
               url: args.url,
-              size: `more than ${(MAX_FILE_SIZE / 1024 / 1024).toFixed(2)} MB`,
+              size: `${(info.size / 1024 / 1024).toFixed(2)} MB`,
               maxSize: `${(MAX_FILE_SIZE / 1024 / 1024).toFixed(2)} MB`
             });
           }
-          const buffer = read.buffer;
+
+          let buffer: Buffer;
+          let contentType: string | null;
+          let fetched: { parts?: number; reused?: number; retries: number };
+          const partsDir = getPartsDir(args.filename);
+          try {
+            if (info?.ranges && info.size !== null) {
+              const result = await fetchInParts(args.url, { ...info, size: info.size }, partsDir, { signal: abortSignal });
+              buffer = result.buffer;
+              contentType = info.contentType;
+              fetched = { parts: result.parts, reused: result.reused, retries: result.retries };
+            } else {
+              const { response, retries } = await fetchWhole(args.url, { signal: abortSignal });
+              contentType = response.headers.get('content-type');
+              const contentLength = response.headers.get('content-length');
+              if (contentLength && parseInt(contentLength) > MAX_FILE_SIZE) {
+                await response.body?.cancel().catch(() => {});
+                return createErrorResponse('FILE_TOO_LARGE', {
+                  url: args.url,
+                  size: `${(parseInt(contentLength) / 1024 / 1024).toFixed(2)} MB`,
+                  maxSize: `${(MAX_FILE_SIZE / 1024 / 1024).toFixed(2)} MB`
+                });
+              }
+              const read = await readLimited(response, MAX_FILE_SIZE);
+              if (read.tooLarge) {
+                return createErrorResponse('FILE_TOO_LARGE', {
+                  url: args.url,
+                  size: `more than ${(MAX_FILE_SIZE / 1024 / 1024).toFixed(2)} MB`,
+                  maxSize: `${(MAX_FILE_SIZE / 1024 / 1024).toFixed(2)} MB`
+                });
+              }
+              buffer = read.buffer;
+              fetched = { retries };
+            }
+          } catch (fetchError: any) {
+            if (abortSignal?.aborted) throw fetchError;
+            const { status, statusText } = attemptStatus(fetchError);
+            return createErrorResponse('FILE_DOWNLOAD_FAILED', {
+              url: args.url,
+              ...(status !== null && status !== 409 ? { status: String(status), statusText: statusText ?? '' } : { error: fetchError.message }),
+              attempts: true,
+              keptParts: info?.ranges ? partsDir : undefined,
+            });
+          }
           const actualSize = buffer.length;
+          const partsLine = fetched.parts !== undefined
+            ? `${fetched.parts} part${fetched.parts === 1 ? '' : 's'}${fetched.reused ? `, ${fetched.reused} reused from an earlier attempt` : ''}`
+            : undefined;
+          const retriesLine = fetched.retries > 0 ? String(fetched.retries) : undefined;
 
           const newFileSizeKB = (actualSize / 1024).toFixed(2);
 
@@ -278,6 +293,7 @@ export function createDownloadTools() {
           if (suspiciousCheck.suspicious) {
             // Quarantine the file instead of saving to downloads
             await quarantineFile(args.url, args.filename, suspiciousCheck.reason!, actualSize, contentType, buffer);
+            await fs.rm(partsDir, { recursive: true, force: true });
 
             const quarantinedFilename = `${args.filename}.quarantined`;
             return createErrorResponse('FILE_QUARANTINED', {
@@ -298,6 +314,7 @@ export function createDownloadTools() {
 
             // Remove executable permissions for security
             await removeExecutablePermissions(filepath);
+            await fs.rm(partsDir, { recursive: true, force: true });
           } catch (saveError: any) {
             // Clean up temp file if it exists
             try {
@@ -318,14 +335,18 @@ export function createDownloadTools() {
               filename: args.filename,
               filepath: filepath,
               size: `${newFileSizeKB} KB`,
-              url: args.url
+              url: args.url,
+              parts: partsLine,
+              retries: retriesLine,
             });
           } else {
             return createSuccessResponse('FILE_DOWNLOADED', {
               filename: args.filename,
               filepath: filepath,
               size: `${newFileSizeKB} KB`,
-              url: args.url
+              url: args.url,
+              parts: partsLine,
+              retries: retriesLine,
             });
           }
         } catch (error: any) {

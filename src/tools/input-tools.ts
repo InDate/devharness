@@ -1191,6 +1191,9 @@ export function createInputTools(
                       await page.$eval(selector, (el: { focus(): void }) => el.focus());
                       if (!(await holdsFocus(page, selector))) return false;
                     }
+                    // A select has no text to select, so Meta+a there selects the whole document.
+                    const tag = await page.$eval(selector, (el: { tagName: string }) => el.tagName);
+                    if (tag === 'SELECT') return true;
                     if (!append) {
                       // The whole field, where a triple click reaches one paragraph.
                       await pressChord(page, SELECT_ALL);

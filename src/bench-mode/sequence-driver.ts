@@ -1063,7 +1063,9 @@ export function createSequenceDriver(
     },
 
     cancel: async () => {
-      if (ourRun()) await replay({ action: 'cancel' });
+      // With nothing selected, ourRun adopts whatever run is going, which may
+      // be another bench's play; tearing this bench down must leave that run.
+      if (selected !== null && ourRun()) await replay({ action: 'cancel' });
       selected = null;
       reached = 0;
       followed = undefined; ended = null;

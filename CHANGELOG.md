@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Capability matrices.** A matrix holds scenarios against capabilities, one
+  JSON file per matrix in `.devharness/matrix/`; each cell holds what is
+  expected and how it stands today (works, gap, unmeasured, n/a), layered from
+  the capability's default, the file's `layers` tables and the scenario's own
+  cell. The `matrix` tool lists, reads, edits one cell, hands over the next gap
+  or unmeasured cell, imports a file from the repo, and lists the changes made
+  to a matrix.
+- **Issues link to matrix cells, rows and columns.** `issues create` and `edit`
+  take `matrix` refs (`m#scenario/capability`, `m#scenario`, `m#/capability`),
+  `matrixAdd` and `matrixRemove`; a ref naming something the store lacks is
+  refused. `issues list` filters on a matrix or a ref, and `matrix read` and
+  `next` carry each cell's issues.
+- **The bench's Matrix tab.** A list of the matrices with their counts, a grid
+  per matrix with filters, a page per cell, row and column, issue marks that
+  open the issue, and `sequence:` bases that open the sequence. A cell's
+  standing is set from its page. Glance shows the marks alone with the column
+  names at 45 degrees, and opens the row and column under the pointer in full.
+  The standing filter folds every other cell and shuts the columns holding
+  none. An Activity drawer lists each change with its time and channel.
+
 ### Changed
 
 - **Events arrive as peer messages.** In Claude Code, each burst of lines on

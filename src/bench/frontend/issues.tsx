@@ -5,7 +5,7 @@ import { Markdown } from './markdown.js';
 import { Row } from './row.js';
 import { Glyph } from './glyph.js';
 import { useEscape } from './escape.js';
-import type { IssueRow, IssueSync, SequenceNote, ToolRun } from '../wire.js';
+import type { IssueRow, IssueSync, MatrixPlace, MatrixRefLink, SequenceNote, ToolRun } from '../wire.js';
 
 /** Each status in words, for the issue page's sidebar. */
 const STATUS_WORDS: Record<IssueRow['status'], string> = {
@@ -280,7 +280,7 @@ function SyncBox({ base, issues, onSynced }: { base: string; issues: IssueRow[];
 }
 
 /** Open: a ring with a dot. Closed: a ring with a tick. Both 16px, as GitHub draws them. */
-function StateMark({ shut }: { shut: boolean }) {
+export function StateMark({ shut }: { shut: boolean }) {
   return shut ? (
     <svg class="issuemark closed" width="16" height="16" viewBox="0 0 16 16" aria-label="closed">
       <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5" />
@@ -316,13 +316,15 @@ function CommentMark() {
  * `issue` is the one open, as the bench's address holds it, and `onIssue`
  * moves the address, so the browser's back returns from an issue to the list.
  * `onGoToNote` opens a note's sequence and runs it through the note's step.
+ * `onMatrix` opens a matrix ref's cell, row or column on the Matrix tab.
  */
-export function Issues({ base, issue: openId, onIssue, onGoToNote }: {
+export function Issues({ base, issue: openId, onIssue, onGoToNote, onMatrix }: {
   base: string;
   issue: number | null;
   onIssue: (issue: number | null) => void;
   /** `step` is 0-based. */
   onGoToNote: (sequence: string, step: number) => void;
+  onMatrix: (place: MatrixPlace) => void;
 }) {
   const [issues, setIssues] = useState<IssueRow[] | null>(null);
   const [failed, setFailed] = useState(false);
@@ -363,7 +365,7 @@ export function Issues({ base, issue: openId, onIssue, onGoToNote }: {
   if (opened) {
     return <IssuePage base={base} issue={opened} issues={issues} byId={byId} onOpen={onIssue}
       onBack={() => onIssue(null)} onChanged={() => setReads(n => n + 1)}
-      onGoToNote={onGoToNote} onLabel={filterByLabel} onType={filterByType} />;
+      onGoToNote={onGoToNote} onLabel={filterByLabel} onType={filterByType} onMatrix={onMatrix} />;
   }
 
   const { labels: wantedLabels, type: wantedType, readiness, words: query } = parseFilter(filter);
@@ -475,12 +477,13 @@ async function callIssues(base: string, args: Record<string, unknown>): Promise<
 }
 
 /** One issue's page: its title and state, the body and comments as a timeline, and a sidebar of facts. */
-function IssuePage({ base, issue, issues, byId, onOpen, onBack, onChanged, onGoToNote, onLabel, onType }: {
+function IssuePage({ base, issue, issues, byId, onOpen, onBack, onChanged, onGoToNote, onLabel, onType, onMatrix }: {
   base: string; issue: IssueRow; issues: IssueRow[]; byId: Map<number, IssueRow>; onOpen: (id: number) => void;
   onBack: () => void; onChanged: () => void; onGoToNote: (sequence: string, step: number) => void;
   /** A label pressed: the list, filtered to it. */
   onLabel: (label: string) => void;
   onType: (type: IssueRow['type']) => void;
+  onMatrix: (place: MatrixPlace) => void;
 }) {
   const count = issue.comments.length;
   const [editing, setEditing] = useState(false);
@@ -601,6 +604,14 @@ function IssuePage({ base, issue, issues, byId, onOpen, onBack, onChanged, onGoT
             {issue.sequenceFile ? <p class="issuemono">{issue.sequenceFile}</p> : <p class="quiet">None linked</p>}
             <SequenceLink base={base} issue={issue} onLinked={onChanged} />
           </section>
+          {issue.matrix && issue.matrix.length > 0 && (
+            <section>
+              <h3>Matrix</h3>
+              <ul class="issuelinks">
+                {issue.matrix.map(link => <MatrixRefLine key={link.ref} link={link} onMatrix={onMatrix} />)}
+              </ul>
+            </section>
+          )}
           <section>
             <h3>GitHub</h3>
             {issue.github ? (
@@ -619,6 +630,19 @@ function IssuePage({ base, issue, issues, byId, onOpen, onBack, onChanged, onGoT
         </aside>
       </div>
     </div>
+  );
+}
+
+/** One matrix ref: a link to its cell, row or column, or plain text marked where the ref names nothing in the store. */
+function MatrixRefLine({ link, onMatrix }: { link: MatrixRefLink; onMatrix: (place: MatrixPlace) => void }) {
+  const at = link.at;
+  const area = at && (at.scenario !== undefined && at.capability !== undefined ? 'cell' : at.scenario !== undefined ? 'row' : 'column');
+  return (
+    <li class="issuelinkrow">
+      {at
+        ? <button class="issuereftitle issuemono" title={`open this ${area} on the Matrix tab`} onClick={() => onMatrix(at)}>{link.ref}</button>
+        : <span class="issuemono matrixdead">{link.ref} <span class="matrixmissing" title="the store holds no matrix, scenario or capability this ref names">points at nothing</span></span>}
+    </li>
   );
 }
 

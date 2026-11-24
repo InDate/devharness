@@ -15,6 +15,7 @@ import type { DialogAnswer, OpenDialog } from './dialog-monitor.js';
 import type { Annotation, BenchReport, TickResult } from './bench-mode.js';
 import type { CaptureRecord, CaptureVersion } from './bench/wire.js';
 import type { ElementFingerprint, ElementRepair } from './element-fingerprint.js';
+import type { CellStanding, MatrixActivityEntry, MatrixIssueLink, MatrixSummary, ResolvedCell, StandingCounts } from './matrix-store.js';
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -344,6 +345,7 @@ export interface ToolResponseMeta {
   storage?: StorageToolMeta;
   replay?: ReplayRunMeta;
   github?: GithubToolMeta;
+  matrix?: MatrixToolMeta;
   bench?: BenchToolMeta;
   /** connection launch: the readings taken during a launch that failed. */
   launchObservations?: LaunchObservationsMeta;
@@ -432,6 +434,46 @@ export interface BenchToolMeta {
 
 /** Structured result of a GitHub action on the issues tool. Behaviour reads
  *  this, never the rendered text. */
+/** Structured result of a matrix action. */
+export interface MatrixToolMeta {
+  action: 'list' | 'read' | 'edit' | 'next' | 'import' | 'activity';
+  /** activity: the changes to the matrix, newest first. */
+  activity?: MatrixActivityEntry[];
+  /** The matrix the call resolved to. */
+  name?: string;
+  /** list: every matrix in the store. import: the one imported. */
+  matrices?: MatrixSummary[];
+  /** read of a whole matrix: cells per standing over the whole matrix. */
+  counts?: StandingCounts;
+  /** read of a whole matrix: per scenario, the capability ids at each standing, after the `today` filter. */
+  rows?: Array<{
+    scenario: string;
+    standings: Partial<Record<CellStanding, string[]>>;
+    /** Open issues linked to this row or to a cell in it; absent with `issues: false`. */
+    openIssues?: number;
+  }>;
+  /** read of a whole matrix: issues linked to whole columns, completed ones included; absent with `issues: false`. */
+  columnIssues?: MatrixIssueLink[];
+  /** read of a scenario, a capability or one cell: the resolved cells, after the `today` filter. */
+  cells?: ResolvedCell[];
+  /** Alongside `cells`: per cell, the issues linked to it, its row and its column, completed ones included; absent with `issues: false`. */
+  cellIssues?: Array<{ scenario: string; capability: string; issues: MatrixIssueLink[] }>;
+  /** edit: the cell after the write, and before it. */
+  cell?: ResolvedCell;
+  previous?: ResolvedCell;
+  /** next: the cell to work on, or null with no gap or unmeasured cell left. */
+  next?: {
+    ref: string;
+    scenario: string;
+    capability: string;
+    cell: ResolvedCell;
+    remaining: { gap: number; unmeasured: number };
+    /** The issues linked to the cell, its row and its column, completed ones included. */
+    issues: MatrixIssueLink[];
+  } | null;
+  imported?: { filePath: string; source: string; replaced: boolean };
+}
+
 export interface GithubToolMeta {
   action: 'publish' | 'sync' | 'import' | 'link' | 'pullSequence';
   repo?: string;
@@ -493,7 +535,8 @@ export function checkPortFailures(
   // - execution: needed to resume from breakpoints (otherwise deadlock with breakpoint blocking)
   // - breakpoint: needed to manage breakpoints while debugging
   // - issues: logging/tracking bugs shouldn't be gated on unrelated server health
-  const portFailureExemptTools = new Set(['server', 'execution', 'breakpoint', 'issues']);
+  // - matrix: reads and writes .devharness/matrix only
+  const portFailureExemptTools = new Set(['server', 'execution', 'breakpoint', 'issues', 'matrix']);
 
   if (blockingPorts.length > 0 && !portFailureExemptTools.has(toolName)) {
     // Block all tools except exempt tools
@@ -771,7 +814,8 @@ export function checkPendingStartups(
 
   // Server tool is always allowed (needed to acknowledge/manage servers)
   // Issues tool is always allowed (logging/tracking bugs shouldn't be gated on unrelated server health)
-  if (toolName === 'server' || toolName === 'issues') {
+  // Matrix tool reads and writes .devharness/matrix only
+  if (toolName === 'server' || toolName === 'issues' || toolName === 'matrix') {
     return {
       blocked: false,
       prefix: '',

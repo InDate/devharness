@@ -2864,3 +2864,220 @@ dialog.varmodal::backdrop { background: rgba(0, 0, 0, 0.45); }
 .issuehitsub { font-size: 12px; color: var(--muted); }
 .issuehitsnippet { font-size: 12px; color: var(--fg); overflow-wrap: anywhere; }
 .issuehit mark { background: color-mix(in srgb, var(--accent) 28%, transparent); color: inherit; border-radius: 2px; }
+
+/* The Matrix tab, in the Issues tab's frame: the same box, list lines, back
+   link and fact sidebar. A standing reads by shape as well as hue - works a
+   solid dot, gap a solid diamond, unmeasured a ring, n/a a dash - since the
+   cells are too small to carry a word. */
+.matrices, .matrixpage { display: flex; flex-direction: column; gap: 12px; }
+.matrices > *, .matrixpage > * { margin: 0; }
+.matrixpage > .issueback { align-self: flex-start; margin: 0; }
+.matrixlisthead { font-size: 13px; font-weight: 600; }
+.matrixabout {
+  font-size: 12px; color: var(--muted); overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+}
+.issuemain > .matrixabout { margin: 4px 0 0; }
+.matrixhead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.matrixtitle { margin: 0; font-size: 18px; font-weight: 400; overflow-wrap: anywhere; }
+.matrixfilters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.matrixfilters .issueeditfield { width: auto; max-width: 100%; font-size: 12px; padding: 3px 6px; }
+.matrixcheck { display: inline-flex; gap: 5px; align-items: center; font-size: 12px; color: var(--muted); cursor: pointer; }
+
+.standingmark { flex: 0 0 auto; display: inline-block; width: 9px; height: 9px; vertical-align: -1px; }
+.standingmark.standing-works { border-radius: 50%; background: var(--done); }
+.standingmark.standing-gap { transform: rotate(45deg) scale(.86); background: var(--alert); }
+.standingmark.standing-unmeasured { border-radius: 50%; border: 1.5px solid var(--muted); }
+.standingmark.standing-na { height: 2px; margin: 3.5px 0; vertical-align: 1px; background: var(--muted); }
+.matrixcounts { display: inline-flex; flex-wrap: wrap; gap: 0 8px; font-variant-numeric: tabular-nums; }
+.matrixcount { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+
+/* The grid scrolls both ways inside its own box, so its header row and its
+   scenario column stay in view however far it is scrolled. */
+.matrixwrap {
+  container-type: inline-size;
+  overflow: auto; max-height: calc(100vh - 150px); min-height: 200px;
+  border: 1px solid var(--line); border-radius: 6px;
+}
+.matrixgrid { border-collapse: separate; border-spacing: 0; font-size: 12px; }
+.matrixgrid th, .matrixgrid td {
+  padding: 4px 6px; vertical-align: top; text-align: left;
+  border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--bg);
+}
+.matrixgrid thead th { position: sticky; top: 0; z-index: 2; background: var(--panel); font-weight: 600; }
+.matrixgrid tbody th { position: sticky; left: 0; z-index: 1; font-weight: 500; }
+.matrixgrid thead .matrixcorner { left: 0; z-index: 3; color: var(--muted); font-weight: 500; }
+.matrixcolhead { min-width: 56px; max-width: 120px; }
+.matrixcolhead .matrixcounts { display: flex; margin-top: 2px; font-weight: 400; color: var(--muted); font-size: 11px; }
+.matrixrowhead { width: 132px; min-width: 132px; max-width: 132px; }
+.matrixheadbtn {
+  display: block; max-width: 100%; padding: 0; border: 0; background: none; text-align: left; cursor: pointer;
+  font: inherit; color: var(--fg); overflow: hidden; text-overflow: ellipsis;
+}
+.matrixcolhead .matrixheadbtn { white-space: nowrap; }
+.matrixrowhead .matrixheadbtn { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+.matrixheadbtn:hover { color: var(--accent); }
+.matrixrowsub { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 400; color: var(--muted); }
+.matrixcell { min-width: 36px; padding: 0; }
+.matrixcellbtn {
+  display: flex; gap: 6px; align-items: flex-start; width: 100%; padding: 6px 8px 4px; border: 0; background: none;
+  font: inherit; color: var(--fg); text-align: left; cursor: pointer;
+}
+.matrixcellbtn .standingmark { margin-top: 3px; }
+.matrixcell:hover, .matrixcell:hover .matrixcellbtn { background: var(--panel); }
+.matrixcelltext { display: none; }
+.matrixcell .matrixbadges { padding: 0 6px 4px; }
+@container (min-width: 900px) {
+  .matrixcell { width: 170px; min-width: 170px; }
+  .matrixcelltext {
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere;
+  }
+  .matrixrowhead { width: 200px; min-width: 200px; max-width: 200px; }
+}
+.matrixheadbtn:focus-visible, .matrixcellbtn:focus-visible, .matrixbadge:focus-visible, .matrixtitlebtn:focus-visible {
+  outline: 1px solid var(--accent); outline-offset: -1px;
+}
+
+/* A linked issue on a cell or a header: its type's glyph in its type's hue,
+   faded once completed, as the Issues tab draws a closed issue apart. */
+.matrixbadges { display: flex; flex-wrap: wrap; gap: 1px; margin-top: 2px; }
+.matrixbadge {
+  display: inline-flex; padding: 1px; border: 1px solid transparent; border-radius: 4px; background: none; cursor: pointer; line-height: 0;
+}
+.matrixbadge:hover { border-color: currentColor; }
+.matrixbadge.closed { opacity: .45; }
+.matrixlegend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; color: var(--muted); }
+.matrixlegend > span { display: inline-flex; align-items: center; gap: 4px; }
+.matrixlegend .matrixbadge { cursor: default; }
+
+.matrixfacts { max-width: 720px; }
+.matrixfacts section > p + p { margin-top: 6px; }
+.matrixfrom { font-weight: 400; }
+.matrixstanding { display: flex; align-items: center; gap: 6px; }
+.matrixquestion { font-style: italic; }
+.matrixrule { color: var(--muted); }
+.matrixfields { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 10px; margin: 6px 0 0; font-size: 12px; }
+.matrixfields dt { color: var(--muted); }
+.matrixfields dd { margin: 0; overflow-wrap: anywhere; }
+.matrixchoose { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.matrixstate {
+  display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px;
+  background: none; font: inherit; font-size: 12px; color: var(--muted); cursor: pointer;
+}
+.matrixstate:hover { color: var(--fg); }
+.matrixstate.on { font-weight: 600; color: var(--fg); border-color: var(--fg); cursor: default; }
+.matrixreadme { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 6px 0; }
+.matrixreadme > * { margin: 0; }
+.matrixstandings { display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 12px; }
+.matrixrow .matrixcounts { font-size: 12px; }
+.matrixtitlebtn { padding: 0; border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.matrixtitlebtn:hover { color: var(--accent); }
+.matrixlinkkind { flex: none; font-size: 11px; color: var(--muted); }
+.matrixline > .standingmark { margin-top: 6px; }
+.matrixline .issuetitle { font-size: 13px; }
+.matrixlineexpect { margin-top: 2px; font-size: 12px; overflow-wrap: anywhere; }
+.matrixline .issuesub { overflow-wrap: anywhere; }
+.matrixmissing {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 10px; font-weight: 600;
+  padding: 0 5px; border-radius: 2em; color: var(--alert); border: 1px solid currentColor;
+}
+.matrixdead { color: var(--muted); overflow-wrap: anywhere; }
+
+.matrixlogtab {
+  position: fixed; right: 0; top: 38%; z-index: 46; display: flex; align-items: center; gap: 6px;
+  padding: 8px 6px; border: 1px solid var(--line); border-right: 0; border-radius: 6px 0 0 6px;
+  background: var(--panel); color: var(--muted); font: inherit; font-size: 11px; cursor: pointer;
+  writing-mode: vertical-rl;
+}
+.matrixlogtab:hover, .matrixlogtab.on { color: var(--fg); }
+.matrixlogtab.on { right: min(340px, 86vw); }
+.matrixlog {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 45; width: min(340px, 86vw);
+  display: flex; flex-direction: column; gap: 10px; padding: 16px 14px 130px; overflow-y: auto;
+  background: var(--bg); border-left: 1px solid var(--line); box-shadow: -8px 0 24px color-mix(in srgb, var(--fg) 12%, transparent);
+  transform: translateX(100%); visibility: hidden;
+  transition: transform .18s ease-out, visibility 0s linear .18s;
+}
+.matrixlog.open { transform: none; visibility: visible; transition: transform .18s ease-out; }
+.matrixlogtab { transition: right .18s ease-out; }
+@media (prefers-reduced-motion: reduce) { .matrixlog, .matrixlog.open, .matrixlogtab { transition: none; } }
+.matrixlog > * { margin: 0; }
+.matrixloghead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.matrixlogclose { padding: 0 6px; border: 0; background: none; font: inherit; font-size: 18px; line-height: 1; color: var(--muted); cursor: pointer; }
+.matrixlogclose:hover { color: var(--fg); }
+.matrixlogrows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.matrixlogrow { display: flex; flex-direction: column; gap: 4px; padding: 10px 0; border-top: 1px solid var(--line); font-size: 12px; }
+.matrixlogrow > * { margin: 0; }
+.matrixlogwhen { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 8px; font-variant-numeric: tabular-nums; }
+.matrixlognote { color: var(--muted); overflow-wrap: anywhere; }
+.matrixlogchange .linkbtn { text-align: left; }
+.matrixlogfield { overflow-wrap: anywhere; }
+.matrixlogvalue { font-weight: 600; display: -webkit-inline-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; vertical-align: top; }
+
+/* The glance view: the marks alone, packed, with each column's name on its side. */
+.matrixglance {
+  padding: 3px 10px; border: 1px solid var(--line); border-radius: 999px; background: none;
+  font: inherit; font-size: 12px; color: var(--muted); cursor: pointer;
+}
+.matrixglance:hover { color: var(--fg); }
+.matrixglance.on { color: var(--fg); border-color: var(--fg); font-weight: 600; }
+.glance > .matrixabout, .glance .matrixcelltext, .glance .matrixrowsub,
+.glance .matrixcolhead .matrixcounts, .glance .matrixgrid .matrixbadges { display: none; }
+.glance .matrixgrid th, .glance .matrixgrid td { padding: 0; }
+.glance .matrixcell { width: 24px; min-width: 24px; }
+.glance .matrixcellbtn { justify-content: center; align-items: center; height: 22px; padding: 0; }
+.glance .matrixcellbtn .standingmark { margin: 0; width: 12px; height: 12px; }
+.glance .matrixcellbtn .standingmark.standing-na { height: 2px; }
+/* Each column's name leans 45 degrees up and to the right from the foot of its
+   own column, across the header cells after it. The header row sticks as one
+   piece with one background, so no cell's background covers a name leaning
+   over it. */
+.glance .matrixgrid thead { position: sticky; top: 0; z-index: 2; }
+.glance .matrixgrid thead tr { background: var(--panel); }
+.glance .matrixgrid thead th { position: relative; top: auto; z-index: auto; background: none; border-right: 0; }
+.glance .matrixcolhead { min-width: 24px; max-width: 24px; height: 124px; }
+.glance .matrixcolhead .matrixheadbtn {
+  position: absolute; left: 16px; bottom: 5px; max-width: 160px; white-space: nowrap;
+  transform: rotate(-45deg); transform-origin: left bottom;
+}
+.glance .matrixgrid thead .matrixcorner { position: sticky; left: 0; z-index: 3; padding: 6px; vertical-align: bottom; background: var(--panel); }
+.glance .matrixgrid { margin-right: 120px; }
+.glance .matrixrowhead { width: 168px; min-width: 168px; max-width: 168px; padding: 0 6px; vertical-align: middle; }
+.glance .matrixrowhead .matrixheadbtn { display: block; white-space: nowrap; line-height: 22px; }
+
+/* In the glance view the header under the pointer puts its own line back as
+   the full view draws it, inside the table: a column takes its width and
+   wraps each cell's words, a row wraps the words of every one of its cells,
+   which widens each column for as long as the row is open. */
+.glance .matrixcolhead.colopen { min-width: 220px; max-width: 220px; }
+.glance .matrixcell.colopen { width: 220px; min-width: 220px; max-width: 220px; }
+.glance .rowopen .matrixcell { width: 150px; min-width: 150px; max-width: 150px; }
+.glance .matrixcell.colopen .matrixcellbtn, .glance .rowopen .matrixcellbtn {
+  justify-content: flex-start; align-items: flex-start; height: auto; padding: 5px 6px; gap: 8px;
+}
+.glance .matrixcell.colopen .matrixcelltext, .glance .rowopen .matrixcelltext {
+  display: block; flex: 1 1 auto; min-width: 0; white-space: normal; overflow-wrap: anywhere;
+}
+.glance .matrixcell.colopen .matrixcellbtn .standingmark, .glance .rowopen .matrixcellbtn .standingmark { margin-top: 2px; }
+.glance .matrixgrid .matrixcell.colopen .matrixbadges, .glance .matrixgrid .rowopen .matrixbadges { display: flex; }
+.glance .matrixgrid .rowopen > th, .glance .matrixgrid .rowopen > td { background: var(--panel); }
+.glance .rowopen .matrixrowhead { padding: 4px 6px; vertical-align: top; }
+.glance .rowopen .matrixrowhead .matrixheadbtn { white-space: normal; line-height: inherit; overflow-wrap: anywhere; }
+.glance .rowopen .matrixrowsub { display: block; white-space: normal; }
+.glance .matrixcolhead.colopen .matrixcounts { display: flex; position: absolute; left: 46px; bottom: 4px; margin: 0; }
+
+/* Under a standing filter the cells at another standing stay in place and go
+   faint, so the chosen standing reads alone across rows that all hold it. */
+.matrixcell.faded > * { opacity: .12; }
+.matrixcell.faded:hover > *, .matrixcell.faded.colopen > *, .rowopen .matrixcell.faded > * { opacity: .55; }
+
+/* Under a standing filter a cell at another standing folds to its faint mark,
+   with no words and no issue marks, and a column holding no cell at the
+   chosen standing shuts to a sliver that keeps its place in the order. */
+.matrixgrid .matrixcell.faded { width: auto; min-width: 24px; }
+.matrixgrid .matrixcell.faded .matrixcelltext, .matrixgrid .matrixcell.faded .matrixbadges { display: none; }
+.matrixgrid .matrixcell.faded .matrixcellbtn { justify-content: center; }
+.matrixgrid .matrixcolhead.colshut, .matrixgrid .matrixcell.colshut {
+  width: 8px; min-width: 8px; max-width: 8px; padding: 0; background: var(--panel);
+}
+.matrixgrid .colshut > * { display: none; }

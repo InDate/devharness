@@ -8,6 +8,7 @@ import { toggleVariables, useVariablesHidden } from './variables-shown.js';
 import { History } from './history.js';
 import { Tools, type ToolSeed } from './tools.js';
 import { Issues } from './issues.js';
+import { Matrix } from './matrix.js';
 import { Running } from './running.js';
 import { EnableProxy } from './enable-proxy.js';
 import { ConnectionPicker } from './connection-picker.js';
@@ -932,15 +933,15 @@ function Footing({ base, onNew, onShot, onSequence, onVariables, onGo }: {
   );
 }
 
-type Tab = 'editing' | 'traffic' | 'browser' | 'history' | 'tools' | 'running' | 'issues';
+type Tab = 'editing' | 'traffic' | 'browser' | 'history' | 'tools' | 'running' | 'issues' | 'matrix';
 
 /** The tab's word in the address, and back. A word no tab has opens Sequence; `servers`, the Running tab's earlier word, opens Running. */
-const TAB_WORDS: Record<Tab, string> = { editing: 'sequence', traffic: 'traffic', browser: 'browser', history: 'history', tools: 'tools', running: 'running', issues: 'issues' };
+const TAB_WORDS: Record<Tab, string> = { editing: 'sequence', traffic: 'traffic', browser: 'browser', history: 'history', tools: 'tools', running: 'running', issues: 'issues', matrix: 'matrix' };
 
 /**
  * Where the bench stands, as the address holds it: the tab, the open
- * sequence, and within a tab the issue open on Issues and the tool and action
- * chosen on Tools. Each move pushes an entry, so the browser's back and
+ * sequence, and within a tab the issue open on Issues, the matrix and its
+ * cell, row or column open on Matrix, and the tool and action chosen on Tools. Each move pushes an entry, so the browser's back and
  * forward return to the list after a sequence or an issue is opened, to the
  * tool chosen before, and to the tab before.
  */
@@ -948,6 +949,11 @@ interface Place {
   tab: Tab;
   sequence: string | null;
   issue: number | null;
+  matrix: string | null;
+  /** With `capability`, a cell of `matrix`; alone, a row. */
+  scenario: string | null;
+  /** Alone, a column of `matrix`. */
+  capability: string | null;
   tool: string | null;
   action: string | null;
   /** The History entry a go-to opened. */
@@ -955,7 +961,7 @@ interface Place {
 }
 
 /** A tab's own place, cleared: a tab opened from its button opens on its list. */
-const TAB_START = { issue: null, tool: null, action: null, entry: null } as const;
+const TAB_START = { issue: null, matrix: null, scenario: null, capability: null, tool: null, action: null, entry: null } as const;
 
 function placeOf(): Place {
   const query = new URLSearchParams(location.search);
@@ -966,6 +972,9 @@ function placeOf(): Place {
     tab,
     sequence: query.get('sequence') || null,
     issue: tab === 'issues' && Number.isInteger(issue) && issue > 0 ? issue : null,
+    matrix: tab === 'matrix' ? query.get('matrix') || null : null,
+    scenario: tab === 'matrix' && query.get('matrix') ? query.get('scenario') || null : null,
+    capability: tab === 'matrix' && query.get('matrix') ? query.get('capability') || null : null,
     tool: tab === 'tools' ? query.get('tool') || null : null,
     action: tab === 'tools' ? query.get('action') || null : null,
     entry: tab === 'history' && query.get('entry') !== null && Number.isInteger(Number(query.get('entry'))) ? Number(query.get('entry')) : null,
@@ -977,6 +986,9 @@ function addressOf(place: Place): string {
   if (place.tab !== 'editing') query.set('tab', TAB_WORDS[place.tab]);
   if (place.sequence) query.set('sequence', place.sequence);
   if (place.issue !== null) query.set('issue', String(place.issue));
+  if (place.matrix) query.set('matrix', place.matrix);
+  if (place.scenario) query.set('scenario', place.scenario);
+  if (place.capability) query.set('capability', place.capability);
   if (place.tool) query.set('tool', place.tool);
   if (place.action) query.set('action', place.action);
   if (place.entry !== null) query.set('entry', String(place.entry));
@@ -988,6 +1000,7 @@ function addressOf(place: Place): string {
 
 function samePlace(a: Place, b: Place): boolean {
   return a.tab === b.tab && a.sequence === b.sequence && a.issue === b.issue
+    && a.matrix === b.matrix && a.scenario === b.scenario && a.capability === b.capability
     && a.tool === b.tool && a.action === b.action && a.entry === b.entry;
 }
 
@@ -1240,6 +1253,8 @@ function Bench() {
             count={counts.issues}
             detail={counts.issues === undefined ? undefined : `${counts.issues} open`}
             onClick={() => goTab('issues')} />
+          <TabButton on={tab === 'matrix'} word="Matrix" mark={<ToolGlyph tool="matrix" />}
+            onClick={() => goTab('matrix')} />
         </nav>
         {/* The state disc is drawn by the footing, which reads the state, into
             the slot on the connection picker's right, as the chosen connection's dot. */}
@@ -1288,6 +1303,27 @@ function Bench() {
             // The run is started here and the address follows it, so the
             // Sequence tab opens on the sequence the note belongs to.
             void postTo('/sequence/playto', { name: sequence, step });
+            go({ ...TAB_START, tab: 'editing', sequence });
+          }}
+          onMatrix={place => go({
+            ...TAB_START, tab: 'matrix', sequence: placeOf().sequence,
+            matrix: place.matrix, scenario: place.scenario ?? null, capability: place.capability ?? null,
+          })} />
+      )}
+      {tab === 'matrix' && (
+        <Matrix base={BASE} at={{ matrix: at.matrix, scenario: at.scenario, capability: at.capability }}
+          onPlace={(within, replace) => {
+            if (!replace) { goWithin(within); return; }
+            const next = { ...placeOf(), ...within };
+            history.replaceState(null, '', addressOf(next));
+            setAt(next);
+          }}
+          onIssue={issue => go({ ...TAB_START, tab: 'issues', sequence: placeOf().sequence, issue })}
+          onSequence={sequence => {
+            // Opening a sequence closes the one open and cancels its run, so a
+            // link followed while a run is going stays put, as `home` does.
+            if (busy) return;
+            reach(sequence);
             go({ ...TAB_START, tab: 'editing', sequence });
           }} />
       )}

@@ -38,6 +38,7 @@ const MARKS: Record<string, preact.JSX.Element> = {
   check: <path d="M2.4 4.4l1.2 1.2L6 3.2M8 4.4h5.6M2.4 10.6l1.2 1.2L6 9.4M8 10.6h5.6" />,
   server: <><rect x="2" y="2.4" width="12" height="4.6" rx="1" /><rect x="2" y="9" width="12" height="4.6" rx="1" /><path d="M4.6 4.7h.1M4.6 11.3h.1" /></>,
   issues: <><circle cx="8" cy="8" r="6.2" /><path d="M8 4.8v3.8M8 11v.1" /></>,
+  matrix: <><rect x="1.8" y="2.4" width="12.4" height="11.2" rx="1.2" /><path d="M1.8 6h12.4M1.8 9.8h12.4M6 2.4v11.2M10 2.4v11.2" /></>,
   dashboard: <><rect x="1.8" y="1.8" width="5.2" height="5.2" rx="1" /><rect x="9" y="1.8" width="5.2" height="5.2" rx="1" /><rect x="1.8" y="9" width="5.2" height="5.2" rx="1" /><rect x="9" y="9" width="5.2" height="5.2" rx="1" /></>,
   message: <path d="M2 3.4h12v7.4H7.2l-3 2.6v-2.6H2z" />,
 };

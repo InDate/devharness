@@ -228,6 +228,7 @@ export const TOGGLEABLE_TOOLS = [
   'replay',      // Sequence recording/playback
   'server',      // Dev server management
   'issues',      // Issue tracking
+  'matrix',      // Capability matrices
   'bench',       // Hold the page, read the boundary, record sequences, collect comments
   'dashboard',   // Web dashboard for monitoring sessions
   // Note: 'config' is NOT toggleable - always enabled

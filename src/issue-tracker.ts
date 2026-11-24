@@ -12,6 +12,7 @@ import { promises as fs, watch as fsWatch, type FSWatcher } from 'fs';
 import { join } from 'path';
 import { getOutputPath, registerRootBound } from './helpers/paths.js';
 import { atomicWriteFile } from './atomic-write.js';
+import { isMatrixName, parseMatrixRef, type MatrixRef } from './matrix-store.js';
 
 // =============================================================================
 // Types
@@ -51,6 +52,8 @@ export interface TrackedIssue {
   title: string;
   body: string;
   labels: string[];
+  /** Matrix refs: `<matrix>#<scenario>/<capability>`, `<matrix>#<scenario>` or `<matrix>#/<capability>`. */
+  matrix: string[];
   comments: IssueComment[];
   sequenceFile: string;
   startUrl: string;
@@ -90,6 +93,34 @@ export interface IssueFilter {
   includeCompleted?: boolean;
   /** Match issues that have ANY of these labels. */
   labels?: string[];
+  /** A matrix name or a matrix ref; matches issues holding a ref inside or around that area. */
+  matrix?: string;
+}
+
+// =============================================================================
+// Matrix refs
+// =============================================================================
+
+/** A bare name selects the whole matrix; anything else parses as a ref. */
+function parseMatrixSelector(selector: string): MatrixRef | undefined {
+  return isMatrixName(selector) ? { matrix: selector } : parseMatrixRef(selector);
+}
+
+/** true when one area holds the other: a cell matches its own row and column, a row matches its cells. */
+function matrixAreasNest(a: MatrixRef, b: MatrixRef): boolean {
+  if (a.matrix !== b.matrix) return false;
+  const scenarioHolds = (outer: MatrixRef, inner: MatrixRef) =>
+    outer.scenario === undefined || outer.scenario === inner.scenario;
+  const capabilityHolds = (outer: MatrixRef, inner: MatrixRef) =>
+    outer.capability === undefined || outer.capability === inner.capability;
+  return (scenarioHolds(a, b) && capabilityHolds(a, b)) || (scenarioHolds(b, a) && capabilityHolds(b, a));
+}
+
+function issueMatchesMatrix(issue: TrackedIssue, selector: MatrixRef): boolean {
+  return issue.matrix.some(ref => {
+    const parsed = parseMatrixRef(ref);
+    return parsed !== undefined && matrixAreasNest(parsed, selector);
+  });
 }
 
 // =============================================================================
@@ -209,7 +240,7 @@ const KNOWN_FRONTMATTER_KEYS: ReadonlySet<string> = new Set([
   'github', 'id', 'type', 'status', 'title', 'labels', 'sequenceFile', 'startUrl',
   'recordingName', 'githubRepo', 'closedReason', 'reportedAt', 'acknowledgedAt',
   'startedAt', 'resolvedAt', 'githubSyncedAt', 'githubBodyHash', 'githubSync',
-  'blockedBy', 'parent',
+  'blockedBy', 'parent', 'matrix',
 ]);
 
 /** Raw (unparsed) values for keys we don't know, so re-emission is lossless. */
@@ -255,6 +286,7 @@ function parseIssueFile(raw: string, filePath: string): TrackedIssue | null {
     title: typeof fm.title === 'string' ? fm.title : '',
     body,
     labels: Array.isArray(fm.labels) ? fm.labels : [],
+    matrix: Array.isArray(fm.matrix) ? fm.matrix.filter((v: unknown) => typeof v === 'string') : [],
     blockedBy: Array.isArray(fm.blockedBy) ? fm.blockedBy.filter((v: unknown) => Number.isInteger(v)) : [],
     parent: Number.isInteger(fm.parent) ? fm.parent : undefined,
     comments,
@@ -279,6 +311,7 @@ function serializeIssueFile(issue: TrackedIssue): string {
   fm.push(`status: ${issue.status}`);
   fm.push(`title: ${yamlQuote(issue.title)}`);
   if (issue.labels.length > 0) fm.push(`labels: ${yamlStringArray(issue.labels)}`);
+  if (issue.matrix.length > 0) fm.push(`matrix: ${yamlStringArray(issue.matrix)}`);
   if (issue.blockedBy.length > 0) fm.push(`blockedBy: [${issue.blockedBy.join(', ')}]`);
   if (issue.parent !== undefined) fm.push(`parent: ${issue.parent}`);
   if (issue.sequenceFile) fm.push(`sequenceFile: ${yamlQuote(issue.sequenceFile)}`);
@@ -440,6 +473,7 @@ async function migrateCsvIfNeeded(): Promise<void> {
       title: row.description,
       body: '',
       labels: [],
+      matrix: [],
       blockedBy: [],
       comments: [],
       sequenceFile: row.sequenceFile,
@@ -603,6 +637,7 @@ export async function addIssue(params: {
   startUrl?: string;
   body?: string;
   labels?: string[];
+  matrix?: string[];
   blockedBy?: number[];
   parent?: number;
 }): Promise<TrackedIssue> {
@@ -619,6 +654,7 @@ export async function addIssue(params: {
     title: params.title,
     body: params.body ?? '',
     labels: params.labels ?? [],
+    matrix: params.matrix ?? [],
     blockedBy: params.blockedBy ?? [],
     parent: params.parent,
     comments: [],
@@ -658,6 +694,10 @@ export async function getIssues(filter?: IssueFilter): Promise<TrackedIssue[]> {
   if (filter?.labels && filter.labels.length > 0) {
     const wanted = new Set(filter.labels);
     result = result.filter(i => i.labels.some(l => wanted.has(l)));
+  }
+  if (filter?.matrix) {
+    const selector = parseMatrixSelector(filter.matrix);
+    result = selector ? result.filter(i => issueMatchesMatrix(i, selector)) : [];
   }
 
   result.sort((a, b) => a.id - b.id);
@@ -699,7 +739,7 @@ export async function updateIssueStatus(id: number, status: IssueStatus): Promis
 export type IssueFieldPatch = Partial<Pick<TrackedIssue,
   'status' | 'title' | 'body' | 'labels' | 'closedReason' | 'resolvedAt' |
   'github' | 'githubRepo' | 'githubSyncedAt' | 'githubBodyHash' | 'githubSync' |
-  'blockedBy' | 'parent'>>;
+  'blockedBy' | 'parent' | 'matrix'>>;
 
 export async function updateIssueFields(id: number, patch: IssueFieldPatch): Promise<TrackedIssue | undefined> {
   await ensureIndexLoaded();
@@ -708,6 +748,18 @@ export async function updateIssueFields(id: number, patch: IssueFieldPatch): Pro
 
   Object.assign(issue, patch);
   return writeAndCacheIssue(issue);
+}
+
+/** Every issue, open or completed, holding a ref into this matrix, with those refs. */
+export async function issuesLinkedTo(matrixName: string): Promise<Array<{ issue: TrackedIssue; refs: string[] }>> {
+  await ensureIndexLoaded();
+  const linked: Array<{ issue: TrackedIssue; refs: string[] }> = [];
+  for (const issue of index!.values()) {
+    const refs = issue.matrix.filter(ref => parseMatrixRef(ref)?.matrix === matrixName);
+    if (refs.length > 0) linked.push({ issue, refs });
+  }
+  linked.sort((a, b) => a.issue.id - b.issue.id);
+  return linked;
 }
 
 /** The open issues among those this one waits on. */
@@ -732,40 +784,29 @@ export type LinkRefusal =
   | { kind: 'cycle'; path: number[] };
 
 /**
- * Checks blockedBy and parent for an issue before they are written. A cycle
- * leaves every issue on it waiting on another, so none of them ever reaches
- * `next`; a parent cycle closes nothing.
+ * Checks blockedBy and parent for an issue before they are written. An issue
+ * waits on each issue it is blocked by and, as a parent, on each of its
+ * pieces, so a loop through either kind of link leaves every issue on it
+ * waiting on another and none of them ever reaches `next`. `parent` null
+ * clears the parent; undefined keeps the one on file.
  */
 export async function checkLinks(
-  id: number | undefined, blockedBy: number[] | undefined, parent: number | undefined,
+  id: number | undefined, blockedBy: number[] | undefined, parent: number | null | undefined,
 ): Promise<LinkRefusal | null> {
   await ensureIndexLoaded();
   const all = index!;
-  const named = [...(blockedBy ?? []), ...(parent !== undefined ? [parent] : [])];
+  const named = [...(blockedBy ?? []), ...(typeof parent === 'number' ? [parent] : [])];
   const missing = named.filter(n => !all.has(n));
   if (missing.length > 0) return { kind: 'missing', ids: [...new Set(missing)] };
   if (id !== undefined && named.includes(id)) return { kind: 'self' };
   if (id === undefined) return null;
 
-  if (blockedBy) {
-    const edges = (n: number) => (n === id ? blockedBy : all.get(n)?.blockedBy ?? []);
-    const path = findPath(edges, blockedBy, id);
-    if (path) return { kind: 'cycle', path: [id, ...path] };
-  }
-  const effectiveParent = parent !== undefined ? parent : all.get(id)?.parent;
-  const effectiveBlockers = blockedBy ?? all.get(id)?.blockedBy ?? [];
-  for (let at = effectiveParent, steps = 0; at !== undefined && steps <= all.size; at = all.get(at)?.parent, steps++) {
-    if (effectiveBlockers.includes(at)) return { kind: 'cycle', path: [id, at, id] };
-  }
-  if (parent !== undefined) {
-    const up: number[] = [];
-    for (let at: number | undefined = parent; at !== undefined; at = all.get(at)?.parent) {
-      up.push(at);
-      if (at === id) return { kind: 'cycle', path: [id, ...up] };
-      if (up.length > all.size) break;
-    }
-  }
-  return null;
+  const parentOf = (n: number) => (n === id && parent !== undefined ? parent ?? undefined : all.get(n)?.parent);
+  const blockersOf = (n: number) => (n === id && blockedBy ? blockedBy : all.get(n)?.blockedBy ?? []);
+  const piecesOf = (n: number) => Array.from(all.keys()).filter(m => parentOf(m) === n);
+  const waitsOn = (n: number) => [...blockersOf(n), ...piecesOf(n)];
+  const path = findPath(waitsOn, waitsOn(id), id);
+  return path ? { kind: 'cycle', path: [id, ...path] } : null;
 }
 
 function findPath(edges: (n: number) => number[], from: number[], target: number): number[] | null {

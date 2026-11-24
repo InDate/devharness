@@ -9,6 +9,7 @@ import { getProxy, checkOutcomesFor } from '../proxy/registry.js';
 import { getMessage } from '../messages.js';
 import { levelOf, causeOf } from '../proxy/intercept-proxy.js';
 import { getIssues, getReadyIssues } from '../issue-tracker.js';
+import { matrixActivity, matrixList, matrixRead, matrixSetStanding, placeMatrixRefs } from './matrix-view.js';
 import { addFavourite, readFavourites, removeFavourite } from './favourites.js';
 import { bodyHash, commentGithubId, stripCommentMarker } from '../github/gh-issues.js';
 import { localProse } from '../github/issue-actions.js';
@@ -458,7 +459,7 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
     sequenceNotes: async () => (await sessions.get(connection)?.sequences?.notes()) ?? [],
     issues: async (includeCompleted: boolean) => {
       const nextPlace = new Map((await getReadyIssues()).map((issue, place) => [issue.id, place]));
-      return (await getIssues({ includeCompleted })).map(issue => ({
+      return Promise.all((await getIssues({ includeCompleted })).map(async issue => ({
       id: issue.id,
       type: issue.type,
       status: issue.status,
@@ -470,6 +471,7 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
       ...(nextPlace.has(issue.id) && { nextPlace: nextPlace.get(issue.id) }),
       comments: issue.comments.map(comment => ({ at: comment.timestamp.getTime(), text: stripCommentMarker(comment.text) })),
       ...(issue.sequenceFile && { sequenceFile: issue.sequenceFile }),
+      ...(issue.matrix.length > 0 && { matrix: await placeMatrixRefs(issue.matrix) }),
       reportedAt: issue.reportedAt.getTime(),
       ...(issue.resolvedAt && { resolvedAt: issue.resolvedAt.getTime() }),
       ...(issue.github !== undefined && {
@@ -483,7 +485,17 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
           decided: issue.githubSync !== undefined,
         },
       }),
-      }));
+      })));
+    },
+    matrices: () => matrixList(),
+    matrix: (name?: string) => matrixRead(name),
+    matrixActivity: (name: string) => matrixActivity(name),
+    setMatrixStanding: async (name, scenario, capability, today) => {
+      const { failure, previous } = await matrixSetStanding(name, scenario, capability, today);
+      if (failure) return { failure };
+      await recordBenchCall(connection, 'matrix', { action: 'edit', matrix: name, scenario, capability, today },
+        `set ${name}#${scenario}/${capability} from ${previous} to ${today}`);
+      return {};
     },
     callTool: async (tool: string, args: Record<string, unknown>) => {
       const sequences = sessions.get(connection)?.sequences;

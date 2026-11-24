@@ -73,6 +73,7 @@ import { createServerTools } from './tools/server-tools.js';
 import { createConfigTools } from './tools/config-tools.js';
 import { createPluginTools } from './tools/plugin-tools.js';
 import { createIssuesTools } from './tools/issues-tools.js';
+import { createMatrixTools } from './tools/matrix-tools.js';
 import { startSessionEndpoint, type SessionEndpoint } from './session-endpoint.js';
 import { runCli, isCliCommand, isVersionFlag, readPackageVersion } from './cli/index.js';
 import { getClaudeSessionId, resolveSessionName, resolveRestartStableSessionName } from './session-identity.js';
@@ -693,6 +694,8 @@ const allTools = {
     // against the live tool list before it is written to disk.
     (): string[] => Object.keys(allTools)
   )) : {}),
+  // Capability matrices
+  ...(configManager.isToolEnabled('matrix') ? toolset('matrix', createMatrixTools()) : {}),
   // Dashboard tools (lazy-initialized in main())
   ...(configManager.isToolEnabled('dashboard') ? toolset('dashboard', createDashboardTools()) : {}),
   // Cross-session message tools

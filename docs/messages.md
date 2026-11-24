@@ -1048,7 +1048,7 @@ Element not found: `{{selector}}`
 **Type:** error
 **Code:** TYPE_NOT_HELD
 
-`{{selector}}` is empty after "{{text}}" was typed into it: the keys reached another element, or the page replaced or reset the field while they went in.
+`{{selector}}` is empty after "{{text}}" was typed into it, and no input event reached it: the keys went to another element, or the page replaced the field while they went in.
 
 **Suggestions:**
 - Read the field with `inspect({ action: 'evaluateExpression' })`; a page still loading can redraw its form, so wait for it and type again
@@ -2830,6 +2830,42 @@ No open issue is ready.{{#waiting}} {{waiting}} wait on another issue or on thei
 
 ---
 
+## ISSUES_MATRIX_REF_INVALID
+
+**Type:** error
+**Code:** ISSUES_MATRIX_REF_INVALID
+
+{{refs}} match no matrix ref form. A ref is a cell `<matrix>#<scenario>/<capability>` (`motion#badge/credit`), a row `<matrix>#<scenario>` (`motion#badge`) or a column `<matrix>#/<capability>` (`motion#/credit`), each part of letters, digits, `_`, `.` or `-`.
+
+---
+
+## ISSUES_MATRIX_REF_MISSING
+
+**Type:** error
+**Code:** ISSUES_MATRIX_REF_MISSING
+
+`{{ref}}` was not linked: {{#partMatrix}}the store holds no matrix `{{value}}`.{{#empty}} The store holds no matrix at all; `matrix({ action: 'import', path: '<repo path to a matrix .json>' })` copies one in.{{/empty}}{{^empty}} Matrices: {{valid}}{{#more}} and {{more}} more; `matrix({ action: 'list' })` lists them all{{/more}}.{{/empty}}{{/partMatrix}}{{^partMatrix}}matrix `{{matrix}}` holds no {{part}} `{{value}}`.{{#empty}} It holds no {{part}} at all.{{/empty}}{{^empty}} Its {{part}} ids: {{valid}}{{#more}} and {{more}} more; `matrix({ action: 'read', matrix: '{{matrix}}' })` lists them all{{/more}}.{{/empty}}{{/partMatrix}} Nothing was written.
+
+---
+
+## ISSUES_MATRIX_REF_UNREADABLE
+
+**Type:** error
+**Code:** ISSUES_MATRIX_REF_UNREADABLE
+
+`{{ref}}` was not linked: `.devharness/matrix/{{matrix}}.json` is unreadable: {{problem}}. Fix the file, or replace it with `matrix({ action: 'import', path, name: '{{matrix}}', overwrite: true })`, then link again. Nothing was written.
+
+---
+
+## ISSUES_MATRIX_FILTER_INVALID
+
+**Type:** error
+**Code:** ISSUES_MATRIX_FILTER_INVALID
+
+`list` takes `matrix` as one string, and {{matrix}} is neither a matrix name nor a ref: pass a name (`motion`), a cell `motion#badge/credit`, a row `motion#badge` or a column `motion#/credit`.
+
+---
+
 ## ISSUES_LINK_NOT_FOUND
 
 **Type:** error
@@ -3201,7 +3237,7 @@ Linked to GitHub {{linked}}: the next `issues({ action: 'sync' })` pushes this c
 **Type:** error
 **Code:** ISSUES_NOTHING_TO_EDIT
 
-Nothing to change on issue #{{id}}: pass `title`, `body`, `labels`, `blockedBy`, `parent`, `sequenceName` or `sync`.
+Nothing to change on issue #{{id}}: pass `title`, `body`, `labels`, `matrix`, `matrixAdd`, `matrixRemove`, `blockedBy`, `parent`, `sequenceName` or `sync`.
 
 ---
 
@@ -4248,6 +4284,139 @@ Dependency conflicts detected. All tools are blocked until resolved.
 **Code:** NAVIGATION_FAILED
 
 Navigation failed: {{message}}
+
+---
+
+## Matrix Messages
+
+## MATRIX_LIST
+
+**Type:** success
+**Summary:** Matrices
+
+{{#empty}}The store holds no matrix. `matrix({ action: 'import', path: '<repo path to a matrix .json>' })` copies one into `.devharness/matrix/`.{{/empty}}{{^empty}}{{list}}
+
+{{count}} in the store. `matrix({ action: 'read', matrix: '<name>' })` lists each scenario's capabilities by standing.{{/empty}}
+
+---
+
+## MATRIX_READ
+
+**Type:** success
+**Summary:** Matrix {{ref}}
+
+{{#about}}{{about}}
+
+{{/about}}{{header}}
+
+{{body}}
+{{#whole}}
+
+`scenario` or `capability` returns those cells in full; `today` keeps cells at one standing.{{/whole}}
+
+**Once per session:**
+
+A cell layers the capability's `default`, then each table the file's `layers` names (keyed by that scenario field), then the scenario's own `cells`; a value marked _(layer)_ comes from that layer. A cell with no `today` reads unmeasured. `edit` writes onto the scenario's own cell only, so it overrides the layers for that one cell. Issues linked to a cell, its row or its column are listed with that link; completed ones stay, marked (completed). `issues: false` leaves them out.
+
+---
+
+## MATRIX_EDIT
+
+**Type:** success
+**Summary:** Cell {{ref}} written
+
+{{before}}
+
+{{after}}
+
+---
+
+## MATRIX_NEXT
+
+**Type:** success
+**Summary:** Next: {{ref}}
+
+{{scenario}} · {{capability}}
+{{#question}}Question: {{question}}
+{{/question}}{{#rule}}Rule: {{rule}}
+{{/rule}}
+{{cell}}
+
+{{gap}} gap, {{unmeasured}} unmeasured left; gaps come first, each in file order. Record the outcome with `matrix({ action: 'edit', matrix: '{{matrix}}', scenario: '{{scenarioId}}', capability: '{{capabilityId}}', today: '<standing>', basis: 'code' or 'sequence:<name>' })`.
+
+---
+
+## MATRIX_NEXT_NONE
+
+**Type:** success
+**Summary:** No cell left
+
+No cell in {{scope}} reads gap or unmeasured.
+
+---
+
+## MATRIX_ACTIVITY
+
+**Type:** success
+**Summary:** Activity on {{name}}
+
+{{#empty}}No change to `{{name}}` is logged. The log starts at the first change made after it was added: an edit through `matrix` or the bench, an import, or a write to the file.{{/empty}}{{^empty}}{{list}}
+
+{{count}} newest first. `by` is the channel the change came in on: `bench` a person's press in the Matrix tab, `session` a tool call, `cli`, or `file` a write to the file from outside devharness.{{/empty}}
+
+---
+
+## MATRIX_IMPORT
+
+**Type:** success
+**Summary:** Matrix {{name}} imported
+
+`{{source}}` copied to `{{filePath}}`{{#replaced}}, replacing the store entry of that name{{/replaced}}: {{scenarios}} scenarios × {{capabilities}} capabilities, {{counts}}.
+
+---
+
+## MATRIX_NOT_FOUND
+
+**Type:** error
+**Code:** MATRIX_NOT_FOUND
+
+{{#empty}}The store holds no matrix. Copy one in with `matrix({ action: 'import', path: '<repo path to a matrix .json>' })`.{{/empty}}{{^empty}}{{#name}}No matrix named `{{name}}`.{{/name}}{{^name}}The store holds several matrices, and `matrix` names one.{{/name}} The store holds: {{valid}}.{{/empty}}
+
+---
+
+## MATRIX_BROKEN
+
+**Type:** error
+**Code:** MATRIX_BROKEN
+
+`.devharness/matrix/{{name}}.json` is unreadable: {{problem}}. Fix the file, or replace it with `matrix({ action: 'import', path, name: '{{name}}', overwrite: true })`.
+
+---
+
+## MATRIX_UNKNOWN_ID
+
+**Type:** error
+**Code:** MATRIX_UNKNOWN_ID
+
+No {{kind}} `{{value}}`. Valid: {{valid}}.
+
+---
+
+## MATRIX_EDIT_EMPTY
+
+**Type:** error
+**Code:** MATRIX_EDIT_EMPTY
+
+`edit` writes at least one of `today`, `expect`, `basis` or `note`; null on a field takes it off the scenario's cell.
+
+---
+
+## MATRIX_IMPORT_REFUSED
+
+**Type:** error
+**Code:** MATRIX_IMPORT_REFUSED
+
+`{{source}}` was not imported: {{problem}}.{{#exists}} `matrix({ action: 'import', path: '{{path}}', name: '{{name}}', overwrite: true })` replaces it, or another `name` keeps both.{{/exists}}
 
 ---
 

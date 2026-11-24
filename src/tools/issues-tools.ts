@@ -46,6 +46,7 @@ import {
   type IssueType,
   type IssueStatus,
 } from '../issue-tracker.js';
+import { isMatrixName, parseMatrixRef, readMatrix } from '../matrix-store.js';
 import { checkUrlPort } from '../utils/port-check.js';
 import {
   handlePublish, handleSync, handleImport, handleLink, handlePullSequence,
@@ -80,6 +81,12 @@ const issuesSchema = z.object({
     .describe('create: labels. edit: the replacement labels. list/next: issues with ANY of them'),
   blockedBy: z.array(z.number().int().positive()).optional()
     .describe('create/edit: IDs that must close first; edit replaces the list'),
+  matrix: z.union([z.array(z.string()), z.string()]).optional()
+    .describe('create/edit: matrix refs `m#scenario/capability`, `m#scenario`, `m#/capability`; edit replaces the list. list: a matrix name or ref'),
+  matrixAdd: z.array(z.string()).optional()
+    .describe('edit: matrix refs to add'),
+  matrixRemove: z.array(z.string()).optional()
+    .describe('edit: matrix refs to remove'),
   parent: z.number().int().positive().nullable().optional()
     .describe('create/edit: issue this is a piece of; it closes when its last piece closes. edit: null clears'),
   text: z.string().optional()
@@ -223,6 +230,58 @@ function verificationRecord(outcome: 'Fixed' | 'Not fixed' | 'Replay failed', se
   return lines.join('\n');
 }
 
+/** The refs whose syntax matches none of cell, row or column. Existence in the matrix store is not checked here. */
+function validateMatrixRefSyntax(refs: string[]): string[] {
+  return refs.filter(ref => parseMatrixRef(ref) === undefined);
+}
+
+/** create/edit take a list; a single string reads as a list of one. */
+function matrixRefList(value: string[] | string | undefined): string[] | undefined {
+  if (value === undefined) return undefined;
+  return [...new Set(typeof value === 'string' ? [value] : value)];
+}
+
+function matrixRefRefusal(malformed: string[]) {
+  return createErrorResponse('ISSUES_MATRIX_REF_INVALID', { refs: malformed.map(r => JSON.stringify(r)).join(', ') });
+}
+
+const MATRIX_VALID_SHOWN = 12;
+
+function boundedList(values: string[]): { valid: string; more: number } {
+  return {
+    valid: values.slice(0, MATRIX_VALID_SHOWN).map(v => `\`${v}\``).join(', '),
+    more: Math.max(0, values.length - MATRIX_VALID_SHOWN),
+  };
+}
+
+/** The refusal for the first well-formed ref naming a matrix, scenario or capability the store lacks; undefined when every ref resolves. */
+async function matrixRefExistenceRefusal(refs: string[]) {
+  for (const ref of refs) {
+    const parsed = parseMatrixRef(ref)!;
+    const read = await readMatrix(parsed.matrix);
+    if (!read.ok && read.reason === 'broken') {
+      return createErrorResponse('ISSUES_MATRIX_REF_UNREADABLE', { ref, matrix: read.name, problem: read.problem });
+    }
+    if (!read.ok) {
+      return createErrorResponse('ISSUES_MATRIX_REF_MISSING', {
+        ref, part: 'matrix', value: parsed.matrix, matrix: parsed.matrix, partMatrix: true,
+        empty: read.valid.length === 0, ...boundedList(read.valid),
+      });
+    }
+    const missing: Array<['scenario' | 'capability', string | undefined, string[]]> = [
+      ['scenario', parsed.scenario, read.matrix.scenarios.map(s => s.id)],
+      ['capability', parsed.capability, read.matrix.capabilities.map(c => c.id)],
+    ];
+    for (const [part, value, ids] of missing) {
+      if (value === undefined || ids.includes(value)) continue;
+      return createErrorResponse('ISSUES_MATRIX_REF_MISSING', {
+        ref, part, value, matrix: parsed.matrix, partMatrix: false, empty: ids.length === 0, ...boundedList(ids),
+      });
+    }
+  }
+  return undefined;
+}
+
 function linkRefusal(refusal: LinkRefusal, id: number | undefined) {
   if (refusal.kind === 'missing') {
     return createErrorResponse('ISSUES_LINK_NOT_FOUND', { ids: refusal.ids.map(n => `#${n}`).join(', ') });
@@ -263,7 +322,8 @@ function formatIssuesList(issues: TrackedIssue[], all: Map<number, TrackedIssue>
     const id = String(issue.id).padEnd(idWidth);
     const status = issue.status.toUpperCase().padEnd(statusWidth);
     const type = issue.type.padEnd(typeWidth);
-    const labelSuffix = issue.labels.length > 0 ? ` [${issue.labels.join(', ')}]` : '';
+    const labelSuffix = (issue.labels.length > 0 ? ` [${issue.labels.join(', ')}]` : '')
+      + (issue.matrix.length > 0 ? ` {${issue.matrix.join(', ')}}` : '');
     // Truncate title to ~60 chars (minus label suffix) for readability
     const maxTitleLen = Math.max(10, 60 - labelSuffix.length);
     const title = issue.title.length > maxTitleLen
@@ -307,6 +367,10 @@ function formatIssueDetails(issue: TrackedIssue, all: Map<number, TrackedIssue>)
 
   if (issue.labels.length > 0) {
     lines.push(`**Labels:** ${issue.labels.join(', ')}`);
+  }
+
+  if (issue.matrix.length > 0) {
+    lines.push(`**Matrix:** ${issue.matrix.join(', ')}`);
   }
 
   if (issue.parent !== undefined) {
@@ -413,11 +477,17 @@ export function createIssuesTools(
               });
             }
 
-            const filter: { type?: IssueType; status?: IssueStatus; includeCompleted?: boolean; labels?: string[] } = {};
+            const filter: { type?: IssueType; status?: IssueStatus; includeCompleted?: boolean; labels?: string[]; matrix?: string } = {};
             if (args.type) filter.type = args.type;
             if (args.status) filter.status = args.status;
             if (args.includeCompleted) filter.includeCompleted = true;
             if (args.labels && args.labels.length > 0) filter.labels = args.labels;
+            if (args.matrix !== undefined) {
+              if (typeof args.matrix !== 'string' || (!isMatrixName(args.matrix) && !parseMatrixRef(args.matrix))) {
+                return createErrorResponse('ISSUES_MATRIX_FILTER_INVALID', { matrix: JSON.stringify(args.matrix) });
+              }
+              filter.matrix = args.matrix;
+            }
 
             let issues = await getIssues(filter);
 
@@ -486,6 +556,12 @@ export function createIssuesTools(
 
             const createRefusal = await checkLinks(undefined, args.blockedBy, args.parent ?? undefined);
             if (createRefusal) return linkRefusal(createRefusal, undefined);
+
+            const createMatrix = matrixRefList(args.matrix);
+            const createMalformed = validateMatrixRefSyntax(createMatrix ?? []);
+            if (createMalformed.length > 0) return matrixRefRefusal(createMalformed);
+            const createMissing = await matrixRefExistenceRefusal(createMatrix ?? []);
+            if (createMissing) return createMissing;
 
             // Check if sequence should be included (default: true)
             const includeSequence = args.includeSequence !== false;
@@ -560,7 +636,8 @@ export function createIssuesTools(
               startUrl: effectiveStartUrl,
               body: args.body,
               labels: args.labels,
-              blockedBy: args.blockedBy,
+              matrix: createMatrix,
+              blockedBy: args.blockedBy ? [...new Set(args.blockedBy)] : undefined,
               parent: args.parent ?? undefined,
             });
 
@@ -596,7 +673,8 @@ export function createIssuesTools(
               });
             }
             if (args.title === undefined && args.body === undefined && args.labels === undefined && args.sequenceName === undefined && args.sync === undefined
-              && args.blockedBy === undefined && args.parent === undefined) {
+              && args.blockedBy === undefined && args.parent === undefined
+              && args.matrix === undefined && args.matrixAdd === undefined && args.matrixRemove === undefined) {
               return createErrorResponse('ISSUES_NOTHING_TO_EDIT', { id: args.id });
             }
             if (args.title !== undefined && !args.title.trim()) {
@@ -609,8 +687,25 @@ export function createIssuesTools(
               if (!(await getIssue(args.id))) {
                 return createErrorResponse('ISSUES_NOT_FOUND', { id: args.id, message: `Issue #${args.id} not found` });
               }
-              const editRefusal = await checkLinks(args.id, args.blockedBy, args.parent ?? undefined);
+              const editRefusal = await checkLinks(args.id, args.blockedBy, args.parent);
               if (editRefusal) return linkRefusal(editRefusal, args.id);
+            }
+
+            let nextMatrix: string[] | undefined;
+            if (args.matrix !== undefined || args.matrixAdd !== undefined || args.matrixRemove !== undefined) {
+              const replacement = matrixRefList(args.matrix);
+              const editMalformed = validateMatrixRefSyntax([...(replacement ?? []), ...(args.matrixAdd ?? [])]);
+              if (editMalformed.length > 0) return matrixRefRefusal(editMalformed);
+              const current = await getIssue(args.id);
+              if (!current) {
+                return createErrorResponse('ISSUES_NOT_FOUND', { id: args.id, message: `Issue #${args.id} not found` });
+              }
+              const linking = [...(replacement ?? []), ...(args.matrixAdd ?? [])].filter(ref => !current.matrix.includes(ref));
+              const editMissing = await matrixRefExistenceRefusal(linking);
+              if (editMissing) return editMissing;
+              const removed = new Set(args.matrixRemove ?? []);
+              nextMatrix = [...new Set([...(replacement ?? current.matrix), ...(args.matrixAdd ?? [])])]
+                .filter(ref => !removed.has(ref));
             }
 
             const edited = await updateIssueFields(args.id, {
@@ -619,6 +714,7 @@ export function createIssuesTools(
               ...(args.title !== undefined && { title: args.title.trim() }),
               ...(args.body !== undefined && { body: args.body }),
               ...(args.labels !== undefined && { labels: args.labels }),
+              ...(nextMatrix !== undefined && { matrix: nextMatrix }),
               ...(args.sync !== undefined && { githubSync: args.sync ?? undefined }),
             });
             if (!edited) {
@@ -661,6 +757,7 @@ export function createIssuesTools(
                 args.title !== undefined && 'title',
                 args.body !== undefined && 'body',
                 args.labels !== undefined && 'labels',
+                nextMatrix !== undefined && (nextMatrix.length > 0 ? `matrix ${nextMatrix.join(', ')}` : 'no matrix links'),
                 args.blockedBy !== undefined && (args.blockedBy.length > 0 ? `waits on ${args.blockedBy.map(n => `#${n}`).join(', ')}` : 'waits on nothing'),
                 args.parent !== undefined && (args.parent === null ? 'no parent' : `piece of #${args.parent}`),
                 args.sequenceName !== undefined && `sequence (${args.sequenceName})`,

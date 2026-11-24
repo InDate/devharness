@@ -200,6 +200,53 @@ version of a cited series is kept with it; it skips `screenshot-*` files, which
 no annotation cites; and a capture held by an unsaved draft counts as cited.
 Needs no browser.
 
+## The matrix tab
+
+The capability matrices in `.devharness/matrix/`. The tab
+lands on a list, one row per matrix with its counts per standing; the row's
+open slot shows the grid. Scenarios run down, capabilities across; each
+cell is one mark — works a solid dot, gap a diamond, unmeasured a ring, n/a a
+dash — and its `expect` shows beside the mark once the grid is wide enough.
+**Glance** beside the filters shows the marks alone: no cell text, counts or
+issue marks, each column's name leaning at 45 degrees, so more of the matrix fits the
+pane; the choice is kept for the next visit. There, resting the pointer on a
+column's or a row's header puts that one line back as the full view draws it,
+inside the table: its cells' words wrapped beside their marks, with its counts
+or its subline and its issue marks. The pointer resting on a cell opens both its row and its
+column. An open row widens every column for as long as it is open, and the
+grid scrolls by what the pointed element moved, so it stays under the pointer. The filters come from the file: one per entry of its `layers`, a standing
+filter, and page and faults only where the scenarios carry those fields. The
+standing filter keeps the rows holding a cell at that standing, folds every
+cell at another standing to a faint mark with no words, and shuts a column
+holding no cell at that standing to a sliver; the sliver's tooltip names it.
+
+```
+?tab=matrix&matrix=motion                              # the grid
+?tab=matrix&matrix=motion&scenario=badge&capability=seen  # one cell
+?tab=matrix&matrix=motion&scenario=badge               # one row
+?tab=matrix&matrix=motion&capability=seen              # one column
+```
+
+A cell's page holds its `expect`, `today`, `basis` and `note`, each with the
+layer it came from. The four standings at its head set `today`: a press
+writes the standing onto the scenario's own cell in the file, the same write
+`matrix({ action: 'edit' })` makes; the other fields change through the tool.
+
+The **Activity** tab on the pane's right edge opens a drawer over the grid
+and over every cell, row and column page: each change to the open matrix,
+newest first, with its time, the channel it came in on (the bench, a session,
+the CLI, or the file for a write from outside devharness) and each cell value
+before and after. A change's cell name opens that cell. Escape or the tab
+closes it. The log is `.devharness/matrix/activity/<name>.jsonl`; it starts at
+the first change made after the log existed, and `matrix({ action: 'activity' })`
+reads the same entries. A `sequence:<name>` basis opens that sequence on the
+Sequence tab; a name no saved sequence carries reads "not found". A glyph on
+a cell, row header or column header is an issue linked to exactly that area,
+bug or feature, faded once completed; it opens the issue. An issue's page
+lists its matrix refs back, and a ref whose matrix, scenario or capability is
+gone reads "points at nothing". Both tabs read again every few seconds, so an
+edit through `matrix` or by hand shows without a reload.
+
 ## From a shell
 
 ```

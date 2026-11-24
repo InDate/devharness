@@ -1,5 +1,15 @@
 {
   "about": "Each scenario on the motion demo against each capability of the workbench loop. A cell holds what devharness is expected to do and how that stands today: works, gap, unmeasured or n/a. A cell’s basis is code (read from src/), research:<file> (a report under docs/research/) or sequence:<name> (shown by a run). A cell reads works only on a sequence basis. A capability’s rule applies to every scenario. A scenario’s cell is merged over its mechanism’s default, then its trigger’s, then the capability’s default. A scenario with no key is a case the demo does not stage yet. The conditions behind Credit and Compare stand in docs/landscapes/attribution.landscape.",
+  "layers": [
+    {
+      "field": "trigger",
+      "table": "triggers"
+    },
+    {
+      "field": "mechanism",
+      "table": "mechanisms"
+    }
+  ],
   "capabilities": [
     {
       "id": "seen",

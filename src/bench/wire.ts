@@ -278,6 +278,8 @@ export interface IssueRow {
   nextPlace?: number;
   /** The repro sequence's file in the issues folder, where one is linked. */
   sequenceFile?: string;
+  /** The matrix cells, rows and columns the issue is linked to; absent where it holds no ref. */
+  matrix?: MatrixRefLink[];
   reportedAt: number;
   resolvedAt?: number;
   /** How the issue stands against GitHub, from what the tracker recorded at the last sync; absent while it is local only. */
@@ -304,6 +306,106 @@ export interface IssueSync {
   /** Marked or left out by someone; false while nobody has decided, which is what the bench offers. */
   decided: boolean;
 }
+
+/** A cell (`scenario` and `capability`), a row (`scenario` alone) or a column (`capability` alone) of one matrix. */
+export interface MatrixPlace {
+  matrix: string;
+  scenario?: string;
+  capability?: string;
+}
+
+/** One matrix ref an issue holds, as written; `at` is absent where the ref names no matrix, scenario or capability the store holds. */
+export interface MatrixRefLink {
+  ref: string;
+  at?: MatrixPlace;
+}
+
+export type MatrixStanding = 'works' | 'gap' | 'unmeasured' | 'n/a';
+
+export type MatrixCounts = Record<MatrixStanding, number>;
+
+/** One matrix on the Matrix tab's list. */
+export interface MatrixListRow {
+  name: string;
+  about?: string;
+  scenarios: number;
+  capabilities: number;
+  cells: MatrixCounts;
+  /** Set on a file that failed to parse or holds the wrong shape; the counts are then zero. */
+  problem?: string;
+}
+
+/** One field of one cell before a change and after it; an absent side held no value. */
+export interface MatrixChangeLine {
+  scenario: string;
+  capability: string;
+  field: string;
+  from?: string;
+  to?: string;
+}
+
+/** One change to a matrix as the activity drawer lists it. */
+export interface MatrixActivityRow {
+  at: string;
+  /** The channel the change came in on: bench, session, cli, or file for a write from outside devharness. */
+  by: string;
+  cause: string;
+  changes: MatrixChangeLine[];
+  notes?: string[];
+}
+
+/** One cell after layering, as `matrix-store` resolves it. */
+export interface MatrixCellView {
+  expect?: string;
+  today: MatrixStanding;
+  /** `code`, `sequence:<name>`, or another basis the file names. */
+  basis?: string;
+  note?: string;
+  /** For each field present, the layer it came from: `capability`, `<table>.<key>` or `scenario`. */
+  from: Partial<Record<'expect' | 'today' | 'basis' | 'note', string>>;
+}
+
+export interface MatrixCapabilityView {
+  id: string;
+  name?: string;
+  question?: string;
+  rule?: string;
+}
+
+/** A scenario's id and name, and every other field it holds with a string, number or boolean value. */
+export interface MatrixScenarioView {
+  id: string;
+  name?: string;
+  fields: Record<string, string>;
+}
+
+/** One issue linked into a matrix, with the refs it holds there. */
+export interface MatrixIssueLink {
+  id: number;
+  type: IssueRow['type'];
+  title: string;
+  closed: boolean;
+  refs: Array<{ ref: string; scenario?: string; capability?: string }>;
+}
+
+/** One matrix as the grid draws it: cells resolved, layer tables reduced to each entry's name. */
+export interface MatrixView {
+  name: string;
+  about?: string;
+  /** Each layer's scenario field, its table, and the names the table gives its keys. */
+  layers: Array<{ field: string; table: string; names: Record<string, string> }>;
+  capabilities: MatrixCapabilityView[];
+  scenarios: MatrixScenarioView[];
+  /** By scenario id, then capability id. */
+  cells: Record<string, Record<string, MatrixCellView>>;
+  issues: MatrixIssueLink[];
+}
+
+/** What `/matrix/read` answers: the matrix, or why there is none to draw. */
+export type MatrixRead =
+  | { view: MatrixView }
+  | { missing: string; valid: string[] }
+  | { broken: string; problem: string };
 
 /** A note written against a step of a saved sequence, for quoting into an issue. */
 export interface SequenceNote {

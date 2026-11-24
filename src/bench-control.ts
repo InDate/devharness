@@ -28,7 +28,7 @@ import { readCapture } from './capture-file.js';
 import { deletePayload, listPayloads, readPayload } from './saved-payloads.js';
 import { decodePng, encodePng } from './png.js';
 import { diffPixels, sideBySide } from './pixel-diff.js';
-import type { BenchView, BoundaryState, CaptureKind, CaptureRect, FactKind, RuleCatalogueEntry, SequenceOutline, HistoryEntry, HistoryDetail, ToolGroup, ToolRun, ToolValues, IssueRow, SequenceNote, ToolFavourite, ServerRow, ServerLog, RunningView } from './bench/wire.js';
+import type { BenchView, BoundaryState, CaptureKind, CaptureRect, FactKind, RuleCatalogueEntry, SequenceOutline, HistoryEntry, HistoryDetail, ToolGroup, ToolRun, ToolValues, IssueRow, MatrixListRow, MatrixActivityRow, MatrixRead, SequenceNote, ToolFavourite, ServerRow, ServerLog, RunningView } from './bench/wire.js';
 import type { RunsView } from './bench/wire.js';
 import type { ActivityMove, ExpectedValue, KindCount, MotionSetting } from './bench/kinds.js';
 import { shareFilm } from './bench-mode/motion-film.js';
@@ -137,6 +137,14 @@ export interface BenchHandlers {
   toolValues: () => Promise<ToolValues>;
   /** The tracked issues; fixed and implemented ones only with `includeCompleted`. */
   issues: (includeCompleted: boolean) => Promise<IssueRow[]>;
+  /** The matrices in the store, with their counts per standing. */
+  matrices: () => Promise<MatrixListRow[]>;
+  /** One matrix resolved for the grid, or the only one in the store when `name` is absent. */
+  matrix: (name?: string) => Promise<MatrixRead>;
+  /** The changes logged for one matrix, newest first. */
+  matrixActivity: (name: string) => Promise<MatrixActivityRow[]>;
+  /** Writes one cell's standing onto its scenario; a refusal comes back as `failure`. */
+  setMatrixStanding: (name: string, scenario: string, capability: string, today: string) => Promise<{ failure?: string }>;
   servers: () => Promise<ServerRow[]>;
   serverLog: (id: string, stream: 'stdout' | 'stderr') => Promise<ServerLog>;
   running: () => Promise<RunningView>;
@@ -469,6 +477,22 @@ export async function startBenchServer(handlers: BenchHandlers): Promise<BenchSe
         if (req.method === 'GET' && route === '/issues') {
           const all = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams.get('all') === '1';
           return send(res, 200, JSON.stringify(await handlers.issues(all)), 'application/json');
+        }
+        if (req.method === 'GET' && route === '/matrix') {
+          return send(res, 200, JSON.stringify(await handlers.matrices()), 'application/json');
+        }
+        if (req.method === 'GET' && route === '/matrix/read') {
+          const name = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams.get('name') || undefined;
+          return send(res, 200, JSON.stringify(await handlers.matrix(name)), 'application/json');
+        }
+        if (req.method === 'GET' && route === '/matrix/activity') {
+          const name = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams.get('name') ?? '';
+          return send(res, 200, JSON.stringify(await handlers.matrixActivity(name)), 'application/json');
+        }
+        if (req.method === 'POST' && route === '/matrix/standing') {
+          const body = await readJson(req);
+          const answer = await handlers.setMatrixStanding(String(body.name ?? ''), String(body.scenario ?? ''), String(body.capability ?? ''), String(body.today ?? ''));
+          return send(res, 200, JSON.stringify(answer), 'application/json');
         }
         if (req.method === 'GET' && route === '/tools/values') {
           return send(res, 200, JSON.stringify(await handlers.toolValues()), 'application/json');

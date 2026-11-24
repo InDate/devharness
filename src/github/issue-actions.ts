@@ -350,7 +350,7 @@ interface SyncOutcome {
 async function applyStatus(
   issue: TrackedIssue, remote: Pick<RemoteIssueSummary, 'state' | 'stateReason'>,
   repo: string | undefined, now: Date, confirm: boolean, opts?: RunGhOptions
-): Promise<{ detail?: string; pendingConfirm?: string }> {
+): Promise<{ detail?: string; pendingConfirm?: string; closedParents?: number[] }> {
   const status = resolveStatus(issue, remote, now);
 
   if (status.closeUpstream) {
@@ -370,7 +370,7 @@ async function applyStatus(
     if (status.status) {
       const parents = isCompletedStatus(status.status) ? await closeFinishedParents(issue.id) : [];
       const closedParents = parents.length > 0 ? `, closed parent ${parents.map(p => `#${p.id}`).join(', ')}` : '';
-      return { detail: `status ${status.status}${closedParents}` };
+      return { detail: `status ${status.status}${closedParents}`, closedParents: parents.map(p => p.id) };
     }
   }
 
@@ -497,8 +497,13 @@ export async function handleSync(args: GithubActionArgs, deps: GithubActionDeps 
     const outcomes: SyncOutcome[] = [];
     const conflicts: Array<{ id: number; number: number }> = [];
     const pendingConfirm: string[] = [];
+    // A parent closed by its last piece closing upstream, after the parent's
+    // own turn in this loop, is sent upstream in a pass after the loop.
+    const synced = new Set<number>();
+    const closedAfterTurn = new Set<number>();
 
     for (const issue of linked) {
+      synced.add(issue.id);
       const summary = byNumber.get(issue.github!);
       const prose = localProse(issue);
       const classification = classifySync(issue, summary, prose);
@@ -529,6 +534,7 @@ export async function handleSync(args: GithubActionArgs, deps: GithubActionDeps 
         issue, summary!, args.repo, now, args.confirm === true, deps.runOpts
       );
       if (statusResult.pendingConfirm) pendingConfirm.push(statusResult.pendingConfirm);
+      for (const id of statusResult.closedParents ?? []) if (synced.has(id)) closedAfterTurn.add(id);
 
       const details: string[] = [];
       if (statusResult.detail) details.push(statusResult.detail);
@@ -555,6 +561,22 @@ export async function handleSync(args: GithubActionArgs, deps: GithubActionDeps 
         id: issue.id, number: issue.github!,
         action: details.length > 0 ? details.join(', ') : 'up to date',
       });
+    }
+
+    for (const id of closedAfterTurn) {
+      const parent = await getIssue(id);
+      const summary = parent?.github !== undefined ? byNumber.get(parent.github) : undefined;
+      if (!parent || !summary || !linked.some(i => i.id === id)) continue;
+      const details: string[] = [];
+      const statusResult = await applyStatus(parent, summary, args.repo, now, args.confirm === true, deps.runOpts);
+      if (statusResult.pendingConfirm) pendingConfirm.push(statusResult.pendingConfirm);
+      if (statusResult.detail) details.push(statusResult.detail);
+      const pushed = await pushComments(parent.id, parent.github!, args.repo, deps.runOpts);
+      if (pushed > 0) details.push(`pushed ${pushed} comment(s)`);
+      if (details.length === 0) continue;
+      const outcome = outcomes.find(o => o.id === id);
+      if (outcome) outcome.action = outcome.action === 'up to date' ? details.join(', ') : `${outcome.action}, ${details.join(', ')}`;
+      else outcomes.push({ id, number: parent.github!, action: details.join(', ') });
     }
 
     if (planning) {

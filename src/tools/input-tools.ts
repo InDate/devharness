@@ -452,6 +452,21 @@ function holdsFocus(page: any, selector: string): Promise<boolean> {
   });
 }
 
+const INPUTS_SEEN = 'devharness.inputsSeen';
+
+/** Start counting the input events that reach the element or anything inside it. */
+function countInputs(page: any, selector: string): Promise<void> {
+  return page.$eval(selector, (el: any, key: string) => {
+    const counter = Symbol.for(key);
+    if (el[counter] === undefined) el.addEventListener('input', () => { el[counter] += 1; }, true);
+    el[counter] = 0;
+  }, INPUTS_SEEN);
+}
+
+function inputsSeen(page: any, selector: string): Promise<number> {
+  return page.$eval(selector, (el: any, key: string) => Number(el[Symbol.for(key)] ?? 0), INPUTS_SEEN);
+}
+
 function optionLabels(page: any, selector: string): Promise<string[]> {
   return page.$eval(selector, (el: any) => Array.from(el.options ?? [], (option: any) => String(option.label ?? option.text)));
 }
@@ -1217,13 +1232,16 @@ export function createInputTools(
                     await new Promise(resolve => setTimeout(resolve, TYPE_AHEAD_WINDOW_MS - sinceTyped));
                     await checkAborted();
                   }
+                  if (!isSelect) await countInputs(page, selector);
                   await withReplayBypass(page, () => typeText(page, text, delay, insert));
                   if (isSelect) await markTypeAheadEnded(page, selector);
 
                   const currentValue = await fieldText(page, selector);
-                  // Keys that reach no field, or a field the page replaced or reset
-                  // while they went in, leave it empty.
-                  if (!isSelect && !append && currentValue === '') {
+                  // An empty field that fired input events took the keys and
+                  // emptied itself (Enter sends a message, a comma makes a chip).
+                  // One that fired none was missed by the keys, or replaced by
+                  // the page while they went in.
+                  if (!isSelect && !append && currentValue === '' && (await inputsSeen(page, selector)) === 0) {
                     return { selector, notHeld: true, fingerprint };
                   }
                   // Type-ahead picks the first option whose label starts with the

@@ -147,7 +147,7 @@ const connectionSchema = z.object({
   connection: z.string().optional().describe('The connection, 3 descriptive words. launch/attach: the name it is created under, which later calls pass (launch defaults to "unnamed-connection-default"). switch/rename/close/status: the one to act on'),
   newName: z.string().optional().describe('rename: the new name, 3 descriptive words'),
   reason: z.string().optional().describe('close: why the connection is closed'),
-  url: z.string().optional().describe('launch: URL to open (default: blank page)'),
+  url: z.string().optional().describe('launch: URL to open (default: blank page); a reused tab is sent there when it is on another page'),
   port: z.number().optional().describe('launch: debugging port (default: this session\'s reserved port); a Chrome already on it gets a tab. attach: debugger port (Node.js usually 9229)'),
   host: z.string().optional().describe('attach: the debugger host (default: localhost)'),
   autoConnect: z.boolean().optional().describe('launch: connect the debugger after launch (default: true)'),
@@ -426,7 +426,8 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
           // names a url has to land there, or the next step acts on the old page.
           const before = await pageOf(existingConnection);
           let movedFrom: string | undefined;
-          if (url && before?.url !== url && existingConnection.puppeteerManager?.isConnected()) {
+          if (url && before?.url !== hrefOf(url) && existingConnection.puppeteerManager?.isConnected()) {
+            await adoptOwnTab(existingConnection);
             await existingConnection.puppeteerManager.getPage().goto(url, { waitUntil: 'load', timeout: 30000 });
             movedFrom = before?.url;
           }
@@ -1273,14 +1274,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
     }
     activateConnection(connection.id);
 
-    // The connection's tab is found by its target id: a position in the tab
-    // list moves as other tabs open and close, and selected a stranger's tab.
-    const targetId = connection.cdpManager.getTargetId?.();
-    if (connection.puppeteerManager?.isConnected() && targetId) {
-      const own = (await connection.puppeteerManager.getPages())
-        .find(page => (page.target() as any)._targetId === targetId);
-      if (own) connection.puppeteerManager.adopt(own);
-    }
+    await adoptOwnTab(connection);
     if (args.bringToFront && connection.puppeteerManager?.isConnected()) {
       await connection.puppeteerManager.getPage().bringToFront();
     }
@@ -1374,4 +1368,22 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
       async (args) => (args.action === 'kill' ? kill(args) : resetLauncher(args))
     ),
   };
+}
+
+/** A url as Chrome reports a page's, so `http://host` reads as the `http://host/` it loads. */
+function hrefOf(url: string): string {
+  try { return new URL(url).href; } catch { return url; }
+}
+
+/**
+ * Points the connection's Puppeteer page at its own tab, found by target id,
+ * which stays fixed while other tabs open and close and shift every tab's
+ * position in the list.
+ */
+async function adoptOwnTab(connection: { cdpManager: { getTargetId?: () => string | null }; puppeteerManager?: any }): Promise<void> {
+  const targetId = connection.cdpManager.getTargetId?.();
+  if (!connection.puppeteerManager?.isConnected() || !targetId) return;
+  const own = (await connection.puppeteerManager.getPages())
+    .find((page: any) => page.target()._targetId === targetId);
+  if (own) connection.puppeteerManager.adopt(own);
 }

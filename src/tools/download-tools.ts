@@ -7,9 +7,10 @@ import { z } from 'zod';
 import { createTool } from '../validation-helpers.js';
 import { createSuccessResponse, createErrorResponse } from '../messages.js';
 import { promises as fs } from 'fs';
+import { createHash } from 'crypto';
 import { join, basename, normalize } from 'path';
 import { getOutputPath } from '../helpers/paths.js';
-import { probe, fetchInParts, fetchWhole, attemptStatus, nameFor, type Probe } from './download-parts.js';
+import { probe, fetchInParts, fetchWhole, attemptStatus, nameFor, retryable, WholeFileAnswer, type Probe } from './download-parts.js';
 
 // Computed fresh on each call (not cached) so they follow a later
 // setWorkingDirOverride() / config useLocal(path) switch.
@@ -19,8 +20,17 @@ function getDownloadsDir(): string {
 function getQuarantineDir(): string {
   return join(getDownloadsDir(), 'quarantine');
 }
-function getPartsDir(filename: string): string {
-  return join(getDownloadsDir(), '.parts', filename);
+/** Keyed by url as well as name, so two downloads saving under one name from different urls keep separate parts. */
+function getPartsDir(url: string, filename: string): string {
+  return join(getDownloadsDir(), '.parts', `${createHash('sha1').update(url).digest('hex').slice(0, 12)}-${filename}`);
+}
+
+async function holdsParts(dir: string): Promise<boolean> {
+  try {
+    return (await fs.readdir(dir)).some(entry => entry.startsWith('part-'));
+  } catch {
+    return false;
+  }
 }
 
 // Security limits
@@ -187,6 +197,10 @@ export function createDownloadTools() {
         overwriteIfExists: z.boolean().optional().describe('Overwrite if exists (default: false)'),
       }).strict(),
       async (rawArgs, abortSignal?: AbortSignal) => {
+        const given = rawArgs.filename !== undefined ? validateFilename(rawArgs.filename) : { valid: true };
+        if (!given.valid) {
+          return createErrorResponse('INVALID_FILENAME', { filename: rawArgs.filename!, reason: given.error! });
+        }
         const info: Probe | null = await probe(rawArgs.url, abortSignal);
         const args = { ...rawArgs, filename: rawArgs.filename ?? nameFor(rawArgs.url, info?.disposition ?? null) };
         try {
@@ -215,7 +229,6 @@ export function createDownloadTools() {
 
           // If file exists and overwrite not allowed, return error BEFORE downloading
           if (existingFileStats && !args.overwriteIfExists) {
-            // Do a HEAD request to get new file size without downloading
             const newFileSize = info?.size != null ? `${(info.size / 1024).toFixed(2)} KB` : 'Unknown';
 
             const existingFileSizeKB = (existingFileStats.size / 1024).toFixed(2);
@@ -240,12 +253,22 @@ export function createDownloadTools() {
           let buffer: Buffer;
           let contentType: string | null;
           let fetched: { parts?: number; reused?: number; retries: number };
-          const partsDir = getPartsDir(args.filename);
+          const partsDir = getPartsDir(args.url, args.filename);
+          let inParts = !!info?.ranges && info.size !== null;
           try {
-            if (info?.ranges && info.size !== null) {
-              const result = await fetchInParts(args.url, { ...info, size: info.size }, partsDir, { signal: abortSignal });
+            let result: Awaited<ReturnType<typeof fetchInParts>> | undefined;
+            if (inParts) {
+              result = await fetchInParts(args.url, { ...info!, size: info!.size! }, partsDir, { signal: abortSignal })
+                .catch(async (error: unknown) => {
+                  if (!(error instanceof WholeFileAnswer)) throw error;
+                  inParts = false;
+                  await fs.rm(partsDir, { recursive: true, force: true }).catch(() => {});
+                  return undefined;
+                });
+            }
+            if (result) {
               buffer = result.buffer;
-              contentType = info.contentType;
+              contentType = info!.contentType;
               fetched = { parts: result.parts, reused: result.reused, retries: result.retries };
             } else {
               const { response, retries } = await fetchWhole(args.url, { signal: abortSignal });
@@ -275,9 +298,9 @@ export function createDownloadTools() {
             const { status, statusText } = attemptStatus(fetchError);
             return createErrorResponse('FILE_DOWNLOAD_FAILED', {
               url: args.url,
-              ...(status !== null && status !== 409 ? { status: String(status), statusText: statusText ?? '' } : { error: fetchError.message }),
-              attempts: true,
-              keptParts: info?.ranges ? partsDir : undefined,
+              ...(status !== null ? { status: String(status), statusText: statusText ?? '' } : { error: fetchError.message }),
+              attempts: retryable(status),
+              keptParts: inParts && info?.validator && (await holdsParts(partsDir)) ? partsDir : undefined,
             });
           }
           const actualSize = buffer.length;

@@ -124,7 +124,13 @@ export interface SequenceDriver {
    * returns the pane to step one with the captured variables gone.
    */
   halt: () => Promise<void>;
-  cancel: () => Promise<void>;
+  /**
+   * Close the sequence and cancel its run. With `picked`, only a run this
+   * bench selected is cancelled: with nothing selected the driver adopts any
+   * run going, another bench's play included, and closing this bench must
+   * leave that run alone.
+   */
+  cancel: (picked?: boolean) => Promise<void>;
   /**
    * Erase a saved sequence, file and all. Returns the failure text when the
    * name matched nothing on disk, so the pane states that rather than

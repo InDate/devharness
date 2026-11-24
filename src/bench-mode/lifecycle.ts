@@ -240,7 +240,7 @@ export async function stopBench(connection: string): Promise<BenchReport | undef
   // and the recorder holding it outlives this bench. Closed here, that debt is
   // paid; left standing, the browsers the run opened stay open with nothing
   // left able to reach them.
-  await session.sequences?.cancel().catch(() => {});
+  await session.sequences?.cancel(true).catch(() => {});
   const { client } = session;
   try {
     await client.send('Overlay.setInspectMode', { mode: 'none', highlightConfig: HIGHLIGHT_CONFIG } as any);

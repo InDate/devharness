@@ -267,16 +267,16 @@ export class CDPManager {
     return this.scriptIdToUrl.get(scriptId);
   }
 
+  getTargetId(): string | null {
+    return this.targetId;
+  }
+
   /**
    * Connect to a Chrome or Node.js debugger instance
    * @param host - The debugger host (default: localhost)
    * @param port - The debugger port (default: 9222)
    * @param targetId - Optional target ID to connect to a specific page/tab
    */
-  getTargetId(): string | null {
-    return this.targetId;
-  }
-
   async connect(host: string = 'localhost', port: number = 9222, targetId?: string): Promise<void> {
     try {
       // If targetId is provided, connect to that specific target
@@ -286,7 +286,10 @@ export class CDPManager {
         cdpOptions.target = targetId;
       }
       this.client = tagClient(await CDP(cdpOptions));
-      this.targetId = targetId ?? null;
+      // With no target named, CDP attaches to the first page; its id is the
+      // last segment of the socket url, and switch finds the tab by it.
+      const socketUrl: unknown = (this.client as any).webSocketUrl;
+      this.targetId = targetId ?? (typeof socketUrl === 'string' ? socketUrl.match(/\/devtools\/page\/([^/?]+)/)?.[1] : undefined) ?? null;
       // Held so a tool can reach sibling targets on the same browser - a worker
       // has its own target and its own websocket, and only host+port locates it.
       this.endpoint = { host, port };

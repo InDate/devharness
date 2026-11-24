@@ -40,6 +40,17 @@ class AttemptError extends Error {
   }
 }
 
+/**
+ * A 200 to a ranged request: the server ignores ranges on GET, or the file
+ * changed and If-Range sent all of it. Either way only a whole-file fetch
+ * returns the file as it stands, so the parts are dropped and that runs.
+ */
+export class WholeFileAnswer extends Error {
+  constructor() {
+    super('the server answered a part with the whole file');
+  }
+}
+
 async function wait(ms: number, signal?: AbortSignal): Promise<void> {
   if (ms <= 0) return;
   await new Promise<void>((resolve, reject) => {
@@ -99,7 +110,9 @@ async function openPartsDir(dir: string, manifest: Manifest): Promise<number> {
   const path = join(dir, 'manifest.json');
   let kept: Manifest | null = null;
   try { kept = JSON.parse(await fs.readFile(path, 'utf-8')); } catch { /* first attempt at this file */ }
-  const same = kept && kept.url === manifest.url && kept.size === manifest.size
+  // With no ETag or Last-Modified, a file replaced by one of the same size
+  // matches on every field, so its kept parts are never reused.
+  const same = kept && manifest.validator !== null && kept.url === manifest.url && kept.size === manifest.size
     && kept.validator === manifest.validator && kept.partSize === manifest.partSize;
   if (!same) {
     for (const entry of await fs.readdir(dir)) await fs.rm(join(dir, entry), { force: true });
@@ -157,13 +170,13 @@ export async function fetchInParts(
       } catch (error: any) {
         throw new AttemptError(`part ${index + 1}/${count}: ${error.message}`, null);
       }
+      if (response.status === 200) {
+        await response.body?.cancel().catch(() => {});
+        throw new WholeFileAnswer();
+      }
       if (response.status !== 206) {
         await response.body?.cancel().catch(() => {});
-        const changed = response.status === 200;
-        throw new AttemptError(
-          changed ? `part ${index + 1}/${count}: the server sent the whole file, so it changed since the download began`
-            : `part ${index + 1}/${count}: HTTP ${response.status}`,
-          changed ? 409 : response.status, response.statusText);
+        throw new AttemptError(`part ${index + 1}/${count}: HTTP ${response.status}`, response.status, response.statusText);
       }
       const body = Buffer.from(await response.arrayBuffer());
       if (body.length !== want) {
@@ -226,6 +239,6 @@ export function nameFor(url: string, disposition: string | null): string {
   if (!name) {
     try { name = decodeURIComponent(new URL(url).pathname.split('/').filter(Boolean).pop() ?? ''); } catch { /* opaque path */ }
   }
-  const cleaned = name.replace(/[/\\\0]/g, '_').replace(/^\.+/, '').trim();
+  const cleaned = name.replace(/[/\\\0]/g, '_').replace(/\.{2,}/g, '.').replace(/^\.+/, '').trim();
   return cleaned || 'download';
 }

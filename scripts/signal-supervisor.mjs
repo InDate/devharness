@@ -3,7 +3,10 @@
 /**
  * postbuild hook: signals every running mcp-supervisor that serves THIS
  * checkout, so `npm run build` hot-reloads a live Claude Code connection
- * instead of requiring a manual /mcp reconnect.
+ * instead of requiring a manual /mcp reconnect. The project's pidfile names the
+ * supervisors started from this directory; a process listing adds those
+ * running this build from any other project directory, whose pidfiles sit
+ * under their own `.devharness/`.
  *
  * A no-op if no such supervisor is running (e.g. CI, or a plain build with no
  * live session attached) - this must never fail the build. It does SAY so,
@@ -16,6 +19,7 @@
  * alone. Rebuilding this tree cannot change the code it runs, and signalling
  * it restarts a session this build has nothing to do with.
  */
+import { execFileSync } from 'child_process';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -63,20 +67,28 @@ for (const candidate of candidatePidFiles) {
   }
 }
 
-if (pidFilePath === undefined) {
-  note(`No pidfile at ${candidatePidFiles.join(' or ')} - nothing to reload (${RECONNECT_HINT}).`);
-  process.exit(0);
+/** Supervisors whose command line runs this checkout's build, from any directory. */
+function runningThisBuild() {
+  try {
+    const listing = execFileSync('ps', ['-axo', 'pid=,command='], { encoding: 'utf-8', timeout: 2000 });
+    return listing.split('\n').flatMap((line) => {
+      const match = /^\s*(\d+)\s+(.*)$/.exec(line);
+      if (!match || !match[2].split(/\s+/).includes(ownSupervisorScript)) return [];
+      const pid = parseInt(match[1], 10);
+      return pid === process.pid ? [] : [{ pid, script: ownSupervisorScript }];
+    });
+  } catch {
+    return [];
+  }
 }
 
-if (records.length === 0) {
-  note(`Pidfile ${pidFilePath} holds no supervisor record - nothing to reload (${RECONNECT_HINT}).`);
-  process.exit(0);
-}
+if (pidFilePath === undefined) records = [];
 
 // A record with no script comes from a supervisor that predates this format;
 // it is the only one recorded, so it is the one this build reaches.
-const mine = records.filter((record) => record.script === ownSupervisorScript || record.script === null);
-const foreign = records.filter((record) => !mine.includes(record));
+const recorded = records.filter((record) => record.script === ownSupervisorScript || record.script === null);
+const foreign = records.filter((record) => !recorded.includes(record));
+const mine = [...recorded, ...runningThisBuild().filter((found) => !recorded.some((record) => record.pid === found.pid))];
 
 for (const record of mine) {
   try {
@@ -92,7 +104,7 @@ for (const record of mine) {
 }
 
 if (mine.length === 0) {
-  note(`No supervisor running ${ownSupervisorScript} - this build reaches nothing (${RECONNECT_HINT}).`);
+  note(`No supervisor running ${ownSupervisorScript}${pidFilePath === undefined ? `, and no pidfile at ${candidatePidFiles.join(' or ')}` : ''} - this build reaches nothing (${RECONNECT_HINT}).`);
 }
 
 for (const record of foreign) {

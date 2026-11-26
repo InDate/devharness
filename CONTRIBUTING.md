@@ -83,9 +83,12 @@ rebuild is usually enough; no `/mcp` reconnect.
 The build reports `Sent SIGUSR2 to mcp-supervisor (PID n)` or `No pidfile ...
 nothing to reload`. Read that line before reading code when behaviour
 contradicts your source - but it is a claim about a pid, not proof your session
-reloaded. The build signals whoever is named in *this repo's* pidfile, which is
-someone else's supervisor when your session is supervised from another
-directory. Ask the running server instead:
+reloaded. The build signals the supervisors named in *this repo's* pidfile and
+every process whose command line runs this checkout's
+`build/mcp-supervisor.js` by its absolute path, so a session in another
+project directory running this build restarts with it. A supervisor started
+with a relative path from another directory is not found. Ask the running
+server instead:
 
 ```
 config({ action: 'status' })

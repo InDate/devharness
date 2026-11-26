@@ -84,6 +84,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fired wrongly also blocked the restart that would load its fix, which left a
   `/mcp` reconnect as the only way out.
 
+- **A rebuild reaches every supervisor running the build.** The postbuild
+  signal went only to the supervisors in the checkout's own pidfile, so a
+  session in another project running the same build kept the old code until a
+  `/mcp` reconnect. It now also signals each process whose command line runs
+  the checkout's `build/mcp-supervisor.js`.
+
 - **A plain-http page keeps its renderer.** The origin-private file system is
   read only on a secure page; Chrome terminated an insecure one that
   `FileSystem.getDirectory` reached.

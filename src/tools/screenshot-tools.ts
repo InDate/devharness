@@ -483,7 +483,7 @@ export function createScreenshotTools(resolveConnectionByName: (connection: stri
         const targetPuppeteerManager = resolved.puppeteerManager;
         const targetCdpManager = resolved.cdpManager;
 
-        const error = checkBrowserAutomation(targetCdpManager, targetPuppeteerManager, action, resolved.connection.port, true);
+        const error = checkBrowserAutomation(targetCdpManager, targetPuppeteerManager, action, resolved.connection, true);
         if (error) {
           return error;
         }

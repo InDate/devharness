@@ -49,7 +49,7 @@ export function createDOMTools(
         const targetPuppeteerManager = resolved.puppeteerManager;
         const targetCdpManager = resolved.cdpManager;
 
-        const error = checkBrowserAutomation(targetCdpManager, targetPuppeteerManager, `dom.${action}`, resolved.connection.port);
+        const error = checkBrowserAutomation(targetCdpManager, targetPuppeteerManager, `dom.${action}`, resolved.connection);
         if (error) {
           return error;
         }

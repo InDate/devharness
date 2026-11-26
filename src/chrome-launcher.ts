@@ -1028,6 +1028,16 @@ export class ChromeLauncher {
     return false;
   }
 
+  /** True while a Chrome this launcher spawned is tracked on `port`. */
+  spawnedOn(port: number): boolean {
+    return this.chromeProcesses.has(port);
+  }
+
+  /** True when a Chrome this launcher spawned on `port` closed at or after `since` (ms). */
+  closedSince(port: number, since: number): boolean {
+    return this.lastCloseEvents.some(event => event.port === port && event.timestamp.getTime() >= since);
+  }
+
   /**
    * Get all running Chrome ports
    */

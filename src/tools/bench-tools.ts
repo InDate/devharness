@@ -308,7 +308,7 @@ export function createBenchTools(
           resolved.cdpManager,
           targetPuppeteerManager,
           `bench.${action}`,
-          resolved.connection.port
+          resolved.connection
         );
         if (browserError) return browserError;
 

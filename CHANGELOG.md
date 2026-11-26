@@ -65,6 +65,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Page tools work on a Chrome devharness attached to.** Content,
+  screenshot, input, navigate, dom and bench checked that the Chrome behind a
+  connection was alive by looking for a process devharness had spawned, so
+  every attached Chrome read as not running. A spawned Chrome is still checked
+  by its process; an attached one reads as gone only once a Chrome devharness
+  spawned on that port has closed since the connection was made.
+
 - **A plain-http page keeps its renderer.** The origin-private file system is
   read only on a secure page; Chrome terminated an insecure one that
   `FileSystem.getDirectory` reached.

@@ -308,7 +308,7 @@ export function createPageTools(
         const targetConsoleMonitor = resolved.consoleMonitor;
         const targetNetworkMonitor = resolved.networkMonitor;
 
-        const error = checkBrowserAutomation(targetCdpManager, targetPuppeteerManager, `navigate.${action}`, resolved.connection.port);
+        const error = checkBrowserAutomation(targetCdpManager, targetPuppeteerManager, `navigate.${action}`, resolved.connection);
         if (error) {
           return error;
         }

@@ -602,7 +602,7 @@ export function createInputTools(
         const targetPuppeteerManager = resolved.puppeteerManager;
         const targetCdpManager = resolved.cdpManager;
 
-        const error = checkBrowserAutomation(targetCdpManager, targetPuppeteerManager, action, resolved.connection.port);
+        const error = checkBrowserAutomation(targetCdpManager, targetPuppeteerManager, action, resolved.connection);
         if (error) {
           return error;
         }

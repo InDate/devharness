@@ -9,6 +9,7 @@ import { blankPageUrl } from './utils/blank-page.js';
 import type { CDPManager } from './cdp-manager.js';
 import type { PuppeteerManager } from './puppeteer-manager.js';
 import type { ChromeLauncher } from './chrome-launcher.js';
+import type { Connection } from './connection-manager.js';
 import { createErrorResponse } from './messages.js';
 
 // Module-level reference to ChromeLauncher (set via setChromeLauncher)
@@ -30,15 +31,20 @@ export function checkBrowserAutomation(
   cdpManager: CDPManager,
   puppeteerManager: PuppeteerManager | null,
   toolName: string,
-  debugPort?: number,
+  browser?: Pick<Connection, 'port' | 'createdAt'>,
   requirePageLoad?: boolean
 ): { content: Array<{ type: 'text'; text: string }>; isError?: boolean } | null {
-  // First, verify Chrome process is actually running (handles external kills)
-  if (chromeLauncherRef && debugPort !== undefined) {
-    if (!chromeLauncherRef.isRunning(debugPort)) {
+  // A Chrome devharness spawned is checked by its process; one it attached to
+  // has no process here, so it reads as gone only once a Chrome devharness
+  // spawned on that port has closed since the connection was made.
+  if (chromeLauncherRef && browser) {
+    const gone = chromeLauncherRef.spawnedOn(browser.port)
+      ? !chromeLauncherRef.isRunning(browser.port)
+      : chromeLauncherRef.closedSince(browser.port, browser.createdAt);
+    if (gone) {
       return createErrorResponse('CHROME_NOT_RUNNING', {
-        port: debugPort,
-        message: `Chrome is not running on port ${debugPort}. Start one with \`connection({ action: 'launch' })\`.`
+        port: browser.port,
+        message: `Chrome is not running on port ${browser.port}. Start one with \`connection({ action: 'launch' })\`.`
       });
     }
   }

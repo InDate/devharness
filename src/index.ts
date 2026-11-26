@@ -871,10 +871,16 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
       if (!runsCalls(toolName)) noteCallStart({ entry: commandIndex, ...(called ? { connection: called } : {}) });
     }
 
+    // The restart and reload controls are the way out of a guard that fires
+    // wrongly, so no guard holds them.
+    const configAction = (validation.data as Record<string, unknown>)?.action;
+    const escapesGuards = toolName === 'config' && (configAction === 'restart' || configAction === 'reload' || configAction === 'status');
+
     // Check for failed monitored ports
     const portMonitor = serverManager.getPortMonitor();
     const failedPorts = portMonitor.getFailedPorts();
-    const portCheck = checkPortFailures(failedPorts, toolName);
+    const passed = { blocked: false as const, prefix: '', markAsError: false };
+    const portCheck = escapesGuards ? passed : checkPortFailures(failedPorts, toolName);
 
     if (portCheck.blocked) {
       await recordBlockEvent(portCheck.block, toolName);
@@ -883,7 +889,7 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
 
     // Check for breakpoint pauses (block tools until acknowledged or resumed)
     const allConnections = connectionManager.getAllConnections();
-    const breakpointCheck = checkBreakpointPause(
+    const breakpointCheck = escapesGuards ? passed : checkBreakpointPause(
       allConnections,
       toolName,
       (port) => serverManager.getPendingRestartByInspectorPort(port),
@@ -897,7 +903,7 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
 
     // Check for pending startup failures (block tools until acknowledged)
     const pendingStartupFailures = serverManager.getPendingStartupFailures();
-    const pendingStartupCheck = checkPendingStartups(pendingStartupFailures, toolName);
+    const pendingStartupCheck = escapesGuards ? passed : checkPendingStartups(pendingStartupFailures, toolName);
 
     if (pendingStartupCheck.blocked) {
       await recordBlockEvent(pendingStartupCheck.block, toolName);
@@ -905,7 +911,7 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
     }
 
     // Check for blocking bugs from recordings
-    const bugCheck = await checkBugBlocking(toolName, validation.data as Record<string, unknown>);
+    const bugCheck = escapesGuards ? passed : await checkBugBlocking(toolName, validation.data as Record<string, unknown>);
     if (bugCheck.blocked) {
       await recordBlockEvent(bugCheck.block, toolName);
       return bugCheck.response;
@@ -913,7 +919,7 @@ Edit ${configPath} to resolve, then restart the MCP server.`,
 
     // Check for duplicate session (multiple MCPs for same Claude session)
     const duplicateInfo = getDuplicateSessionInfo();
-    const duplicateCheck = checkDuplicateSession(duplicateInfo, toolName);
+    const duplicateCheck = escapesGuards ? passed : checkDuplicateSession(duplicateInfo, toolName);
     if (duplicateCheck.blocked) {
       await recordBlockEvent(duplicateCheck.block, toolName);
       return duplicateCheck.response;

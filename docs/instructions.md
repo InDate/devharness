@@ -421,5 +421,6 @@ runs against (see Quick Start).
 - `listTools`: List all toggleable tools with status and dependency conflicts
 - `reload`: Re-read config.json now (also happens automatically on file edits, ~250ms debounce). Doesn't apply `tools.enabled`/`tools.disabled` - those need `restart`
 - `restart`: Restart devharness itself via the mcp-supervisor (see "Restarting devharness" above) - use when the server seems stuck/broken, or to apply `tools.enabled`/`tools.disabled` changes
+- `restart`, `reload` and `status` pass every guard (a duplicate session, a breakpoint pause, a failed port or startup, a blocking bug), since they are the way out of a guard that fires wrongly
 - `listProfiles`: List named persistent Chrome profiles and the root they live under
 - `resetProfile`: Wipe and recreate a named profile (`config({ action: 'resetProfile', profile: 'device-a' })`). Refused while a live Chrome holds that profile - nothing is deleted in that case

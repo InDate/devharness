@@ -80,6 +80,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   guard now walks each parent up past the launcher chain and blocks only where
   two Claude processes remain.
 
+- **`config restart`, `reload` and `status` pass every guard.** A guard that
+  fired wrongly also blocked the restart that would load its fix, which left a
+  `/mcp` reconnect as the only way out.
+
 - **A plain-http page keeps its renderer.** The origin-private file system is
   read only on a secure page; Chrome terminated an insecure one that
   `FileSystem.getDirectory` reached.

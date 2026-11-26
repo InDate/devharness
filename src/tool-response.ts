@@ -57,6 +57,8 @@ export interface ClickActionMeta {
   preClickUrl: string;
   postClickUrl: string;
   navigationOccurred: boolean;
+  /** The click's effect closed the page it landed on, so nothing after it was read. */
+  pageClosed?: boolean;
   hasClickHandler: boolean;
   domChanges: {
     mutationCount: number;

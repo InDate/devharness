@@ -496,6 +496,17 @@ async function readFocusedField(page: any): Promise<{ tag: string; value: string
 const TAP_GAP_MS = 80;
 
 /** The actions that dispatch mouse or touch events, which Chrome hit-tests against a rendered frame. */
+/**
+ * True when the page a call just reached has closed or detached its main
+ * frame. An input whose effect closes its own page leaves every read after it
+ * failing on that page, while the input itself went out.
+ */
+function pageWentAway(page: any, error: unknown): boolean {
+  if (page.isClosed?.()) return true;
+  if (page.mainFrame?.()?.detached) return true;
+  return /detached Frame|Target closed|Session closed/i.test(String((error as any)?.message ?? error));
+}
+
 const POINTER_ACTIONS = new Set(['click', 'hover', 'drag', 'scroll', 'mousemove', 'tap', 'swipe', 'pinch', 'rotate']);
 
 /**
@@ -856,7 +867,14 @@ export function createInputTools(
 
                   // Perform the click - use wrapper to bypass replay blocker overlay
                   await checkAborted(); // last exit before the click goes on the wire
-                  await withReplayBypass(page, () => withModifiers(page, args.modifiers, () => clickSelector(page, selector, { clickCount, button, holdMs })));
+                  // The element was found on a live page just above, so a page
+                  // gone from here on went with the click.
+                  try {
+                    await withReplayBypass(page, () => withModifiers(page, args.modifiers, () => clickSelector(page, selector, { clickCount, button, holdMs })));
+                  } catch (error) {
+                    if (pageWentAway(page, error)) return { selector, clickCount, hasClickHandler, fingerprint, postClickState: null, pageClosed: true };
+                    throw error;
+                  }
 
                   // Check if breakpoint was hit during click - if so, skip post-click evaluation
                   // which would hang because page JS is paused
@@ -871,6 +889,7 @@ export function createInputTools(
                   }
 
                   // Get post-click state
+                  try {
                   const postClickRead = await page.evaluate((clickedSelector: string) => {
                     const focused = (globalThis as any).document.activeElement;
                     let focusInfo = null;
@@ -928,9 +947,14 @@ export function createInputTools(
                     postClickState,
                     warning: !hasClickHandler ? 'Element may not have a click handler attached. Click was performed but may not trigger any action.' : undefined,
                   };
+                  } catch (error) {
+                    if (pageWentAway(page, error)) return { selector, clickCount, hasClickHandler, fingerprint, postClickState: null, pageClosed: true };
+                    throw error;
+                  }
                 },
                 'click'
               );
+              const pageClosed = result.result?.pageClosed === true;
 
               // If paused at breakpoint, return immediately - don't try any more page interactions
               if (result.pausedAtBreakpoint || result.result?.pausedDuringClick) {
@@ -958,13 +982,15 @@ export function createInputTools(
               // Collect DOM changes
               let changesText = '';
               let changes: DOMChanges | null = null;
-              if (shouldDetectChanges) {
+              if (shouldDetectChanges && pageClosed) {
+                domChangeMonitor.drop(connection);
+              } else if (shouldDetectChanges) {
                 changes = await domChangeMonitor.stopObserving(connection, { settleTimeout, signal: abortSignal });
                 changesText = formatDOMChanges(changes);
               }
 
               // Clean up temporary selector attribute
-              await cleanupResolvedSelector(page, selector);
+              if (!pageClosed) await cleanupResolvedSelector(page, selector);
 
               if (result.result?.refused) {
                 return elementMismatch('click', `\`${rawSelector}\``, result.result.refused, result.result.fingerprint);
@@ -1008,6 +1034,9 @@ export function createInputTools(
               if (postClick?.childInteractive?.length > 0) {
                 postClickInfo += `\n**Contains:** ${postClick.childInteractive.join(', ')}`;
               }
+              if (pageClosed) {
+                postClickInfo += '\n**Page closed:** the click closed the page it landed on, so nothing after it was read. `connection targets` lists the pages left on the port.';
+              }
 
               // Build _meta for click validation
               const postClickUrl = postClick?.url || page.url();
@@ -1020,6 +1049,7 @@ export function createInputTools(
                   preClickUrl,
                   postClickUrl,
                   navigationOccurred: preClickUrl !== postClickUrl,
+                  ...(pageClosed && { pageClosed: true }),
                   hasClickHandler: result.result.hasClickHandler ?? false,
                   ...(result.result.fingerprint ? { fingerprint: result.result.fingerprint } : {}),
                   domChanges: changes ? {

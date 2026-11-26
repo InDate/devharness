@@ -73,6 +73,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A click whose effect closes its own page reports as sent.** The click
+  went out, the page closed as its result, and the reads after it - the
+  focus, the tab stops, the selector cleanup - met the detached frame, so the
+  whole click came back as not run. A page that closes or detaches after the
+  element was found is now the click's doing: the reply notes the page
+  closed, and `_meta.click.pageClosed` is set.
+
 - **One connection reads one page on a port holding several.** The debugger
   attached to the first page the port listed and the page tools to the first
   page Puppeteer listed, so on a port with several pages `inspect` and

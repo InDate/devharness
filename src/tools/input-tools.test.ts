@@ -286,3 +286,39 @@ describe('a scroll as a run of wheel events', () => {
     expect(page.mouse.wheel).not.toHaveBeenCalled();
   });
 });
+
+describe('a click whose effect closes its own page', () => {
+  function closingPage(throwFrom: 'click' | 'read') {
+    let closed = false;
+    const detached = () => new Error("Attempted to use detached Frame '4CF53283'");
+    const { input } = makeInput({
+      isClosed: () => closed,
+      evaluate: vi.fn(async (fn: unknown) => {
+        if (closed) throw detached();
+        return String(fn).includes('activeElement') && throwFrom === 'read' ? (closed = true, Promise.reject(detached())) : { blocked: false };
+      }),
+      $: vi.fn(async () => ({
+        evaluate: async () => true,
+        scrollIntoView: async () => {}, clickablePoint: async () => ({ x: 1, y: 1 }), boundingBox: async () => ({ x: 0, y: 0, width: 2, height: 2 }), dispose: async () => {},
+      })),
+      mouse: {
+        move: vi.fn(async () => {}), down: vi.fn(async () => {}), wheel: vi.fn(async () => {}),
+        up: vi.fn(async () => { if (throwFrom === 'click') { closed = true; throw detached(); } }),
+        click: vi.fn(async () => { if (throwFrom === 'click') { closed = true; throw detached(); } }),
+      },
+    });
+    return input;
+  }
+
+  it('reports the click sent, with the page closed, where the click itself meets the closing page', async () => {
+    const reply = await closingPage('click').handler({ ...on, action: 'click', selector: '[data-edit="remove"]' } as never) as any;
+    expect(reply.isError, reply.content?.[0]?.text).toBeUndefined();
+    expect(reply._meta.click.pageClosed).toBe(true);
+  });
+
+  it('reports the click sent, with the page closed, where the read after it meets the closed page', async () => {
+    const reply = await closingPage('read').handler({ ...on, action: 'click', selector: '[data-edit="remove"]' } as never) as any;
+    expect(reply.isError, reply.content?.[0]?.text).toBeUndefined();
+    expect(reply._meta.click.pageClosed).toBe(true);
+  });
+});

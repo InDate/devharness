@@ -143,13 +143,14 @@ export function shareBrowserProxy(
 }
 
 const connectionSchema = z.object({
-  action: z.enum(['launch', 'attach', 'list', 'switch', 'rename', 'close', 'status', 'browsers']),
+  action: z.enum(['launch', 'attach', 'list', 'switch', 'rename', 'close', 'status', 'browsers', 'targets']),
   connection: z.string().optional().describe('The connection, 3 descriptive words. launch/attach: the name it is created under, which later calls pass (launch defaults to "unnamed-connection-default"). switch/rename/close/status: the one to act on'),
   newName: z.string().optional().describe('rename: the new name, 3 descriptive words'),
   reason: z.string().optional().describe('close: why the connection is closed'),
   url: z.string().optional().describe('launch: URL to open (default: blank page); a reused tab is sent there when it is on another page'),
   port: z.number().optional().describe('launch: debugging port (default: this session\'s reserved port); a Chrome already on it gets a tab. attach: debugger port (Node.js usually 9229)'),
-  host: z.string().optional().describe('attach: the debugger host (default: localhost)'),
+  host: z.string().optional().describe('attach/targets: the debugger host (default: localhost)'),
+  target: z.string().optional().describe('attach: the page on a port holding several, by target id, exact title, or a piece of its title or URL; `targets` lists them'),
   autoConnect: z.boolean().optional().describe('launch: connect the debugger after launch (default: true)'),
   forceNewInstance: z.boolean().optional().describe('launch: a fresh Chrome process, never a tab in an existing one'),
   newContextWindow: z.boolean().optional().describe('launch: a window in the Chrome on `port` with cookies and storage of its own; with proxy, only it routes through the proxy'),
@@ -924,6 +925,36 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
     }
   };
 
+  /** The page targets the debugger on host:port lists, in its order; undefined where it does not answer. */
+  const pageTargets = async (host: string, port: number): Promise<PageTarget[] | undefined> => {
+    try {
+      const listed = await (await fetch(`http://${host}:${port}/json/list`, { signal: AbortSignal.timeout(2000) })).json() as Array<PageTarget & { type: string }>;
+      return listed.filter(target => target.type === 'page').map(({ id, title, url }) => ({ id, title, url }));
+    } catch {
+      return undefined;
+    }
+  };
+
+  const holdersOf = (port: number, id: string): string[] => connectionManager.getAllConnections()
+    .filter(connection => connection.port === port && connection.cdpManager.getTargetId?.() === id)
+    .map(connection => connection.reference ?? connection.id);
+
+  const targets = async (args: ConnectionArgs): Promise<any> => {
+    const host = args.host || 'localhost';
+    const port = args.port || configManager.getCurrentPort();
+    const pages = await pageTargets(host, port);
+    if (!pages) {
+      return createErrorResponse('DEBUGGER_NOT_RUNNING', { port: port.toString(), message: `No debugger answers on ${host}:${port}.` });
+    }
+    const rows = pages.map(page => ({ ...page, connections: holdersOf(port, page.id) }));
+    const response = createSuccessResponse('CONNECTION_TARGETS', {
+      host, port, count: rows.length, empty: rows.length === 0,
+      list: rows.map(row => `- \`${row.id}\` ${row.title ? `**${row.title}**` : '_(no title)_'} · ${row.url}${row.connections.length > 0 ? ` · held by ${row.connections.join(', ')}` : ''}`).join('\n'),
+    });
+    response._meta = { tool: 'connection', action: 'targets', timestamp: Date.now(), targets: rows } as any;
+    return response;
+  };
+
   const attach = async (args: ConnectionArgs): Promise<any> => {
       // The name in its stored form; throws when it is not three words
       const reference = requireValidReference(args.connection!, 'connection');
@@ -963,6 +994,20 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
           }
         }
 
+        let chosen: PageTarget | undefined;
+        if (args.target !== undefined) {
+          const pages = await pageTargets(host, port) ?? [];
+          const found = choosePageTarget(pages, args.target);
+          if (found.kind !== 'one') {
+            return createErrorResponse(found.kind === 'none' ? 'CONNECTION_TARGET_NOT_FOUND' : 'CONNECTION_TARGET_AMBIGUOUS', {
+              target: args.target, host, port,
+              list: (found.kind === 'none' ? pages : found.matches).map(page => `- \`${page.id}\` ${page.title || '(no title)'} · ${page.url}`).join('\n'),
+              empty: pages.length === 0,
+            });
+          }
+          chosen = found.page;
+        }
+
         // Check if browser already exists on this port
         const browserAlreadyExists = connectionManager.hasBrowser(host, port);
 
@@ -974,7 +1019,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
         let dialogMonitor: DialogMonitor | undefined;
 
         // Connect CDP first to detect runtime type
-        await cdpManager.connect(host, port);
+        await cdpManager.connect(host, port, chosen?.id);
         const runtimeType = cdpManager.getRuntimeType();
 
         // If this port belongs to a server devharness is managing, and its start
@@ -1001,9 +1046,15 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
         if (runtimeType === 'chrome') {
           await puppeteerManager.connect(host, port);
 
-          // Create new tab if browser already existed
-          if (browserAlreadyExists) {
-            await puppeteerManager.newPage();
+          // The debugger and the page every tool reads stand on one target: the
+          // one named, a new tab in a browser another connection holds, or the
+          // page the debugger attached to.
+          if (!chosen && browserAlreadyExists) {
+            const opened = await puppeteerManager.newPage();
+            await cdpManager.disconnect();
+            await cdpManager.connect(host, port, (opened.target() as any)._targetId);
+          } else {
+            await adoptOwnTab({ cdpManager, puppeteerManager });
           }
 
           // Start monitoring console and network
@@ -1330,6 +1381,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
     close: ['connection', 'reason'],
     status: ['connection'],
     browsers: [],
+    targets: [],
   };
 
   return {
@@ -1358,6 +1410,7 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
           case 'close': return close(args);
           case 'status': return status(args);
           case 'browsers': return browsers();
+          case 'targets': return targets(args);
         }
       }
     ),
@@ -1368,6 +1421,32 @@ export function createConnectionTools(deps: ConnectionToolDeps) {
       async (args) => (args.action === 'kill' ? kill(args) : resetLauncher(args))
     ),
   };
+}
+
+export interface PageTarget {
+  id: string;
+  title: string;
+  url: string;
+}
+
+/**
+ * The page a `target` names: an exact target id, then an exact title, then
+ * the pages whose title or URL holds it. More than one match at the first
+ * step that finds any is ambiguous.
+ */
+export function choosePageTarget(pages: PageTarget[], target: string):
+  { kind: 'one'; page: PageTarget } | { kind: 'none' } | { kind: 'several'; matches: PageTarget[] } {
+  const steps = [
+    (page: PageTarget) => page.id === target,
+    (page: PageTarget) => page.title === target,
+    (page: PageTarget) => page.title.includes(target) || page.url.includes(target),
+  ];
+  for (const step of steps) {
+    const matches = pages.filter(step);
+    if (matches.length === 1) return { kind: 'one', page: matches[0] };
+    if (matches.length > 1) return { kind: 'several', matches };
+  }
+  return { kind: 'none' };
 }
 
 /** A url as Chrome reports a page's, so `http://host` reads as the `http://host/` it loads. */

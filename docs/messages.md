@@ -294,6 +294,41 @@ Failed to connect to debugger at {{host}}:{{port}}: {{error}}
 
 ---
 
+## CONNECTION_TARGETS
+
+**Type:** success
+**Summary:** Pages on {{host}}:{{port}}
+
+{{#empty}}The debugger on {{host}}:{{port}} lists no page.{{/empty}}{{^empty}}{{count}} listed, by target id, title and URL:
+
+{{list}}
+
+`connection({ action: 'attach', connection, port: {{port}}, target: '<id, title or a piece of the URL>' })` attaches to one, and every tool on that connection reads that page.{{/empty}}
+
+---
+
+## CONNECTION_TARGET_NOT_FOUND
+
+**Type:** error
+**Code:** CONNECTION_TARGET_NOT_FOUND
+
+No page on {{host}}:{{port}} has the id or title `{{target}}`, or holds it in its title or URL.{{#empty}} The debugger lists no page.{{/empty}}{{^empty}} Its pages:
+{{list}}{{/empty}}
+
+---
+
+## CONNECTION_TARGET_AMBIGUOUS
+
+**Type:** error
+**Code:** CONNECTION_TARGET_AMBIGUOUS
+
+`{{target}}` matches several pages on {{host}}:{{port}}:
+{{list}}
+
+Name one by its id or its exact title.
+
+---
+
 ## DEBUGGER_NOT_CONNECTED
 
 **Type:** error

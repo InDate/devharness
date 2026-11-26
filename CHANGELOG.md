@@ -65,6 +65,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **One connection reads one page on a port holding several.** The debugger
+  attached to the first page the port listed and the page tools to the first
+  page Puppeteer listed, so on a port with several pages `inspect` and
+  `content` could read different pages; a second attach opened a new tab for
+  one side and left the other on the first page. Both now stand on one target.
+  `attach` takes `target` (id, exact title, or a piece of a title or URL) to
+  choose it, and `connection targets` lists a port's pages and who holds each.
+
 - **Page tools work on a Chrome devharness attached to.** Content,
   screenshot, input, navigate, dom and bench checked that the Chrome behind a
   connection was alive by looking for a process devharness had spawned, so

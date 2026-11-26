@@ -231,11 +231,12 @@ actions below are the complete enums accepted by each tool.
 Nearly every tool also takes `connection` to pick which connection it
 runs against (see Quick Start).
 
-**Connection**: `connection` (actions: launch, attach, list, switch, rename, close, status, browsers) and `browser` (actions: kill, resetLauncher)
+**Connection**: `connection` (actions: launch, attach, list, switch, rename, close, status, browsers, targets) and `browser` (actions: kill, resetLauncher)
 - `connection` names the connection on every call: the one launch or attach creates, and the one switch, rename, close and status act on. Rename's new name is `newName`
 - `launch` with `newContextWindow: true` adds a window to the Chrome already on `port`, with cookies and storage of its own. With `proxy: true` that window alone routes through the proxy, so a running Chrome gains a proxied window without a relaunch; `copyCookiesFrom` starts it with another connection's cookies (localStorage and IndexedDB stay behind). Closing the connection closes the window
 - `launch` also connects - don't follow it with `attach`. `launch` with the `port` of a running Chrome opens a new tab in it
 - `launch` with a `connection` name that is already live reuses that tab, and with a `url` sends the tab there when it is on another page (the reply names where it was), so a sequence's launch step lands where it says on a rerun. A tab already on that url is left as it is, unreloaded; a url that redirects elsewhere reloads on each reuse
+- `attach` on a port holding several pages takes `target`: a target id, an exact title, or a piece of a title or URL; a piece matching several pages is refused with the matches. Every tool on the connection reads that one page, the debugger included. With no `target`, attach takes the first page the port lists, or a new tab where another connection already holds that browser. `targets` lists a port's pages with their id, title, URL and the connections holding each
 - `list` gives each connection's URL and title and drops dead ones; `switch` makes a connection active and selects its page
 - `close` and both `browser` actions require a `reason`. Closing the last connection to a Chrome kills that Chrome. `browser` is separate so that allowing `connection` allows no kill
 - `connection({ action: 'launch', profile: 'device-a' })` uses a **named persistent profile**: a stable user-data-dir under `~/.devharness/profiles` (override per project with `chrome.persistentProfileRoot`) that survives across runs, so logins, cookies and IndexedDB persist. Naming it is what makes it persistent - there is no separate flag. It does not pin a port. Only one live Chrome may hold a profile at a time. Unnamed launches stay throwaway and are deleted on exit

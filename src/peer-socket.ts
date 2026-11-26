@@ -15,6 +15,11 @@
  *   `sessions.send` writes it (measured on Claude Code 2.1.296, read on
  *   2.1.318 with `peerProtocol: 1`).
  * A change to either stops delivery; `sendPeerMessage` then throws.
+ *
+ * A third internal names the sender: the `<cross-session-message>` header a
+ * Claude sender writes into its own content, which the receiver reads the
+ * sender's name from (measured on 2.1.332). Bare content arrives from "an
+ * unidentified session"; a change to the header leaves the message unnamed.
  */
 
 import { execFileSync } from 'child_process';
@@ -114,9 +119,28 @@ export function claudeSessionOf(pid: number, parents: Map<number, number> = read
   return undefined;
 }
 
+const HEADER_NAME = /^[^"<>\n\r]+$/;
+const HEADER_ADDRESS = /^uds:[A-Za-z0-9/._-]+$/;
+const HEADER_CLOSE = '</cross-session-message>';
+
+/**
+ * `text` under the header naming `name` as its sender. Attributes go in the
+ * order the receiver parses them, `from` before `from-name`; an address
+ * outside the characters it parses drops the whole header there, so such an
+ * address stays out. No `from-mode`: that one claims a permission mode the
+ * receiver weighs. Text already headed, text holding the closing tag, and a
+ * name the header cannot carry return `text` as it stands.
+ */
+export function withSenderHeader(text: string, name: string, from?: string): string {
+  if (!HEADER_NAME.test(name) || text.startsWith('<cross-session-message') || text.includes(HEADER_CLOSE)) return text;
+  const address = from && HEADER_ADDRESS.test(from) ? ` from="${from}"` : '';
+  return `<cross-session-message${address} from-name="${name}">\n${text}\n${HEADER_CLOSE}`;
+}
+
 /**
  * Writes `text` to the session listening on `socketPath` as one peer
- * message. `from` fills the frame's reply address. The connection stays open
+ * message. `from` fills the frame's reply address; `name` heads the content
+ * with the sender's name (`withSenderHeader`). The connection stays open
  * `holdMs`: Claude Code reads the sender's pid off the open connection, and
  * one closed at once arrives with no verified sender. Rejects where the
  * socket is gone or refuses the connection.
@@ -124,11 +148,12 @@ export function claudeSessionOf(pid: number, parents: Map<number, number> = read
 export function sendPeerMessage(
   socketPath: string,
   text: string,
-  options: { from?: string; holdMs?: number } = {},
+  options: { from?: string; name?: string; holdMs?: number } = {},
 ): Promise<void> {
+  const content = options.name ? withSenderHeader(text, options.name, options.from) : text;
   const frame = {
     type: 'user',
-    message: { role: 'user', content: text },
+    message: { role: 'user', content },
     msg_id: randomUUID(),
     ...(options.from ? { from: options.from } : {}),
   };

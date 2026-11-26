@@ -204,7 +204,7 @@ export async function deliverStream(sessionName: string): Promise<void> {
     const end = stream.lastIndexOf(0x0a) + 1;
     if (end <= from) return;
     const lines = stream.subarray(from, end).toString('utf8');
-    await sendPeerMessage(socketPath, `devharness events (${streamPath}):\n${lines}`);
+    await sendPeerMessage(socketPath, `devharness events (${streamPath}):\n${lines}`, { name: 'devharness' });
     await fs.writeFile(cursorPath, String(end));
   } catch (error) {
     console.error(`[devharness] Event delivery to ${sessionName} failed: ${error}`);

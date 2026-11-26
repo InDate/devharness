@@ -32,6 +32,14 @@ export interface SessionInfo {
   sessionEntryCount?: number;  // Count of new entries in session file since watching started
   allPids?: number[];          // All MCP PIDs that have reported for this session
   allPpids?: number[];         // All Claude session PIDs (parents)
+  /** By MCP pid: its parent and the build file it runs, for the servers that report one. */
+  servers?: Record<string, ServerRecord>;
+}
+
+/** One MCP server of a session: its parent pid and the build file it runs. */
+export interface ServerRecord {
+  ppid?: number;
+  build?: string;
 }
 
 export interface ProjectInfo {
@@ -52,6 +60,8 @@ export interface HubLockData {
 export interface HeartbeatPayload {
   pid: number;
   ppid?: number;             // Claude session process ID (parent)
+  /** The build file this server runs. */
+  build?: string;
   sessionId?: string;
   shortId?: string;
   cwd: string;
@@ -88,6 +98,7 @@ export interface MCPHeartbeatAckMessage {
   type: 'mcp_heartbeat_ack';
   allPids: number[];
   allPpids: number[];
+  servers?: Record<string, ServerRecord>;
 }
 
 export interface MCPNeedNewHubMessage {

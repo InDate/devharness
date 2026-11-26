@@ -81,12 +81,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   spawned on that port has closed since the connection was made.
 
 - **Two devharness servers in one Claude session pass the duplicate-session
-  guard.** The guard took each server's parent as its Claude process, but
-  that parent is the server's launcher (the supervisor, with `npm exec` above
-  it for an npx install), so a published server and a development one in the
-  same session read as two sessions holding one id, and both were blocked. The
-  guard now walks each parent up past the launcher chain and blocks only where
-  two Claude processes remain.
+  guard.** A published server and a development build in the same session
+  share its id, so the guard read them as a resumed copy and blocked both.
+  Each server now reports the build file it runs, and the guard counts only
+  the servers running its own: a resumed copy runs the same build, a
+  development build beside the installed one runs another. A server that
+  reports no build runs an older version, so it is no resumed copy and is
+  left out; a hub of an older version keeps no build and counts every server,
+  as before.
 
 - **`config restart`, `reload` and `status` pass every guard.** A guard that
   fired wrongly also blocked the restart that would load its fix, which left a

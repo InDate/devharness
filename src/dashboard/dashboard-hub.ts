@@ -19,7 +19,9 @@ import type {
   WSMessage,
   MCPMessage,
   MCPHeartbeatMessage,
+  ServerRecord,
 } from './types.js';
+import { RUNNING_BUILD } from './running-build.js';
 import type { Orchestrator } from '../log-processor/orchestrator.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -213,6 +215,7 @@ export class DashboardHub {
     if (payload.ppid && !allPpids.includes(payload.ppid)) {
       allPpids.push(payload.ppid);
     }
+    const servers = { ...(existing?.servers ?? {}), [pid]: { ppid: payload.ppid, build: payload.build } };
 
     const session: SessionInfo = {
       pid,
@@ -227,6 +230,7 @@ export class DashboardHub {
       sessionEntryCount: payload.sessionEntryCount,
       allPids,
       allPpids,
+      servers,
     };
 
     // Merge connections from existing session if same sessionId but different PID
@@ -253,6 +257,7 @@ export class DashboardHub {
       type: 'mcp_heartbeat_ack',
       allPids: session.allPids || [],
       allPpids: session.allPpids || [],
+      servers: session.servers ?? {},
     };
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(ack));
@@ -264,6 +269,7 @@ export class DashboardHub {
     for (const [key, session] of this.sessions.entries()) {
       if (session.allPids?.includes(pid)) {
         session.allPids = session.allPids.filter(p => p !== pid);
+        if (session.servers) delete session.servers[pid];
 
         if (session.allPids.length === 0) {
           this.sessions.delete(key);
@@ -365,6 +371,7 @@ export class DashboardHub {
       if (payload.ppid && !allPpids.includes(payload.ppid)) {
         allPpids.push(payload.ppid);
       }
+      const servers = { ...(existing?.servers ?? {}), [pid]: { ppid: payload.ppid, build: payload.build } };
 
       const session: SessionInfo = {
         pid,
@@ -379,6 +386,7 @@ export class DashboardHub {
         sessionEntryCount: payload.sessionEntryCount,
         allPids,
         allPpids,
+        servers,
       };
 
       // Merge connections from existing session if same sessionId but different PID
@@ -416,6 +424,7 @@ export class DashboardHub {
       if (session.allPids?.includes(pid)) {
         // Remove this PID from allPids
         session.allPids = session.allPids.filter(p => p !== pid);
+        if (session.servers) delete session.servers[pid];
 
         if (session.allPids.length === 0) {
           // No more PIDs - remove the session entirely
@@ -671,6 +680,7 @@ export class DashboardHub {
       connections: [],
       allPids: [process.pid],
       allPpids: [process.ppid],
+      servers: { [process.pid]: { ppid: process.ppid, build: RUNNING_BUILD } },
     };
     this.sessions.set(sessionKey, session);
     this.selfSessionKey = sessionKey;
@@ -737,6 +747,11 @@ export class DashboardHub {
   getAllPids(): number[] {
     const session = this.sessions.get(this.selfSessionKey);
     return session?.allPids || [process.pid];
+  }
+
+  /** By MCP pid, the parent and build file of each server of this hub's session. */
+  getServers(): Record<string, ServerRecord> {
+    return this.sessions.get(this.selfSessionKey)?.servers ?? {};
   }
 
   // Get all Claude session PIDs for this hub's session (for duplicate detection)

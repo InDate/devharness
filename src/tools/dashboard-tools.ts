@@ -5,7 +5,8 @@
 
 import { z } from 'zod';
 import { livePids } from '../helpers/process-liveness.js';
-import { sessionProcesses } from '../helpers/session-process.js';
+import { RUNNING_BUILD } from '../dashboard/running-build.js';
+import type { ServerRecord } from '../dashboard/types.js';
 import { createTool } from '../validation-helpers.js';
 import { createSuccessResponse, createErrorResponse } from '../messages.js';
 import type { DuplicateSessionInfo } from '../tool-response.js';
@@ -51,34 +52,44 @@ export function getDuplicateSessionInfo(): DuplicateSessionInfo | null {
 
   let allPids: number[] = [process.pid];
   let allPpids: number[] = [process.ppid];
+  let servers: Record<string, ServerRecord> = {};
 
   if (instance?.client) {
     allPids = instance.client.getAllPids();
     allPpids = instance.client.getAllPpids();
+    servers = instance.client.getServers();
   } else if (instance?.hub) {
     allPids = instance.hub.getAllPids();
     allPpids = instance.hub.getAllPpids();
+    servers = instance.hub.getServers();
   }
 
-  // The hub prunes a pid only on a clean websocket close, so a killed MCP stays
-  // registered and every later session reads it as a duplicate. Drop the dead
-  // ones before deciding: a stale pid should be reaped, not reported.
-  const pids = livePids(allPids, process.pid);
-  const ppids = livePids(allPpids, process.ppid);
-  if (pids.length <= 1) {
-    return { sessionId: session.sessionId, shortId: session.shortId, allPids: pids, allPpids: ppids, currentPid: process.pid, currentPpid: process.ppid };
-  }
-  // A server's parent is its launcher; the Claude process above it is what
-  // two servers of one session share.
-  const [currentPpid] = sessionProcesses([process.ppid]);
-  return {
-    sessionId: session.sessionId,
-    shortId: session.shortId,
-    allPids: pids,
-    allPpids: sessionProcesses(ppids),
-    currentPid: process.pid,
-    currentPpid,
-  };
+  return duplicateSessionInfo(session.sessionId, session.shortId, allPids, allPpids, servers);
+}
+
+/**
+ * The servers of this session that could be a resumed copy of it: the live
+ * ones running this build file. A server reporting another build - a
+ * development build beside the installed one - shares the session id without
+ * being a second Claude process holding it, and is left out. A resumed copy
+ * runs the version this server runs, which reports its build, so a server
+ * reporting none runs an older version and is left out too. A hub that keeps
+ * no server records (an older version) leaves every pid counted.
+ *
+ * The hub prunes a pid only on a clean websocket close, so a killed MCP stays
+ * registered and every later session reads it as a duplicate. Dead pids are
+ * dropped before deciding: a stale pid should be reaped, not reported.
+ */
+export function duplicateSessionInfo(
+  sessionId: string, shortId: string, allPids: number[], allPpids: number[], servers: Record<string, ServerRecord>,
+): DuplicateSessionInfo {
+  const recorded = Object.keys(servers).length > 0;
+  const sameBuild = (pid: number) => pid === process.pid || !recorded || servers[pid]?.build === RUNNING_BUILD;
+  const pids = livePids(allPids, process.pid).filter(sameBuild);
+  const ppids = recorded
+    ? [...new Set(pids.map(pid => servers[pid]?.ppid).filter((ppid): ppid is number => ppid !== undefined))]
+    : livePids(allPpids, process.ppid);
+  return { sessionId, shortId, allPids: pids, allPpids: ppids, currentPid: process.pid, currentPpid: process.ppid };
 }
 
 export function createDashboardTools() {

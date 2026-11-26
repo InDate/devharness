@@ -914,8 +914,8 @@ export function checkDuplicateSession(
   info: DuplicateSessionInfo | null,
   toolName: string
 ): PreExecutionResult {
-  // No session info, one server, or several servers under one Claude process - allow
-  if (!info || info.allPids.length <= 1 || new Set(info.allPpids).size <= 1) {
+  // No session info or not a duplicate - allow
+  if (!info || info.allPids.length <= 1) {
     return { blocked: false, prefix: '', markAsError: false };
   }
 

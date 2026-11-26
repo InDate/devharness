@@ -4,7 +4,8 @@
  */
 
 import WebSocket from 'ws';
-import type { HeartbeatPayload, ConnectionInfo, ActionInfo, MCPMessage, MCPHeartbeatMessage } from './types.js';
+import type { HeartbeatPayload, ConnectionInfo, ActionInfo, MCPMessage, MCPHeartbeatMessage, ServerRecord } from './types.js';
+import { RUNNING_BUILD } from './running-build.js';
 
 const RECONNECT_DELAY = 1000; // 1 second
 const MAX_RECONNECT_ATTEMPTS = 3;
@@ -20,6 +21,7 @@ export class DashboardClient {
   private sessionEntryCount = 0;
   private allPids: number[] = [];
   private allPpids: number[] = [];
+  private servers: Record<string, ServerRecord> = {};
   private ppid: number;
   private onHubDown?: () => void;
   private hubDownTriggered = false;
@@ -87,6 +89,7 @@ export class DashboardClient {
           if ('allPpids' in message) {
             this.allPpids = message.allPpids;
           }
+          this.servers = message.servers ?? {};
           break;
 
         case 'need_new_hub':
@@ -140,6 +143,7 @@ export class DashboardClient {
     const payload: HeartbeatPayload = {
       pid: this.pid,
       ppid: this.ppid,
+      build: RUNNING_BUILD,
       sessionId: this.sessionId,
       shortId: this.shortId,
       cwd: this.cwd,
@@ -195,6 +199,11 @@ export class DashboardClient {
 
   getAllPpids(): number[] {
     return this.allPpids;
+  }
+
+  /** By MCP pid, the parent and build file of each server of this session, as the hub last acknowledged. */
+  getServers(): Record<string, ServerRecord> {
+    return this.servers;
   }
 
   getSessionId(): string | undefined {

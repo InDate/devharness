@@ -72,6 +72,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by its process; an attached one reads as gone only once a Chrome devharness
   spawned on that port has closed since the connection was made.
 
+- **Two devharness servers in one Claude session pass the duplicate-session
+  guard.** The guard took each server's parent as its Claude process, but
+  that parent is the server's launcher (the supervisor, with `npm exec` above
+  it for an npx install), so a published server and a development one in the
+  same session read as two sessions holding one id, and both were blocked. The
+  guard now walks each parent up past the launcher chain and blocks only where
+  two Claude processes remain.
+
 - **A plain-http page keeps its renderer.** The origin-private file system is
   read only on a secure page; Chrome terminated an insecure one that
   `FileSystem.getDirectory` reached.

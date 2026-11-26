@@ -134,6 +134,11 @@ describe('guards attach block info', () => {
     expect(result.block?.resolve).toContain('acknowledgeStartup');
   });
 
+  it('lets several servers under one Claude process through', () => {
+    const info = { sessionId: 'abc-123', shortId: 'abc', allPids: [10, 20], allPpids: [100], currentPid: 20, currentPpid: 100 };
+    expect(checkDuplicateSession(info, 'connection').blocked).toBe(false);
+  });
+
   it('duplicate session, from both sides', () => {
     const base = {
       sessionId: 'abc-123',

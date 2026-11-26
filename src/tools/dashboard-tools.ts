@@ -5,6 +5,7 @@
 
 import { z } from 'zod';
 import { livePids } from '../helpers/process-liveness.js';
+import { sessionProcesses } from '../helpers/session-process.js';
 import { createTool } from '../validation-helpers.js';
 import { createSuccessResponse, createErrorResponse } from '../messages.js';
 import type { DuplicateSessionInfo } from '../tool-response.js';
@@ -62,13 +63,21 @@ export function getDuplicateSessionInfo(): DuplicateSessionInfo | null {
   // The hub prunes a pid only on a clean websocket close, so a killed MCP stays
   // registered and every later session reads it as a duplicate. Drop the dead
   // ones before deciding: a stale pid should be reaped, not reported.
+  const pids = livePids(allPids, process.pid);
+  const ppids = livePids(allPpids, process.ppid);
+  if (pids.length <= 1) {
+    return { sessionId: session.sessionId, shortId: session.shortId, allPids: pids, allPpids: ppids, currentPid: process.pid, currentPpid: process.ppid };
+  }
+  // A server's parent is its launcher; the Claude process above it is what
+  // two servers of one session share.
+  const [currentPpid] = sessionProcesses([process.ppid]);
   return {
     sessionId: session.sessionId,
     shortId: session.shortId,
-    allPids: livePids(allPids, process.pid),
-    allPpids: livePids(allPpids, process.ppid),
+    allPids: pids,
+    allPpids: sessionProcesses(ppids),
     currentPid: process.pid,
-    currentPpid: process.ppid,
+    currentPpid,
   };
 }
 

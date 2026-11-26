@@ -49,6 +49,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The npm package holds only what runs.** Tests were compiled into
+  `build/` beside the runtime, with source maps and type declarations for
+  every file, and `docs/` shipped whole with its design notes and research.
+  `tsconfig.build.json` now emits the runtime alone, `tsconfig.json`
+  typechecks everything including the tests, and `files` lists the docs a
+  user reads. The package drops from 2,010 files and 13.4 MB unpacked to 275
+  files and 4.9 MB.
+
 - **Events arrive as peer messages.** In Claude Code, each burst of lines on
   the event stream goes to the session's messaging socket, which the session
   reads at its next tool round, Bash rounds included. The stream file stays

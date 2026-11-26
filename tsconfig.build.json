@@ -1,0 +1,12 @@
+{
+  "//": "What ships: the runtime under src/, compiled into build/. Tests run from source under vitest and are typechecked by tsconfig.json, so none of them, nor maps or declarations, are emitted.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "build", "src/dashboard/frontend", "src/bench/frontend", "src/**/*.test.ts", "src/test-support"]
+}

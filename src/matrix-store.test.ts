@@ -12,7 +12,6 @@ import {
   listMatrices,
   matrixLinkKind,
   matrixShapeProblem,
-  nextCell,
   parseMatrixRef,
   readMatrix,
   readMatrixActivity,
@@ -59,6 +58,22 @@ afterEach(async () => {
 });
 
 describe('resolveCell', () => {
+  it('holds the union of every layer\'s needs and the row\'s, first layer first, each once', () => {
+    const matrix: MatrixFile = {
+      layers: [{ field: 'kind', table: 'kinds' }],
+      capabilities: [{ id: 'profile', default: { needs: ['/login'] } }, { id: 'login' }],
+      kinds: { native: { profile: { needs: ['api#/auth', '/login'] } } },
+      scenarios: [{ id: 'mobile', kind: 'native', needs: ['api#/auth', '#4'], cells: { profile: { needs: ['design#tokens'] } } }],
+    };
+    expect(resolveCell(matrix, 'mobile', 'profile')!.needs).toEqual([
+      { ref: '/login', from: 'capability' },
+      { ref: 'api#/auth', from: 'kinds.native' },
+      { ref: '#4', from: 'row' },
+      { ref: 'design#tokens', from: 'scenario' },
+    ]);
+    expect(resolveCell(matrix, 'mobile', 'login')!.needs).toEqual([{ ref: 'api#/auth', from: 'row' }, { ref: '#4', from: 'row' }]);
+  });
+
   it('layers the capability default, each layer table in order, then the scenario cell', () => {
     const cell = resolveCell(SAMPLE, 'badge', 'credit')!;
     expect(cell.expect).toBe('the mechanism over the trigger');
@@ -132,6 +147,12 @@ describe('the store', () => {
     expect(missing).toMatchObject({ ok: false, reason: 'missing', valid: ['sample'] });
   });
 
+  it('reports needs that are not a list of strings', () => {
+    expect(matrixShapeProblem({ capabilities: [{ id: 'a', default: { needs: 'b' } }], scenarios: [] })).toMatch(/capability `a` default/);
+    expect(matrixShapeProblem({ capabilities: [], scenarios: [{ id: 'r', needs: [3] }] })).toMatch(/scenario `r`/);
+    expect(matrixShapeProblem({ capabilities: [], scenarios: [{ id: 'r', cells: { a: { needs: {} } } }] })).toMatch(/cell `r\/a`/);
+  });
+
   it('reports a file of the wrong shape', () => {
     expect(matrixShapeProblem({ capabilities: [], scenarios: [] })).toBeUndefined();
     expect(matrixShapeProblem({ scenarios: [] })).toBeTypeOf('string');
@@ -153,6 +174,17 @@ describe('setCell', () => {
     expect(written.mechanisms).toEqual(SAMPLE.mechanisms);
   });
 
+  it('replaces the cell\'s own needs, logs the change, and holds the write when the check refuses it', async () => {
+    await store('sample');
+    const written = await setCell('sample', 'toast', 'slow', { needs: ['/seen', '/seen', '#2'] });
+    expect(written.ok && written.cell.needs).toEqual([{ ref: '/seen', from: 'scenario' }, { ref: '#2', from: 'scenario' }]);
+    expect((await readMatrixActivity('sample'))[0].changes).toEqual([{ scenario: 'toast', capability: 'slow', field: 'needs', to: '/seen, #2' }]);
+    const refused = await setCell('sample', 'toast', 'slow', { needs: null }, 'session', async () => 'no');
+    expect(refused).toEqual({ ok: false, reason: 'refused', refusal: 'no' });
+    const read = await readMatrix('sample');
+    expect(read.ok && resolveCell(read.matrix, 'toast', 'slow')!.needs).toHaveLength(2);
+  });
+
   it('takes a field off the cell on null, so the layer under it shows again', async () => {
     const file = await store('sample');
     const result = await setCell('sample', 'badge', 'credit', { today: null });
@@ -167,21 +199,6 @@ describe('setCell', () => {
     expect(await setCell('sample', 'nope', 'credit', { today: 'works' })).toMatchObject({ ok: false, reason: 'scenario', valid: ['badge', 'toast'] });
     expect(await setCell('sample', 'badge', 'nope', { today: 'works' })).toMatchObject({ ok: false, reason: 'capability', valid: ['seen', 'credit', 'slow'] });
     expect(await setCell('sample', 'badge', 'credit', { today: 'broken' as never })).toMatchObject({ ok: false, reason: 'today' });
-  });
-});
-
-describe('nextCell', () => {
-  it('returns the first gap before any unmeasured cell, in file order', async () => {
-    await store('sample');
-    const next = await nextCell('sample');
-    expect(next).toMatchObject({ ref: 'sample#toast/credit', remaining: { gap: 1, unmeasured: 4 } });
-    await setCell('sample', 'toast', 'credit', { today: 'works' });
-    expect((await nextCell('sample'))!.ref).toBe('sample#badge/credit');
-  });
-
-  it('returns nothing once no cell reads gap or unmeasured', async () => {
-    await store('done', { capabilities: [{ id: 'a', default: { today: 'works' } }], scenarios: [{ id: 'r' }] });
-    expect(await nextCell('done')).toBeUndefined();
   });
 });
 

@@ -228,7 +228,12 @@ holding no cell at that standing to a sliver; the sliver's tooltip names it.
 ```
 
 A cell's page holds its `expect`, `today`, `basis` and `note`, each with the
-layer it came from. The four standings at its head set `today`: a press
+layer it came from, and its needs: each met or not, with the layer holding it,
+the count of cells still short of works or the reason it cannot meet, and a
+press on it opens that cell, row, column or issue. An open cell with a need
+unmet is drawn in the grid with a dashed outline, since `next` skips it; its
+page lists where the chains of its unmet needs end, the cells and issues ready
+to work first. The four standings at its head set `today`: a press
 writes the standing onto the scenario's own cell in the file, the same write
 `matrix({ action: 'edit' })` makes; the other fields change through the tool.
 

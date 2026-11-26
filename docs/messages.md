@@ -2817,7 +2817,7 @@ A listing this wide omits bodies. Narrow the filters, or read one issue in full 
 {{othersList}}
 {{/othersList}}
 
-{{readyCount}} ready{{#waiting}}, {{waiting}} waiting on another issue or on their open pieces{{/waiting}}. Start it with `issues({ action: 'workOn', id: {{id}} })`.
+{{readyCount}} ready{{#waiting}}, {{waiting}} waiting on another issue, their open pieces, or a need unmet{{/waiting}}. Start it with `issues({ action: 'workOn', id: {{id}} })`.
 
 ---
 
@@ -2826,7 +2826,7 @@ A listing this wide omits bodies. Narrow the filters, or read one issue in full 
 **Type:** success
 **Summary:** No issue ready
 
-No open issue is ready.{{#waiting}} {{waiting}} wait on another issue or on their open pieces; `issues({ action: 'list' })` shows what each waits on.{{/waiting}}
+No open issue is ready.{{#waiting}} {{waiting}} wait on another issue, their open pieces, or a need unmet; `issues({ action: 'list' })` shows what each waits on.{{/waiting}}
 
 ---
 
@@ -3237,7 +3237,7 @@ Linked to GitHub {{linked}}: the next `issues({ action: 'sync' })` pushes this c
 **Type:** error
 **Code:** ISSUES_NOTHING_TO_EDIT
 
-Nothing to change on issue #{{id}}: pass `title`, `body`, `labels`, `matrix`, `matrixAdd`, `matrixRemove`, `blockedBy`, `parent`, `sequenceName` or `sync`.
+Nothing to change on issue #{{id}}: pass `title`, `body`, `labels`, `matrix`, `matrixAdd`, `matrixRemove`, `blockedBy`, `needs`, `parent`, `sequenceName` or `sync`.
 
 ---
 
@@ -4316,7 +4316,7 @@ Navigation failed: {{message}}
 
 **Once per session:**
 
-A cell layers the capability's `default`, then each table the file's `layers` names (keyed by that scenario field), then the scenario's own `cells`; a value marked _(layer)_ comes from that layer. A cell with no `today` reads unmeasured. `edit` writes onto the scenario's own cell only, so it overrides the layers for that one cell. Issues linked to a cell, its row or its column are listed with that link; completed ones stay, marked (completed). `issues: false` leaves them out.
+A cell layers the capability's `default`, then each table the file's `layers` names (keyed by that scenario field), then the scenario's own `cells`; a value marked _(layer)_ comes from that layer. A cell with no `today` reads unmeasured. `edit` writes onto the scenario's own cell only, so it overrides the layers for that one cell. Issues linked to a cell, its row or its column are listed with that link; completed ones stay, marked (completed). `issues: false` leaves them out. A cell's needs are the union of every layer's `needs` and the scenario's own `needs`; each shows met, the cells it still waits on, or its problem.
 
 ---
 
@@ -4342,16 +4342,22 @@ A cell layers the capability's `default`, then each table the file's `layers` na
 {{/rule}}
 {{cell}}
 
-{{gap}} gap, {{unmeasured}} unmeasured left; gaps come first, each in file order. Record the outcome with `matrix({ action: 'edit', matrix: '{{matrix}}', scenario: '{{scenarioId}}', capability: '{{capabilityId}}', today: '<standing>', basis: 'code' or 'sequence:<name>' })`.
+{{gap}} gap, {{unmeasured}} unmeasured left{{#blocked}}, {{blocked}} of them waiting on a need unmet{{/blocked}}; a cell comes up once its needs are met, gaps before unmeasured, each in file order.{{#waiting}}
+
+{{waiting}}{{/waiting}}
+
+Record the outcome with `matrix({ action: 'edit', matrix: '{{matrix}}', scenario: '{{scenarioId}}', capability: '{{capabilityId}}', today: '<standing>', basis: 'code' or 'sequence:<name>' })`.
 
 ---
 
 ## MATRIX_NEXT_NONE
 
 **Type:** success
-**Summary:** No cell left
+**Summary:** No cell ready
 
-No cell in {{scope}} reads gap or unmeasured.
+{{#blocked}}Every open cell in {{scope}} waits on a need unmet: {{blocked}} of them.
+
+{{waiting}}{{/blocked}}{{^blocked}}No cell in {{scope}} reads gap or unmeasured.{{/blocked}}
 
 ---
 
@@ -4407,7 +4413,7 @@ No {{kind}} `{{value}}`. Valid: {{valid}}.
 **Type:** error
 **Code:** MATRIX_EDIT_EMPTY
 
-`edit` writes at least one of `today`, `expect`, `basis` or `note`; null on a field takes it off the scenario's cell.
+`edit` writes at least one of `today`, `expect`, `basis`, `note` or `needs`; null on a field takes it off the scenario's cell.
 
 ---
 
@@ -4417,6 +4423,24 @@ No {{kind}} `{{value}}`. Valid: {{valid}}.
 **Code:** MATRIX_IMPORT_REFUSED
 
 `{{source}}` was not imported: {{problem}}.{{#exists}} `matrix({ action: 'import', path: '{{path}}', name: '{{name}}', overwrite: true })` replaces it, or another `name` keeps both.{{/exists}}
+
+---
+
+## NEEDS_REFUSED
+
+**Type:** error
+**Code:** NEEDS_REFUSED
+
+`{{ref}}` on {{at}} was not written: {{problem}}.{{#valid}} Valid there: {{valid}}.{{/valid}} A need is `#<issue>` or a matrix ref (`m#s/c` a cell, `m#s` a row, `m#/c` a column); on a matrix cell also `/<capability>` for this row's cell and `<scenario>/` for this column's. A need on a matrix the store lacks is written and stays unmet until that matrix arrives. Nothing was written.
+
+---
+
+## NEEDS_CYCLE
+
+**Type:** error
+**Code:** NEEDS_CYCLE
+
+That closes a loop of waits: {{path}}. Each cell and issue on it waits on the next, so none of them would come up in `next`. Drop one need, blocker or matrix link along it. Nothing was written.
 
 ---
 

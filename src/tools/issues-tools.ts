@@ -38,7 +38,6 @@ import {
   checkLinks,
   closeFinishedParents,
   getIssueMap,
-  getReadyIssues,
   openBlockers,
   childrenOf,
   type LinkRefusal,
@@ -47,6 +46,8 @@ import {
   type IssueStatus,
 } from '../issue-tracker.js';
 import { isMatrixName, parseMatrixRef, readMatrix } from '../matrix-store.js';
+import { checkIssueNeeds, issueNeeds, loadWorld, readyIssues, type WaitWorld } from '../waits-on.js';
+import { needBlock, needRefusalResponse } from './needs-format.js';
 import { checkUrlPort } from '../utils/port-check.js';
 import {
   handlePublish, handleSync, handleImport, handleLink, handlePullSequence,
@@ -81,6 +82,8 @@ const issuesSchema = z.object({
     .describe('create: labels. edit: the replacement labels. list/next: issues with ANY of them'),
   blockedBy: z.array(z.number().int().positive()).optional()
     .describe('create/edit: IDs that must close first; edit replaces the list'),
+  needs: z.array(z.string()).optional()
+    .describe('create/edit: what else it waits on, `#12` or a matrix ref met once every cell in it works; edit replaces the list'),
   matrix: z.union([z.array(z.string()), z.string()]).optional()
     .describe('create/edit: matrix refs `m#scenario/capability`, `m#scenario`, `m#/capability`; edit replaces the list. list: a matrix name or ref'),
   matrixAdd: z.array(z.string()).optional()
@@ -355,7 +358,7 @@ function issueRef(issue: TrackedIssue | undefined, id: number): string {
   return `#${id} ${getStatusIcon(issue.status)} ${issue.title}`;
 }
 
-function formatIssueDetails(issue: TrackedIssue, all: Map<number, TrackedIssue>): string {
+function formatIssueDetails(issue: TrackedIssue, all: Map<number, TrackedIssue>, world: WaitWorld): string {
   const typeIcon = issue.type === 'bug' ? '🐛' : '✨';
   const statusIcon = getStatusIcon(issue.status);
 
@@ -380,6 +383,9 @@ function formatIssueDetails(issue: TrackedIssue, all: Map<number, TrackedIssue>)
   if (issue.blockedBy.length > 0) {
     lines.push('**Waits on:**', ...issue.blockedBy.map(id => `- ${issueRef(all.get(id), id)}`));
   }
+
+  const needs = issueNeeds(world, issue).filter(state => state.via === undefined || !state.met);
+  if (needs.length > 0) lines.push(needBlock(needs, '**Needs**').trimStart());
 
   const pieces = childrenOf(issue.id, all);
   if (pieces.length > 0) {
@@ -470,7 +476,7 @@ export function createIssuesTools(
                 featureCount: issue.type === 'feature' ? 1 : 0,
                 pendingCount: issue.status === 'pending' ? 1 : 0,
                 issuesList: formatIssuesList([issue], await getIssueMap()),
-                details: formatIssueDetails(issue, await getIssueMap()),
+                details: formatIssueDetails(issue, await getIssueMap(), await loadWorld()),
                 bodiesOmitted: false,
                 search: null,
                 includeCompleted: true,
@@ -518,7 +524,10 @@ export function createIssuesTools(
               featureCount,
               pendingCount,
               issuesList: formatIssuesList(issues, all),
-              details: rendersDetails ? issues.map(i => formatIssueDetails(i, all)).join('\n\n---\n\n') : null,
+              details: rendersDetails ? await (async () => {
+                const world = await loadWorld();
+                return issues.map(i => formatIssueDetails(i, all, world)).join('\n\n---\n\n');
+              })() : null,
               bodiesOmitted: !rendersDetails && issues.length > 0,
               search: args.search || null,
               includeCompleted: args.includeCompleted || false,
@@ -526,15 +535,16 @@ export function createIssuesTools(
           }
 
           case 'next': {
-            const ready = await getReadyIssues({ type: args.type, labels: args.labels });
+            const ready = await readyIssues({ type: args.type, labels: args.labels });
             const all = await getIssueMap();
+            const world = await loadWorld();
             const waiting = (await getIssues({ type: args.type, labels: args.labels })).length - ready.length;
             if (ready.length === 0) {
               return createSuccessResponse('ISSUES_NEXT_NONE', { waiting });
             }
             return createSuccessResponse('ISSUES_NEXT', {
               id: ready[0].id,
-              details: formatIssueDetails(ready[0], all),
+              details: formatIssueDetails(ready[0], all, world),
               othersList: ready.length > 1 ? formatIssuesList(ready.slice(1), all) : null,
               readyCount: ready.length,
               waiting,
@@ -556,6 +566,9 @@ export function createIssuesTools(
 
             const createRefusal = await checkLinks(undefined, args.blockedBy, args.parent ?? undefined);
             if (createRefusal) return linkRefusal(createRefusal, undefined);
+            const createNeeds = args.needs ? [...new Set(args.needs)] : undefined;
+            const createNeedRefusal = createNeeds && await checkIssueNeeds({ needs: createNeeds });
+            if (createNeedRefusal) return needRefusalResponse(createNeedRefusal);
 
             const createMatrix = matrixRefList(args.matrix);
             const createMalformed = validateMatrixRefSyntax(createMatrix ?? []);
@@ -638,6 +651,7 @@ export function createIssuesTools(
               labels: args.labels,
               matrix: createMatrix,
               blockedBy: args.blockedBy ? [...new Set(args.blockedBy)] : undefined,
+              needs: createNeeds,
               parent: args.parent ?? undefined,
             });
 
@@ -673,7 +687,7 @@ export function createIssuesTools(
               });
             }
             if (args.title === undefined && args.body === undefined && args.labels === undefined && args.sequenceName === undefined && args.sync === undefined
-              && args.blockedBy === undefined && args.parent === undefined
+              && args.blockedBy === undefined && args.parent === undefined && args.needs === undefined
               && args.matrix === undefined && args.matrixAdd === undefined && args.matrixRemove === undefined) {
               return createErrorResponse('ISSUES_NOTHING_TO_EDIT', { id: args.id });
             }
@@ -708,8 +722,25 @@ export function createIssuesTools(
                 .filter(ref => !removed.has(ref));
             }
 
+            const nextNeeds = args.needs !== undefined ? [...new Set(args.needs)] : undefined;
+            if (nextNeeds !== undefined || args.blockedBy !== undefined || args.parent !== undefined || nextMatrix !== undefined) {
+              const current = await getIssue(args.id);
+              if (!current) {
+                return createErrorResponse('ISSUES_NOT_FOUND', { id: args.id, message: `Issue #${args.id} not found` });
+              }
+              const needRefusal = await checkIssueNeeds({
+                ...current,
+                ...(nextNeeds !== undefined && { needs: nextNeeds }),
+                ...(args.blockedBy !== undefined && { blockedBy: [...new Set(args.blockedBy)] }),
+                ...(args.parent !== undefined && { parent: args.parent ?? undefined }),
+                ...(nextMatrix !== undefined && { matrix: nextMatrix }),
+              });
+              if (needRefusal) return needRefusalResponse(needRefusal);
+            }
+
             const edited = await updateIssueFields(args.id, {
               ...(args.blockedBy !== undefined && { blockedBy: [...new Set(args.blockedBy)] }),
+              ...(nextNeeds !== undefined && { needs: nextNeeds }),
               ...(args.parent !== undefined && { parent: args.parent ?? undefined }),
               ...(args.title !== undefined && { title: args.title.trim() }),
               ...(args.body !== undefined && { body: args.body }),
@@ -759,6 +790,7 @@ export function createIssuesTools(
                 args.labels !== undefined && 'labels',
                 nextMatrix !== undefined && (nextMatrix.length > 0 ? `matrix ${nextMatrix.join(', ')}` : 'no matrix links'),
                 args.blockedBy !== undefined && (args.blockedBy.length > 0 ? `waits on ${args.blockedBy.map(n => `#${n}`).join(', ')}` : 'waits on nothing'),
+                nextNeeds !== undefined && (nextNeeds.length > 0 ? `needs ${nextNeeds.join(', ')}` : 'needs nothing'),
                 args.parent !== undefined && (args.parent === null ? 'no parent' : `piece of #${args.parent}`),
                 args.sequenceName !== undefined && `sequence (${args.sequenceName})`,
                 args.sync !== undefined && (args.sync === true ? 'set to sync' : args.sync === false ? 'left out of sync' : 'sync undecided'),
@@ -915,7 +947,7 @@ export function createIssuesTools(
                 type: issue.type,
                 title: issue.title,
                 sequenceFile: issue.sequenceFile || null,
-                details: formatIssueDetails(issue, await getIssueMap()),
+                details: formatIssueDetails(issue, await getIssueMap(), await loadWorld()),
                 replayStarted: hasSequence,
                 browserLaunched: !hasSequence && !!issue.startUrl,
                 connection: connectionRef,

@@ -78,6 +78,8 @@ export interface TrackedIssue {
   githubSync?: boolean;
   /** Issues that have to close before this one can be worked. */
   blockedBy: number[];
+  /** What this issue waits on beside its blockers: `#<issue>` or a matrix ref, met as `src/waits-on.ts` reads it. */
+  needs: string[];
   /** The issue this one is a piece of; that issue closes when its last open piece closes. */
   parent?: number;
   /** Frontmatter keys this version doesn't know, re-emitted verbatim so a
@@ -240,7 +242,7 @@ const KNOWN_FRONTMATTER_KEYS: ReadonlySet<string> = new Set([
   'github', 'id', 'type', 'status', 'title', 'labels', 'sequenceFile', 'startUrl',
   'recordingName', 'githubRepo', 'closedReason', 'reportedAt', 'acknowledgedAt',
   'startedAt', 'resolvedAt', 'githubSyncedAt', 'githubBodyHash', 'githubSync',
-  'blockedBy', 'parent', 'matrix',
+  'blockedBy', 'parent', 'matrix', 'needs',
 ]);
 
 /** Raw (unparsed) values for keys we don't know, so re-emission is lossless. */
@@ -288,6 +290,7 @@ function parseIssueFile(raw: string, filePath: string): TrackedIssue | null {
     labels: Array.isArray(fm.labels) ? fm.labels : [],
     matrix: Array.isArray(fm.matrix) ? fm.matrix.filter((v: unknown) => typeof v === 'string') : [],
     blockedBy: Array.isArray(fm.blockedBy) ? fm.blockedBy.filter((v: unknown) => Number.isInteger(v)) : [],
+    needs: Array.isArray(fm.needs) ? fm.needs.filter((v: unknown) => typeof v === 'string') : [],
     parent: Number.isInteger(fm.parent) ? fm.parent : undefined,
     comments,
     sequenceFile: typeof fm.sequenceFile === 'string' ? fm.sequenceFile : '',
@@ -313,6 +316,7 @@ function serializeIssueFile(issue: TrackedIssue): string {
   if (issue.labels.length > 0) fm.push(`labels: ${yamlStringArray(issue.labels)}`);
   if (issue.matrix.length > 0) fm.push(`matrix: ${yamlStringArray(issue.matrix)}`);
   if (issue.blockedBy.length > 0) fm.push(`blockedBy: [${issue.blockedBy.join(', ')}]`);
+  if (issue.needs.length > 0) fm.push(`needs: ${yamlStringArray(issue.needs)}`);
   if (issue.parent !== undefined) fm.push(`parent: ${issue.parent}`);
   if (issue.sequenceFile) fm.push(`sequenceFile: ${yamlQuote(issue.sequenceFile)}`);
   if (issue.startUrl) fm.push(`startUrl: ${yamlQuote(issue.startUrl)}`);
@@ -475,6 +479,7 @@ async function migrateCsvIfNeeded(): Promise<void> {
       labels: [],
       matrix: [],
       blockedBy: [],
+      needs: [],
       comments: [],
       sequenceFile: row.sequenceFile,
       startUrl: row.startUrl,
@@ -639,6 +644,7 @@ export async function addIssue(params: {
   labels?: string[];
   matrix?: string[];
   blockedBy?: number[];
+  needs?: string[];
   parent?: number;
 }): Promise<TrackedIssue> {
   await ensureIndexLoaded();
@@ -656,6 +662,7 @@ export async function addIssue(params: {
     labels: params.labels ?? [],
     matrix: params.matrix ?? [],
     blockedBy: params.blockedBy ?? [],
+    needs: params.needs ?? [],
     parent: params.parent,
     comments: [],
     sequenceFile: params.sequenceFile ?? '',
@@ -739,7 +746,7 @@ export async function updateIssueStatus(id: number, status: IssueStatus): Promis
 export type IssueFieldPatch = Partial<Pick<TrackedIssue,
   'status' | 'title' | 'body' | 'labels' | 'closedReason' | 'resolvedAt' |
   'github' | 'githubRepo' | 'githubSyncedAt' | 'githubBodyHash' | 'githubSync' |
-  'blockedBy' | 'parent' | 'matrix'>>;
+  'blockedBy' | 'needs' | 'parent' | 'matrix'>>;
 
 export async function updateIssueFields(id: number, patch: IssueFieldPatch): Promise<TrackedIssue | undefined> {
   await ensureIndexLoaded();

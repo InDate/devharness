@@ -2926,6 +2926,9 @@ dialog.varmodal::backdrop { background: rgba(0, 0, 0, 0.45); }
 .matrixcellbtn .standingmark { margin-top: 3px; }
 .matrixcell:hover, .matrixcell:hover .matrixcellbtn { background: var(--panel); }
 .matrixcelltext { display: none; }
+.matrixcell.waits .matrixcellbtn { outline: 1px dashed var(--muted); outline-offset: -3px; }
+.matrixwaitsample { display: inline-block; width: 12px; height: 12px; border: 1px dashed var(--muted); border-radius: 2px; }
+.matrixneeds .met { opacity: .6; }
 .matrixcell .matrixbadges { padding: 0 6px 4px; }
 @container (min-width: 900px) {
   .matrixcell { width: 170px; min-width: 170px; }

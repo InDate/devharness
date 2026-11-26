@@ -388,6 +388,34 @@ export interface MatrixIssueLink {
   refs: Array<{ ref: string; scenario?: string; capability?: string }>;
 }
 
+/** One need of a cell as it stands: met, the cells still open in its area, or its problem. */
+export interface MatrixNeedView {
+  /** As written. */
+  ref: string;
+  /** The `#<issue>` or matrix ref it resolves to. */
+  target?: string;
+  met: boolean;
+  /** The problem in words, where the need cannot resolve or never meets. */
+  problem?: string;
+  open?: string[];
+  /** The layer holding it: `capability`, `<table>.<key>`, `row` or `scenario`. */
+  from?: string;
+}
+
+/** Where a chain of unmet needs ends: a cell or issue ready to work, or a need that cannot resolve. */
+export interface MatrixChainEnd {
+  ref: string;
+  kind: 'cell' | 'issue' | 'problem';
+  problem?: string;
+}
+
+/** A cell's needs, and for an open cell with one unmet, where its chains end. */
+export interface MatrixCellNeeds {
+  needs: MatrixNeedView[];
+  /** Set on a gap or unmeasured cell with a need unmet: `next` skips it. */
+  waits?: MatrixChainEnd[];
+}
+
 /** One matrix as the grid draws it: cells resolved, layer tables reduced to each entry's name. */
 export interface MatrixView {
   name: string;
@@ -399,6 +427,8 @@ export interface MatrixView {
   /** By scenario id, then capability id. */
   cells: Record<string, Record<string, MatrixCellView>>;
   issues: MatrixIssueLink[];
+  /** By scenario id, then capability id, for the cells holding a need. */
+  needs: Record<string, Record<string, MatrixCellNeeds>>;
 }
 
 /** What `/matrix/read` answers: the matrix, or why there is none to draw. */

@@ -25,12 +25,18 @@ export type CellStanding = typeof CELL_STANDINGS[number];
 export const CELL_FIELDS = ['expect', 'today', 'basis', 'note'] as const;
 export type CellField = typeof CELL_FIELDS[number];
 
-/** One cell as a file writes it, at any layer. `basis` is `code` or `sequence:<name>`. */
+/**
+ * One cell as a file writes it, at any layer. `basis` is `code` or
+ * `sequence:<name>`. `needs` lists what the cell waits on: `#<issue>`, a matrix
+ * ref, `/<capability>` (this row's cell in that column) or `<scenario>/` (that
+ * row's cell in this column).
+ */
 export interface MatrixCell {
   expect?: string;
   today?: CellStanding;
   basis?: string;
   note?: string;
+  needs?: string[];
 }
 
 export interface MatrixCapability {
@@ -45,6 +51,8 @@ export interface MatrixCapability {
 export interface MatrixScenario {
   id: string;
   name?: string;
+  /** Needs every cell of this row holds, beside its own. */
+  needs?: string[];
   cells?: Record<string, MatrixCell>;
   [extra: string]: unknown;
 }
@@ -69,13 +77,21 @@ export interface MatrixFile {
 /** The layer a resolved field took its value from: `capability`, `<table>.<key>` or `scenario`. */
 export type CellLayerName = string;
 
-export interface ResolvedCell extends MatrixCell {
+/** One need of a resolved cell, as written, with the layer that holds it: a layer above, or `row` for the scenario's `needs`. */
+export interface CellNeed {
+  ref: string;
+  from: CellLayerName;
+}
+
+export interface ResolvedCell extends Omit<MatrixCell, 'needs'> {
   scenario: string;
   capability: string;
   /** A cell with no `today` at any layer reads `unmeasured`. */
   today: CellStanding;
   /** For each field present, the layer its value came from. */
   from: Partial<Record<CellField, CellLayerName>>;
+  /** The union of every layer's needs, first layer first; absent where no layer holds one. */
+  needs?: CellNeed[];
 }
 
 export type StandingCounts = Record<CellStanding, number>;
@@ -174,6 +190,9 @@ export function refCoversCell(ref: string | MatrixRef, scenarioId: string, capab
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+const isNeedList = (value: unknown): boolean =>
+  value === undefined || (Array.isArray(value) && value.every(each => typeof each === 'string'));
+
 /** The first shape fault in a parsed matrix file, or undefined for a well-formed one. */
 export function matrixShapeProblem(data: unknown): string | undefined {
   if (!isRecord(data)) return 'the file holds no JSON object';
@@ -190,6 +209,17 @@ export function matrixShapeProblem(data: unknown): string | undefined {
     if (!isRecord(scenario) || typeof scenario.id !== 'string') return 'a scenario has no string `id`';
     if (scenarioIds.has(scenario.id)) return `scenario id \`${scenario.id}\` appears twice`;
     scenarioIds.add(scenario.id);
+    if (!isNeedList(scenario.needs)) return `scenario \`${scenario.id}\` holds \`needs\` that is not a list of strings`;
+    if (isRecord(scenario.cells)) {
+      for (const [capabilityId, cell] of Object.entries(scenario.cells)) {
+        if (isRecord(cell) && !isNeedList(cell.needs)) return `cell \`${scenario.id}/${capabilityId}\` holds \`needs\` that is not a list of strings`;
+      }
+    }
+  }
+  for (const capability of data.capabilities as Array<Record<string, unknown>>) {
+    if (isRecord(capability.default) && !isNeedList(capability.default.needs)) {
+      return `capability \`${capability.id}\` default holds \`needs\` that is not a list of strings`;
+    }
   }
   if (data.layers !== undefined) {
     if (!Array.isArray(data.layers)) return '`layers` is not an array';
@@ -197,7 +227,14 @@ export function matrixShapeProblem(data: unknown): string | undefined {
       if (!isRecord(layer) || typeof layer.field !== 'string' || typeof layer.table !== 'string') {
         return 'a `layers` entry is not `{ "field": "<scenario field>", "table": "<top-level key>" }`';
       }
-      if (!isRecord(data[layer.table])) return `layer table \`${layer.table}\` is not a top-level object`;
+      const table = data[layer.table];
+      if (!isRecord(table)) return `layer table \`${layer.table}\` is not a top-level object`;
+      for (const [key, entry] of Object.entries(table)) {
+        if (!isRecord(entry)) continue;
+        for (const [capabilityId, cell] of Object.entries(entry)) {
+          if (isRecord(cell) && !isNeedList(cell.needs)) return `layer \`${layer.table}.${key}.${capabilityId}\` holds \`needs\` that is not a list of strings`;
+        }
+      }
     }
   }
   return undefined;
@@ -221,10 +258,12 @@ export function resolveCell(matrix: MatrixFile, scenario: MatrixScenario | strin
     const entry = table[key];
     if (isRecord(entry)) stack.push([`${layer.table}.${key}`, entry[column.id]]);
   }
+  stack.push(['row', { needs: row.needs }]);
   stack.push(['scenario', row.cells?.[column.id]]);
 
-  const cell: MatrixCell = {};
+  const cell: Omit<MatrixCell, 'needs'> = {};
   const from: ResolvedCell['from'] = {};
+  const needs: CellNeed[] = [];
   for (const [layerName, values] of stack) {
     if (!isRecord(values)) continue;
     for (const field of CELL_FIELDS) {
@@ -232,8 +271,12 @@ export function resolveCell(matrix: MatrixFile, scenario: MatrixScenario | strin
       (cell as Record<string, unknown>)[field] = values[field];
       from[field] = layerName;
     }
+    if (!Array.isArray(values.needs)) continue;
+    for (const ref of values.needs) {
+      if (typeof ref === 'string' && !needs.some(need => need.ref === ref)) needs.push({ ref, from: layerName });
+    }
   }
-  return { ...cell, scenario: row.id, capability: column.id, today: standingOf(cell.today), from };
+  return { ...cell, scenario: row.id, capability: column.id, today: standingOf(cell.today), from, ...(needs.length > 0 && { needs }) };
 }
 
 function emptyCounts(): StandingCounts {
@@ -279,7 +322,8 @@ function fileFor(name: string): string {
 export interface MatrixCellChange {
   scenario: string;
   capability: string;
-  field: CellField;
+  /** `needs` changes log the list joined with `, `. */
+  field: CellField | 'needs';
   from?: string;
   to?: string;
 }
@@ -354,6 +398,21 @@ export async function readMatrixActivity(name: string, limit = 200): Promise<Mat
   return kept.reverse().slice(0, limit);
 }
 
+/** The joined list of a cell's needs, or undefined for a cell holding none. */
+function needsText(cell: ResolvedCell): string | undefined {
+  return cell.needs?.map(need => need.ref).join(', ');
+}
+
+/** Each field, and the needs list, that resolves differently in `now`. */
+function cellChanges(was: ResolvedCell, now: ResolvedCell): MatrixCellChange[] {
+  const at = { scenario: now.scenario, capability: now.capability };
+  const changes: MatrixCellChange[] = CELL_FIELDS
+    .filter(field => was[field] !== now[field])
+    .map(field => ({ ...at, field, from: was[field], to: now[field] }));
+  if (needsText(was) !== needsText(now)) changes.push({ ...at, field: 'needs', from: needsText(was), to: needsText(now) });
+  return changes;
+}
+
 /** The cell fields that resolve differently in `after`, and the rows and columns that came or went. */
 function matrixDifference(before: MatrixFile, after: MatrixFile): { changes: MatrixCellChange[]; notes: string[] } {
   const changes: MatrixCellChange[] = [];
@@ -372,9 +431,7 @@ function matrixDifference(before: MatrixFile, after: MatrixFile): { changes: Mat
       const was = resolveCell(before, scenario.id, capability.id);
       const now = resolveCell(after, scenario, capability);
       if (!was || !now) continue;
-      for (const field of CELL_FIELDS) {
-        if (was[field] !== now[field]) changes.push({ scenario: scenario.id, capability: capability.id, field, from: was[field], to: now[field] });
-      }
+      changes.push(...cellChanges(was, now));
     }
   }
   return { changes, notes };
@@ -563,13 +620,20 @@ export async function readMatrix(name?: string): Promise<MatrixReadResult> {
   return { ok: true, name: entry.name, matrix: entry.matrix };
 }
 
-/** A field set to null is taken off the scenario's own cell, so the layer beneath shows through. */
-export type CellPatch = { [F in CellField]?: (F extends 'today' ? CellStanding : string) | null };
+/** A field set to null is taken off the scenario's own cell, so the layer beneath shows through. `needs` replaces the cell's own list. */
+export type CellPatch = { [F in CellField]?: (F extends 'today' ? CellStanding : string) | null } & { needs?: string[] | null };
 
-export type SetCellResult =
+/**
+ * Runs on the matrix as a write would leave it, before anything reaches the
+ * disk; a returned refusal stops the write and comes back in the result.
+ */
+export type MatrixWriteCheck<R> = (name: string, matrix: MatrixFile) => Promise<R | undefined>;
+
+export type SetCellResult<R = never> =
   | { ok: true; cell: ResolvedCell; previous: ResolvedCell }
   | { ok: false; reason: 'matrix' | 'scenario' | 'capability' | 'today'; valid: string[] }
-  | { ok: false; reason: 'broken'; problem: string };
+  | { ok: false; reason: 'broken'; problem: string }
+  | { ok: false; reason: 'refused'; refusal: R };
 
 /**
  * Writes the patch onto `scenario.cells[capability]` and saves the file
@@ -577,7 +641,10 @@ export type SetCellResult =
  * for this one cell. The file is read from disk at write time, so an edit made
  * outside devharness inside the watcher's debounce window is kept.
  */
-export function setCell(name: string, scenarioId: string, capabilityId: string, patch: CellPatch, by: MatrixActivitySource = 'session'): Promise<SetCellResult> {
+export function setCell<R = never>(
+  name: string, scenarioId: string, capabilityId: string, patch: CellPatch,
+  by: MatrixActivitySource = 'session', check?: MatrixWriteCheck<R>,
+): Promise<SetCellResult<R>> {
   return serialized(async () => {
     const entries = await ensureIndexLoaded();
     if (!entries.has(name)) return { ok: false, reason: 'matrix', valid: [...entries.keys()] };
@@ -602,70 +669,40 @@ export function setCell(name: string, scenarioId: string, capabilityId: string, 
       if (value === null) delete own[field];
       else own[field] = value;
     }
+    if (patch.needs === null || (patch.needs !== undefined && patch.needs.length === 0)) delete own.needs;
+    else if (patch.needs !== undefined) own.needs = [...new Set(patch.needs)];
     const cells = { ...(scenario.cells ?? {}) };
     if (Object.keys(own).length > 0) cells[capabilityId] = own as MatrixCell;
     else delete cells[capabilityId];
     if (Object.keys(cells).length > 0) scenario.cells = cells;
     else delete scenario.cells;
 
+    const refusal = check ? await check(name, matrix) : undefined;
+    if (refusal !== undefined) return { ok: false, reason: 'refused', refusal };
+
     const raw = JSON.stringify(matrix, null, 2) + '\n';
     await atomicWriteFile(filePath, raw);
     entries.set(name, { name, filePath, raw, matrix });
     const cell = resolveCell(matrix, scenario, capability)!;
-    const changes = CELL_FIELDS.filter(field => previous[field] !== cell[field])
-      .map(field => ({ scenario: scenarioId, capability: capabilityId, field, from: previous[field], to: cell[field] }));
+    const changes = cellChanges(previous, cell);
     if (changes.length > 0) await appendActivity(name, { at: new Date().toISOString(), by, cause: 'edit', changes, after: hashOf(raw) });
     emit({ name, cause: 'edit', cell: { scenario: scenarioId, capability: capabilityId } });
     return { ok: true, cell, previous };
   });
 }
 
-export interface NextCell {
-  matrix: string;
-  ref: string;
-  scenario: MatrixScenario;
-  capability: MatrixCapability;
-  cell: ResolvedCell;
-  /** Cells left at each standing nextCell visits, across the matrices it searched. */
-  remaining: { gap: number; unmeasured: number };
-}
-
-/**
- * The next cell to work on: the first `gap`, then the first `unmeasured`, in
- * file order (scenarios, then capabilities within a scenario). With no name,
- * every matrix is searched in name order, all gaps before any unmeasured cell.
- */
-export async function nextCell(name?: string): Promise<NextCell | undefined> {
+/** Every matrix in the store, in name order, each with its file or the reason it does not read. */
+export async function allMatrices(): Promise<Array<{ name: string; matrix?: MatrixFile; problem?: string }>> {
   const entries = await ensureIndexLoaded();
-  const searched = [...entries.values()]
-    .filter(entry => entry.matrix && (name === undefined || entry.name === name))
-    .map(entry => ({ name: entry.name, matrix: entry.matrix! }));
-
-  const remaining = { gap: 0, unmeasured: 0 };
-  const first: Partial<Record<'gap' | 'unmeasured', Omit<NextCell, 'remaining'>>> = {};
-  for (const { name: matrixName, matrix } of searched) {
-    for (const scenario of matrix.scenarios) {
-      for (const capability of matrix.capabilities) {
-        const cell = resolveCell(matrix, scenario, capability)!;
-        if (cell.today !== 'gap' && cell.today !== 'unmeasured') continue;
-        remaining[cell.today]++;
-        first[cell.today] ??= {
-          matrix: matrixName,
-          ref: formatMatrixRef({ matrix: matrixName, scenario: scenario.id, capability: capability.id }),
-          scenario,
-          capability,
-          cell,
-        };
-      }
-    }
-  }
-  const found = first.gap ?? first.unmeasured;
-  return found ? { ...found, remaining } : undefined;
+  return [...entries.values()]
+    .map(entry => ({ name: entry.name, ...(entry.matrix ? { matrix: entry.matrix } : { problem: entry.problem ?? 'unreadable' }) }))
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export type ImportResult =
+export type ImportResult<R = never> =
   | { ok: true; name: string; filePath: string; source: string; replaced: boolean; summary: MatrixSummary }
-  | { ok: false; reason: 'unreadable' | 'shape' | 'name' | 'exists'; name?: string; source: string; problem: string };
+  | { ok: false; reason: 'unreadable' | 'shape' | 'name' | 'exists'; name?: string; source: string; problem: string }
+  | { ok: false; reason: 'refused'; name: string; source: string; refusal: R };
 
 /**
  * The store name a source file takes when no name is given: its file name
@@ -677,7 +714,10 @@ export function defaultImportName(sourcePath: string): string {
 }
 
 /** Copies a matrix file into the store. A relative path resolves against the project directory. */
-export function importMatrix(sourcePath: string, options: { name?: string; overwrite?: boolean; by?: MatrixActivitySource } = {}): Promise<ImportResult> {
+export function importMatrix<R = never>(
+  sourcePath: string,
+  options: { name?: string; overwrite?: boolean; by?: MatrixActivitySource; check?: MatrixWriteCheck<R> } = {},
+): Promise<ImportResult<R>> {
   return serialized(async () => {
     const source = resolve(getProjectDir(), sourcePath);
     let raw: string;
@@ -698,6 +738,8 @@ export function importMatrix(sourcePath: string, options: { name?: string; overw
     if (replaced && !options.overwrite) {
       return { ok: false, reason: 'exists', name, source, problem: `\`${name}\` is already in the store` };
     }
+    const refusal = options.check ? await options.check(name, parsed.matrix) : undefined;
+    if (refusal !== undefined) return { ok: false, reason: 'refused', name, source, refusal };
     const replacedMatrix = entries.get(name)?.matrix;
     await atomicWriteFile(parsed.filePath, raw);
     entries.set(name, parsed);

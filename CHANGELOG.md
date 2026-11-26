@@ -28,6 +28,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   names at 45 degrees, and opens the row and column under the pointer in full.
   The standing filter folds every other cell and shuts the columns holding
   none. An Activity drawer lists each change with its time and channel.
+- **Matrix cells and issues carry needs, and `next` hands out work in build
+  order.** A cell's `needs` names an issue (`#12`), a matrix area in any
+  matrix (`m#s/c`, `m#s`, `m#/c`), this row's cell in another column
+  (`/<capability>`) or another row's cell in this column (`<scenario>/`). It
+  sits on a capability's default, a layer table, a whole scenario and a cell,
+  and a cell holds the union of all of them. A need on an issue is met once the
+  issue is completed; a need on an area once every cell in it works, with n/a
+  counting as met inside a row or column. `matrix next` skips a cell with a
+  need unmet, counts the cells it skipped, and names the first of them with
+  the cells, issues or unresolvable needs its chains end at. An issue takes
+  `needs` of its own and waits on the needs of each cell its `matrix` refs
+  cover, so `issues next` follows the same order. `matrix edit` and `import`,
+  and `issues create` and `edit`, refuse a malformed need, one naming an
+  issue, scenario or capability that is not there, and a loop of waits
+  through cells and issues; a need on a matrix the store lacks is kept and
+  stays unmet. The bench draws a cell `next` skips with a dashed outline, and
+  a cell's page lists its needs and where their chains end, each opening its
+  cell or issue.
 
 ### Changed
 

@@ -16,7 +16,6 @@ import {
   parseMatrixRef,
   refCoversCell,
   listMatrices,
-  nextCell,
   readMatrix,
   readMatrixActivity,
   resolveCell,
@@ -35,6 +34,8 @@ import {
   type StandingCounts,
 } from '../matrix-store.js';
 import { issuesLinkedTo, isCompletedStatus } from '../issue-tracker.js';
+import { cellNeeds, checkMatrixNeeds, loadWorld, matrixNeedProblems, nextReadyCell, type NeedRefusal } from '../waits-on.js';
+import { needBlock, needRefusalResponse, problemWords, waitingBlock } from './needs-format.js';
 import { originChannel } from '../call-origin.js';
 
 const nullableText = z.string().nullable().optional();
@@ -52,6 +53,8 @@ const matrixSchema = z.object({
   expect: nullableText.describe('edit: what devharness is expected to do in this cell'),
   basis: nullableText.describe('edit: `code` or `sequence:<name>`'),
   note: nullableText.describe('edit: the note. On edit, null on any field takes it off the cell so the default shows'),
+  needs: z.array(z.string()).nullable().optional()
+    .describe('edit: what the cell waits on, replacing its own list: `#12`, `m#s/c`, `m#s`, `m#/c`, `/<capability>` this row, `<scenario>/` this column'),
   path: z.string().optional()
     .describe('import: matrix JSON file, relative to the project directory'),
   name: z.string().optional()
@@ -163,6 +166,7 @@ function capabilityHeader(capability: MatrixCapability): string {
     for (const field of CELL_FIELDS) {
       if (capability.default[field] !== undefined) lines.push(`Default ${field}: ${capability.default[field]}`);
     }
+    if (capability.default.needs?.length) lines.push(`Default needs: ${capability.default.needs.join(', ')}`);
   }
   return lines.join('\n');
 }
@@ -187,8 +191,20 @@ async function handleRead(args: MatrixArgs): Promise<MCPResponse> {
   const cells = rows.flatMap(row => columns.map(column => resolveCell(matrix, row, column)!)).filter(kept);
   const ref = formatMatrixRef({ matrix: name, scenario: scenario?.id, capability: capability?.id });
   const linked = args.issues === false ? undefined : await issuesLinkedTo(name);
+  const world = await loadWorld();
+  const needsOf = (cell: ResolvedCell) => cellNeeds(world, { matrix: name, scenario: cell.scenario, capability: cell.capability }, cell);
+  const cellNeedList = cells
+    .map(cell => ({ scenario: cell.scenario, capability: cell.capability, needs: needsOf(cell) }))
+    .filter(entry => entry.needs.length > 0);
+  const needsShown = (cell: ResolvedCell) => needBlock(
+    cellNeedList.find(entry => entry.scenario === cell.scenario && entry.capability === cell.capability)?.needs ?? [], 'Needs');
 
   if (!scenario && !capability) {
+    const waitingCells = cellNeedList.filter(entry => {
+      const cell = cells.find(each => each.scenario === entry.scenario && each.capability === entry.capability)!;
+      return (cell.today === 'gap' || cell.today === 'unmeasured') && entry.needs.some(need => !need.met);
+    });
+    const problems = matrixNeedProblems(world, name);
     const openOnRow = (rowId: string) => linked === undefined ? undefined : linked
       .filter(({ issue, refs }) => !isCompletedStatus(issue.status) && refs.some(r => parseMatrixRef(r)?.scenario === rowId))
       .length;
@@ -208,11 +224,19 @@ async function handleRead(args: MatrixArgs): Promise<MCPResponse> {
     const columnLine = columnIssues && columnIssues.length > 0
       ? `\nIssues on whole columns: ${columnIssues.map(link => `#${link.id} on ${parseMatrixRef(link.ref)!.capability}${link.completed ? ' (completed)' : ''}`).join(', ')}`
       : '';
+    const waitingLine = waitingCells.length > 0
+      ? `\n${waitingCells.length} open cell${waitingCells.length === 1 ? '' : 's'} wait on an unmet need: ${waitingCells.slice(0, 8).map(entry => `${entry.scenario}/${entry.capability}`).join(', ')}${waitingCells.length > 8 ? ` and ${waitingCells.length - 8} more` : ''}`
+      : '';
+    const problemLines = [
+      ...problems.needs.map(need => `- ${need.cell}: \`${need.ref}\`, ${problemWords(need.problem!)}`),
+      ...(problems.cycle ? [`- a loop of waits: ${problems.cycle.join(' → ')}`] : []),
+    ];
+    const problemBlock = problemLines.length > 0 ? `\nNeeds with a problem:\n${problemLines.join('\n')}` : '';
     return withMeta(createSuccessResponse('MATRIX_READ', {
       ref,
       about: matrix.about,
       header: `${matrix.scenarios.length} scenarios × ${matrix.capabilities.length} capabilities: ${countsLine(countStandings(matrix))}`,
-      body: (lines.length > 0 ? lines.join('\n') : `No cell reads ${today}.`) + columnLine,
+      body: (lines.length > 0 ? lines.join('\n') : `No cell reads ${today}.`) + columnLine + waitingLine + problemBlock,
       whole: true,
     }), {
       action: 'read',
@@ -220,6 +244,8 @@ async function handleRead(args: MatrixArgs): Promise<MCPResponse> {
       counts: countStandings(matrix),
       rows: summary.map(({ scenario: id, standings, openIssues }) => ({ scenario: id, standings, ...(openIssues !== undefined && { openIssues }) })),
       ...(columnIssues && { columnIssues }),
+      cellNeeds: waitingCells,
+      needProblems: problems,
     });
   }
 
@@ -238,23 +264,25 @@ async function handleRead(args: MatrixArgs): Promise<MCPResponse> {
   let body: string;
   if (scenario && capability) {
     header = `${scenarioTitle(scenario)} · ${capability.name ?? capability.id}${layerFields(matrix, scenario) ? `\n${layerFields(matrix, scenario)}` : ''}`;
-    body = cells.length > 0 ? renderCell(cells[0], capability.id) + shownFor(cells[0]) : `The cell reads ${resolveCell(matrix, scenario, capability)!.today}, not ${today}.`;
+    body = cells.length > 0 ? renderCell(cells[0], capability.id) + needsShown(cells[0]) + shownFor(cells[0]) : `The cell reads ${resolveCell(matrix, scenario, capability)!.today}, not ${today}.`;
   } else if (scenario) {
     const rowLinks = linked ? linksWhere(linked, ref => matrixLinkKind(ref) === 'row' && ref.scenario === scenario.id) : [];
     header = [scenarioTitle(scenario), layerFields(matrix, scenario)].filter(Boolean).join('\n') + issueBlock(rowLinks, 'Issues on this row');
-    body = cells.length > 0 ? cells.map(cell => renderCell(cell, cell.capability) + shownFor(cell, 'row')).join('\n') : `No cell of this scenario reads ${today}.`;
+    body = cells.length > 0 ? cells.map(cell => renderCell(cell, cell.capability) + needsShown(cell) + shownFor(cell, 'row')).join('\n') : `No cell of this scenario reads ${today}.`;
   } else {
     const columnLinks = linked ? linksWhere(linked, ref => matrixLinkKind(ref) === 'column' && ref.capability === capability!.id) : [];
     header = capabilityHeader(capability!) + issueBlock(columnLinks, 'Issues on this column');
     body = cells.length > 0
-      ? cells.map(cell => renderCell(cell, cell.scenario, 'capability') + shownFor(cell, 'column')).join('\n')
+      ? cells.map(cell => renderCell(cell, cell.scenario, 'capability') + needsShown(cell) + shownFor(cell, 'column')).join('\n')
       : `No cell of this capability reads ${today}.`;
   }
+  if (scenario?.needs?.length) header += `\nRow needs: ${scenario.needs.join(', ')}`;
   return withMeta(createSuccessResponse('MATRIX_READ', { ref, header, body, whole: false }), {
     action: 'read',
     name,
     cells,
     ...(cellIssues && { cellIssues }),
+    cellNeeds: cellNeedList,
   });
 }
 
@@ -269,13 +297,17 @@ async function handleEdit(args: MatrixArgs): Promise<MCPResponse> {
   if (args.expect !== undefined) patch.expect = args.expect;
   if (args.basis !== undefined) patch.basis = args.basis;
   if (args.note !== undefined) patch.note = args.note;
+  if (args.needs !== undefined) patch.needs = args.needs;
   if (Object.keys(patch).length === 0) return createErrorResponse('MATRIX_EDIT_EMPTY', {});
 
   const chosen = await chooseMatrix(args.matrix);
   if ('content' in chosen) return chosen;
-  const result = await setCell(chosen.name, args.scenario!, args.capability!, patch, sourceOfCall());
+  const check = patch.needs === undefined ? undefined
+    : (name: string, matrix: MatrixFile) => checkMatrixNeeds(name, matrix, [{ scenario: args.scenario!, capability: args.capability! }]);
+  const result = await setCell<NeedRefusal>(chosen.name, args.scenario!, args.capability!, patch, sourceOfCall(), check);
   if (!result.ok) {
     if (result.reason === 'broken') return createErrorResponse('MATRIX_BROKEN', { name: chosen.name, problem: result.problem });
+    if (result.reason === 'refused') return needRefusalResponse(result.refusal);
     const value = result.reason === 'matrix' ? chosen.name
       : result.reason === 'scenario' ? args.scenario!
       : result.reason === 'capability' ? args.capability!
@@ -283,10 +315,12 @@ async function handleEdit(args: MatrixArgs): Promise<MCPResponse> {
     return unknownId(result.reason, value, result.valid);
   }
   const ref = formatMatrixRef({ matrix: chosen.name, scenario: args.scenario, capability: args.capability });
+  const world = await loadWorld();
+  const place = { matrix: chosen.name, scenario: args.scenario!, capability: args.capability! };
   return withMeta(createSuccessResponse('MATRIX_EDIT', {
     ref,
     before: renderCell(result.previous, 'Before'),
-    after: renderCell(result.cell, 'After'),
+    after: renderCell(result.cell, 'After') + needBlock(cellNeeds(world, place, result.cell), 'Needs'),
   }), { action: 'edit', name: chosen.name, cell: result.cell, previous: result.previous });
 }
 
@@ -324,12 +358,19 @@ async function handleNext(args: MatrixArgs): Promise<MCPResponse> {
     const chosen = await chooseMatrix(args.matrix);
     if ('content' in chosen) return chosen;
   }
-  const next = await nextCell(args.matrix);
+  const { next, remaining, waiting } = await nextReadyCell(args.matrix);
+  const waitingText = waiting ? waitingBlock(waiting) : undefined;
   if (!next) {
-    return withMeta(createSuccessResponse('MATRIX_NEXT_NONE', { scope: args.matrix ?? 'any matrix' }), {
+    return withMeta(createSuccessResponse('MATRIX_NEXT_NONE', {
+      scope: args.matrix ?? 'any matrix',
+      blocked: remaining.blocked,
+      waiting: waitingText,
+    }), {
       action: 'next',
       name: args.matrix,
       next: null,
+      remaining,
+      ...(waiting && { waiting }),
     });
   }
   const nextIssues = linksForCell(await issuesLinkedTo(next.matrix), next.scenario.id, next.capability.id);
@@ -342,9 +383,11 @@ async function handleNext(args: MatrixArgs): Promise<MCPResponse> {
     capability: next.capability.name ?? next.capability.id,
     question: next.capability.question,
     rule: next.capability.rule,
-    cell: renderCell(next.cell, 'Cell') + issueBlock(nextIssues, 'Issues'),
-    gap: next.remaining.gap,
-    unmeasured: next.remaining.unmeasured,
+    cell: renderCell(next.cell, 'Cell') + needBlock(next.needs, 'Needs') + issueBlock(nextIssues, 'Issues'),
+    gap: remaining.gap,
+    unmeasured: remaining.unmeasured,
+    blocked: remaining.blocked,
+    waiting: waitingText,
   }), {
     action: 'next',
     name: next.matrix,
@@ -353,15 +396,21 @@ async function handleNext(args: MatrixArgs): Promise<MCPResponse> {
       scenario: next.scenario.id,
       capability: next.capability.id,
       cell: next.cell,
-      remaining: next.remaining,
+      needs: next.needs,
+      remaining,
       issues: nextIssues,
     },
+    remaining,
+    ...(waiting && { waiting }),
   });
 }
 
 async function handleImport(args: MatrixArgs): Promise<MCPResponse> {
   if (!args.path) return missing('import', 'path');
-  const result = await importMatrix(args.path, { name: args.name, overwrite: args.overwrite, by: sourceOfCall() });
+  const result = await importMatrix<NeedRefusal>(args.path, {
+    name: args.name, overwrite: args.overwrite, by: sourceOfCall(), check: (name, matrix) => checkMatrixNeeds(name, matrix),
+  });
+  if (!result.ok && result.reason === 'refused') return needRefusalResponse(result.refusal);
   if (!result.ok) {
     return createErrorResponse('MATRIX_IMPORT_REFUSED', {
       source: result.source,

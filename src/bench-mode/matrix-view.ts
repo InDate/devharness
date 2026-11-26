@@ -11,9 +11,41 @@
 
 import { CELL_STANDINGS, isMatrixName, listMatrices, parseMatrixRef, readMatrix, readMatrixActivity, resolveCell, setCell, type CellStanding, type MatrixFile } from '../matrix-store.js';
 import { issuesLinkedTo, isCompletedStatus } from '../issue-tracker.js';
-import type { MatrixActivityRow, MatrixListRow, MatrixPlace, MatrixRead, MatrixRefLink, MatrixScenarioView, MatrixView } from '../bench/wire.js';
+import { cellNeeds, chainEnds, loadWorld, type NeedState } from '../waits-on.js';
+import { problemWords } from '../tools/needs-format.js';
+import type { MatrixActivityRow, MatrixListRow, MatrixNeedView, MatrixPlace, MatrixRead, MatrixRefLink, MatrixScenarioView, MatrixView } from '../bench/wire.js';
 
-const resolved = new WeakMap<MatrixFile, Omit<MatrixView, 'issues'>>();
+const resolved = new WeakMap<MatrixFile, Omit<MatrixView, 'issues' | 'needs'>>();
+
+const needView = ({ ref, target, met, problem, open, from }: NeedState): MatrixNeedView => ({
+  ref, met,
+  ...(target !== undefined && { target }),
+  ...(problem !== undefined && { problem: problemWords(problem) }),
+  ...(open !== undefined && { open }),
+  ...(from !== undefined && { from }),
+});
+
+/** Every cell holding a need, with each need as it stands; read on every call, since another matrix or an issue meets it. */
+async function needsView(name: string, matrix: MatrixFile): Promise<MatrixView['needs']> {
+  const world = await loadWorld();
+  const needs: MatrixView['needs'] = {};
+  for (const scenario of matrix.scenarios) {
+    for (const capability of matrix.capabilities) {
+      const cell = resolveCell(matrix, scenario, capability)!;
+      if (!cell.needs) continue;
+      const states = cellNeeds(world, { matrix: name, scenario: scenario.id, capability: capability.id }, cell);
+      const unmet = states.filter(state => !state.met);
+      const open = cell.today === 'gap' || cell.today === 'unmeasured';
+      (needs[scenario.id] ??= {})[capability.id] = {
+        needs: states.map(needView),
+        ...(open && unmet.length > 0 && {
+          waits: chainEnds(world, unmet).map(({ ref, kind, problem }) => ({ ref, kind, ...(problem !== undefined && { problem: problemWords(problem) }) })),
+        }),
+      };
+    }
+  }
+  return needs;
+}
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -21,13 +53,13 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 function scenarioView(scenario: MatrixFile['scenarios'][number]): MatrixScenarioView {
   const fields: Record<string, string> = {};
   for (const [key, value] of Object.entries(scenario)) {
-    if (key === 'id' || key === 'name' || key === 'cells') continue;
+    if (key === 'id' || key === 'name' || key === 'cells' || key === 'needs') continue;
     if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') fields[key] = String(value);
   }
   return { id: scenario.id, ...(typeof scenario.name === 'string' && { name: scenario.name }), fields };
 }
 
-function resolveView(name: string, matrix: MatrixFile): Omit<MatrixView, 'issues'> {
+function resolveView(name: string, matrix: MatrixFile): Omit<MatrixView, 'issues' | 'needs'> {
   const layers = (matrix.layers ?? []).map(layer => {
     const table = matrix[layer.table];
     const names: Record<string, string> = {};
@@ -42,7 +74,7 @@ function resolveView(name: string, matrix: MatrixFile): Omit<MatrixView, 'issues
   for (const scenario of matrix.scenarios) {
     const row: Record<string, MatrixView['cells'][string][string]> = {};
     for (const capability of matrix.capabilities) {
-      const { scenario: _s, capability: _c, ...cell } = resolveCell(matrix, scenario, capability)!;
+      const { scenario: _s, capability: _c, needs: _n, ...cell } = resolveCell(matrix, scenario, capability)!;
       row[capability.id] = cell;
     }
     cells[scenario.id] = row;
@@ -93,7 +125,7 @@ export async function matrixRead(name?: string): Promise<MatrixRead> {
       };
     }),
   }));
-  return { view: { ...view, issues } };
+  return { view: { ...view, issues, needs: await needsView(read.name, read.matrix) } };
 }
 
 /**

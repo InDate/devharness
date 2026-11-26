@@ -198,4 +198,34 @@ describe('issue links onto a matrix', () => {
 
     expect((await call({ action: 'next' }))._meta.matrix.next.issues.map((link: any) => link.id).sort()).toEqual([onCell, onRow, onColumn].sort());
   });
+
+  it('writes a cell\'s needs, refusing a need naming no capability and a loop, and keeping one on a matrix not in the store', async () => {
+    expect((await call({ action: 'edit', scenario: 'toast', capability: 'credit', needs: ['/nope'] }))._errorId).toBe('NEEDS_REFUSED');
+    expect((await call({ action: 'edit', scenario: 'toast', capability: 'credit', needs: ['/credit'] }))._errorId).toBe('NEEDS_CYCLE');
+    const written = await call({ action: 'edit', scenario: 'toast', capability: 'credit', needs: ['tools#/probe'] });
+    expect(written.isError).toBeUndefined();
+    const read = await call({ action: 'read', scenario: 'toast', capability: 'credit' });
+    expect(read._meta.matrix.cellNeeds).toMatchObject([{ needs: [{ ref: 'tools#/probe', met: false, problem: 'matrix-missing' }] }]);
+    expect((await call({ action: 'read' }))._meta.matrix.needProblems.needs).toMatchObject([{ cell: 'sample#toast/credit', problem: 'matrix-missing' }]);
+  });
+
+  it('hands out the cell a need waits on before the cell holding it, and names the skipped one', async () => {
+    await call({ action: 'edit', scenario: 'badge', capability: 'credit', needs: ['toast/'] });
+    const next = (await call({ action: 'next' }))._meta.matrix;
+    expect(next.next.ref).toBe('sample#toast/credit');
+    expect(next.remaining).toEqual({ gap: 1, unmeasured: 1, blocked: 1 });
+    expect(next.waiting).toMatchObject({ ref: 'sample#badge/credit', ends: [{ ref: 'sample#toast/credit', kind: 'cell' }] });
+  });
+
+  it('holds an issue on a need until the cell works, and refuses a short form on an issue', async () => {
+    expect((await issue({ action: 'create', type: 'feature', title: 'short', includeSequence: false, needs: ['/credit'] }))._errorId).toBe('NEEDS_REFUSED');
+    const made = await issue({ action: 'create', type: 'feature', title: 'after credit', includeSequence: false, needs: ['sample#badge/credit'] });
+    expect(made.isError).toBeUndefined();
+    const waiting = Math.max(...(await getIssues()).map(each => each.id));
+    expect((await getIssue(waiting))!.needs).toEqual(['sample#badge/credit']);
+    const before = await issue({ action: 'next' });
+    expect(before.content[0].text).not.toContain(`#${waiting}`);
+    await call({ action: 'edit', scenario: 'badge', capability: 'credit', today: 'works' });
+    expect((await issue({ action: 'next' })).content[0].text).toContain(`#${waiting}`);
+  });
 });

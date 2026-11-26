@@ -16,6 +16,7 @@ import type { Annotation, BenchReport, TickResult } from './bench-mode.js';
 import type { CaptureRecord, CaptureVersion } from './bench/wire.js';
 import type { ElementFingerprint, ElementRepair } from './element-fingerprint.js';
 import type { CellStanding, MatrixActivityEntry, MatrixIssueLink, MatrixSummary, ResolvedCell, StandingCounts } from './matrix-store.js';
+import type { NeedState, WaitingCell } from './waits-on.js';
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -458,6 +459,10 @@ export interface MatrixToolMeta {
   cells?: ResolvedCell[];
   /** Alongside `cells`: per cell, the issues linked to it, its row and its column, completed ones included; absent with `issues: false`. */
   cellIssues?: Array<{ scenario: string; capability: string; issues: MatrixIssueLink[] }>;
+  /** read: per cell holding needs, each need as it stands; a whole-matrix read lists only the cells with a need unmet. */
+  cellNeeds?: Array<{ scenario: string; capability: string; needs: NeedState[] }>;
+  /** read of a whole matrix: needs carrying a problem, written in the file or reported on write, and a loop of waits through its cells. */
+  needProblems?: { needs: Array<NeedState & { cell: string }>; cycle: string[] | null };
   /** edit: the cell after the write, and before it. */
   cell?: ResolvedCell;
   previous?: ResolvedCell;
@@ -467,10 +472,16 @@ export interface MatrixToolMeta {
     scenario: string;
     capability: string;
     cell: ResolvedCell;
-    remaining: { gap: number; unmeasured: number };
+    /** Its needs, every one met. */
+    needs: NeedState[];
+    remaining: { gap: number; unmeasured: number; blocked: number };
     /** The issues linked to the cell, its row and its column, completed ones included. */
     issues: MatrixIssueLink[];
   } | null;
+  /** next: open cells left, and how many of them wait on an unmet need; set beside a null `next` too. */
+  remaining?: { gap: number; unmeasured: number; blocked: number };
+  /** next: the first open cell skipped for an unmet need, and where its chains end. */
+  waiting?: WaitingCell;
   imported?: { filePath: string; source: string; replaced: boolean };
 }
 

@@ -8,7 +8,8 @@ import type { BenchHandlers } from '../bench-control.js';
 import { getProxy, checkOutcomesFor } from '../proxy/registry.js';
 import { getMessage } from '../messages.js';
 import { levelOf, causeOf } from '../proxy/intercept-proxy.js';
-import { getIssues, getReadyIssues } from '../issue-tracker.js';
+import { getIssues } from '../issue-tracker.js';
+import { readyIssues } from '../waits-on.js';
 import { matrixActivity, matrixList, matrixRead, matrixSetStanding, placeMatrixRefs } from './matrix-view.js';
 import { addFavourite, readFavourites, removeFavourite } from './favourites.js';
 import { bodyHash, commentGithubId, stripCommentMarker } from '../github/gh-issues.js';
@@ -458,7 +459,7 @@ export function benchRoutes(connection: string, session: BenchSession, page: Pag
     removeFavourite: (id: string) => removeFavourite(id),
     sequenceNotes: async () => (await sessions.get(connection)?.sequences?.notes()) ?? [],
     issues: async (includeCompleted: boolean) => {
-      const nextPlace = new Map((await getReadyIssues()).map((issue, place) => [issue.id, place]));
+      const nextPlace = new Map((await readyIssues()).map((issue, place) => [issue.id, place]));
       return Promise.all((await getIssues({ includeCompleted })).map(async issue => ({
       id: issue.id,
       type: issue.type,

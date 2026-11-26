@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { Glyph } from './glyph.js';
 import { Row } from './row.js';
 import { StateMark } from './issues.js';
-import type { MatrixActivityRow, MatrixCellView, MatrixIssueLink, MatrixListRow, MatrixRead, MatrixStanding, MatrixView } from '../wire.js';
+import type { MatrixActivityRow, MatrixCellNeeds, MatrixCellView, MatrixIssueLink, MatrixListRow, MatrixRead, MatrixStanding, MatrixView } from '../wire.js';
 
 /** Where the Matrix tab stands, as the address holds it: a matrix, and in it a cell, a row or a column. */
 export interface MatrixAt {
@@ -14,6 +14,16 @@ export interface MatrixAt {
 }
 
 const STANDINGS: MatrixStanding[] = ['works', 'gap', 'unmeasured', 'n/a'];
+
+const AREA_RE = /^([A-Za-z0-9_.-]+)#(?:([A-Za-z0-9_.-]+)(?:\/([A-Za-z0-9_.-]+))?|\/([A-Za-z0-9_.-]+))$/;
+
+/** A need's target as a place to open: an issue number, or a matrix area. */
+function targetPlace(target: string): { issue: number } | { at: MatrixAt } | undefined {
+  const issue = /^#(\d+)$/.exec(target);
+  if (issue) return { issue: Number(issue[1]) };
+  const area = AREA_RE.exec(target);
+  return area ? { at: { matrix: area[1], scenario: area[2] ?? null, capability: area[3] ?? area[4] ?? null } } : undefined;
+}
 
 /** A standing as a class name: `n/a` holds a slash no selector takes. */
 const standingClass = (standing: MatrixStanding): string => `standing-${standing === 'n/a' ? 'na' : standing}`;
@@ -245,6 +255,11 @@ function OpenMatrix({ base, name, at, onPlace, onIssue, onSequence }: {
 
   const view = read.view;
   const place = (scenario: string | null, capability: string | null) => onPlace({ matrix: name, scenario, capability });
+  const openTarget = (target: string) => {
+    const found = targetPlace(target);
+    if (found && 'issue' in found) onIssue(found.issue);
+    else if (found) onPlace(found.at);
+  };
   const back = <button class="issueback" onClick={() => place(null, null)}>‹ {name}</button>;
   const scenario = at.scenario === null ? undefined : view.scenarios.find(each => each.id === at.scenario);
   const capability = at.capability === null ? undefined : view.capabilities.find(each => each.id === at.capability);
@@ -261,7 +276,7 @@ function OpenMatrix({ base, name, at, onPlace, onIssue, onSequence }: {
   }
   const page = scenario && capability
     ? <CellPage base={base} view={view} scenarioId={scenario.id} capabilityId={capability.id} back={back} sequences={sequences}
-        onPlace={place} onIssue={onIssue} onSequence={onSequence} />
+        onPlace={place} onIssue={onIssue} onSequence={onSequence} onTarget={openTarget} />
     : scenario
       ? <RowPage base={base} view={view} scenarioId={scenario.id} back={back} sequences={sequences}
           onPlace={place} onIssue={onIssue} onSequence={onSequence} />
@@ -539,11 +554,12 @@ function Grid({ view, toList, filters, onFilters, onPlace, onIssue, scroll, glan
                 </th>
                 {view.capabilities.map(capability => {
                   const cell = view.cells[scenario.id][capability.id];
+                  const waits = view.needs[scenario.id]?.[capability.id]?.waits;
                   return (
-                    <td key={capability.id} class={`matrixcell ${standingClass(cell.today)}${openColumn === capability.id ? ' colopen' : ''}${filters.standing && cell.today !== filters.standing ? ' faded' : ''}${shut.has(capability.id) ? ' colshut' : ''}`}
+                    <td key={capability.id} class={`matrixcell ${standingClass(cell.today)}${waits ? ' waits' : ''}${openColumn === capability.id ? ' colopen' : ''}${filters.standing && cell.today !== filters.standing ? ' faded' : ''}${shut.has(capability.id) ? ' colshut' : ''}`}
                       onMouseEnter={(e: Event) => over(e.currentTarget as Element, scenario.id, capability.id)} onMouseLeave={left}>
                       <button class="matrixcellbtn" onFocus={(e: Event) => over((e.currentTarget as Element).parentElement!, scenario.id, capability.id)} onBlur={left}
-                        title={`${scenario.name ?? scenario.id} × ${capability.name ?? capability.id}: ${cell.today}${cell.expect ? ` · ${cell.expect}` : ''}`}
+                        title={`${scenario.name ?? scenario.id} × ${capability.name ?? capability.id}: ${cell.today}${waits ? ` · waits on ${waits.map(end => end.ref).join(', ')}` : ''}${cell.expect ? ` · ${cell.expect}` : ''}`}
                         onClick={() => onPlace(scenario.id, capability.id)}>
                         <StandingMark standing={cell.today} />
                         {cell.expect && <span class="matrixcelltext">{cell.expect}</span>}
@@ -562,6 +578,7 @@ function Grid({ view, toList, filters, onFilters, onPlace, onIssue, scroll, glan
         <span><span class="issuetype-bug"><Glyph of="bug" /></span> bug</span>
         <span><span class="issuetype-feature"><Glyph of="feature" /></span> feature</span>
         <span><span class="matrixbadge closed"><Glyph of="bug" /></span> completed</span>
+        <span><span class="matrixwaitsample" /> waits on a need, so next skips it</span>
       </p>
     </div>
   );
@@ -667,6 +684,44 @@ function IssueList({ groups, onIssue }: {
   );
 }
 
+/** A cell's needs, each met or not with the cells it still waits on, and where the chains of the unmet ones end. */
+function NeedList({ needs, view, onTarget }: { needs: MatrixCellNeeds | undefined; view: MatrixView; onTarget: (target: string) => void }) {
+  if (!needs) return null;
+  const link = (target: string | undefined, text: string) => target
+    ? <button class="issuereftitle issuemono" title={`open ${target}`} onClick={() => onTarget(target)}>{text}</button>
+    : <span class="issuemono">{text}</span>;
+  return (
+    <section>
+      <h3>Needs</h3>
+      <ul class="issuelinks matrixneeds">
+        {needs.needs.map(need => (
+          <li key={need.ref} class={`issuelinkrow${need.met ? ' met' : ''}`}>
+            <StateMark shut={need.met} />
+            {link(need.target, need.target && need.target !== need.ref ? `${need.ref} → ${need.target}` : need.ref)}
+            <span class="quiet">
+              {need.met ? 'met' : need.problem ?? (need.open ? `${need.open.length} cell${need.open.length === 1 ? '' : 's'} short of works` : 'issue open')}
+              {need.from && need.from !== 'scenario' && ` · from ${need.from === 'row' ? 'the row' : layerWords(need.from, view)}`}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {needs.waits && needs.waits.length > 0 && (
+        <>
+          <p class="quiet">Next skips this cell. Its chains end at:</p>
+          <ul class="issuelinks matrixneeds">
+            {needs.waits.map(end => (
+              <li key={end.ref} class="issuelinkrow">
+                {link(end.kind === 'problem' ? undefined : end.ref, end.ref)}
+                <span class="quiet">{end.kind === 'problem' ? end.problem : end.kind === 'issue' ? 'issue ready' : 'cell ready'}</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
+  );
+}
+
 interface PageProps {
   base: string;
   view: MatrixView;
@@ -677,7 +732,9 @@ interface PageProps {
   onSequence: (name: string) => void;
 }
 
-function CellPage({ base, view, scenarioId, capabilityId, back, sequences, onPlace, onIssue, onSequence }: PageProps & { scenarioId: string; capabilityId: string }) {
+function CellPage({ base, view, scenarioId, capabilityId, back, sequences, onPlace, onIssue, onSequence, onTarget }: PageProps & {
+  scenarioId: string; capabilityId: string; onTarget: (target: string) => void;
+}) {
   const scenario = view.scenarios.find(each => each.id === scenarioId)!;
   const capability = view.capabilities.find(each => each.id === capabilityId)!;
   const cell = view.cells[scenarioId][capabilityId];
@@ -722,6 +779,7 @@ function CellPage({ base, view, scenarioId, capabilityId, back, sequences, onPla
       {refusal && <p class="bad">{refusal}</p>}
       <div class="issueside-facts matrixfacts">
         <CellFacts cell={cell} view={view} sequences={sequences} onSequence={onSequence} />
+        <NeedList needs={view.needs[scenarioId]?.[capabilityId]} view={view} onTarget={onTarget} />
         <IssueList onIssue={onIssue} groups={[
           { kind: 'cell', issues: linkedTo(view, scenarioId, capabilityId) },
           { kind: 'row', issues: linkedTo(view, scenarioId, undefined) },
